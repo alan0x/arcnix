@@ -124,7 +124,7 @@ impl Bridge {
                     ensure!(actual == id, "conflict belongs to wrong job");
                     return Ok((info, reply));
                 }
-                Update::Progress(..) => {}
+                Update::Progress(..) | Update::TransferPlan(..) | Update::TransferFile(..) => {}
                 Update::Finished(_, result) => bail!("transfer finished before prompt: {result:?}"),
                 _ => bail!("unexpected event before collision"),
             }
@@ -148,6 +148,9 @@ impl Bridge {
                         "duplicate or wrong transfer report"
                     );
                     report = Some(summary);
+                }
+                Update::TransferPlan(actual, _) | Update::TransferFile(actual, _) => {
+                    ensure!(actual == id, "file progress belongs to wrong job");
                 }
                 Update::Finished(actual, result) => {
                     ensure!(actual == id, "finished belongs to wrong job");
@@ -268,13 +271,28 @@ fn pending_conflict_releases_worker_on_cancel_and_connection_switch() -> Result<
     let old_epoch = bridge.epoch;
     bridge.epoch += 1;
     bridge.send(Action::Disconnect)?;
-    bridge.finished(&pending, false)?;
-    let disconnected = bridge.receive()?;
-    assert_eq!(disconnected.epoch, bridge.epoch);
-    ensure!(
-        matches!(disconnected.update, Update::Disconnected),
-        "disconnect must not wait for user decision"
-    );
+    // Independent transfer sessions may acknowledge cancellation before or
+    // after the main browsing session acknowledges disconnection.
+    let (mut stopped, mut disconnected) = (false, false);
+    while !stopped || !disconnected {
+        let response = bridge.receive()?;
+        match response.update {
+            Update::Finished(id, result) => {
+                ensure!(
+                    id == pending && result.is_err(),
+                    "old transfer must finish unsuccessfully"
+                );
+                assert_eq!(response.epoch, old_epoch);
+                stopped = true;
+            }
+            Update::Disconnected => {
+                assert_eq!(response.epoch, bridge.epoch);
+                disconnected = true;
+            }
+            Update::Progress(..) | Update::TransferFile(..) => {}
+            _ => bail!("unexpected event while disconnecting transfer"),
+        }
+    }
     assert!(
         late_reply
             .send(ConflictDecision {

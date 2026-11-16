@@ -5,10 +5,10 @@
     document.addEventListener("pointerdown", () => document.documentElement.classList.remove("keyboard-navigation"), true);
     document.addEventListener("keydown", () => document.documentElement.classList.add("keyboard-navigation"), true);
     const additive = event => /Mac|iPhone|iPad/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
-    function send(pane, kind, row, event = {}) {
+    function send(pane, kind, row, event = {}, extra = {}) {
         const bridge = pane?.querySelector(".file-gesture-input");
         if (!bridge || pane.closest("[inert],[hidden]")) return;
-        bridge.value = JSON.stringify({kind, path: row?.getAttribute("aria-label") || "", toggle: !!additive(event), range: !!event.shiftKey, sequence: ++sequence});
+        bridge.value = JSON.stringify({kind, path: row?.getAttribute("aria-label") || "", toggle: !!additive(event), range: !!event.shiftKey, ...extra, sequence: ++sequence});
         bridge.dispatchEvent(new Event("input", {bubbles: true}));
     }
     let fileMenu = null;
@@ -17,6 +17,72 @@
         const pane=target instanceof Element ? target.closest('.file-pane') : null;
         return pane && !pane.closest('[inert],[hidden]') ? pane : null;
     }
+    const fileDragType = 'application/x-arcnix-file-transfer';
+    let fileDrag = null;
+    function clearDropTarget() {
+        document.querySelectorAll('[data-file-drop-target]').forEach(pane => pane.removeAttribute('data-file-drop-target'));
+    }
+    function clearFileDrag() {
+        if (fileDrag) send(fileDrag.pane, 'drag_end', null, {}, {drag_id:fileDrag.id});
+        document.querySelectorAll('[data-file-drag-source]').forEach(pane => pane.removeAttribute('data-file-drag-source'));
+        clearDropTarget();
+        fileDrag = null;
+    }
+    function dragPaneReady(pane) {
+        return pane?.isConnected && validPane(pane) === pane && pane.classList.contains('file-transfer-ready');
+    }
+    function dropPane(target) {
+        const pane = validPane(target);
+        return fileDrag && pane !== fileDrag.pane && dragPaneReady(pane) && dragPaneReady(fileDrag.pane) ? pane : null;
+    }
+    document.addEventListener('dragstart', event => {
+        const row = event.target instanceof Element && event.target.closest('.file-row');
+        if (!row) return;
+        const pane = validPane(row);
+        if (!dragPaneReady(pane) || !row.classList.contains('file-draggable') || !event.dataTransfer) {
+            event.preventDefault(); return;
+        }
+        clearFileDrag();
+        fileDrag = {pane, id:++sequence};
+        event.dataTransfer.effectAllowed = 'copy';
+        event.dataTransfer.setData(fileDragType, String(fileDrag.id));
+        event.dataTransfer.setDragImage(row, 20, row.offsetHeight / 2);
+        pane.setAttribute('data-file-drag-source', 'true');
+        send(pane, 'drag_start', row, {}, {drag_id:fileDrag.id});
+    }, true);
+    document.addEventListener('dragover', event => {
+        if (!fileDrag) return;
+        clearDropTarget();
+        const pane = dropPane(event.target);
+        event.preventDefault();
+        event.dataTransfer.dropEffect = pane ? 'copy' : 'none';
+        if (pane) pane.setAttribute('data-file-drop-target', 'true');
+    }, true);
+    document.addEventListener('dragleave', event => {
+        const pane = validPane(event.target);
+        if (pane && (!(event.relatedTarget instanceof Node) || !pane.contains(event.relatedTarget))) {
+            pane.removeAttribute('data-file-drop-target');
+        }
+    }, true);
+    document.addEventListener('drop', event => {
+        if (!fileDrag) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        const pane = dropPane(event.target);
+        if (pane && event.dataTransfer?.getData(fileDragType) === String(fileDrag.id)) {
+            send(pane, 'transfer_drop', null, {}, {drag_id:fileDrag.id});
+        }
+        clearFileDrag();
+    }, true);
+    document.addEventListener('dragend', clearFileDrag, true);
+    window.addEventListener('blur', clearFileDrag);
+    function updateDraggableRows() {
+        if (fileDrag && !dragPaneReady(fileDrag.pane)) clearFileDrag();
+        for (const row of document.querySelectorAll('.file-row')) {
+            const draggable = row.classList.contains('file-draggable') && dragPaneReady(validPane(row));
+            if (row.draggable !== !!draggable) row.draggable = !!draggable;
+        }
+    }
+    new MutationObserver(updateDraggableRows).observe(document, {subtree:true, childList:true, attributes:true, attributeFilter:['class','inert','hidden']});
     function context(target,event,keyboard=false) {
         const pane=validPane(target);
         const listing=target instanceof Element && target.closest('.file-list-container,.file-empty');
@@ -117,6 +183,7 @@
     }, true);
     document.addEventListener("keydown", event => {
         if (!(event.target instanceof Element) || event.isComposing) return;
+        if (event.target.closest(".terminal-module")) return;
         const pane = event.target.closest(".file-pane") || (additive(event) && event.key.toLowerCase() === "l" && lastPane?.isConnected ? lastPane : null);
         if (!pane || pane.closest("[inert],[hidden]")) return;
         if (additive(event) && event.key.toLowerCase() === "l") {
@@ -139,7 +206,7 @@
         }
         else if (event.key === "ArrowRight") send(pane, "expand", row);
         else if (event.key === "ArrowLeft") {
-            if (row.querySelector(".file-expander")?.textContent === "⌄") send(pane, "collapse", row);
+            if (row.querySelector(".file-expander")?.getAttribute("aria-expanded") === "true") send(pane, "collapse", row);
             else {
                 const rows = [...pane.querySelectorAll(".file-row")];
                 const depth = parseFloat(getComputedStyle(row).paddingLeft);

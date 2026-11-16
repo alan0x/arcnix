@@ -94,6 +94,42 @@ fn single(s: &State, remote: bool) -> Option<FileEntry> {
     let mut entries = chosen(s, remote);
     (entries.len() == 1).then(|| entries.remove(0))
 }
+fn terminal_directory(s: &State) -> Option<String> {
+    if !workspace::ready(s, true) {
+        return None;
+    }
+    let directory = if s.remote_selection.is_empty() {
+        s.remote_path.clone()
+    } else {
+        let file = single(s, true)?;
+        if file.is_dir && !file.is_symlink {
+            file.path
+        } else {
+            file.path
+                .rsplit_once('/')
+                .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                .unwrap_or(&s.remote_path)
+                .to_owned()
+        }
+    };
+    terminal::directory_supported(&directory).then_some(directory)
+}
+fn terminal_action(ui: Ui) -> impl Widget {
+    action(
+        &ui,
+        true,
+        "Terminal here",
+        |s, _| terminal_directory(s).is_some(),
+        {
+            let ui = ui.clone();
+            move || {
+                if let Some(directory) = ui.state.with(terminal_directory) {
+                    ui.terminal_here(directory);
+                }
+            }
+        },
+    )
+}
 fn has_item(s: &State, remote: bool) -> bool {
     s.file_context
         .as_ref()
@@ -350,6 +386,10 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                 }
                             },
                         ),
+                        when(remote, {
+                            let terminal = ui.clone();
+                            move || terminal_action(terminal.clone())
+                        }),
                         action(
                             &ui,
                             remote,
@@ -411,6 +451,10 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                         text().class("menu-divider").content(""),
                     ))
                 }
+            }),
+            when(state.map(move |s| remote && !has_item(s, remote)), {
+                let terminal = ui.clone();
+                move || terminal_action(terminal.clone())
             }),
             action(&ui, remote, "新建文件夹", available, {
                 let ui = ui.clone();

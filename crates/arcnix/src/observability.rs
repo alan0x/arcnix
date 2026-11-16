@@ -89,8 +89,11 @@ impl Ui {
             return;
         }
         match self.state.with(|s| s.workspace_page) {
-            WorkspacePage::Resources if !self.state.with(|s| s.metrics.paused) => {
-                self.metrics_refresh()
+            WorkspacePage::Resources => {
+                if !self.state.with(|s| s.metrics.paused) {
+                    self.metrics_refresh();
+                }
+                self.ports_enter();
             }
             WorkspacePage::SystemLogs => {
                 if self.state.with(|s| s.system_logs.capabilities.is_none()) {
@@ -796,6 +799,7 @@ pub(super) fn resources(ui: Ui) -> impl Widget {
                         .unwrap_or_else(missing)
                 }))),
                 crate::resource_trends::panel(ui.clone()),
+                crate::resource_ports_ui::panel(ui.clone()),
                 text()
                     .class("observability-warning")
                     .content(i18n::bind(state.map(|s| {

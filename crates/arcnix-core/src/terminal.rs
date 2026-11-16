@@ -1,5 +1,6 @@
-//! Interactive PTY on an exclusively owned SSH transport. No command execution
-//! shortcuts or local shell: input/output are the remote terminal's raw bytes.
+//! Interactive PTY on an exclusively owned SSH transport. An optional working
+//! directory is established before the interactive shell starts; later input
+//! and output are the remote terminal's raw bytes.
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 
@@ -29,8 +30,44 @@ fn dimensions(columns: u32, rows: u32) -> Result<()> {
 fn again(error: &ssh2::Error) -> bool {
     error.code() == ErrorCode::Session(-37)
 }
+
+pub fn validate_directory(directory: &str) -> Result<()> {
+    ensure!(
+        directory.starts_with('/')
+            && directory.len() <= 16_384
+            && !directory.chars().any(char::is_control),
+        "Terminal directory must be absolute, at most 16 KiB, and contain no control characters"
+    );
+    Ok(())
+}
+
+fn directory_command(directory: &str) -> Result<String> {
+    validate_directory(directory)?;
+    Ok(format!(
+        "# arcnix:terminal:here\ncd -- {} && exec \"${{SHELL:-/bin/sh}}\" -i",
+        crate::remote_tasks::quote(directory)
+    ))
+}
+
 impl Pty {
     pub(crate) fn open(session: Session, columns: u32, rows: u32) -> Result<Self> {
+        Self::open_with_directory(session, columns, rows, None)
+    }
+    pub(crate) fn open_here(
+        session: Session,
+        columns: u32,
+        rows: u32,
+        directory: &str,
+    ) -> Result<Self> {
+        validate_directory(directory)?;
+        Self::open_with_directory(session, columns, rows, Some(directory))
+    }
+    fn open_with_directory(
+        session: Session,
+        columns: u32,
+        rows: u32,
+        directory: Option<&str>,
+    ) -> Result<Self> {
         dimensions(columns, rows)?;
         let mut channel = session
             .channel_session()
@@ -39,9 +76,15 @@ impl Pty {
         channel
             .request_pty("xterm-256color", None, Some((columns, rows, 0, 0)))
             .context("Server refused a terminal PTY")?;
-        channel
-            .shell()
-            .context("Server refused an interactive shell")?;
+        if let Some(directory) = directory {
+            channel
+                .exec(&directory_command(directory)?)
+                .context("Server refused a terminal in this directory")?;
+        } else {
+            channel
+                .shell()
+                .context("Server refused an interactive shell")?;
+        }
         session.set_blocking(false);
         Ok(Self {
             session,
@@ -128,5 +171,32 @@ impl Drop for Pty {
     fn drop(&mut self) {
         let _ = self.channel.close();
         let _ = self.session.disconnect(None, "Terminal closed", None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_directory_is_a_single_literal_before_an_interactive_shell() {
+        let command = directory_command("/srv/中文 a'$(touch nope);b").unwrap();
+        assert_eq!(
+            command,
+            "# arcnix:terminal:here\ncd -- '/srv/中文 a'\\''$(touch nope);b' && exec \"${SHELL:-/bin/sh}\" -i"
+        );
+        for directory in [
+            "",
+            ".",
+            "relative/path",
+            "/bad\npath",
+            "/bad\rpath",
+            "/bad\0path",
+            "/bad\u{1b}path",
+        ] {
+            assert!(directory_command(directory).is_err());
+        }
+        assert!(directory_command(&format!("/{}", "x".repeat(16_384))).is_err());
+        assert!(directory_command("/").is_ok());
     }
 }

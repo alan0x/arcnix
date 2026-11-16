@@ -5,11 +5,43 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct PendingConflict {
+    pub identity: String,
     pub job_id: String,
     pub info: TransferConflict,
     pub reply: Sender<ConflictDecision>,
     pub action: ConflictAction,
     pub scope: ConflictScope,
+}
+
+pub(super) fn policy(
+    s: &State,
+    job_id: &str,
+    direction: TransferDirection,
+) -> Option<ConflictAction> {
+    s.batch_ids
+        .get(job_id)
+        .and_then(|batch| s.queue_rules.get(&(batch.clone(), direction)))
+        .copied()
+        .or_else(|| s.session_rules.get(&direction).copied())
+        .or_else(|| {
+            s.config
+                .transfer_rules
+                .iter()
+                .find(|rule| {
+                    Some(&rule.server_id) == s.selected.as_ref() && rule.direction == direction
+                })
+                .map(|rule| rule.action)
+                .or(if direction == TransferDirection::Upload {
+                    s.config.settings.upload_conflict
+                } else {
+                    s.config.settings.download_conflict
+                })
+                .and_then(|action| match action {
+                    ExistingFileAction::Ask => None,
+                    ExistingFileAction::Overwrite => Some(ConflictAction::Overwrite),
+                    ExistingFileAction::Skip => Some(ConflictAction::Skip),
+                })
+        })
 }
 
 pub(super) fn show(
@@ -18,20 +50,70 @@ pub(super) fn show(
     info: TransferConflict,
     reply: Sender<ConflictDecision>,
 ) {
-    ui.state.revise(|s| {
-        s.transfer_now = std::time::Instant::now();
-        if let Some(m) = s.transfer_meters.get_mut(&job_id) {
-            m.pause(s.transfer_now);
+    let action = ui.state.with(|s| {
+        if !s
+            .jobs
+            .iter()
+            .any(|job| job.id == job_id && job.status == TransferStatus::Running)
+            || s.cancels
+                .get(&job_id)
+                .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+        {
+            Some(ConflictAction::Cancel)
+        } else {
+            policy(s, &job_id, info.direction)
         }
-        s.transfer_conflict = Some(PendingConflict {
+    });
+    if let Some(action) = action {
+        let _ = reply.send(ConflictDecision {
+            action,
+            scope: ConflictScope::ThisFile,
+        });
+        return;
+    }
+    ui.state.revise(|s| {
+        let pending = PendingConflict {
+            identity: new_id(),
             job_id,
             info,
             reply,
             action: ConflictAction::Skip,
             scope: ConflictScope::ThisFile,
-        });
+        };
+        if s.transfer_conflict.is_none() {
+            s.transfer_conflict = Some(pending);
+        } else {
+            s.transfer_conflicts.push_back(pending);
+        }
     });
     if ui.state.with(|s| s.dialog.is_none()) {
+        ui.open_dialog(Dialog::TransferConflict);
+    }
+}
+
+pub(super) fn finished(ui: &Ui, job_id: &str) {
+    ui.state.revise(|s| {
+        s.transfer_conflicts
+            .retain(|pending| pending.job_id != job_id);
+        if s.transfer_conflict
+            .as_ref()
+            .is_some_and(|pending| pending.job_id == job_id)
+        {
+            s.transfer_conflict = None;
+        }
+        if s.transfer_conflict.is_none() {
+            s.transfer_conflict = s.transfer_conflicts.pop_front();
+        }
+    });
+    if ui
+        .state
+        .with(|s| s.transfer_conflict.is_none() && s.dialog == Some(Dialog::TransferConflict))
+    {
+        ui.close_dialog();
+    } else if ui
+        .state
+        .with(|s| s.transfer_conflict.is_some() && s.dialog.is_none())
+    {
         ui.open_dialog(Dialog::TransferConflict);
     }
 }
@@ -45,17 +127,31 @@ impl Ui {
             action: pending.action,
             scope: pending.scope,
         };
-        self.state.revise(|s| {
-            s.transfer_now = std::time::Instant::now();
-            if let Some(m) = s.transfer_meters.get_mut(&pending.job_id) {
-                m.resume(s.transfer_now);
-            }
-        });
         self.apply_conflict_rule(&pending.job_id, pending.info.direction, decision);
         if pending.reply.send(decision).is_err() {
             self.log("文件冲突任务已结束，未继续传输。");
         }
         self.close_dialog();
+        self.state.revise(|s| {
+            let waiting = std::mem::take(&mut s.transfer_conflicts);
+            for pending in waiting {
+                if let Some(action) = policy(s, &pending.job_id, pending.info.direction) {
+                    let _ = pending.reply.send(ConflictDecision {
+                        action,
+                        scope: ConflictScope::ThisFile,
+                    });
+                } else {
+                    s.transfer_conflicts.push_back(pending);
+                }
+            }
+            s.transfer_conflict = s.transfer_conflicts.pop_front();
+        });
+        if self
+            .state
+            .with(|s| s.transfer_conflict.is_some() && s.dialog.is_none())
+        {
+            self.open_dialog(Dialog::TransferConflict);
+        }
     }
 }
 
@@ -167,9 +263,13 @@ fn file_details(ui: &Ui, source: bool) -> impl Widget + use<> {
 
 pub(super) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
-    when(
-        state.map(|s| s.dialog == Some(Dialog::TransferConflict)),
-        move || {
+    each(state.map(|s| {
+        if s.dialog == Some(Dialog::TransferConflict) {
+            s.transfer_conflict.as_ref().map(|pending| pending.identity.clone()).into_iter().collect::<Vec<_>>()
+        } else { Vec::new() }
+    }))
+    .key(|identity| identity.clone())
+    .children(move |_| {
             let submit = ui.clone();
             let cancel = ui.clone();
             modal(
@@ -236,6 +336,5 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                     .on_press(move || submit.resolve_conflict()),
             ),
         )
-        },
-    )
+        })
 }

@@ -552,6 +552,9 @@ class Authentication(paramiko.ServerInterface):
         return True
 
     def check_channel_shell_request(self, channel):
+        return self.interactive(channel, "/fixture")
+
+    def interactive(self, channel, directory):
         # A deterministic SSH PTY protocol peer, never a host OS shell.
         def interactive():
             try:
@@ -579,7 +582,7 @@ class Authentication(paramiko.ServerInterface):
                                 channel.close()
                                 return
                             if command == "pwd":
-                                channel.sendall(b"/fixture\r\n")
+                                channel.sendall(directory.encode() + b"\r\n")
                             elif command == "size":
                                 channel.sendall((str(self.terminal_size[0]) + "x" + str(self.terminal_size[1]) + "\r\n").encode())
                             elif command == "ansi":
@@ -647,7 +650,108 @@ class Authentication(paramiko.ServerInterface):
         for offset in range(0,len(raw),4096):channel.sendall(raw[offset:offset+4096])
         channel.send_exit_status(0);channel.close()
 
+    def resource_ports_reply(self, channel, script, administrator):
+        """Model only fixture-owned identities; never signal a host process."""
+        fixture = self.fixture_root / 'resource-ports-fixture.json'
+        options = json.loads(fixture.read_text(encoding='utf-8')) if fixture.exists() else {}
+        terminated = self.fixture_root / 'resource-ports-terminated.json'
+        ended = json.loads(terminated.read_text(encoding='utf-8')) if terminated.exists() else []
+        web = dict(pid=200, start_ticks=12345, uid=1000, fd=3, command='fixture-web',
+                   executable='/usr/bin/fixture-web', unit='fixture-web.service')
+        dns = dict(pid=201, start_ticks=23456, uid=0, fd=5, command='fixture-dns',
+                   executable='/usr/sbin/fixture-dns', unit='fixture-dns.service')
+        rows = [
+            dict(protocol='tcp', family=4, address='127.0.0.1', port=8080, uid=1000, inode=42,
+                 holders_limited=False, holders=[web]),
+            dict(protocol='tcp', family=6, address='::', port=8080, uid=1000, inode=43,
+                 holders_limited=False, holders=[dict(web, fd=4)]),
+            dict(protocol='udp', family=4, address='0.0.0.0', port=5353, uid=0, inode=44,
+                 holders_limited=False, holders=[dns]),
+            dict(protocol='udp', family=6, address='::', port=5353, uid=0, inode=45,
+                 holders_limited=False, holders=[]),
+        ]
+        snapshot = dict(version=1, sampled=1794773000, uid=0 if administrator else 1000,
+                        boot_id='11111111-1111-4111-8111-111111111111', namespace=4026531840,
+                        processes=10, descriptors=23, denied=0 if administrator else 2,
+                        changed=0, unreadable=0, limits=[], matched=4, rows=rows)
+        snapshot.update(options.get('snapshot', {}))
+        snapshot['rows'] = [row for row in snapshot['rows']
+                            if not row['holders'] or any(h['pid'] not in ended for h in row['holders'])]
+        snapshot['rows'].sort(key=lambda row: (row['protocol'], row['port'], row['family'], row['address'], row['inode']))
+        if 'matched' not in options.get('snapshot', {}):
+            snapshot['matched'] = len(snapshot['rows'])
+        terminating = '# arcnix:resource-ports:terminate' in script
+        target = json.loads(shlex.split(script)[-1]) if terminating else None
+        query = dict(action='terminate' if terminating else 'read', administrator=administrator)
+        if target is not None:
+            query['target'] = target
+        with (self.fixture_root / 'resource-ports-queries.jsonl').open('a', encoding='utf-8') as audit:
+            audit.write(json.dumps(query) + '\n')
+        if options.get('disconnect_transport'):
+            # Close only this fixture's accepted SSH connection. The listening
+            # peer stays available so the desktop can reconnect normally.
+            channel.get_transport().close()
+            return
+        until = time.monotonic() + options.get('terminate_delay' if terminating else 'delay', .15)
+        while time.monotonic() < until:
+            if channel.closed:
+                return
+            time.sleep(.02)
+        if terminating:
+            holder, listener = target['holder'], target['listener']
+            valid = (target['boot_id'] == snapshot['boot_id'] and target['namespace'] == snapshot['namespace']
+                     and any(all(row[key] == listener[key] for key in ('protocol', 'family', 'address', 'port', 'uid', 'inode'))
+                             and holder in row['holders'] for row in snapshot['rows']))
+            error = options.get('terminate_error')
+            if not valid:
+                error = 'Process identity or listening socket changed; refresh ports before retrying'
+            elif holder['uid'] != 1000 and not administrator:
+                error = 'Permission denied ending another user process'
+            if error:
+                channel.sendall_stderr(error.encode())
+                channel.send_exit_status(options.get('terminate_exit', 1))
+            else:
+                ended.append(holder['pid'])
+                terminated.write_text(json.dumps(sorted(set(ended))), encoding='utf-8')
+                result = dict(version=1, pid=holder['pid'], start_ticks=holder['start_ticks'], signal=9)
+                channel.sendall(json.dumps(result).encode())
+                channel.send_exit_status(0)
+        else:
+            if options.get('stderr'):
+                channel.sendall_stderr(options['stderr'].encode())
+            channel.sendall(options.get('raw', json.dumps(snapshot, ensure_ascii=False)).encode())
+            channel.send_exit_status(options.get('exit', 0))
+        channel.close()
+
     def check_channel_exec_request(self, channel, command):
+        if command.startswith(b"# arcnix:terminal:here\n"):
+            # Interpret only the fixed client bootstrap grammar. This fixture
+            # never passes remote text or a selected path to the host shell.
+            try:
+                text = command.decode("utf-8")
+                parts = shlex.split(text.split("\n", 1)[1])
+                assert len(parts) == 7
+                assert parts[:2] == ["cd", "--"]
+                assert parts[3:] == ["&&", "exec", "${SHELL:-/bin/sh}", "-i"]
+                directory = parts[2]
+                assert directory.startswith("/") and len(directory.encode()) <= 16384
+                assert not any(ord(character) < 32 or ord(character) == 127 for character in directory)
+                destination = Files(self, root=self.fixture_root).path(directory)
+                with (self.fixture_root / "terminal-here-requests.jsonl").open("a", encoding="utf-8") as audit:
+                    audit.write(json.dumps(dict(directory=directory, script=text), ensure_ascii=False) + "\n")
+                if not destination.is_dir():
+                    def missing():
+                        # Let Paramiko acknowledge the exec request before the
+                        # short-lived bootstrap publishes its failing exit.
+                        time.sleep(.02)
+                        channel.sendall(b"cd: fixture directory does not exist\r\n")
+                        channel.send_exit_status(1)
+                        channel.close()
+                    threading.Thread(target=missing, daemon=True).start()
+                    return True
+                return self.interactive(channel, directory)
+            except (AssertionError, UnicodeError, ValueError, OSError):
+                return False
         def reply():
             # Deliberately does not execute arbitrary commands on the developer's machine.
             text = command.decode()
@@ -908,6 +1012,9 @@ class Authentication(paramiko.ServerInterface):
                             channel.sendall((json.dumps(dict(__REALTIME_TIMESTAMP='1794640000000000',_SYSTEMD_UNIT=unit,PRIORITY='3',MESSAGE='Saved service failure '+unit+' arcnix-test 中文'+(' fixture-admin-secret' if query['administrator'] else '')))+'\n').encode())
                         channel.send_exit_status(0)
                     channel.close();return
+                if '# arcnix:resource-ports:read' in script or '# arcnix:resource-ports:terminate' in script:
+                    self.resource_ports_reply(channel, script, 'sudo' in args)
+                    return
                 if '# arcnix:tcp-listeners:read' in script:
                     assert 'timeout --kill-after=2 15 python3 -I' in script and 'start_ticks' in script
                     ports=json.loads(shlex.split(script)[-1]);assert ports==sorted(set(ports))

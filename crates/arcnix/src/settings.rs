@@ -6,6 +6,7 @@ pub(super) struct SettingsState {
     pub error: String,
     pub log_error: String,
     pub log_directory_draft: Option<String>,
+    pub transfer_concurrency_draft: Option<String>,
 }
 
 impl Ui {

@@ -6,7 +6,7 @@ A friendly desktop workspace for managing servers over SSH, built with Rust, Glo
 
 - Organize servers in sortable groups, annotate environments and tags, and import SSH configurations. Searches include labels; batch target and configuration comparison forms also offer exact label filters.
 - Servers overview combines time-labelled local diagnostics and current-policy backup confirmations, filters findings and records needing verification, and reviews up to 32 selected servers for a new diagnostic run. It preserves the current workspace and makes no background probes.
-- Dual-pane SFTP browsing, transfer queues and file conflict handling.
+- Dual-pane SFTP browsing, drag-and-drop file/folder uploads and downloads, expandable per-file progress, configurable parallel transfers (default 5), and file conflict handling.
 - Context menus for file and folder actions, with keyboard navigation, properties, and confirmed multi-item or recursive deletion.
 - Cancellable deletion with live progress, remote POSIX permissions, and per-server file column preferences.
 - Interactive SSH terminals, software management, resource metrics and system logs.
@@ -50,6 +50,8 @@ Use **Settings → General → Configuration backup** to export a reviewed JSON 
 Restore previews the replacement, retains this computer's current SSH trust, and preserves the exact previous file beside the active configuration. Imported host keys do not grant trust. Active operations must finish first; a successful restore disconnects the workspace, keeps recent task history and unsaved publication drafts separate, and can repair a corrupt startup configuration without restarting first. Changed source files or settings require a new review. Close other configuration editors during restore.
 
 ## Operations
+
+**Resources** lists the connected server's TCP listeners and bound UDP ports, with searchable addresses, PIDs, program paths and service units. Refresh on demand, optionally query as administrator, and confirm before force-ending an owning process. Permission and scan limits are shown. Termination rechecks the process and socket identity and uses Linux pidfd to guard against PID reuse.
 
 After connecting, open **Operations**. **Services** lists loaded systemd service units, including stopped and failed units. Select a service to inspect its state or open its journal. Start, stop and restart open the shared server-task form with the current server selected. Add other targets if needed, review each preflight plan, then submit. Refresh the service list to inspect the resulting state.
 

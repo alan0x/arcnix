@@ -172,6 +172,11 @@ pub struct AppSettings {
     pub upload_conflict: Option<ExistingFileAction>,
     #[serde(default)]
     pub download_conflict: Option<ExistingFileAction>,
+    #[serde(default = "default_transfer_concurrency")]
+    pub transfer_concurrency: u8,
+}
+fn default_transfer_concurrency() -> u8 {
+    5
 }
 impl Default for AppSettings {
     fn default() -> Self {
@@ -186,6 +191,7 @@ impl Default for AppSettings {
             updates: Default::default(),
             upload_conflict: None,
             download_conflict: None,
+            transfer_concurrency: default_transfer_concurrency(),
         }
     }
 }

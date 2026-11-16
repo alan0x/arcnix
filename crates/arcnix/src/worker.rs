@@ -68,10 +68,22 @@ pub enum Action {
         cancel: Arc<AtomicBool>,
         policy: Option<arcnix_core::transfer::ConflictAction>,
     },
+    TransferConcurrency(u8),
     PackageDetect,
     PackageSearch(String),
     PackageInstalled,
     MetricsSample,
+    PortsRead {
+        administrator: bool,
+        sudo: zeroize::Zeroizing<String>,
+        cancel: Arc<AtomicBool>,
+    },
+    PortTerminate {
+        target: Box<arcnix_core::resource_ports::Target>,
+        administrator: bool,
+        sudo: zeroize::Zeroizing<String>,
+        cancel: Arc<AtomicBool>,
+    },
     LogsDiscover,
     LogsRead(LogQuery),
 }
@@ -109,6 +121,8 @@ pub enum Update {
         result: Result<Vec<FileEntry>, String>,
     },
     Progress(String, u64, u64, u64),
+    TransferPlan(String, arcnix_core::transfer::TransferPlan),
+    TransferFile(String, arcnix_core::transfer::FileProgress),
     Finished(String, Result<(), String>),
     Log(String),
     Deleted {
@@ -126,6 +140,8 @@ pub enum Update {
     PackageEnvironment(Result<SystemEnvironment, String>),
     PackageList(Result<Vec<packages::Package>, String>),
     Metrics(Result<ResourceSnapshot, String>),
+    Ports(Result<arcnix_core::resource_ports::Snapshot, String>),
+    PortTerminated(Result<(), String>),
     LogCapabilities(Result<LogCapabilities, String>),
     SystemLogs(Result<LogSnapshot, String>),
     TransferConflict(
@@ -293,6 +309,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
         }
     });
     thread::spawn(move || {
+        let mut transfers = crate::transfer_worker::Pool::new(events.clone(), generation.clone());
         let mut pending: Option<PendingConnection> = None;
         let mut session: Option<RemoteSession> = None;
         let mut active_epoch = 0;
@@ -312,6 +329,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     update,
                 });
             };
+            if let Action::TransferConcurrency(limit) = action {
+                transfers.set_limit(limit);
+                continue;
+            }
             if let Action::Operations(action) = action {
                 let kind = action.kind();
                 let result: anyhow::Result<()> = (|| {
@@ -330,12 +351,76 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     if arcnix_core::transport_error::is_connection_error(&error) {
                         session = None;
                         pending = None;
+                        transfers.reset();
                         send(Update::ConnectionLost(format!("{error:#}")));
                     }
                     send(Update::Operations(crate::operations_worker::Event::Failed(
                         kind,
                         format!("{error:#}"),
                     )));
+                }
+                continue;
+            }
+            if matches!(
+                action,
+                Action::PortsRead { .. } | Action::PortTerminate { .. }
+            ) {
+                let terminating = matches!(action, Action::PortTerminate { .. });
+                let outcome: anyhow::Result<()> = (|| {
+                    anyhow::ensure!(
+                        epoch == generation.load(Ordering::Acquire) && epoch == active_epoch,
+                        "Server connection has changed"
+                    );
+                    let remote = session
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Connect a server first"))?;
+                    match action {
+                        Action::PortsRead {
+                            administrator,
+                            sudo,
+                            cancel,
+                        } => {
+                            let snapshot = arcnix_core::resource_ports::read(
+                                remote,
+                                administrator,
+                                (!sudo.is_empty()).then_some(sudo.as_str()),
+                                &cancel,
+                            )?;
+                            send(Update::Ports(Ok(snapshot)));
+                        }
+                        Action::PortTerminate {
+                            target,
+                            administrator,
+                            sudo,
+                            cancel,
+                        } => {
+                            arcnix_core::resource_ports::terminate(
+                                remote,
+                                &target,
+                                administrator,
+                                (!sudo.is_empty()).then_some(sudo.as_str()),
+                                &cancel,
+                            )?;
+                            send(Update::PortTerminated(Ok(())));
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = outcome {
+                    if arcnix_core::transport_error::is_connection_error(&error) {
+                        session = None;
+                        pending = None;
+                        transfers.reset();
+                        package_environment = None;
+                        send(Update::ConnectionLost(format!("{error:#}")));
+                    }
+                    let message = format!("{error:#}");
+                    send(if terminating {
+                        Update::PortTerminated(Err(message))
+                    } else {
+                        Update::Ports(Err(message))
+                    });
                 }
                 continue;
             }
@@ -372,6 +457,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     if arcnix_core::transport_error::is_connection_error(&error) {
                         session = None;
                         pending = None;
+                        transfers.reset();
                         package_environment = None;
                         send(Update::ConnectionLost(format!("{error:#}")));
                     }
@@ -419,6 +505,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     if arcnix_core::transport_error::is_connection_error(&error) {
                         session = None;
                         pending = None;
+                        transfers.reset();
                         package_environment = None;
                         send(Update::ConnectionLost(format!("{error:#}")));
                     }
@@ -431,94 +518,13 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 }
                 continue;
             }
-            // Every accepted transfer gets its terminal event, including a
-            // disconnected/stale session. Otherwise the queue stays Running.
             if let Action::TransferInteractive {
                 job,
                 cancel,
-                mut policy,
+                policy,
             } = action
             {
-                let result: anyhow::Result<()> = (|| {
-                    anyhow::ensure!(
-                        epoch == generation.load(Ordering::Acquire) && epoch == active_epoch,
-                        "连接已切换，传输已停止"
-                    );
-                    anyhow::ensure!(job.server_id == active_server, "服务器会话已变化，拒绝传输");
-                    let remote = session
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("连接已断开，请重新连接后重试"))?;
-                    let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
-                    let latest = std::cell::Cell::new(None);
-                    let progress = |done, total, actual| {
-                        latest.set(Some((done, total, actual)));
-                        if done == total || last.elapsed().as_millis() >= 100 {
-                            send(Update::Progress(job.id.clone(), done, total, actual));
-                            last = std::time::Instant::now();
-                        }
-                    };
-                    let mut resolve = |conflict:&arcnix_core::transfer::TransferConflict| -> anyhow::Result<arcnix_core::transfer::ConflictAction> {
-                            use arcnix_core::transfer::ConflictAction;
-                            if let Some(action) = policy { return Ok(action); }
-                            let (reply,answer) = mpsc::channel();
-                            send(Update::TransferConflict(job.id.clone(), conflict.clone(),reply));
-                            loop {
-                                if cancel.load(Ordering::Relaxed) || epoch != generation.load(Ordering::Acquire) {
-                                    return Err(arcnix_core::remote::TransferCancelled.into());
-                                }
-                                match answer.recv_timeout(std::time::Duration::from_millis(100)) {
-                                    Ok(decision) => {
-                                        if decision.action == ConflictAction::Cancel {
-                                            cancel.store(true,Ordering::Relaxed);
-                                        } else if decision.scope != ConflictScope::ThisFile {
-                                            policy = Some(decision.action);
-                                        }
-                                        return Ok(decision.action);
-                                    }
-                                    Err(mpsc::RecvTimeoutError::Timeout) => {},
-                                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(ConflictAction::Cancel),
-                                }
-                            }
-                        };
-                    let summary = match job.direction {
-                        TransferDirection::Upload => remote.upload_path_with_conflicts_stats(
-                            &job.local_path,
-                            &job.remote_path,
-                            &cancel,
-                            progress,
-                            &mut resolve,
-                        ),
-                        TransferDirection::Download => remote.download_path_with_conflicts_stats(
-                            &job.remote_path,
-                            &job.local_path,
-                            &cancel,
-                            progress,
-                            &mut resolve,
-                        ),
-                    };
-                    if let Some((done, total, actual)) = latest.get() {
-                        send(Update::Progress(job.id.clone(), done, total, actual));
-                    }
-                    let summary = summary?;
-                    send(Update::TransferReport(job.id.clone(), summary));
-                    Ok(())
-                })();
-                let lost = result
-                    .as_ref()
-                    .err()
-                    .filter(|e| arcnix_core::transport_error::is_connection_error(e))
-                    .map(|e| format!("{e:#}"));
-                // Publish connection loss before Finished so the UI cannot
-                // schedule another transfer on a known dead session.
-                if let Some(message) = lost {
-                    session = None;
-                    pending = None;
-                    send(Update::ConnectionLost(message));
-                }
-                send(Update::Finished(
-                    job.id,
-                    result.map_err(|e| format!("{e:#}")),
-                ));
+                transfers.submit(epoch, serial, job, cancel, policy);
                 continue;
             }
             let browsing = matches!(action, Action::Remote(_));
@@ -550,6 +556,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         active_profile = Some(profile.clone());
                         session = None;
                         pending = None;
+                        transfers.reset();
                         let connection = match expected {
                             Some(expected) => {
                                 PendingConnection::open_for_known_host(&profile, &expected)?
@@ -573,6 +580,12 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                             .ok_or_else(|| anyhow::anyhow!("连接已失效，请重新连接"))?;
                         session = Some(connection.authenticate(&secret, &fingerprint)?);
                         if let Some(profile) = active_profile.clone() {
+                            transfers.attach(
+                                epoch,
+                                profile.clone(),
+                                fingerprint.clone(),
+                                secret.clone(),
+                            );
                             let _ = terminal.send(crate::terminal_worker::Command::Attach {
                                 epoch,
                                 profile: Box::new(profile),
@@ -585,10 +598,12 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         ));
                     }
                     Action::Disconnect => {
+                        transfers.reset();
                         package_environment = None;
                         active_epoch = epoch;
                         session = None;
                         pending = None;
+                        transfers.reset();
                         send(Update::Disconnected);
                     }
                     action => {
@@ -734,6 +749,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     if had_session && arcnix_core::transport_error::is_connection_error(&error) {
                         session = None;
                         pending = None;
+                        transfers.reset();
                         send(Update::ConnectionLost(format!("{error:#}")));
                     }
                     continue;
@@ -741,6 +757,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 if had_session && arcnix_core::transport_error::is_connection_error(&error) {
                     session = None;
                     pending = None;
+                    transfers.reset();
                     send(Update::ConnectionLost(format!("{error:#}")));
                 } else if let Some(parent) = child_path {
                     send(Update::Children {
@@ -796,6 +813,11 @@ mod tests {
             Action::MetricsSample,
             Action::LogsDiscover,
             Action::LogsRead(LogQuery::default()),
+            Action::PortsRead {
+                administrator: false,
+                sudo: zeroize::Zeroizing::new(String::new()),
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
         ]
         .into_iter()
         .enumerate()
@@ -813,7 +835,45 @@ mod tests {
                 Update::Metrics(Err(_))
                     | Update::LogCapabilities(Err(_))
                     | Update::SystemLogs(Err(_))
+                    | Update::Ports(Err(_))
             ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn port_termination_requests_finish_without_a_session_and_reject_expired_epochs() -> Result<()>
+    {
+        let (tx, rx) = start();
+        let target: arcnix_core::resource_ports::Target =
+            serde_json::from_value(serde_json::json!({
+                "boot_id":"12345678-1234-1234-1234-123456789abc", "namespace":123,
+                "listener":{"protocol":"tcp","family":4,"address":"127.0.0.1","port":45678,
+                    "inode":321,"uid":1000,"holders":[],"holders_limited":false},
+                "holder":{"pid":1234,"start_ticks":9876,"uid":1000,"fd":3,"command":"owned-fixture",
+                    "executable":"/usr/bin/owned-fixture","unit":null}
+            }))?;
+        for (epoch, serial) in [(0, 1), (99, 2)] {
+            tx.send(Request {
+                epoch,
+                serial,
+                action: Action::PortTerminate {
+                    target: Box::new(target.clone()),
+                    administrator: false,
+                    sudo: zeroize::Zeroizing::new(String::new()),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            })?;
+            let response = receive(&rx)?;
+            assert_eq!((response.epoch, response.serial), (epoch, serial));
+            match response.update {
+                Update::PortTerminated(Err(error)) => assert!(error.contains(if epoch == 0 {
+                    "Connect a server first"
+                } else {
+                    "Server connection has changed"
+                })),
+                _ => anyhow::bail!("Port termination did not return a terminal error"),
+            }
         }
         Ok(())
     }

@@ -23,6 +23,20 @@ pub(super) struct BrowserState {
     remote: PaneState,
     local_icons: bool,
     remote_icons: bool,
+    drag: Option<FileDrag>,
+}
+
+#[derive(Clone)]
+struct FileDrag {
+    id: u64,
+    remote: bool,
+    epoch: u64,
+    server: String,
+    local_path: String,
+    remote_path: String,
+    local_request: u64,
+    remote_request: u64,
+    entries: Vec<FileEntry>,
 }
 impl BrowserState {
     fn pane(&self, remote: bool) -> &PaneState {
@@ -36,6 +50,7 @@ impl BrowserState {
         }
     }
     pub fn reset(&mut self, remote: bool) {
+        self.drag = None;
         *self.pane_mut(remote) = PaneState::default();
     }
 }
@@ -297,6 +312,86 @@ pub(super) fn selected_entries(s: &State, remote: bool) -> Vec<FileEntry> {
     let all = entries(s, remote);
     transfer_roots(&all, selected, remote)
 }
+pub(super) fn transfer_ready(s: &State) -> bool {
+    workspace::ready(s, false) && workspace::ready(s, true)
+}
+
+fn drag_ready(s: &State) -> bool {
+    transfer_ready(s)
+        && s.dialog.is_none()
+        && s.navigation == navigation::Page::Servers
+        && s.workspace_page == WorkspacePage::Files
+}
+
+fn begin_drag(ui: &Ui, remote: bool, target: &str, id: u64) {
+    ui.state.revise(|s| s.file_browser.drag = None);
+    if id == 0
+        || !ui.state.with(|s| {
+            drag_ready(s)
+                && s.selected.is_some()
+                && entries(s, remote)
+                    .iter()
+                    .any(|entry| entry.path == target && !entry.is_symlink)
+        })
+    {
+        return;
+    }
+    // A drag from a selected row keeps the entire selection. An unselected row
+    // becomes the sole source, without depending on a preceding click event.
+    if !ui.state.with(|s| {
+        if remote {
+            &s.remote_selection
+        } else {
+            &s.local_selection
+        }
+        .contains(target)
+    }) {
+        select(ui, remote, target, false, false);
+    }
+    ui.state.revise(|s| {
+        s.file_menu = None;
+        s.file_context = None;
+        s.file_browser.drag = Some(FileDrag {
+            id,
+            remote,
+            epoch: s.epoch,
+            server: s.selected.clone().unwrap(),
+            local_path: s.local_path.clone(),
+            remote_path: s.remote_path.clone(),
+            local_request: s.local_request,
+            remote_request: s.remote_request,
+            entries: selected_entries(s, remote),
+        });
+    });
+}
+
+fn drop_transfer(ui: &Ui, remote: bool, id: u64) {
+    let source = ui.state.revise(|s| {
+        let source = s.file_browser.drag.take()?;
+        // Bind the gesture to both listings and the SSH session. A refresh,
+        // navigation or reconnect during a drag must never retarget a transfer.
+        (source.id == id
+            && source.remote != remote
+            && source.epoch == s.epoch
+            && Some(&source.server) == s.selected.as_ref()
+            && source.local_path == s.local_path
+            && source.remote_path == s.remote_path
+            && source.local_request == s.local_request
+            && source.remote_request == s.remote_request
+            && drag_ready(s))
+        .then_some(source)
+    });
+    if let Some(source) = source {
+        ui.transfer_entries(
+            if source.remote {
+                TransferDirection::Download
+            } else {
+                TransferDirection::Upload
+            },
+            source.entries,
+        );
+    }
+}
 fn transfer_roots(all: &[FileEntry], selected: &HashSet<String>, remote: bool) -> Vec<FileEntry> {
     let directories: HashSet<_> = all
         .iter()
@@ -326,6 +421,9 @@ fn transfer_roots(all: &[FileEntry], selected: &HashSet<String>, remote: bool) -
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum GestureKind {
+    DragStart,
+    DragEnd,
+    TransferDrop,
     Context,
     Rename,
     Delete,
@@ -348,6 +446,8 @@ struct Gesture {
     toggle: bool,
     #[serde(default)]
     range: bool,
+    #[serde(default)]
+    drag_id: u64,
 }
 pub(super) fn clear_selection(s: &mut State, remote: bool) {
     selection(s, remote).clear();
@@ -503,6 +603,17 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
         return;
     };
     match event.kind {
+        GestureKind::DragStart => begin_drag(ui, remote, &event.path, event.drag_id),
+        GestureKind::DragEnd => ui.state.revise(|s| {
+            if s.file_browser
+                .drag
+                .as_ref()
+                .is_some_and(|source| source.id == event.drag_id)
+            {
+                s.file_browser.drag = None;
+            }
+        }),
+        GestureKind::TransferDrop => drop_transfer(ui, remote, event.drag_id),
         GestureKind::Context => file_context::open(ui, remote, &event.path),
         GestureKind::Delete => file_context::begin_delete(ui, remote),
         GestureKind::Rename => {
@@ -583,12 +694,15 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                 } else {
                                     &s.local_selection
                                 };
-                                if selected.contains(&entry.get().entry.path) {
-                                    "file-row row-selected"
-                                } else {
-                                    "file-row"
+                                let entry = entry.get();
+                                let mut class = String::from("file-row");
+                                if selected.contains(&entry.entry.path) {
+                                    class.push_str(" row-selected");
                                 }
-                                .to_owned()
+                                if !entry.entry.is_symlink {
+                                    class.push_str(" file-draggable");
+                                }
+                                class
                             }))
                             .style(entry.map(|r| {
                                 Style::new().padding(Edges {
@@ -599,9 +713,11 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                 })
                             }))
                             .fill((
-                                sapid::button()
+                                glory::ui::button()
                                     .class(entry.map(|r| {
-                                        if r.entry.is_dir {
+                                        if r.loading {
+                                            "file-expander file-expander-loading"
+                                        } else if r.entry.is_dir {
                                             "file-expander"
                                         } else {
                                             "file-expander file-expander-empty"
@@ -615,18 +731,16 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                             r.entry.name
                                         )
                                     })))
-                                    .label(entry.map(|r| {
-                                        if r.loading {
-                                            "…"
-                                        } else if r.expanded {
-                                            "⌄"
-                                        } else {
-                                            "›"
-                                        }
-                                        .to_owned()
+                                    .label("")
+                                    .semantics(entry.map(|r| {
+                                        Some(Box::new(glory::render::Semantics {
+                                            expanded: Some(r.expanded),
+                                            ..Default::default()
+                                        }))
                                     }))
+                                    .fill(icons::disclosure_icon(entry.map(|r| r.expanded)))
                                     .enabled(entry.map(|r| r.entry.is_dir && !r.entry.is_symlink))
-                                    .on_press(move || {
+                                    .on(glory::render::EventKind::Activate, move |_| {
                                         toggle_tree(&expand, remote, &entry.get().entry.path, None)
                                     }),
                                 sapid::button()

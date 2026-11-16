@@ -1057,3 +1057,154 @@ fn telemetry_separates_skipped_progress_from_payload_bytes_in_both_directions() 
     assert_eq!(actual, 0);
     Ok(())
 }
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn planned_transfers_dispatch_files_on_independent_sessions_and_keep_empty_directories()
+-> Result<()> {
+    use arcnix_core::TransferDirection;
+    use arcnix_core::transfer::ConflictAction;
+    let session = connect()?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::create_dir_all(source.join("nested/empty"))?;
+    fs::write(source.join("nested/中文.txt"), b"nested payload")?;
+    fs::write(source.join("zero"), [])?;
+    fs::write(source.join("large.bin"), vec![42; 300_000])?;
+    let destination = format!("/planned-{}", new_id());
+    let cancel = AtomicBool::new(false);
+    let plan = session.prepare_upload(&source, &destination, &cancel)?;
+    assert!(plan.is_directory);
+    assert_eq!(plan.files.len(), 3);
+    assert_eq!(plan.total_bytes, 300_014);
+    assert!(
+        plan.files
+            .iter()
+            .any(|file| file.relative_path == "nested/中文.txt")
+    );
+    assert!(
+        session
+            .list_dir(&format!("{destination}/nested/empty"))?
+            .1
+            .is_empty()
+    );
+    std::thread::scope(|scope| -> Result<()> {
+        let workers: Vec<_> = plan
+            .files
+            .iter()
+            .map(|file| {
+                scope.spawn(|| -> Result<()> {
+                    let mut final_progress = (0, 0, 0);
+                    let report = connect()?.transfer_planned_file(
+                        TransferDirection::Upload,
+                        file,
+                        &cancel,
+                        |done, total, actual| final_progress = (done, total, actual),
+                        |_| Ok(ConflictAction::Skip),
+                    )?;
+                    assert_eq!(report.transferred_files, 1);
+                    assert_eq!(final_progress, (file.size, file.size, file.size));
+                    Ok(())
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("file worker did not panic")?;
+        }
+        Ok(())
+    })?;
+    let target = temp.join("download");
+    let download = session.prepare_download(&destination, &target, &cancel)?;
+    assert!(download.is_directory);
+    assert_eq!(download.files.len(), 3);
+    assert_eq!(download.total_bytes, plan.total_bytes);
+    assert!(target.join("nested/empty").is_dir());
+    for file in &download.files {
+        connect()?.transfer_planned_file(
+            TransferDirection::Download,
+            file,
+            &cancel,
+            |_, _, _| {},
+            |_| Ok(ConflictAction::Skip),
+        )?;
+        assert_eq!(
+            fs::read(&file.local_path)?,
+            fs::read(source.join(&file.relative_path))?
+        );
+    }
+    let skipped = &download.files[0];
+    fs::write(&skipped.local_path, b"retain existing destination")?;
+    let report = session.transfer_planned_file(
+        TransferDirection::Download,
+        skipped,
+        &cancel,
+        |_, _, actual| assert_eq!(actual, 0),
+        |_| Ok(ConflictAction::Skip),
+    )?;
+    assert_eq!(report.skipped_files, 1);
+    assert_eq!(
+        fs::read(&skipped.local_path)?,
+        b"retain existing destination"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn planned_transfers_refuse_changed_sources_and_cancel_before_copy() -> Result<()> {
+    use arcnix_core::TransferDirection;
+    use arcnix_core::transfer::ConflictAction;
+    let session = connect()?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::write(&source, b"original")?;
+    let remote = format!("/planned-stamp-{}", new_id());
+    let cancel = AtomicBool::new(false);
+    let upload = session.prepare_upload(&source, &remote, &cancel)?;
+    assert!(!upload.is_directory);
+    fs::write(&source, b"changed source bytes")?;
+    assert!(
+        session
+            .transfer_planned_file(
+                TransferDirection::Upload,
+                &upload.files[0],
+                &cancel,
+                |_, _, _| panic!("A changed source must not begin copying"),
+                |_| Ok(ConflictAction::Overwrite),
+            )
+            .is_err()
+    );
+    session.upload(&source, &remote, &cancel, |_, _| {})?;
+    let local = temp.join("download");
+    let download = session.prepare_download(&remote, &local, &cancel)?;
+    fs::write(&source, b"new")?;
+    session.upload_with_conflicts(
+        &source,
+        &remote,
+        &cancel,
+        |_, _| {},
+        |_| Ok(ConflictAction::Overwrite),
+    )?;
+    assert!(
+        session
+            .transfer_planned_file(
+                TransferDirection::Download,
+                &download.files[0],
+                &cancel,
+                |_, _, _| panic!("A changed remote source must not begin copying"),
+                |_| Ok(ConflictAction::Overwrite),
+            )
+            .is_err()
+    );
+    assert!(!local.exists());
+    cancel.store(true, Ordering::Relaxed);
+    let error = session
+        .prepare_upload(&source, &remote, &cancel)
+        .unwrap_err();
+    assert!(error.is::<TransferCancelled>());
+    let error = session
+        .prepare_download(&remote, &local, &cancel)
+        .unwrap_err();
+    assert!(error.is::<TransferCancelled>());
+    Ok(())
+}

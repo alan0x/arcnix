@@ -109,6 +109,51 @@ pub(super) fn glyph(icon: Icon) -> impl Widget {
         .content("")
 }
 
+pub(super) fn disclosure_icon(expanded: impl Into<Vary<bool>>) -> impl Widget {
+    let expanded = expanded.into();
+    text()
+        .class_fn(move || {
+            if expanded.get() {
+                "action-glyph disclosure-icon sapid-chevron-down"
+            } else {
+                "action-glyph disclosure-icon sapid-chevron-right"
+            }
+            .to_owned()
+        })
+        .content("")
+}
+
+fn disclosure_svg(icon: sapid::Icon) -> String {
+    use glory::render::PathCommand;
+    // Wry 0.7 rejects Graphic nodes. Keep Sapid's own geometry and stroke, and
+    // render it through the same SVG mask path as the other desktop icons.
+    let drawing = icon.drawing(glory::style::Color(0, 0, 0, 255));
+    let path = drawing
+        .commands
+        .iter()
+        .map(|command| match command {
+            PathCommand::Move(point) => format!("M{} {}", point.x, point.y),
+            PathCommand::Line(point) => format!("L{} {}", point.x, point.y),
+            PathCommand::Cubic { first, second, end } => format!(
+                "C{} {} {} {} {} {}",
+                first.x, first.y, second.x, second.y, end.x, end.y
+            ),
+            PathCommand::Close => "Z".to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let stroke = drawing.stroke.expect("Sapid chevrons have a stroke");
+    let cap = match stroke.cap {
+        glory::render::StrokeCap::Butt => "butt",
+        glory::render::StrokeCap::Round => "round",
+        glory::render::StrokeCap::Square => "square",
+    };
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"round\"><path d=\"{path}\"/></svg>",
+        drawing.width, drawing.height, stroke.width
+    )
+}
+
 pub fn icon_action(name: impl Into<String>, icon: Icon) -> sapid::ActionIcon {
     let name = name.into();
     sapid::action_icon(i18n::translate(&name))
@@ -189,6 +234,18 @@ pub fn css() -> String {
         css.push_str(&format!(
             ".glyph-{}{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n",
             icon.name()
+        ));
+    }
+    for (name, icon) in [
+        ("right", sapid::Icon::ChevronRight),
+        ("down", sapid::Icon::ChevronDown),
+    ] {
+        let encoded = disclosure_svg(icon)
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>();
+        css.push_str(&format!(
+            ".sapid-chevron-{name}{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n"
         ));
     }
     css

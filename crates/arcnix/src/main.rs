@@ -31,6 +31,7 @@ mod preferences_ui;
 mod record_maintenance_ui;
 mod recovery_ui;
 mod remote_editor;
+mod resource_ports_ui;
 mod resource_trends;
 mod script_exchange_ui;
 mod script_parameters_ui;
@@ -46,11 +47,16 @@ mod task_refresh_ui;
 mod task_target_picker;
 mod tcp_listeners_ui;
 mod terminal;
+mod terminal_menu;
 mod terminal_worker;
 #[cfg(test)]
 mod terminal_worker_tests;
+mod transfer_details;
 mod transfer_progress;
 mod transfer_ui;
+mod transfer_worker;
+#[cfg(test)]
+mod transfer_worker_tests;
 mod update_install;
 mod updates_ui;
 mod worker;
@@ -75,6 +81,9 @@ use worker::{Action, Request, Update};
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
+    TerminalRename {
+        id: u64,
+    },
     TransferDefaults,
     RemoteEditor,
     Server,
@@ -109,6 +118,7 @@ enum Dialog {
     DiagnosticLogs,
     DeletedFiles,
     TcpListeners,
+    TerminatePortProcess,
     ConfigurationCompare,
     ConfigurationDiscard,
     ConfigurationBackup,
@@ -226,12 +236,15 @@ struct State {
     diagnostics: diagnostics_ui::DiagnosticsState,
     configurations: configurations_ui::ConfigurationState,
     metrics: observability::MetricState,
+    ports: resource_ports_ui::PortState,
     system_logs: observability::LogsState,
     system_task_running: bool,
     settings: settings::SettingsState,
     system_dark: bool,
     file_split: f64,
     transfer_conflict: Option<transfer_ui::PendingConflict>,
+    transfer_conflicts: std::collections::VecDeque<transfer_ui::PendingConflict>,
+    transfer_details: HashMap<String, transfer_details::Details>,
     batch_ids: HashMap<String, String>,
     queue_rules: HashMap<(String, TransferDirection), arcnix_core::transfer::ConflictAction>,
     session_rules: HashMap<TransferDirection, arcnix_core::transfer::ConflictAction>,
@@ -398,6 +411,9 @@ impl Ui {
         });
     }
     fn close_dialog(&self) {
+        let terminal_rename = self
+            .state
+            .with(|s| matches!(s.dialog, Some(Dialog::TerminalRename { .. })));
         if remote_editor::dismiss(self) {
             return;
         }
@@ -423,6 +439,7 @@ impl Ui {
                 return;
             }
             backups_ui::dismiss(s);
+            resource_ports_ui::dismiss(s);
             if matches!(s.dialog, Some(Dialog::ScriptImport | Dialog::ScriptExport)) {
                 script_exchange_ui::forget(s);
             }
@@ -487,6 +504,16 @@ impl Ui {
             .with(|s| s.dialog.is_none() && s.transfer_conflict.is_some())
         {
             self.open_dialog(Dialog::TransferConflict);
+        }
+        if terminal_rename
+            && self.state.with(|s| {
+                s.dialog.is_none()
+                    && navigation::workspace_visible(s)
+                    && s.workspace_page == WorkspacePage::Terminal
+            })
+        {
+            let id = self.state.with(|s| s.terminal.id);
+            self.terminal_ui_command(id, "focus");
         }
     }
     fn error(&self, message: impl AsRef<str>) {
@@ -555,7 +582,19 @@ impl Ui {
         }
         self.state.revise(|s| {
             let active = s.cancels.keys().cloned().collect();
+            let previous: Vec<_> = s.jobs.iter().map(|job| job.id.clone()).collect();
             browser::retry(&mut s.jobs, &active, s.selected.as_deref(), id.as_deref());
+            let changes: Vec<_> = previous
+                .into_iter()
+                .zip(s.jobs.iter().map(|job| job.id.clone()))
+                .filter(|(old, new)| old != new)
+                .collect();
+            for (old, new) in changes {
+                transfer_details::reset(s, &old, &new);
+                if let Some(batch) = s.batch_ids.remove(&old) {
+                    s.batch_ids.insert(new, batch);
+                }
+            }
             s.transfer_meters
                 .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
         });
@@ -607,6 +646,7 @@ impl Ui {
                 s.software = Default::default();
                 s.operations = Default::default();
                 s.metrics = Default::default();
+                resource_ports_ui::reset(s);
                 s.system_logs = Default::default();
             });
             let known = self.state.with(|s| {
@@ -650,6 +690,7 @@ impl Ui {
             s.software = Default::default();
             s.operations = Default::default();
             s.metrics = Default::default();
+            resource_ports_ui::reset(s);
             s.system_logs = Default::default();
             s.session_rules.clear();
             s.queue_rules.clear();
@@ -670,6 +711,17 @@ impl Ui {
                     j.status = TransferStatus::Cancelled;
                 }
             }
+            let cancelled: Vec<_> = s
+                .jobs
+                .iter()
+                .filter(|job| job.status == TransferStatus::Cancelled)
+                .map(|job| job.id.clone())
+                .collect();
+            for id in cancelled {
+                transfer_details::finish(s, &id, &TransferStatus::Cancelled);
+            }
+            s.transfer_conflict = None;
+            s.transfer_conflicts.clear();
         });
     }
     fn authenticate(&self, remember: bool) {
@@ -736,25 +788,25 @@ impl Ui {
         });
     }
     fn transfer(&self, direction: TransferDirection) {
+        let entries = self
+            .state
+            .with(|s| file_browser::selected_entries(s, direction == TransferDirection::Download));
+        self.transfer_entries(direction, entries);
+    }
+    fn transfer_entries(&self, direction: TransferDirection, entries: Vec<FileEntry>) {
         if direction == TransferDirection::Download
-            && self.state.with(|s| {
-                file_browser::selected_entries(s, true)
-                    .iter()
-                    .any(|f| !safe_local_name(&f.name))
-            })
+            && entries.iter().any(|f| !safe_local_name(&f.name))
         {
             self.log("下载已拒绝：所选远程名称无法安全保存为本地文件名");
             return;
         }
         let jobs = self.state.with(|s| {
-            if !s.connected || !s.local_ready || !s.remote_ready {
+            if !file_browser::transfer_ready(s) {
                 return Vec::new();
             }
             let Some(server_id) = s.selected.clone() else {
                 return Vec::new();
             };
-            let entries =
-                file_browser::selected_entries(s, direction == TransferDirection::Download);
             entries
                 .iter()
                 .map(|f| TransferJob {
@@ -791,60 +843,49 @@ impl Ui {
         self.schedule();
     }
     fn schedule(&self) {
+        let limit = self.state.with(|s| s.config.settings.transfer_concurrency);
+        self.send(Action::TransferConcurrency(limit));
         let next = self.state.revise(|s| {
+            let mut next = Vec::new();
             if s.system_task_running
                 || s.deletion.is_some()
                 || s.remote_editor.is_some()
                 || s.properties.as_ref().is_some_and(|p| p.is_running())
                 || !s.connected
                 || s.queue_paused
-                || !s.cancels.is_empty()
-                || s.jobs.iter().any(|j| j.status == TransferStatus::Running)
             {
-                return None;
+                return next;
             }
-            let job = s.jobs.iter_mut().find(|j| {
-                j.status == TransferStatus::Queued && Some(&j.server_id) == s.selected.as_ref()
-            })?;
-            job.status = TransferStatus::Running;
-            s.inflight_transfers.insert(job.id.clone());
-            s.transfer_now = std::time::Instant::now();
-            s.transfer_meters.insert(
-                job.id.clone(),
-                transfer_progress::Meter::new(s.transfer_now),
-            );
-            let cancel = Arc::new(AtomicBool::new(false));
-            s.cancels.insert(job.id.clone(), cancel.clone());
-            Some((job.clone(), cancel))
+            while s.cancels.len() < usize::from(limit) {
+                let index = s.jobs.iter().position(|job| {
+                    job.status == TransferStatus::Queued
+                        && Some(&job.server_id) == s.selected.as_ref()
+                        && !s.jobs.iter().any(|active| {
+                            s.cancels.contains_key(&active.id)
+                                && transfer_worker::overlap(job, active)
+                        })
+                });
+                let Some(index) = index else {
+                    break;
+                };
+                let job = &mut s.jobs[index];
+                job.status = TransferStatus::Running;
+                s.inflight_transfers.insert(job.id.clone());
+                s.transfer_now = std::time::Instant::now();
+                s.transfer_meters.insert(
+                    job.id.clone(),
+                    transfer_progress::Meter::new(s.transfer_now),
+                );
+                let cancel = Arc::new(AtomicBool::new(false));
+                s.cancels.insert(job.id.clone(), cancel.clone());
+                next.push((job.clone(), cancel));
+            }
+            next
         });
-        if let Some((job, cancel)) = next {
-            use arcnix_core::transfer::ConflictAction;
-            let policy = self.state.with(|s| {
-                s.batch_ids
-                    .get(&job.id)
-                    .and_then(|batch| s.queue_rules.get(&(batch.clone(), job.direction)))
-                    .copied()
-                    .or_else(|| s.session_rules.get(&job.direction).copied())
-                    .or_else(|| {
-                        s.config
-                            .transfer_rules
-                            .iter()
-                            .find(|rule| {
-                                rule.server_id == job.server_id && rule.direction == job.direction
-                            })
-                            .map(|rule| rule.action)
-                            .or(if job.direction == TransferDirection::Upload {
-                                s.config.settings.upload_conflict
-                            } else {
-                                s.config.settings.download_conflict
-                            })
-                            .and_then(|action| match action {
-                                ExistingFileAction::Ask => None,
-                                ExistingFileAction::Overwrite => Some(ConflictAction::Overwrite),
-                                ExistingFileAction::Skip => Some(ConflictAction::Skip),
-                            })
-                    })
-            });
+        for (job, cancel) in next {
+            let policy = self
+                .state
+                .with(|s| transfer_ui::policy(s, &job.id, job.direction));
             self.send(Action::TransferInteractive {
                 job,
                 cancel,
@@ -1143,6 +1184,7 @@ fn module_tab(ui: Ui, page: WorkspacePage, label: &'static str) -> impl Widget {
                     observability::metrics_leave(s);
                 }
                 s.workspace_page = page;
+                s.terminal.menu = None;
             });
             ui.observability_enter();
             ui.terminal_enter();
@@ -1314,7 +1356,11 @@ fn app(ui: Ui) -> impl Widget {
                 servers::dialogs(ui.clone()),
                 updates_ui::overlay(ui.clone()),
                 workspace::file_dialog(ui.clone()),
-                file_context::dialogs(ui.clone()),
+                fragment((
+                    file_context::dialogs(ui.clone()),
+                    terminal_menu::dialogs(ui.clone()),
+                    resource_ports_ui::dialog(ui.clone()),
+                )),
                 remote_editor::dialogs(ui.clone()),
                 file_columns::dialog(ui.clone()),
                 cleanup_records_ui::dialog(ui.clone()),
@@ -1533,12 +1579,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         diagnostics: Default::default(),
         configurations: Default::default(),
         metrics: Default::default(),
+        ports: Default::default(),
         system_logs: Default::default(),
         system_task_running: false,
         settings: Default::default(),
         system_dark: true,
         file_split: 0.5,
         transfer_conflict: None,
+        transfer_conflicts: Default::default(),
+        transfer_details: Default::default(),
         batch_ids: HashMap::new(),
         queue_rules: HashMap::new(),
         session_rules: HashMap::new(),
@@ -1631,12 +1680,25 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){events.error(format!("读取目录失败：{message}"));}},
-            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
+            Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
+            Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
             Update::TransferReport(id,summary)=>{events.log(format!("传输结果：写入 {} 个文件，跳过 {} 个文件",summary.transferred_files,summary.skipped_files));state.revise(|s|{s.transfer_summaries.insert(id,summary);});},
             Update::Progress(id,done,total,actual)=>state.revise(|s|{s.transfer_now=std::time::Instant::now();if let Some(m)=s.transfer_meters.get_mut(&id){m.observe(actual,s.transfer_now);}
                 if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.transferred_bytes=done;job.total_bytes=total;}}),
-            Update::Finished(id,result)=>{state.revise(|s|{if s.transfer_conflict.as_ref().is_some_and(|c|c.job_id==id){s.transfer_conflict=None;if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}}});if let Err(error)=&result{events.log(format!("传输未完成：{error}"));}state.revise(|s|{s.transfer_now=std::time::Instant::now();if let Some(m)=s.transfer_meters.get_mut(&id){m.finish(s.transfer_now);}let cancelled=s.cancels.remove(&id).is_some_and(|c|c.load(Ordering::Relaxed));if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);}});events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}events.schedule();}
+            Update::Finished(id,result)=>{
+                transfer_ui::finished(&events,&id);
+                if let Err(error)=&result{events.log(format!("传输未完成：{error}"));}
+                state.revise(|s|{
+                    s.transfer_now=std::time::Instant::now();
+                    if let Some(m)=s.transfer_meters.get_mut(&id){m.finish(s.transfer_now);}
+                    let cancelled=s.cancels.remove(&id).is_some_and(|c|c.load(Ordering::Relaxed));
+                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();transfer_details::finish(s,&id,&status);}
+                });
+                if state.with(|s|s.cancels.is_empty()) {events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}}
+                events.schedule();
+            }
             Update::Log(message)=>{
                 events.log(message);
                 let file=state.with(|s|if s.file_pending==Some(response.serial){s.dialog.clone()}else{None});
@@ -1654,6 +1716,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             },
             Update::ConnectionError(message)=>{state.revise(|s|{s.connecting=false;s.fingerprint=None;s.secret.clear();});events.error(format!("连接失败：{message}"));},
             Update::Metrics(result)=>observability::metrics_event(&events,response.serial,result),
+            Update::Ports(result)=>resource_ports_ui::event(&events,response.serial,result),
+            Update::PortTerminated(result)=>resource_ports_ui::terminated(&events,response.serial,result),
             Update::LogCapabilities(result)=>observability::logs_capabilities_event(&events,response.serial,result),
             Update::SystemLogs(result)=>observability::logs_event(&events,response.serial,result),
             Update::PackageEnvironment(result)=>software::event(&events,response.serial,software::Event::Environment(result)),

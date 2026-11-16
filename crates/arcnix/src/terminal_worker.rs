@@ -1,5 +1,7 @@
-//! Independent SSH transport keeps interactive input responsive during SFTP.
-use std::sync::atomic::{AtomicU64, Ordering};
+//! Independent SSH transports keep interactive sessions responsive during SFTP
+//! and while another terminal connects.
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -11,12 +13,35 @@ use zeroize::Zeroizing;
 use crate::worker::{Response, Update};
 
 pub const OUTPUT_WINDOW: usize = 256 * 1024;
+pub const SESSION_LIMIT: usize = 8;
 pub enum Action {
-    Open { id: u64, columns: u32, rows: u32 },
-    Input { id: u64, bytes: Vec<u8> },
-    Resize { id: u64, columns: u32, rows: u32 },
-    Consumed { id: u64, bytes: usize },
-    Close { id: u64 },
+    Open {
+        id: u64,
+        columns: u32,
+        rows: u32,
+    },
+    OpenHere {
+        id: u64,
+        columns: u32,
+        rows: u32,
+        directory: String,
+    },
+    Input {
+        id: u64,
+        bytes: Vec<u8>,
+    },
+    Resize {
+        id: u64,
+        columns: u32,
+        rows: u32,
+    },
+    Consumed {
+        id: u64,
+        bytes: usize,
+    },
+    Close {
+        id: u64,
+    },
     Detach,
 }
 pub enum Command {
@@ -45,186 +70,341 @@ struct Credentials {
     fingerprint: String,
     secret: Zeroizing<String>,
 }
+struct SessionControl {
+    tx: mpsc::SyncSender<Action>,
+    stop: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
+}
+impl SessionControl {
+    fn close(self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+struct Alive(Arc<AtomicBool>);
+impl Drop for Alive {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+fn publish(
+    events: &async_channel::Sender<Response>,
+    epoch: u64,
+    serial: u64,
+    event: Event,
+) -> bool {
+    events
+        .send_blocking(Response {
+            epoch,
+            serial,
+            update: Update::Terminal(event),
+        })
+        .is_ok()
+}
+fn current(credentials: &Credentials, generation: &AtomicU64, stop: &AtomicBool) -> bool {
+    !stop.load(Ordering::Acquire) && credentials.epoch == generation.load(Ordering::Acquire)
+}
+struct OpenRequest {
+    id: u64,
+    columns: u32,
+    rows: u32,
+    directory: Option<String>,
+    serial: u64,
+}
+fn spawn_session(
+    request: OpenRequest,
+    credentials: Arc<Credentials>,
+    generation: Arc<AtomicU64>,
+    events: async_channel::Sender<Response>,
+) -> SessionControl {
+    let OpenRequest {
+        id,
+        columns,
+        rows,
+        directory,
+        serial,
+    } = request;
+    let (tx, rx) = mpsc::sync_channel(64);
+    let stop = Arc::new(AtomicBool::new(false));
+    let alive = Arc::new(AtomicBool::new(true));
+    let control = SessionControl {
+        tx,
+        stop: stop.clone(),
+        alive: alive.clone(),
+    };
+    std::thread::spawn(move || {
+        let _alive = Alive(alive);
+        let opened: anyhow::Result<Pty> = (|| {
+            anyhow::ensure!(
+                current(&credentials, &generation, &stop),
+                "Terminal connection was cancelled"
+            );
+            let pending = PendingConnection::open_for_known_host(
+                &credentials.profile,
+                &credentials.fingerprint,
+            )?;
+            anyhow::ensure!(
+                current(&credentials, &generation, &stop),
+                "Terminal connection was cancelled"
+            );
+            let remote = pending.authenticate(&credentials.secret, &credentials.fingerprint)?;
+            anyhow::ensure!(
+                current(&credentials, &generation, &stop),
+                "Terminal connection was cancelled"
+            );
+            if let Some(directory) = directory {
+                remote.into_terminal_here(columns, rows, &directory)
+            } else {
+                remote.into_terminal(columns, rows)
+            }
+        })();
+        let mut terminal = match opened {
+            Ok(terminal) if current(&credentials, &generation, &stop) => terminal,
+            Ok(_) => return,
+            Err(error) => {
+                if current(&credentials, &generation, &stop) {
+                    publish(
+                        &events,
+                        credentials.epoch,
+                        serial,
+                        Event::Failed {
+                            id,
+                            message: format!("{error:#}"),
+                        },
+                    );
+                }
+                return;
+            }
+        };
+        if !publish(&events, credentials.epoch, serial, Event::Started { id }) {
+            return;
+        }
+        let mut unconsumed = 0usize;
+        while current(&credentials, &generation, &stop) {
+            let result: anyhow::Result<()> = (|| {
+                match rx.recv_timeout(Duration::from_millis(12)) {
+                    Ok(Action::Input { id: target, bytes }) if target == id => {
+                        terminal.input(bytes)?
+                    }
+                    Ok(Action::Resize {
+                        id: target,
+                        columns,
+                        rows,
+                    }) if target == id => terminal.resize(columns, rows)?,
+                    Ok(Action::Consumed { id: target, bytes }) if target == id => {
+                        unconsumed = unconsumed.saturating_sub(bytes)
+                    }
+                    Ok(Action::Close { id: target }) if target == id => {
+                        stop.store(true, Ordering::Release);
+                        return Ok(());
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        stop.store(true, Ordering::Release);
+                        return Ok(());
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) | Ok(_) => {}
+                }
+                if !current(&credentials, &generation, &stop) {
+                    return Ok(());
+                }
+                let output = terminal.poll(OUTPUT_WINDOW.saturating_sub(unconsumed).min(16_384))?;
+                if !output.bytes.is_empty() {
+                    unconsumed += output.bytes.len();
+                    anyhow::ensure!(
+                        publish(
+                            &events,
+                            credentials.epoch,
+                            0,
+                            Event::Output {
+                                id,
+                                bytes: output.bytes
+                            }
+                        ),
+                        "Terminal receiver stopped"
+                    );
+                }
+                if let Some(code) = output.exit_code {
+                    stop.store(true, Ordering::Release);
+                    publish(
+                        &events,
+                        credentials.epoch,
+                        0,
+                        Event::Exited {
+                            id,
+                            code: Some(code),
+                        },
+                    );
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                if current(&credentials, &generation, &stop) {
+                    publish(
+                        &events,
+                        credentials.epoch,
+                        0,
+                        Event::Failed {
+                            id,
+                            message: format!("{error:#}"),
+                        },
+                    );
+                }
+                break;
+            }
+        }
+    });
+    control
+}
+fn close_all(sessions: &mut HashMap<u64, SessionControl>) {
+    for (_, session) in sessions.drain() {
+        session.close();
+    }
+}
 pub fn start(
     events: async_channel::Sender<Response>,
     generation: Arc<AtomicU64>,
 ) -> mpsc::Sender<Command> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut credentials: Option<Credentials> = None;
-        let mut terminal: Option<Pty> = None;
-        let mut terminal_id = 0;
-        let mut epoch = 0;
-        let mut unconsumed = 0usize;
-        let send = |epoch, serial, event| {
-            events
-                .send_blocking(Response {
-                    epoch,
-                    serial,
-                    update: Update::Terminal(event),
-                })
-                .is_ok()
-        };
+        let mut credentials: Option<Arc<Credentials>> = None;
+        let mut sessions = HashMap::<u64, SessionControl>::new();
         loop {
-            if epoch != generation.load(Ordering::Acquire) {
-                terminal = None;
+            if credentials
+                .as_ref()
+                .is_some_and(|credentials| credentials.epoch != generation.load(Ordering::Acquire))
+            {
+                close_all(&mut sessions);
                 credentials = None;
             }
+            sessions.retain(|_, session| session.alive.load(Ordering::Acquire));
             match rx.recv_timeout(Duration::from_millis(12)) {
                 Ok(Command::Reset) => {
-                    terminal = None;
+                    close_all(&mut sessions);
                     credentials = None;
-                    unconsumed = 0;
                 }
                 Ok(Command::Attach {
-                    epoch: next,
+                    epoch,
                     profile,
                     fingerprint,
                     secret,
                 }) => {
-                    if next != generation.load(Ordering::Acquire) {
+                    if epoch != generation.load(Ordering::Acquire) {
                         continue;
                     }
-                    terminal = None;
-                    epoch = next;
-                    credentials = Some(Credentials {
+                    close_all(&mut sessions);
+                    credentials = Some(Arc::new(Credentials {
                         epoch,
                         profile,
                         fingerprint,
                         secret,
-                    });
-                    unconsumed = 0;
+                    }));
                 }
                 Ok(Command::Request {
-                    epoch: request_epoch,
+                    epoch,
                     serial,
                     action,
                 }) => {
-                    if request_epoch != generation.load(Ordering::Acquire) || request_epoch != epoch
-                    {
+                    if epoch != generation.load(Ordering::Acquire) {
                         continue;
                     }
-                    let result: anyhow::Result<()> = (|| {
-                        match action {
-                            Action::Open { id, columns, rows } => {
-                                terminal = None;
-                                terminal_id = id;
-                                unconsumed = 0;
-                                let credentials = credentials.as_ref().ok_or_else(|| {
-                                    anyhow::anyhow!("Reconnect SSH before opening a terminal")
-                                })?;
-                                anyhow::ensure!(
-                                    credentials.epoch == epoch,
-                                    "Terminal connection has changed"
-                                );
-                                let pending = PendingConnection::open_for_known_host(
-                                    &credentials.profile,
-                                    &credentials.fingerprint,
-                                )?;
-                                anyhow::ensure!(
-                                    epoch == generation.load(Ordering::Acquire),
-                                    "Terminal connection was cancelled"
-                                );
-                                let remote = pending
-                                    .authenticate(&credentials.secret, &credentials.fingerprint)?;
-                                anyhow::ensure!(
-                                    epoch == generation.load(Ordering::Acquire),
-                                    "Terminal connection was cancelled"
-                                );
-                                terminal = Some(remote.into_terminal(columns, rows)?);
-                                if !send(epoch, serial, Event::Started { id }) {
-                                    return Err(anyhow::anyhow!("Terminal receiver stopped"));
+                    match action {
+                        Action::Open { id, columns, rows }
+                        | Action::OpenHere {
+                            id,
+                            columns,
+                            rows,
+                            directory: _,
+                        } => {
+                            let directory = match action {
+                                Action::OpenHere { directory, .. } => Some(directory),
+                                _ => None,
+                            };
+                            let result: anyhow::Result<()> = (|| {
+                                if let Some(directory) = &directory {
+                                    arcnix_core::terminal::validate_directory(directory)?;
                                 }
-                            }
-                            Action::Input { id, bytes } if id == terminal_id => {
-                                if let Some(terminal) = terminal.as_mut() {
-                                    terminal.input(bytes)?;
+                                let credentials = credentials
+                                    .as_ref()
+                                    .filter(|credentials| credentials.epoch == epoch)
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("Reconnect SSH before opening a terminal")
+                                    })?;
+                                if let Some(previous) = sessions.remove(&id) {
+                                    previous.close();
                                 }
+                                anyhow::ensure!(
+                                    sessions.len() < SESSION_LIMIT,
+                                    "At most 8 terminal sessions can be open"
+                                );
+                                sessions.insert(
+                                    id,
+                                    spawn_session(
+                                        OpenRequest {
+                                            id,
+                                            columns,
+                                            rows,
+                                            directory,
+                                            serial,
+                                        },
+                                        credentials,
+                                        generation.clone(),
+                                        events.clone(),
+                                    ),
+                                );
+                                Ok(())
+                            })();
+                            if let Err(error) = result {
+                                publish(
+                                    &events,
+                                    epoch,
+                                    serial,
+                                    Event::Failed {
+                                        id,
+                                        message: format!("{error:#}"),
+                                    },
+                                );
                             }
-                            Action::Resize { id, columns, rows } if id == terminal_id => {
-                                if let Some(terminal) = terminal.as_mut() {
-                                    terminal.resize(columns, rows)?;
-                                }
-                            }
-                            Action::Consumed { id, bytes } if id == terminal_id => {
-                                unconsumed = unconsumed.saturating_sub(bytes)
-                            }
-                            Action::Close { id } if id == terminal_id => {
-                                terminal = None;
-                                send(epoch, serial, Event::Exited { id, code: None });
-                            }
-                            Action::Detach => {
-                                terminal = None;
-                                credentials = None;
-                                unconsumed = 0;
-                            }
-                            _ => {}
                         }
-                        Ok(())
-                    })();
-                    if let Err(error) = result {
-                        terminal = None;
-                        if !send(
-                            epoch,
-                            serial,
-                            Event::Failed {
-                                id: terminal_id,
-                                message: format!("{error:#}"),
-                            },
-                        ) {
-                            break;
+                        Action::Close { id } => {
+                            if let Some(session) = sessions.remove(&id) {
+                                session.close();
+                                publish(&events, epoch, serial, Event::Exited { id, code: None });
+                            }
+                        }
+                        Action::Detach => {
+                            close_all(&mut sessions);
+                            credentials = None;
+                        }
+                        Action::Input { id, .. }
+                        | Action::Resize { id, .. }
+                        | Action::Consumed { id, .. } => {
+                            if let Some(session) = sessions.get(&id) {
+                                if session.stop.load(Ordering::Acquire) {
+                                    continue;
+                                }
+                                if let Err(mpsc::TrySendError::Full(_)) =
+                                    session.tx.try_send(action)
+                                {
+                                    session.stop.store(true, Ordering::Release);
+                                    publish(
+                                        &events,
+                                        epoch,
+                                        serial,
+                                        Event::Failed {
+                                            id,
+                                            message: "Terminal command queue is full".into(),
+                                        },
+                                    );
+                                }
+                            }
                         }
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            if let Some(pty) = terminal.as_mut() {
-                match pty.poll(OUTPUT_WINDOW.saturating_sub(unconsumed).min(16_384)) {
-                    Ok(output) => {
-                        if !output.bytes.is_empty() {
-                            unconsumed += output.bytes.len();
-                            if !send(
-                                epoch,
-                                0,
-                                Event::Output {
-                                    id: terminal_id,
-                                    bytes: output.bytes,
-                                },
-                            ) {
-                                break;
-                            }
-                        }
-                        if let Some(code) = output.exit_code {
-                            terminal = None;
-                            if !send(
-                                epoch,
-                                0,
-                                Event::Exited {
-                                    id: terminal_id,
-                                    code: Some(code),
-                                },
-                            ) {
-                                break;
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        terminal = None;
-                        if !send(
-                            epoch,
-                            0,
-                            Event::Failed {
-                                id: terminal_id,
-                                message: format!("{error:#}"),
-                            },
-                        ) {
-                            break;
-                        }
-                    }
-                }
-            }
         }
+        close_all(&mut sessions);
     });
     tx
 }

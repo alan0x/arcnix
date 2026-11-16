@@ -64,6 +64,9 @@ impl Ui {
 
 /// Keep leaving-page cleanup consistent for rail and application actions.
 pub(super) fn change_page(s: &mut State, page: Page, _source: &'static str) {
+    if s.navigation != page {
+        s.terminal.menu = None;
+    }
     if s.navigation == Page::Servers && page != Page::Servers {
         observability::metrics_leave(s);
     }

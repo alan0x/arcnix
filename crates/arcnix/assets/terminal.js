@@ -2,24 +2,34 @@
 // session identities and queues. No remote scripts, websockets or CDN requests.
 (() => {
     let engine = null, scheduled = false, token = 0, pending = null, queue = [];
+    const engines = new Map();
+    const MAX_SESSIONS = 8;
+    const handledKeys = new WeakSet();
+    let terminalMenu = null;
+    function metadata() {
+        try { return JSON.parse(document.querySelector(".terminal-state")?.textContent || "null"); }
+        catch (_) { return null; }
+    }
     function dispatch() {
-        if (!engine) return;
-        const source=document.querySelector(".terminal-state");
-        let metadata;try{metadata=JSON.parse(source.textContent);}catch(_){return;}
-        if(pending && metadata.input_ack>=pending.token)pending=null;
+        const state=metadata();
+        if(!state)return;
+        if(pending && pending.epoch===state.epoch && pending.session===state.id && state.input_ack>=pending.token)pending=null;
         if(!pending)pending=queue.shift()||null;
         if(!pending)return;
-        if(pending.epoch!==metadata.epoch||pending.session!==metadata.id){pending=null;queue=[];return;}
+        if(pending.epoch!==state.epoch||pending.session!==state.id)return;
         const input=document.querySelector(".terminal-input-bridge");
         if(!input)return;
         input.value=JSON.stringify(pending);
         input.dispatchEvent(new Event("input",{bubbles:true}));
     }
     function emit(value) {
-        if(!engine)return;
+        const state=metadata();
+        if(!state)return;
+        const epoch=engine?.epoch ?? state.epoch, session=engine?.id ?? state.id;
+        token=Math.max(token,state.input_ack||0);
         const previous=queue[queue.length-1];
-        if(value.kind==="data"&&previous?.kind==="data"&&previous.id===value.id&&previous.epoch===engine.epoch&&previous.data.length+value.data.length<=2048){previous.data+=value.data;return;}
-        queue.push({...value,epoch:engine.epoch,session:engine.id,token:++token});
+        if(value.kind==="data"&&previous?.kind==="data"&&previous.id===value.id&&previous.epoch===epoch&&previous.data.length+value.data.length<=2048){previous.data+=value.data;return;}
+        queue.push({...value,epoch,session,token:++token});
         if(!pending)dispatch();
     }
     setInterval(()=>{if(pending||queue.length)dispatch();},80);
@@ -37,31 +47,61 @@
             try { engine.fit.fit(); } catch (_) { /* zero-sized view during layout */ }
         }
     }
-    function make(metadata, surface) {
+    function detach() {
+        if (!engine) { pending=null;queue=[];return; }
+        // Only raw terminal bytes wait for their original tab to become active
+        // again. UI operations must not replay after switching sessions.
+        engine.outbound.push(...[pending,...queue].filter(packet=>packet &&
+            packet.epoch===engine.epoch && packet.session===engine.id &&
+            (packet.kind==="data" || packet.kind==="binary")));
         pending=null;queue=[];
-        if (engine) { engine.resize.disconnect(); engine.term.dispose(); engine.wrapper.remove(); }
+        engine.resize.disconnect();
+        engine.wrapper.remove();
+        engine.visible=false;
+        // A consumption acknowledgement may still have been queued when the
+        // tab changed. Repeating it on return is safe; dropping it is not.
+        engine.sentAckPacket=0;
+        engine.commandAck=0;
+        engine=null;
+    }
+    function dispose(current) {
+        if (engine===current) detach();
+        current.resize.disconnect();
+        current.term.dispose();
+        current.wrapper.remove();
+        engines.delete(current.key);
+    }
+    function consumed(current) {
+        if (engine!==current || current.ackPacket<=current.sentAckPacket) return;
+        current.sentAckPacket=current.ackPacket;
+        emit({kind:"consumed",id:current.id,packet:current.ackPacket});
+    }
+    function make(metadata, surface) {
         const wrapper = document.createElement("div");
         wrapper.className="terminal-owned-surface";
         surface.appendChild(wrapper);
-        const term = new Terminal({fontFamily:'"Cascadia Mono",Consolas,"Liberation Mono",monospace',fontSize:13,cursorBlink:true,scrollback:5000,convertEol:false,screenReaderMode:true,allowProposedApi:false,disableStdin:true,linkHandler:{activate:()=>{}}});
+        const term = new Terminal({fontFamily:'"Cascadia Mono",Consolas,"Liberation Mono",monospace',fontSize:13,cursorBlink:true,scrollback:5000,convertEol:false,screenReaderMode:true,allowProposedApi:false,disableStdin:true,rightClickSelectsWord:false,linkHandler:{activate:()=>{}}});
         const addon = new FitAddon.FitAddon();
         term.loadAddon(addon);
         term.open(wrapper);
         term.parser.registerOscHandler(52,()=>true); // Remote output cannot write the clipboard.
         const id=metadata.id, epoch=metadata.epoch,key=`${epoch}:${id}`;
-        engine={id,epoch,key,term,fit:addon,wrapper,surface,lastPacket:0,clear:metadata.clear,paste:0,visible:false,status:null,selected:false};
-        engine.resize=new ResizeObserver(()=>{fit();});
-        engine.resize.observe(surface);
+        const current={id,epoch,key,term,fit:addon,wrapper,surface,lastPacket:0,ackPacket:0,sentAckPacket:0,clear:metadata.clear,paste:0,visible:false,status:null,selected:false,outbound:[],commandRevision:0,commandAck:0};
+        current.resize=new ResizeObserver(()=>{if(engine?.key===key)fit();});
+        current.resize.observe(surface);
+        engines.set(key,current);
         term.onData(text=>{if(engine?.key===key && engine.status==="running") data(text,id);});
         term.onBinary(text=>{if(engine?.key===key && engine.status==="running") emit({kind:"binary",id,data:btoa(text)});});
-        term.onResize(size=>emit({kind:"resize",id,columns:size.cols,rows:size.rows}));
+        term.onResize(size=>{if(engine?.key===key)emit({kind:"resize",id,columns:size.cols,rows:size.rows});});
         term.onSelectionChange(()=>{
             if (engine?.key!==key) return;
             const selected=term.hasSelection();
             if(selected!==engine.selected){engine.selected=selected;emit({kind:"selection",id,selected});}
         });
         term.attachCustomKeyEventHandler(event=>{
+            if(engine?.key!==key)return false;
             if(event.type!=="keydown") return true;
+            if(applicationKey(event))return false;
             const chord=event.ctrlKey||event.metaKey;
             if(chord && event.key.toLowerCase()==="c" && (event.shiftKey||term.hasSelection())) {
                 event.preventDefault();copy();return false;
@@ -74,12 +114,169 @@
         // Escape, Ctrl+K etc. belong to the shell, not Glory's app shortcuts.
         for(const name of ["keydown","keypress","keyup","input","paste"])
             wrapper.addEventListener(name,event=>event.stopPropagation());
-        fit();
-        emit({kind:"ready",columns:term.cols,rows:term.rows});
+        return current;
+    }
+    function activate(metadata,surface) {
+        const key=`${metadata.epoch}:${metadata.id}`;
+        if(engine?.key!==key){
+            detach();
+            engine=engines.get(key)||null;
+            if(!engine){
+                // Rust owns the same limit. Keep the browser cache bounded even
+                // if malformed metadata ever includes an extra session.
+                while(engines.size>=MAX_SESSIONS)dispose(engines.values().next().value);
+                engine=make(metadata,surface);
+                fit();
+                emit({kind:"ready",columns:engine.term.cols,rows:engine.term.rows});
+            } else if(engine.outbound.length) {
+                queue.push(...engine.outbound);
+                engine.outbound=[];
+            }
+        }
+        if(engine.surface!==surface || engine.wrapper.parentElement!==surface){
+            engine.resize.disconnect();
+            engine.surface=surface;
+            surface.appendChild(engine.wrapper);
+            engine.resize.observe(surface);
+            engine.visible=false;
+        }
     }
     function copy() {
         if(engine?.term.hasSelection()) emit({kind:"copy",id:engine.id,text:engine.term.getSelection()});
     }
+    function terminalModule(target) {
+        const module=target instanceof Element ? target.closest('.terminal-module') : null;
+        return module && module.getClientRects().length && !module.closest('[inert],[hidden]') ? module : null;
+    }
+    function terminalTarget(target) {
+        if(!(target instanceof Element) || !terminalModule(target))return null;
+        return target.closest('.terminal-tab-item') || target.closest('.terminal-surface');
+    }
+    function openContext(target,event,keyboard=false) {
+        const origin=terminalTarget(target),state=metadata();
+        if(!origin || !state)return false;
+        const tab=origin.matches('.terminal-tab-item');
+        const id=tab ? Number(origin.querySelector('.terminal-tab-id')?.textContent) : state.id;
+        if(!Number.isSafeInteger(id) || id<0)return false;
+        const selection=!tab && engine?.key===`${state.epoch}:${state.id}` ? engine.term.getSelection() : '';
+        const tooLarge=new TextEncoder().encode(selection).length>65536;
+        const box=origin.getBoundingClientRect();
+        let x=keyboard ? box.left+16 : event.clientX, y=keyboard ? box.bottom : event.clientY;
+        if(keyboard && !tab && engine){
+            const screen=origin.querySelector('.xterm-screen')?.getBoundingClientRect() || box;
+            const cursor=engine.term.buffer.active;
+            x=screen.left+(cursor.cursorX+.5)*screen.width/engine.term.cols;
+            y=screen.top+(cursor.cursorY+1)*screen.height/engine.term.rows;
+        }
+        terminalMenu={x,y,origin:tab ? origin.querySelector('.terminal-tab') : engine?.term.textarea,tab,epoch:state.epoch,sourceId:state.id,id,opened:false,focus:true,restore:true};
+        emit({kind:'context',id,selection:tooLarge?'':selection,too_large:tooLarge,tab});
+        schedule();
+        return true;
+    }
+    function dismissContext(restore=true) {
+        if(terminalMenu)terminalMenu.restore=restore;
+        document.querySelector('.terminal-menu-dismiss')?.click();
+        schedule();
+    }
+    function restoreContextFocus(previous) {
+        if(!previous?.restore || document.querySelector('[role=dialog]'))return;
+        const state=metadata();
+        if(!state || state.epoch!==previous.epoch)return;
+        if(previous.tab && previous.sourceId===state.id && previous.origin?.isConnected){
+            previous.origin.focus({preventScroll:true});
+        } else if(engine?.surface.getClientRects().length){
+            engine.term.focus();
+        }
+    }
+    function placeContext() {
+        if(!terminalMenu)return;
+        const menu=document.querySelector('.terminal-context-menu');
+        if(!menu || !menu.getClientRects().length){
+            if(terminalMenu.opened){const previous=terminalMenu;terminalMenu=null;restoreContextFocus(previous);}
+            return;
+        }
+        terminalMenu.opened=true;
+        const box=menu.getBoundingClientRect();
+        menu.style.left=`${Math.max(8,Math.min(terminalMenu.x,innerWidth-box.width-8))}px`;
+        menu.style.top=`${Math.max(8,Math.min(terminalMenu.y,innerHeight-box.height-8))}px`;
+        if(terminalMenu.focus){
+            const first=menu.querySelector('.terminal-menu-action:not(:disabled)');
+            if(first)first.focus({preventScroll:true});else menu.focus({preventScroll:true});
+            terminalMenu.focus=false;
+        }
+    }
+    function applicationKey(event) {
+        if(handledKeys.has(event))return true;
+        if(event.type!=='keydown' || event.isComposing || !(event.target instanceof Element))return false;
+        if(event.target.closest('[role=dialog]'))return false;
+        const menu=event.target.closest('.terminal-context-menu');
+        if(!menu && !terminalModule(event.target))return false;
+        const chord=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
+        if(menu){
+            if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+                const items=[...menu.querySelectorAll('.terminal-menu-action:not(:disabled)')].filter(item=>item.getClientRects().length);
+                const index=items.indexOf(event.target.closest('.terminal-menu-action'));
+                const next=event.key==='Home'?0:event.key==='End'?items.length-1:index<0?(event.key==='ArrowUp'?items.length-1:0):(index+(event.key==='ArrowUp'?-1:1)+items.length)%items.length;
+                items[next]?.focus({preventScroll:true});
+            } else if(event.key==='Escape'||event.key==='Tab'){
+                dismissContext(true);
+            } else if(chord && event.shiftKey && (key==='c'||key==='v')){
+                menu.querySelector(key==='c'?'.terminal-menu-copy:not(:disabled)':'.terminal-menu-paste:not(:disabled)')?.click();
+            } else if(chord && event.shiftKey && (key==='t'||key==='w')){
+                menu.querySelector(key==='t'?'.terminal-menu-new-tab:not(:disabled)':'.terminal-menu-close-tab:not(:disabled)')?.click();
+            } else if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10'){
+                // The existing application menu already owns this gesture.
+            } else {
+                return shortcutKey(event);
+            }
+        } else if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10'){
+            if(!openContext(event.target,event,true))return false;
+        } else {
+            return shortcutKey(event);
+        }
+        handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
+    }
+    function shortcutKey(event) {
+        if(event.altKey || !(event.ctrlKey||event.metaKey))return false;
+        const key=event.key.toLowerCase();
+        let action=null;
+        if(key==='tab')action=event.shiftKey?'previous_tab':'next_tab';
+        else if(event.shiftKey){
+            if(key==='t')action='new_tab';
+            else if(key==='w')action='close_tab';
+            else if(key==='a')action='select_all';
+            else if(key==='l')action='clear';
+        }
+        if(!action)return false;
+        const state=metadata();
+        if(!state)return false;
+        emit({kind:'shortcut',id:state.id,action});
+        handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
+    }
+    document.addEventListener('contextmenu',event=>{
+        let target=event.target;
+        if(target instanceof Element && target.closest('.terminal-menu-dismiss')){
+            target=document.elementsFromPoint(event.clientX,event.clientY).find(item=>terminalTarget(item));
+        }
+        if(terminalTarget(target)){
+            event.preventDefault();event.stopImmediatePropagation();
+            openContext(target,event);
+        } else if(target instanceof Element && target.closest('.terminal-context-menu')){
+            event.preventDefault();event.stopImmediatePropagation();
+        }
+    },true);
+    // Keep right-click from changing xterm's selection or sending a mouse event
+    // to the remote foreground program before the custom menu snapshots it.
+    document.addEventListener('mousedown',event=>{
+        if(event.button===2 && terminalTarget(event.target)){
+            event.preventDefault();event.stopImmediatePropagation();
+        }
+    },true);
+    document.addEventListener('keydown',applicationKey,true);
+    document.addEventListener('wheel',event=>{
+        if(terminalMenu?.opened && terminalTarget(event.target))dismissContext(false);
+    },true);
+    window.addEventListener('resize',()=>{if(terminalMenu?.opened)dismissContext(false);});
     document.addEventListener("click",event=>{
         if(!(event.target instanceof Element))return;
         const copyButton=event.target.closest(".terminal-copy"),pasteButton=event.target.closest(".terminal-paste");
@@ -92,15 +289,18 @@
         if(!source||!surface)return;
         let metadata;
         try{metadata=JSON.parse(source.textContent);}catch(_){return;}
+        token=Math.max(token,metadata.input_ack||0);
+        const sessions=Array.isArray(metadata.sessions)?metadata.sessions:[metadata.id];
+        const valid=new Set(sessions.map(id=>`${metadata.epoch}:${id}`));
+        for(const current of engines.values())if(!valid.has(current.key))dispose(current);
         if(!metadata.id){
-            if(engine){engine.resize.disconnect();engine.term.dispose();engine.wrapper.remove();engine=null;}
-            pending=null;queue=[];
+            detach();
+            placeContext();
             return;
         }
         const visible=!!surface.getClientRects().length;
-        if(!engine && !visible)return;
-        if(engine?.key!==`${metadata.epoch}:${metadata.id}`)make(metadata,surface);
-        if(engine.surface!==surface){engine.resize.disconnect();engine.surface=surface;surface.appendChild(engine.wrapper);engine.resize.observe(surface);}
+        if(!visible && !engines.has(`${metadata.epoch}:${metadata.id}`)){detach();return;}
+        activate(metadata,surface);
         const term=engine.term;
         const app=document.querySelector(".app");
         if(app){
@@ -121,15 +321,33 @@
             if(metadata.paste&&metadata.status==="running")term.paste(metadata.paste);
             emit({kind:"pasted",id:metadata.id,revision:metadata.paste_revision});
         }
+        const command=metadata.command;
+        if(command && command.id===engine.id && ['select_all','focus'].includes(command.kind)){
+            if(command.revision>engine.commandRevision){
+                engine.commandRevision=command.revision;
+                if(command.kind==='select_all')term.selectAll();
+                if(visible && !document.querySelector('[role=dialog]'))term.focus();
+            }
+            if(command.revision>engine.commandAck){
+                engine.commandAck=command.revision;
+                emit({kind:'command_done',id:engine.id,revision:command.revision});
+            }
+        }
         for(const element of document.querySelectorAll(".terminal-packet")){
             let packet;try{packet=JSON.parse(element.textContent);}catch(_){continue;}
             if(packet.id<=engine.lastPacket)continue;
             engine.lastPacket=packet.id;
             const bytes=Uint8Array.from(atob(packet.data),c=>c.charCodeAt(0));
-            const id=metadata.id,key=engine.key;
-            term.write(bytes,()=>{if(engine?.key===key)emit({kind:"consumed",id,packet:packet.id});});
+            const current=engine;
+            term.write(bytes,()=>{
+                if(engines.get(current.key)!==current)return;
+                current.ackPacket=Math.max(current.ackPacket,packet.id);
+                consumed(current);
+            });
         }
-        if(pending&&metadata.input_ack>=pending.token){pending=null;dispatch();}
+        consumed(engine);
+        if(pending&&pending.epoch===metadata.epoch&&pending.session===metadata.id&&metadata.input_ack>=pending.token){pending=null;dispatch();}
+        placeContext();
     }
     const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(scan);}};
     new MutationObserver(records=>{

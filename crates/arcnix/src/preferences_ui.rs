@@ -237,10 +237,54 @@ fn policy(ui: Ui, direction: TransferDirection) -> impl Widget {
     )
 }
 pub(super) fn transfers(ui: Ui) -> impl Widget {
-    settings::panel(&ui,navigation::SettingsSection::Transfers,"Existing files",col().class("preferences-stack").fill((
-        text().class("subtle").content(i18n::bind("Default behavior when a destination already exists. Server and session choices override these defaults.")),
-        label("Uploads"),policy(ui.clone(),TransferDirection::Upload),label("Downloads"),policy(ui.clone(),TransferDirection::Download),
-    )))
+    let edit = ui.clone();
+    let apply = ui.clone();
+    fragment((
+        settings::panel(
+            &ui,
+            navigation::SettingsSection::Transfers,
+            "Concurrent transfers",
+            col().class("preferences-stack").fill((
+                label("Maximum simultaneous files"),
+                row().class("script-actions").fill((
+                    input()
+                        .class("transfer-concurrency-input")
+                        .name(i18n::bind("Maximum simultaneous files"))
+                        .value(ui.state.map(|s| {
+                            s.settings.transfer_concurrency_draft.clone().unwrap_or_else(|| {
+                                s.config.settings.transfer_concurrency.to_string()
+                            })
+                        }))
+                        .on(value_changed, move |event| {
+                            if let Event::ValueChanged { value, .. } = event {
+                                edit.state.revise(|s| s.settings.transfer_concurrency_draft = Some(value));
+                            }
+                        }),
+                    sapid::button()
+                        .class("button")
+                        .label(i18n::bind("Apply transfer limit"))
+                        .enabled(ui.state.map(|s| s.settings.transfer_concurrency_draft.is_some()))
+                        .on_press(move || {
+                            let value = apply.state.with(|s| s.settings.transfer_concurrency_draft.clone().unwrap_or_default());
+                            let Ok(limit) = value.trim().parse::<u8>() else {
+                                apply.state.revise(|s| s.settings.error = "Concurrent transfers must be between 1 and 16".into());
+                                return;
+                            };
+                            apply.update_preferences(|s| s.transfer_concurrency = limit);
+                            if apply.state.with(|s| s.settings.error.is_empty()) {
+                                apply.state.revise(|s| s.settings.transfer_concurrency_draft = None);
+                                apply.schedule();
+                            }
+                        }),
+                )),
+                text().class("subtle").content(i18n::bind("Choose 1–16 simultaneous files (default 5). Uploads and downloads share this limit. Lowering it lets active files finish before more start.")),
+            )),
+        ),
+        settings::panel(&ui,navigation::SettingsSection::Transfers,"Existing files",col().class("preferences-stack").fill((
+            text().class("subtle").content(i18n::bind("Default behavior when a destination already exists. Server and session choices override these defaults.")),
+            label("Uploads"),policy(ui.clone(),TransferDirection::Upload),label("Downloads"),policy(ui.clone(),TransferDirection::Download),
+        ))),
+    ))
 }
 pub(super) fn logging(ui: Ui) -> impl Widget {
     let export = ui.clone();

@@ -255,6 +255,10 @@ impl AppConfig {
             "资源采样间隔应为 3、5、10 或 30 秒"
         );
         ensure!(
+            (1..=16).contains(&self.settings.transfer_concurrency),
+            "Concurrent transfers must be between 1 and 16"
+        );
+        ensure!(
             self.snippets.len() <= 200,
             "Too many saved commands (200 maximum)"
         );
@@ -575,6 +579,30 @@ mod tests {
             assert_eq!(mode.is_dark(false), mode == Theme::Dark);
             assert_eq!(mode.is_dark(true), mode != Theme::Light);
             assert_eq!(store.load().unwrap(), loaded);
+        }
+    }
+
+    #[test]
+    fn transfer_concurrency_defaults_for_old_configs_and_rejects_invalid_saved_limits() {
+        let old: AppConfig = serde_json::from_str(
+            r#"{"groups":[],"servers":[],"trusted_hosts":[],"local_directory":null,"settings":{"language":"English","show_hidden_files":true,"resource_interval_seconds":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(old.settings.transfer_concurrency, 5);
+        assert_eq!(AppConfig::default().settings.transfer_concurrency, 5);
+        let dir = TestDir::new();
+        let store = dir.store();
+        let mut config = old;
+        for limit in [1, 5, 16] {
+            config.settings.transfer_concurrency = limit;
+            store.save(&config).unwrap();
+            assert_eq!(store.load().unwrap().settings.transfer_concurrency, limit);
+        }
+        let original = fs::read(store.path()).unwrap();
+        for invalid in [0, 17, u8::MAX] {
+            config.settings.transfer_concurrency = invalid;
+            assert!(store.save(&config).is_err());
+            assert_eq!(fs::read(store.path()).unwrap(), original);
         }
     }
 

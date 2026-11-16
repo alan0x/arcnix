@@ -16,7 +16,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arcnix"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arcnix-core",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "arcnix-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -49,6 +49,7 @@ dependencies = [
  "ssh2",
  "tokio",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

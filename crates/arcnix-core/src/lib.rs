@@ -29,6 +29,7 @@ pub mod record_recovery;
 pub mod recovery_drills;
 pub mod remote;
 pub mod remote_tasks;
+pub mod resource_ports;
 pub mod script_bundles;
 pub mod script_favorites;
 pub mod script_parameters;

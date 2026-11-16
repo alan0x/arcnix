@@ -92,7 +92,18 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
     let menu = ui.clone();
     let all = ui.clone();
     let clear = ui.clone();
-    col().class(state.map(move |s| if file_browser::icons(s, remote) { "file-pane icons-view" } else { "file-pane details-view" }.to_owned())).fill((
+    col().class(state.map(move |s| {
+        let mut class = if file_browser::icons(s, remote) { "file-pane icons-view" } else { "file-pane details-view" }.to_owned();
+        if file_browser::transfer_ready(s) {
+            class.push_str(" file-transfer-ready");
+        }
+        class
+    })).fill((
+        text().class("file-drop-hint").content(i18n::bind(if remote {
+            "松开以上传到当前远程目录"
+        } else {
+            "松开以下载到当前本地目录"
+        })),
         row().class("pane-heading").fill((
             col().class("pane-heading-copy").fill((
                 text().class("pane-title").content(i18n::bind(if remote {
@@ -130,7 +141,7 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
             )
             .class("button with-icon primary")
             .enabled(state.map(move |s| {
-                s.connected && s.local_ready && s.remote_ready && !file_browser::selected_entries(s, remote).is_empty()
+                file_browser::transfer_ready(s) && !file_browser::selected_entries(s, remote).is_empty()
             }))
             .on_press(move || {
                 transfer.transfer(if remote {
@@ -471,6 +482,8 @@ fn queue(ui: Ui) -> impl Widget {
                     });
                     s.transfer_meters
                         .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
+                    s.transfer_details
+                        .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
                 })
             }),
         )),
@@ -489,144 +502,153 @@ fn queue(ui: Ui) -> impl Widget {
                     let job = item.value;
                     let cancel = ui.clone();
                     let retry = ui.clone();
-                    row().class("queue-row").fill((
-                        text().class("job-name").content(job.map(|j| {
-                            format!(
-                                "{} {}",
-                                if j.direction == TransferDirection::Upload {
-                                    "↑"
-                                } else {
-                                    "↓"
-                                },
-                                j.local_path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                            )
-                        })),
-                        col().class("job-transfer").fill((
-                            row().class("job-progress-heading").fill((
-                                text().class("job-status").content(i18n::bind(state.map(
-                                    move |s| {
-                                        let j = job.get();
-                                        match &j.status {
-                                            TransferStatus::Queued => "等待中".into(),
-                                            TransferStatus::Running
-                                                if s.transfer_conflict
-                                                    .as_ref()
-                                                    .is_some_and(|c| c.job_id == j.id) =>
-                                            {
-                                                "等待文件冲突处理".into()
-                                            }
-                                            TransferStatus::Running if j.total_bytes == 0 => {
-                                                "正在准备传输…".into()
-                                            }
-                                            TransferStatus::Running
-                                                if j.transferred_bytes >= j.total_bytes =>
-                                            {
-                                                "正在完成传输…".into()
-                                            }
-                                            TransferStatus::Running => format!(
-                                                "{} / {}",
-                                                transfer_progress::bytes(j.transferred_bytes),
-                                                transfer_progress::bytes(j.total_bytes)
-                                            ),
-                                            TransferStatus::Completed => {
-                                                match s.transfer_summaries.get(&j.id) {
-                                                    Some(report)
-                                                        if report.transferred_files == 0
-                                                            && report.skipped_files > 0 =>
-                                                    {
-                                                        format!(
-                                                            "已跳过 {} 个文件",
-                                                            report.skipped_files
-                                                        )
-                                                    }
-                                                    Some(report) if report.skipped_files > 0 => {
-                                                        format!(
-                                                            "已完成 · 跳过 {} 个文件",
-                                                            report.skipped_files
-                                                        )
-                                                    }
-                                                    _ => "已完成".into(),
-                                                }
-                                            }
-                                            TransferStatus::Cancelled => "已取消".into(),
-                                            TransferStatus::Failed(e) => format!("失败：{e}"),
-                                        }
+                    col().class("queue-job").fill((
+                        row().class("queue-row").fill((
+                            transfer_details::toggle(ui.clone(), job),
+                            text().class("job-name").content(job.map(|j| {
+                                format!(
+                                    "{} {}",
+                                    if j.direction == TransferDirection::Upload {
+                                        "↑"
+                                    } else {
+                                        "↓"
                                     },
-                                ))),
+                                    j.local_path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                )
+                            })),
+                            col().class("job-transfer").fill((
+                                row().class("job-progress-heading").fill(
+                                    text().class("job-status").content(i18n::bind(state.map(
+                                        move |s| {
+                                            let j = job.get();
+                                            match &j.status {
+                                                TransferStatus::Queued => "等待中".into(),
+                                                TransferStatus::Running
+                                                    if transfer_details::waiting(s, &j.id) =>
+                                                {
+                                                    "等待文件冲突处理".into()
+                                                }
+                                                TransferStatus::Running if j.total_bytes == 0 => {
+                                                    "正在准备传输…".into()
+                                                }
+                                                TransferStatus::Running
+                                                    if j.transferred_bytes >= j.total_bytes =>
+                                                {
+                                                    "正在完成传输…".into()
+                                                }
+                                                TransferStatus::Running => format!(
+                                                    "{} / {}",
+                                                    transfer_progress::bytes(j.transferred_bytes),
+                                                    transfer_progress::bytes(j.total_bytes)
+                                                ),
+                                                TransferStatus::Completed => {
+                                                    match s.transfer_summaries.get(&j.id) {
+                                                        Some(report)
+                                                            if report.transferred_files == 0
+                                                                && report.skipped_files > 0 =>
+                                                        {
+                                                            format!(
+                                                                "已跳过 {} 个文件",
+                                                                report.skipped_files
+                                                            )
+                                                        }
+                                                        Some(report)
+                                                            if report.skipped_files > 0 =>
+                                                        {
+                                                            format!(
+                                                                "已完成 · 跳过 {} 个文件",
+                                                                report.skipped_files
+                                                            )
+                                                        }
+                                                        _ => "已完成".into(),
+                                                    }
+                                                }
+                                                TransferStatus::Cancelled => "已取消".into(),
+                                                TransferStatus::Failed(e) => format!("失败：{e}"),
+                                            }
+                                        },
+                                    ))),
+                                ),
+                                text().class("job-transfer-details").content(
+                                    state.map(move |s| transfer_progress::details(s, &job.get())),
+                                ),
+                            )),
+                            row().class("job-progress-column").fill((
+                                col()
+                                    .class(job.map(|j| {
+                                        match j.status {
+                                            TransferStatus::Failed(_) => "job-progress failed",
+                                            TransferStatus::Cancelled => "job-progress cancelled",
+                                            _ => "job-progress",
+                                        }
+                                        .to_owned()
+                                    }))
+                                    .name(i18n::bind("传输进度"))
+                                    .role(glory::render::Role::ProgressBar)
+                                    .semantics(job.map(|j| {
+                                        Some(Box::new(glory::render::Semantics {
+                                            progress: Some(glory::render::ProgressValue {
+                                                min: 0.,
+                                                max: 100.,
+                                                current: Some(transfer_progress::percent(j)),
+                                                value_text: None,
+                                            }),
+                                            ..Default::default()
+                                        }))
+                                    }))
+                                    .fill(
+                                        col()
+                                            .style(job.map(|j| {
+                                                glory::style::Style::new().width(
+                                                    glory::style::Length::Percent(
+                                                        transfer_progress::percent(j),
+                                                    ),
+                                                )
+                                            }))
+                                            .class("job-progress-fill"),
+                                    ),
                                 text().class("job-percent").content(
                                     job.map(|j| format!("{:.1}%", transfer_progress::percent(j))),
                                 ),
                             )),
-                            col()
-                                .class(job.map(|j| {
-                                    match j.status {
-                                        TransferStatus::Failed(_) => "job-progress failed",
-                                        TransferStatus::Cancelled => "job-progress cancelled",
-                                        _ => "job-progress",
-                                    }
-                                    .to_owned()
-                                }))
-                                .name(i18n::bind("传输进度"))
-                                .role(glory::render::Role::ProgressBar)
-                                .semantics(job.map(|j| {
-                                    Some(Box::new(glory::render::Semantics {
-                                        progress: Some(glory::render::ProgressValue {
-                                            min: 0.,
-                                            max: 100.,
-                                            current: Some(transfer_progress::percent(j)),
-                                            value_text: None,
-                                        }),
-                                        ..Default::default()
-                                    }))
-                                }))
-                                .fill(
-                                    col()
-                                        .style(job.map(|j| {
-                                            glory::style::Style::new().width(
-                                                glory::style::Length::Percent(
-                                                    transfer_progress::percent(j),
-                                                ),
-                                            )
-                                        }))
-                                        .class("job-progress-fill"),
-                                ),
-                            text().class("job-transfer-details").content(
-                                state.map(move |s| transfer_progress::details(s, &job.get())),
-                            ),
-                        )),
-                        close_action("取消传输")
-                            .enabled(job.map(|j| {
-                                matches!(j.status, TransferStatus::Running | TransferStatus::Queued)
-                            }))
-                            .on_press(move || {
-                                cancel.state.revise(|s| {
-                                    let id = job.get().id;
-                                    if let Some(token) = s.cancels.get(&id) {
-                                        token.store(true, Ordering::Relaxed);
-                                    }
-                                    if let Some(j) = s.jobs.iter_mut().find(|j| j.id == id)
-                                        && j.status == TransferStatus::Queued
-                                    {
-                                        j.status = TransferStatus::Cancelled;
-                                    }
-                                });
-                                cancel.schedule();
-                            }),
-                        icon_action("重试传输", Icon::Refresh)
-                            .enabled(state.map(move |s| {
-                                let j = job.get();
-                                s.connected
-                                    && Some(&j.server_id) == s.selected.as_ref()
-                                    && !s.cancels.contains_key(&j.id)
-                                    && matches!(
+                            close_action("取消传输")
+                                .enabled(job.map(|j| {
+                                    matches!(
                                         j.status,
-                                        TransferStatus::Failed(_) | TransferStatus::Cancelled
+                                        TransferStatus::Running | TransferStatus::Queued
                                     )
-                            }))
-                            .on_press(move || retry.retry(Some(job.get().id))),
+                                }))
+                                .on_press(move || {
+                                    cancel.state.revise(|s| {
+                                        let id = job.get().id;
+                                        if let Some(token) = s.cancels.get(&id) {
+                                            token.store(true, Ordering::Relaxed);
+                                        }
+                                        if let Some(j) = s.jobs.iter_mut().find(|j| j.id == id)
+                                            && j.status == TransferStatus::Queued
+                                        {
+                                            j.status = TransferStatus::Cancelled;
+                                        }
+                                    });
+                                    cancel.schedule();
+                                }),
+                            icon_action("重试传输", Icon::Refresh)
+                                .enabled(state.map(move |s| {
+                                    let j = job.get();
+                                    s.connected
+                                        && Some(&j.server_id) == s.selected.as_ref()
+                                        && !s.cancels.contains_key(&j.id)
+                                        && matches!(
+                                            j.status,
+                                            TransferStatus::Failed(_) | TransferStatus::Cancelled
+                                        )
+                                }))
+                                .on_press(move || retry.retry(Some(job.get().id))),
+                        )),
+                        transfer_details::listing(ui.clone(), job),
                     ))
                 }
             }),

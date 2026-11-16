@@ -2037,3 +2037,61 @@ UID {} · 网络命名空间 {} · IP 地址族 {}	UID {} · Network namespace {
 描述符扫描上限	Descriptor scan limit
 套接字表读取上限	Socket table read limit
 持有者显示上限	Holder display limit
+松开以上传到当前远程目录	Release to upload to the current remote folder
+松开以下载到当前本地目录	Release to download to the current local folder
+并发传输	Concurrent transfers
+最大同时传输文件数	Maximum simultaneous files
+应用传输并发数	Apply transfer limit
+并发传输数必须为 1–16	Concurrent transfers must be between 1 and 16
+可设置为 1–16 个文件（默认 5）。上传和下载共用此限制；调低后，正在传输的文件会继续完成，再按新额度启动后续文件。	Choose 1–16 simultaneous files (default 5). Uploads and downloads share this limit. Lowering it lets active files finish before more start.
+收起文件进度	Collapse file progress
+展开文件进度	Expand file progress
+正在传输	Transferring
+已跳过	Skipped
+{} 个文件 · 已处理 {}	{} files · {} processed
+没有需要传输的文件	No files to transfer
+等待扫描文件…	Waiting to scan files…
+正在扫描文件…	Scanning files…
+文件传输进度	File transfer progress
+在此处打开终端	Terminal here
+终端 {}	Terminal {}
+关闭终端标签	Close terminal tab
+请先关闭一个终端标签后再打开新的终端（最多 8 个）	Close a terminal tab before opening another (8 maximum)
+关闭终端菜单	Dismiss terminal menu
+终端操作	Terminal actions
+复制	Copy
+粘贴	Paste
+全选	Select all
+清空显示	Clear display
+新建终端标签	New terminal tab
+重命名标签	Rename tab
+关闭标签	Close tab
+切换标签	Switch tabs
+重命名终端标签	Rename terminal tab
+标签名称	Tab name
+请输入标签名称（1–80 个字符，不含控制字符）	Enter a tab name (1–80 characters, no control characters)
+监听端口及进程	Listening ports and processes
+刷新端口	Refresh ports
+当前网络命名空间中的 TCP 监听端口和已绑定 UDP 端口。进程信息的可见范围取决于权限。	TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions.
+搜索端口、PID 或程序	Filter ports, PID or program
+以管理员身份查询	Query as administrator
+以管理员身份结束	End as administrator
+正在结束进程…	Ending process…
+正在读取监听端口…	Reading listening ports…
+尚未读取监听端口	No listening port snapshot yet
+{} 个端口 · 显示 {} 个 · 采样于 {} · UID {}	{} ports · {} shown · Sampled {} · UID {}
+协议 / 地址	Protocol / address
+PID / 程序	PID / program
+用户 / 服务 / 可执行文件	User / service / executable
+强制结束	Force end
+强制结束进程	Force end process
+SIGKILL 会立即结束此进程，未保存的数据可能丢失。此进程的所有端口和连接都会关闭；服务管理器可能会重新启动它。	SIGKILL ends this process immediately and may lose unsaved data. All ports and connections owned by this process will close. A service manager may restart it.
+端口快照已变化，请刷新端口后重试	The port snapshot changed; refresh ports and try again
+已达到扫描上限，部分端口或进程信息可能未列出	Scan limit reached; some ports or process details may be missing
+部分进程信息因权限等原因不可见，可尝试以管理员身份查询	Some process details are unavailable; query as administrator for more visibility
+扫描期间端口发生变化，请刷新以获取最新状态	Ports changed during the scan; refresh for the latest state
+另有占用此端口的进程未列出	Additional process holders were omitted
+没有匹配的监听端口	No matching listening ports
+进程已结束，正在以当前连接用户的身份刷新端口	Process ended; refreshing ports as the connected user
+无法获取网络命名空间身份，已禁用强制结束	Network namespace identity is unavailable; force ending is disabled
+显示上次的端口快照	Showing the previous port snapshot

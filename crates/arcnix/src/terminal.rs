@@ -25,7 +25,7 @@ pub struct Packet {
     bytes: usize,
 }
 #[derive(Clone, Default)]
-pub struct TerminalState {
+pub struct SessionState {
     pub id: u64,
     pub status: Status,
     pub error: String,
@@ -38,19 +38,149 @@ pub struct TerminalState {
     selected: bool,
     input_ack: u64,
     copied: bool,
+    directory: Option<String>,
+    name: Option<String>,
+    command: Option<UiCommand>,
+    command_revision: u64,
+}
+#[derive(Clone, Default)]
+pub struct TerminalState {
+    active: SessionState,
+    background: Vec<SessionState>,
+    next_id: u64,
+    pub(super) menu: Option<terminal_menu::Context>,
+    pub(super) rename_draft: String,
+}
+impl std::ops::Deref for TerminalState {
+    type Target = SessionState;
+    fn deref(&self) -> &SessionState {
+        &self.active
+    }
+}
+impl std::ops::DerefMut for TerminalState {
+    fn deref_mut(&mut self) -> &mut SessionState {
+        &mut self.active
+    }
+}
+impl TerminalState {
+    fn session_mut(&mut self, id: u64) -> Option<&mut SessionState> {
+        if self.active.id == id {
+            Some(&mut self.active)
+        } else {
+            self.background.iter_mut().find(|session| session.id == id)
+        }
+    }
+    fn ids(&self) -> Vec<u64> {
+        self.background
+            .iter()
+            .map(|session| session.id)
+            .chain((self.active.id > 0).then_some(self.active.id))
+            .collect()
+    }
+    pub(super) fn session_count(&self) -> usize {
+        self.background.len() + usize::from(self.active.id > 0)
+    }
+    fn tabs(&self) -> Vec<Tab> {
+        let mut tabs: Vec<_> = self
+            .background
+            .iter()
+            .chain((self.active.id > 0).then_some(&self.active))
+            .map(|session| Tab {
+                id: session.id,
+                directory: session.directory.clone(),
+                name: session.name.clone(),
+            })
+            .collect();
+        tabs.sort_by_key(|tab| tab.id);
+        tabs
+    }
+}
+#[derive(Clone)]
+struct Tab {
+    id: u64,
+    directory: Option<String>,
+    name: Option<String>,
+}
+fn tab_label(tab: &Tab) -> String {
+    tab.name
+        .clone()
+        .or_else(|| tab.directory.clone())
+        .unwrap_or_else(|| i18n::translate(&format!("终端 {}", tab.id)))
+}
+pub(super) fn session_status(s: &State, id: u64) -> Option<Status> {
+    if s.terminal.id == id && id > 0 {
+        Some(s.terminal.status)
+    } else {
+        s.terminal
+            .background
+            .iter()
+            .find(|session| session.id == id)
+            .map(|session| session.status)
+    }
+}
+#[derive(Clone, Serialize)]
+struct UiCommand {
+    revision: u64,
+    id: u64,
+    kind: String,
+}
+pub(super) fn directory_supported(directory: &str) -> bool {
+    arcnix_core::terminal::validate_directory(directory).is_ok()
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Input {
-    Ready { columns: u32, rows: u32 },
-    Data { id: u64, data: String },
-    Binary { id: u64, data: String },
-    Resize { id: u64, columns: u32, rows: u32 },
-    Consumed { id: u64, packet: u64 },
-    Selection { id: u64, selected: bool },
-    Copy { id: u64, text: String },
-    Paste { id: u64 },
-    Pasted { id: u64, revision: u64 },
+    Ready {
+        columns: u32,
+        rows: u32,
+    },
+    Data {
+        id: u64,
+        data: String,
+    },
+    Binary {
+        id: u64,
+        data: String,
+    },
+    Resize {
+        id: u64,
+        columns: u32,
+        rows: u32,
+    },
+    Consumed {
+        id: u64,
+        packet: u64,
+    },
+    Selection {
+        id: u64,
+        selected: bool,
+    },
+    Copy {
+        id: u64,
+        text: String,
+    },
+    Paste {
+        id: u64,
+    },
+    Pasted {
+        id: u64,
+        revision: u64,
+    },
+    Context {
+        id: u64,
+        selection: String,
+        tab: bool,
+        #[serde(default)]
+        too_large: bool,
+    },
+    Shortcut {
+        id: u64,
+        action: String,
+    },
+    CommandDone {
+        id: u64,
+        revision: u64,
+    },
 }
 #[derive(Serialize)]
 struct Metadata<'a> {
@@ -61,6 +191,8 @@ struct Metadata<'a> {
     paste: &'a str,
     paste_revision: u64,
     input_ack: u64,
+    sessions: Vec<u64>,
+    command: &'a Option<UiCommand>,
 }
 impl Ui {
     pub(super) fn terminal_enter(&self) {
@@ -73,61 +205,290 @@ impl Ui {
         }
     }
     fn terminal_start(&self, columns: u32, rows: u32) {
+        let directory = self.state.with(|s| s.terminal.directory.clone());
+        self.terminal_open(columns, rows, directory, false);
+    }
+    pub(super) fn terminal_here(&self, directory: String) {
+        if !directory_supported(&directory) || !self.state.with(|s| s.connected) {
+            return;
+        }
+        if self
+            .state
+            .with(|s| s.terminal.session_count() >= terminal_worker::SESSION_LIMIT)
+        {
+            self.error("Close a terminal tab before opening another (8 maximum)");
+            return;
+        }
+        self.state.revise(|s| {
+            s.file_menu = None;
+            s.file_context = None;
+            s.workspace_page = WorkspacePage::Terminal;
+        });
+        self.terminal_open(100, 30, Some(directory), true);
+    }
+    fn terminal_open(&self, columns: u32, rows: u32, directory: Option<String>, keep_active: bool) {
         if !self.state.with(|s| s.connected) {
             return;
         }
-        let id = self.state.revise(|s| {
-            let id = s.terminal.id + 1;
-            s.terminal = TerminalState {
+        if keep_active
+            && self
+                .state
+                .with(|s| s.terminal.session_count() >= terminal_worker::SESSION_LIMIT)
+        {
+            self.error("Close a terminal tab before opening another (8 maximum)");
+            return;
+        }
+        let (id, previous) = self.state.revise(|s| {
+            let terminal = &mut s.terminal;
+            terminal.menu = None;
+            let name = if keep_active {
+                None
+            } else {
+                terminal.name.clone()
+            };
+            let previous = (!keep_active && terminal.id > 0).then_some(terminal.id);
+            if keep_active && terminal.id > 0 {
+                terminal
+                    .background
+                    .push(std::mem::take(&mut terminal.active));
+            }
+            terminal.next_id += 1;
+            let id = terminal.next_id;
+            terminal.active = SessionState {
                 id,
                 status: Status::Starting,
+                directory: directory.clone(),
+                name,
                 ..Default::default()
             };
-            id
+            (id, previous)
         });
-        self.send(Action::Terminal(TerminalAction::Open {
-            id,
-            columns: columns.clamp(2, 500),
-            rows: rows.clamp(1, 300),
+        if let Some(id) = previous {
+            self.send(Action::Terminal(TerminalAction::Close { id }));
+        }
+        let columns = columns.clamp(2, 500);
+        let rows = rows.clamp(1, 300);
+        self.send(Action::Terminal(if let Some(directory) = directory {
+            TerminalAction::OpenHere {
+                id,
+                columns,
+                rows,
+                directory,
+            }
+        } else {
+            TerminalAction::Open { id, columns, rows }
         }));
+    }
+    fn terminal_switch(&self, id: u64) {
+        self.state.revise(|s| {
+            s.terminal.menu = None;
+            if let Some(index) = s
+                .terminal
+                .background
+                .iter()
+                .position(|session| session.id == id)
+            {
+                let terminal = &mut s.terminal;
+                std::mem::swap(&mut terminal.active, &mut terminal.background[index]);
+            }
+        });
+    }
+    pub(super) fn terminal_close_tab(&self, id: u64) {
+        self.state.revise(|s| {
+            s.terminal.menu = None;
+            let terminal = &mut s.terminal;
+            if terminal.id == id {
+                terminal.active = terminal.background.pop().unwrap_or_default();
+            } else {
+                terminal.background.retain(|session| session.id != id);
+            }
+        });
+        self.send(Action::Terminal(TerminalAction::Close { id }));
+    }
+    fn terminal_new_tab(&self, source: u64) {
+        let directory = self.state.with(|s| {
+            if s.terminal.id == source {
+                s.terminal.directory.clone()
+            } else {
+                s.terminal
+                    .background
+                    .iter()
+                    .find(|session| session.id == source)
+                    .and_then(|session| session.directory.clone())
+            }
+        });
+        self.terminal_open(100, 30, directory, true);
+    }
+    fn terminal_cycle(&self, delta: isize) {
+        let target = self.state.with(|s| {
+            let tabs = s.terminal.tabs();
+            let index = tabs.iter().position(|tab| tab.id == s.terminal.id)?;
+            Some(tabs[(index as isize + delta).rem_euclid(tabs.len() as isize) as usize].id)
+        });
+        if let Some(id) = target {
+            self.terminal_switch(id);
+        }
+    }
+    pub(super) fn terminal_ui_command(&self, id: u64, kind: &str) {
+        self.state.revise(|s| {
+            if s.terminal.id == id && id > 0 {
+                s.terminal.command_revision += 1;
+                s.terminal.command = Some(UiCommand {
+                    revision: s.terminal.command_revision,
+                    id,
+                    kind: kind.to_owned(),
+                });
+            }
+        });
+    }
+    fn terminal_paste(&self, id: u64) {
+        if !self
+            .state
+            .with(|s| s.terminal.id == id && s.terminal.status == Status::Running)
+        {
+            return;
+        }
+        match clipboard::read(256 * 1024) {
+            Ok(text) => self.state.revise(|s| {
+                s.terminal.paste_revision += 1;
+                s.terminal.paste = text;
+            }),
+            Err(error) => self.error(format!("Cannot paste into terminal: {error:#}")),
+        }
+    }
+    fn terminal_clear(&self, id: u64) {
+        self.state.revise(|s| {
+            if let Some(session) = s.terminal.session_mut(id) {
+                session.clear += 1;
+            }
+        });
+    }
+    fn terminal_begin_name(&self, id: u64) {
+        let draft = self.state.with(|s| {
+            s.terminal
+                .tabs()
+                .iter()
+                .find(|tab| tab.id == id)
+                .map(tab_label)
+        });
+        if let Some(draft) = draft {
+            self.state.revise(|s| s.terminal.rename_draft = draft);
+            self.open_dialog(Dialog::TerminalRename { id });
+        }
+    }
+    pub(super) fn terminal_save_name(&self, id: u64) {
+        if !self.state.with(|s| {
+            s.dialog == Some(Dialog::TerminalRename { id }) && session_status(s, id).is_some()
+        }) {
+            return;
+        }
+        let name = self
+            .state
+            .with(|s| s.terminal.rename_draft.trim().to_owned());
+        if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+            self.state.revise(|s| {
+                s.dialog_error = "Enter a tab name (1–80 characters, no control characters)".into()
+            });
+            return;
+        }
+        self.state.revise(|s| {
+            if let Some(session) = s.terminal.session_mut(id) {
+                session.name = Some(name);
+            }
+        });
+        self.close_dialog();
+    }
+    pub(super) fn terminal_dismiss_menu(&self) {
+        self.state.revise(|s| s.terminal.menu = None);
+    }
+    pub(super) fn terminal_menu_action(&self, identity: &str, action: &str) {
+        let context = self.state.revise(|s| {
+            let menu = s.terminal.menu.as_ref()?;
+            if menu.identity != identity
+                || menu.epoch != s.epoch
+                || !navigation::workspace_visible(s)
+                || s.workspace_page != WorkspacePage::Terminal
+                || s.dialog.is_some()
+            {
+                return None;
+            }
+            if menu.id != 0 && session_status(s, menu.id).is_none() {
+                return None;
+            }
+            s.terminal.menu.take()
+        });
+        let Some(context) = context else {
+            return;
+        };
+        match action {
+            "copy" if !context.selection.is_empty() || context.too_large => {
+                if context.too_large || context.selection.len() > 65_536 {
+                    self.error("Terminal selection is too large to copy (64 KiB maximum)");
+                } else if let Err(error) = clipboard::copy(&context.selection) {
+                    self.error(format!("Cannot copy terminal selection: {error:#}"));
+                } else {
+                    self.state.revise(|s| {
+                        if let Some(session) = s.terminal.session_mut(context.id) {
+                            session.copied = true;
+                        }
+                    });
+                }
+            }
+            "paste" => self.terminal_paste(context.id),
+            "select_all" => self.terminal_ui_command(context.id, "select_all"),
+            "clear" => self.terminal_clear(context.id),
+            "new_tab" => self.terminal_new_tab(context.id),
+            "rename" => self.terminal_begin_name(context.id),
+            "close" if context.id > 0 => self.terminal_close_tab(context.id),
+            _ => {}
+        }
     }
 }
 pub(super) fn disconnected(ui: &Ui) {
-    ui.state.revise(|s| s.terminal = TerminalState::default());
+    ui.state.revise(|s| {
+        s.terminal = TerminalState::default();
+        if matches!(s.dialog, Some(Dialog::TerminalRename { .. })) {
+            s.dialog = None;
+        }
+    });
     ui.send(Action::Terminal(TerminalAction::Detach));
 }
 pub(super) fn update(ui: &Ui, event: TerminalEvent) {
-    match event {
-        TerminalEvent::Started { id } => ui.state.revise(|s| {
-            if s.terminal.id == id && s.terminal.status == Status::Starting {
-                s.terminal.status = Status::Running;
+    ui.state.revise(|s| {
+        let id = match &event {
+            TerminalEvent::Started { id }
+            | TerminalEvent::Output { id, .. }
+            | TerminalEvent::Exited { id, .. }
+            | TerminalEvent::Failed { id, .. } => *id,
+        };
+        let Some(session) = s.terminal.session_mut(id) else {
+            return;
+        };
+        match event {
+            TerminalEvent::Started { .. } if session.status == Status::Starting => {
+                session.status = Status::Running
             }
-        }),
-        TerminalEvent::Output { id, bytes } => ui.state.revise(|s| {
-            if s.terminal.id != id {
-                return;
+            TerminalEvent::Output { bytes, .. } => {
+                session.sequence += 1;
+                session.packets.push_back(Packet {
+                    id: session.sequence,
+                    data: STANDARD.encode(&bytes),
+                    bytes: bytes.len(),
+                });
             }
-            s.terminal.sequence += 1;
-            s.terminal.packets.push_back(Packet {
-                id: s.terminal.sequence,
-                data: STANDARD.encode(&bytes),
-                bytes: bytes.len(),
-            });
-        }),
-        TerminalEvent::Exited { id, code } => ui.state.revise(|s| {
-            if s.terminal.id == id {
-                s.terminal.status = Status::Exited;
-                s.terminal.exit_code = code;
+            TerminalEvent::Exited { code, .. } => {
+                session.status = Status::Exited;
+                session.exit_code = code;
             }
-        }),
-        TerminalEvent::Failed { id, message } => ui.state.revise(|s| {
-            if s.terminal.id == id {
-                s.terminal.status = Status::Failed;
-                s.terminal.error = message;
+            TerminalEvent::Failed { message, .. } => {
+                session.status = Status::Failed;
+                session.error = message;
             }
-        }),
-    }
+            _ => {}
+        }
+    });
 }
+
 fn handle_input(ui: &Ui, json: String) {
     if json.len() > 400_000 || !ui.state.with(|s| s.connected) {
         return;
@@ -149,7 +510,62 @@ fn handle_input(ui: &Ui, json: String) {
     let (current, running) = ui
         .state
         .with(|s| (s.terminal.id, s.terminal.status == Status::Running));
+    // A control action may switch or close the active tab. Acknowledge the
+    // originating session before that change so it cannot replay on return.
+    ui.state.revise(|s| {
+        if let Some(session) = s.terminal.session_mut(current) {
+            session.input_ack = token;
+        }
+    });
     match event {
+        Input::Context {
+            id,
+            selection,
+            tab,
+            too_large,
+        } => ui.state.revise(|s| {
+            if navigation::workspace_visible(s)
+                && s.workspace_page == WorkspacePage::Terminal
+                && s.dialog.is_none()
+                && (id == 0 || session_status(s, id).is_some())
+            {
+                s.terminal.menu = Some(terminal_menu::Context {
+                    epoch: s.epoch,
+                    id,
+                    selection,
+                    tab,
+                    too_large,
+                    identity: new_id(),
+                });
+            }
+        }),
+        Input::Shortcut { id, action }
+            if id == current
+                && ui.state.with(|s| {
+                    navigation::workspace_visible(s)
+                        && s.workspace_page == WorkspacePage::Terminal
+                        && s.dialog.is_none()
+                }) =>
+        {
+            match action.as_str() {
+                "new_tab" => ui.terminal_new_tab(id),
+                "close_tab" if id > 0 => ui.terminal_close_tab(id),
+                "next_tab" => ui.terminal_cycle(1),
+                "previous_tab" => ui.terminal_cycle(-1),
+                "select_all" => ui.terminal_ui_command(id, "select_all"),
+                "clear" => ui.terminal_clear(id),
+                _ => {}
+            }
+        }
+        Input::CommandDone { id, revision } if id == current => ui.state.revise(|s| {
+            if s.terminal
+                .command
+                .as_ref()
+                .is_some_and(|command| command.revision == revision)
+            {
+                s.terminal.command = None;
+            }
+        }),
         Input::Ready { columns, rows } => {
             if ui.state.with(|s| s.terminal.status == Status::Idle) {
                 ui.terminal_start(columns, rows);
@@ -204,13 +620,7 @@ fn handle_input(ui: &Ui, json: String) {
         Input::Copy { id, .. } if id == current => {
             ui.error("Terminal selection is too large to copy (64 KiB maximum)")
         }
-        Input::Paste { id } if id == current && running => match clipboard::read(256 * 1024) {
-            Ok(text) => ui.state.revise(|s| {
-                s.terminal.paste_revision += 1;
-                s.terminal.paste = text;
-            }),
-            Err(error) => ui.error(format!("Cannot paste into terminal: {error:#}")),
-        },
+        Input::Paste { id } if id == current && running => ui.terminal_paste(id),
         Input::Pasted { id, revision } if id == current => ui.state.revise(|s| {
             if s.terminal.paste_revision == revision {
                 s.terminal.paste.clear();
@@ -218,13 +628,68 @@ fn handle_input(ui: &Ui, json: String) {
         }),
         _ => {}
     }
-    ui.state.revise(|s| s.terminal.input_ack = token);
+}
+fn tabs(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let new_tab = ui.clone();
+    row()
+        .class(state.map(|s| {
+            if s.connected {
+                "terminal-tabs"
+            } else {
+                "hidden"
+            }
+            .to_owned()
+        }))
+        .fill((
+            row().class("terminal-tab-list").fill(
+                each(state.map(|s| s.terminal.tabs()))
+                    .key(|tab| tab.id)
+                    .children(move |item| {
+                        let tab = item.value;
+                        let select = ui.clone();
+                        let close = ui.clone();
+                        row().class("terminal-tab-item").fill((
+                            text()
+                                .class("terminal-tab-id")
+                                .content(tab.map(|tab| tab.id.to_string())),
+                            sapid::button()
+                                .pressed(state.map(move |s| s.terminal.id == tab.get().id))
+                                .class(state.map(move |s| {
+                                    if s.terminal.id == tab.get().id {
+                                        "terminal-tab active"
+                                    } else {
+                                        "terminal-tab"
+                                    }
+                                    .to_owned()
+                                }))
+                                .name(tab.map(tab_label))
+                                .label(tab.map(tab_label))
+                                .on_press(move || select.terminal_switch(tab.get().id)),
+                            close_action("关闭终端标签")
+                                .class("icon-button terminal-tab-close")
+                                .on_press(move || close.terminal_close_tab(tab.get().id)),
+                        ))
+                    }),
+            ),
+            icon_action("新建终端标签", Icon::Plus)
+                .class("icon-button terminal-new-tab")
+                .enabled(state.map(|s| {
+                    s.connected && s.terminal.session_count() < terminal_worker::SESSION_LIMIT
+                }))
+                .on_press(move || {
+                    let id = new_tab.state.with(|s| s.terminal.id);
+                    new_tab.terminal_new_tab(id);
+                }),
+        ))
 }
 pub(super) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let bridge = ui.clone();
     let start = ui.clone();
     let close = ui.clone();
+    let tabs_ui = ui.clone();
+    let menu_ui = ui.clone();
     let clear = ui;
     col()
         .class(state.map(|s| {
@@ -236,6 +701,8 @@ pub(super) fn page(ui: Ui) -> impl Widget {
             .to_owned()
         }))
         .fill((
+            terminal_menu::menu(menu_ui),
+            tabs(tabs_ui),
             row().class("terminal-toolbar").fill((
                 text().class("terminal-heading").content(i18n::bind("终端")),
                 text()
@@ -318,6 +785,8 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                     paste: &s.terminal.paste,
                     paste_revision: s.terminal.paste_revision,
                     input_ack: s.terminal.input_ack,
+                    sessions: s.terminal.ids(),
+                    command: &s.terminal.command,
                 })
                 .unwrap_or_default()
             })),

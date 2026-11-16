@@ -13,7 +13,9 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 use sha2::{Digest, Sha256};
 use ssh2::{ErrorCode, MethodType, OpenFlags, OpenType, RenameFlags, Session, Sftp};
 
-use crate::transfer::{ConflictAction, TransferConflict, TransferSummary};
+use crate::transfer::{
+    ConflictAction, PlannedFile, TransferConflict, TransferPlan, TransferSummary,
+};
 use crate::{
     AuthMethod, CommandOutput, FileEntry, ServerInfo, ServerProfile, TransferDirection, new_id,
 };
@@ -181,6 +183,7 @@ struct TreeEntry {
     relative: String,
     directory: bool,
     size: u64,
+    modified: Option<u64>,
 }
 
 #[derive(Default)]
@@ -190,7 +193,13 @@ struct TreePlan {
 }
 
 impl TreePlan {
-    fn push(&mut self, relative: String, directory: bool, size: u64) -> Result<()> {
+    fn push(
+        &mut self,
+        relative: String,
+        directory: bool,
+        size: u64,
+        modified: Option<u64>,
+    ) -> Result<()> {
         ensure!(
             self.entries.len() < TREE_ENTRY_LIMIT,
             "目录超过 {TREE_ENTRY_LIMIT} 个项目"
@@ -200,6 +209,7 @@ impl TreePlan {
             relative,
             directory,
             size,
+            modified,
         });
         Ok(())
     }
@@ -561,6 +571,19 @@ impl RemoteSession {
         drop(sftp);
         crate::terminal::Pty::open(session, columns, rows)
     }
+    /// Opens a fresh interactive shell in an exact absolute remote directory.
+    /// The fixed bootstrap never writes commands into an existing terminal.
+    pub fn into_terminal_here(
+        self,
+        columns: u32,
+        rows: u32,
+        directory: &str,
+    ) -> Result<crate::terminal::Pty> {
+        crate::terminal::validate_directory(directory)?;
+        let Self { session, sftp } = self;
+        drop(sftp);
+        crate::terminal::Pty::open_here(session, columns, rows, directory)
+    }
     pub fn sftp_available(&self) -> bool {
         self.sftp.is_some()
     }
@@ -589,6 +612,205 @@ impl RemoteSession {
             .as_ref()
             .context("服务器未启用 SFTP，文件管理不可用；SSH 系统操作仍可使用")
     }
+
+    /// Scans an upload and creates its directory structure before file workers
+    /// start. The returned files can be copied on independent SSH connections.
+    pub fn prepare_upload(
+        &self,
+        local: &Path,
+        remote: &str,
+        cancel: &AtomicBool,
+    ) -> Result<TransferPlan> {
+        check_cancel(cancel)?;
+        validate_path(remote)?;
+        let metadata = fs::symlink_metadata(local).context("Cannot inspect upload source")?;
+        ensure!(!metadata.is_symlink(), "不传输符号链接");
+        ensure!(
+            metadata.is_dir() || metadata.is_file(),
+            "Upload source must be a regular file or directory"
+        );
+        if metadata.is_file() {
+            return Ok(TransferPlan {
+                files: vec![PlannedFile {
+                    relative_path: local
+                        .file_name()
+                        .context("Upload source has no filename")?
+                        .to_string_lossy()
+                        .into_owned(),
+                    local_path: local.to_owned(),
+                    remote_path: remote.to_owned(),
+                    size: metadata.len(),
+                    source_modified: local_modified(&metadata),
+                }],
+                total_bytes: metadata.len(),
+                is_directory: false,
+            });
+        }
+        let mut scanned = TreePlan::default();
+        scan_local(local, "", 0, cancel, &mut scanned)?;
+        let mut files = Vec::new();
+        let mut directories = Vec::new();
+        for item in &scanned.entries {
+            check_cancel(cancel)?;
+            let source = tree_local(local, &item.relative);
+            let destination = tree_remote(remote, &item.relative);
+            validate_path(&destination)?;
+            let metadata = fs::symlink_metadata(&source)?;
+            if item.directory {
+                ensure!(
+                    metadata.is_dir() && !metadata.is_symlink(),
+                    "Source directory changed during transfer"
+                );
+                directories.push(destination);
+            } else {
+                ensure!(
+                    metadata.is_file() && !metadata.is_symlink() && metadata.len() == item.size,
+                    "Source file changed after directory scan"
+                );
+                files.push(PlannedFile {
+                    relative_path: item.relative.clone(),
+                    local_path: source,
+                    remote_path: destination,
+                    size: item.size,
+                    source_modified: local_modified(&metadata),
+                });
+            }
+        }
+        check_cancel(cancel)?;
+        self.ensure_remote_directory(remote)?;
+        for directory in directories {
+            check_cancel(cancel)?;
+            self.ensure_remote_directory(&directory)?;
+        }
+        Ok(TransferPlan {
+            files,
+            total_bytes: scanned.total,
+            is_directory: true,
+        })
+    }
+
+    /// Prevalidates download names and types, then prepares all destination
+    /// directories, including empty ones, before returning the file manifest.
+    pub fn prepare_download(
+        &self,
+        remote: &str,
+        local: &Path,
+        cancel: &AtomicBool,
+    ) -> Result<TransferPlan> {
+        check_cancel(cancel)?;
+        validate_path(remote)?;
+        let metadata = self
+            .sftp()?
+            .lstat(Path::new(remote))
+            .context("Cannot inspect download source")?;
+        ensure!(!metadata.file_type().is_symlink(), "不传输符号链接");
+        ensure!(
+            metadata.is_dir() || metadata.is_file(),
+            "Download source must be a regular file or directory"
+        );
+        if metadata.is_file() {
+            let size = metadata.size.context("Remote file size unavailable")?;
+            return Ok(TransferPlan {
+                files: vec![PlannedFile {
+                    relative_path: remote.rsplit('/').next().unwrap_or(remote).to_owned(),
+                    local_path: local.to_owned(),
+                    remote_path: remote.to_owned(),
+                    size,
+                    source_modified: metadata.mtime,
+                }],
+                total_bytes: size,
+                is_directory: false,
+            });
+        }
+        let mut scanned = TreePlan::default();
+        self.scan_remote(remote, "", 0, cancel, &mut scanned)?;
+        let mut files = Vec::new();
+        let mut directories = Vec::new();
+        for item in &scanned.entries {
+            check_cancel(cancel)?;
+            let source = tree_remote(remote, &item.relative);
+            let destination = tree_local(local, &item.relative);
+            if item.directory {
+                let metadata = self.sftp()?.lstat(Path::new(&source))?;
+                ensure!(
+                    metadata.is_dir() && !metadata.file_type().is_symlink(),
+                    "Source directory changed during transfer"
+                );
+                directories.push(destination);
+            } else {
+                files.push(PlannedFile {
+                    relative_path: item.relative.clone(),
+                    local_path: destination,
+                    remote_path: source,
+                    size: item.size,
+                    source_modified: item.modified,
+                });
+            }
+        }
+        check_cancel(cancel)?;
+        ensure_local_directory(local)?;
+        for directory in directories {
+            check_cancel(cancel)?;
+            ensure_local_directory(&directory)?;
+        }
+        Ok(TransferPlan {
+            files,
+            total_bytes: scanned.total,
+            is_directory: true,
+        })
+    }
+
+    /// Rechecks the scanned source before using the existing conflict-aware,
+    /// atomic single-file copy. The caller may use a different SSH connection
+    /// for each file, while retaining one manifest and progress index.
+    pub fn transfer_planned_file(
+        &self,
+        direction: TransferDirection,
+        file: &PlannedFile,
+        cancel: &AtomicBool,
+        progress: impl FnMut(u64, u64, u64),
+        on_conflict: impl FnMut(&TransferConflict) -> Result<ConflictAction>,
+    ) -> Result<TransferSummary> {
+        check_cancel(cancel)?;
+        validate_path(&file.remote_path)?;
+        match direction {
+            TransferDirection::Upload => {
+                let metadata = fs::symlink_metadata(&file.local_path)?;
+                ensure!(
+                    metadata.is_file()
+                        && !metadata.is_symlink()
+                        && metadata.len() == file.size
+                        && local_modified(&metadata) == file.source_modified,
+                    "Source file changed after directory scan"
+                );
+                self.upload_with_conflicts_stats(
+                    &file.local_path,
+                    &file.remote_path,
+                    cancel,
+                    progress,
+                    on_conflict,
+                )
+            }
+            TransferDirection::Download => {
+                let metadata = self.sftp()?.lstat(Path::new(&file.remote_path))?;
+                ensure!(
+                    metadata.is_file()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.size == Some(file.size)
+                        && metadata.mtime == file.source_modified,
+                    "Source file changed after directory scan"
+                );
+                self.download_with_conflicts_stats(
+                    &file.remote_path,
+                    &file.local_path,
+                    cancel,
+                    progress,
+                    on_conflict,
+                )
+            }
+        }
+    }
+
     /// Transfers a regular file or an entire directory into an absent destination.
     /// Directory cancellation preserves completed files; retry with a new target.
     pub fn upload_path(
@@ -942,6 +1164,7 @@ impl RemoteSession {
                 } else {
                     metadata.size.context("Remote file size unavailable")?
                 },
+                metadata.mtime,
             )?;
             if metadata.is_dir() {
                 self.scan_remote(root, &relative, depth + 1, cancel, plan)?;
@@ -1685,7 +1908,9 @@ impl RemoteSession {
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                         Err(_) if channel.eof() => {}
-                        Err(error) => return Err(error.into()),
+                        Err(error) => {
+                            return Err(crate::transport_error::stream_error(&self.session, error));
+                        }
                     }
                 }
                 if written == stdin.len() && !eof_sent && !channel.eof() {
@@ -1715,7 +1940,9 @@ impl RemoteSession {
                             advanced = true;
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                        Err(error) => return Err(error.into()),
+                        Err(error) => {
+                            return Err(crate::transport_error::stream_error(&self.session, error));
+                        }
                     }
                 }
                 if channel.eof() && !advanced {
@@ -1899,6 +2126,7 @@ fn scan_local(
             relative.clone(),
             metadata.is_dir(),
             if metadata.is_dir() { 0 } else { metadata.len() },
+            local_modified(&metadata),
         )?;
         if metadata.is_dir() {
             scan_local(root, &relative, depth + 1, cancel, plan)?;
