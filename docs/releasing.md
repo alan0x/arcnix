@@ -6,6 +6,8 @@ Only pushing a matching `v*` tag runs `.github/workflows/release.yml`. Ordinary
 pushes, pull requests and manually running the normal CI workflow do not run the
 release matrix or publish assets. The tag must match every workspace package and
 internal dependency version. The normal CI checks must pass before release builds.
+Normal CI checks the complete workspace on Linux and Windows, including the Linux
+desktop with GTK/WebKit dependencies, before a release tag is created.
 
 | Platform | Native runner | Rust target | Archive |
 | --- | --- | --- | --- |

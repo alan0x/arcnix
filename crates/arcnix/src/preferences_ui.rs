@@ -21,7 +21,7 @@ pub(super) fn tick(ui: &Ui) {
             || s.system_task_running
             || s.file_pending.is_some()
             || !s.cancels.is_empty()
-            || s.keepalive_at.elapsed().as_secs() < seconds.into()
+            || s.keepalive_at.elapsed().as_secs() < u64::from(seconds)
         {
             return false;
         }
