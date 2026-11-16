@@ -57,29 +57,13 @@ impl ConfigStore {
         file.take(MAX_CONFIG_BYTES + 1)
             .read_to_end(&mut bytes)
             .context("读取配置文件失败")?;
-        ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
-        let document: Document =
-            serde_json::from_slice(&bytes).context("配置文件格式错误，原文件已保留")?;
-        ensure!(
-            document.version == SCHEMA_VERSION,
-            "不支持的配置版本 {}，需要版本 {}；原文件已保留",
-            document.version,
-            SCHEMA_VERSION
-        );
-        document.config.validate().context("配置内容无效")?;
-        Ok(document.config)
+        decoded(&bytes)
     }
 
     /// Writes a unique file beside the destination, flushes it, then renames it
     /// over the destination. A failed write never truncates the old config.
     pub fn save(&self, config: &AppConfig) -> Result<()> {
-        config.validate()?;
-        let document = Document {
-            version: SCHEMA_VERSION,
-            config: config.clone(),
-        };
-        let bytes = serde_json::to_vec_pretty(&document)?;
-        ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
+        let bytes = encoded(config)?;
         let parent = self
             .path
             .parent()
@@ -110,6 +94,35 @@ impl ConfigStore {
         }
         result
     }
+
+    /// Check the same schema and serialized limit used by save, without I/O.
+    pub fn check(config: &AppConfig) -> Result<()> {
+        encoded(config).map(|_| ())
+    }
+}
+
+pub(crate) fn decoded(bytes: &[u8]) -> Result<AppConfig> {
+    ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
+    let document: Document =
+        serde_json::from_slice(bytes).context("配置文件格式错误，原文件已保留")?;
+    ensure!(
+        document.version == SCHEMA_VERSION,
+        "不支持的配置版本 {}，需要版本 {}；原文件已保留",
+        document.version,
+        SCHEMA_VERSION
+    );
+    document.config.validate().context("配置内容无效")?;
+    Ok(document.config)
+}
+pub(crate) fn encoded(config: &AppConfig) -> Result<Vec<u8>> {
+    config.validate()?;
+    let document = Document {
+        version: SCHEMA_VERSION,
+        config: config.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&document)?;
+    ensure!((bytes.len() as u64) < MAX_CONFIG_BYTES, "配置文件过大");
+    Ok(bytes)
 }
 
 fn nonempty(value: &str, label: &str, limit: usize) -> Result<()> {
@@ -142,7 +155,7 @@ fn validate_host(host: &str) -> Result<()> {
     Ok(())
 }
 
-fn host_key(host: &str) -> String {
+pub(crate) fn host_key(host: &str) -> String {
     let address = host
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
@@ -166,10 +179,26 @@ fn validate_fingerprint(fingerprint: &str) -> Result<()> {
 
 impl ServerProfile {
     pub fn validate(&self) -> Result<()> {
+        crate::server_labels::validate(&self.environment, &self.tags)?;
         nonempty(&self.id, "服务器标识", 256)?;
         nonempty(&self.name, "服务器名称", 256)?;
         validate_host(&self.host)?;
         ensure!(self.port != 0, "SSH 端口必须介于 1 和 65535 之间");
+        if let Some(connection) = self.connection {
+            connection.validate()?;
+        }
+        for path in [&self.locations.local_directory, &self.locations.last_local]
+            .into_iter()
+            .flatten()
+        {
+            ensure!(
+                path.is_absolute(),
+                "Local server directories must be absolute"
+            );
+        }
+        if let Some(path) = &self.locations.last_remote {
+            nonempty(path, "Last remote directory", 32768)?;
+        }
         ensure!(
             self.file_pane_ratio
                 .is_none_or(|ratio| (200..=800).contains(&ratio)),
@@ -195,10 +224,50 @@ impl ServerProfile {
 
 impl AppConfig {
     pub fn validate(&self) -> Result<()> {
+        self.settings.connection.validate()?;
+        ensure!(
+            self.backup_evidence.len() <= 512,
+            "Too many backup confirmation records"
+        );
+        ensure!(
+            self.backup_policies.len() <= 100,
+            "At most 100 backup policies are supported"
+        );
+        let mut policy_ids = HashSet::new();
+        for policy in &self.backup_policies {
+            policy.validate()?;
+            ensure!(
+                policy_ids.insert(&policy.id),
+                "Duplicate backup policy identifier"
+            );
+        }
+        self.settings.logging.validate()?;
+        ensure!(
+            self.settings.display.decimals <= 3,
+            "Use 0–3 decimal places"
+        );
+        ensure!(
+            [1, 7, 30].contains(&self.settings.updates.interval_days),
+            "Update interval must be 1, 7 or 30 days"
+        );
         ensure!(
             [3, 5, 10, 30].contains(&self.settings.resource_interval_seconds),
             "资源采样间隔应为 3、5、10 或 30 秒"
         );
+        ensure!(
+            self.snippets.len() <= 200,
+            "Too many saved commands (200 maximum)"
+        );
+        let mut snippet_ids = HashSet::new();
+        for snippet in &self.snippets {
+            snippet.validate()?;
+            ensure!(
+                snippet_ids.insert(&snippet.id),
+                "Duplicate command identifier"
+            );
+        }
+        crate::script_parameters::validate_presets(self)?;
+        crate::script_favorites::validate(&self.script_favorites)?;
         let mut group_ids = HashSet::new();
         let mut group_names = HashSet::new();
         for group in &self.groups {
@@ -245,7 +314,7 @@ impl AppConfig {
         Ok(())
     }
 
-    pub fn upsert_server(&mut self, server: ServerProfile) -> Result<()> {
+    pub fn upsert_server(&mut self, mut server: ServerProfile) -> Result<()> {
         server.validate()?;
         if let Some(group) = &server.group_id {
             ensure!(self.groups.iter().any(|g| &g.id == group), "所选分组不存在");
@@ -257,6 +326,8 @@ impl AppConfig {
             {
                 self.transfer_rules
                     .retain(|rule| rule.server_id != server.id);
+                server.locations.last_local = None;
+                server.locations.last_remote = None;
             }
             *existing = server;
         } else {
@@ -579,8 +650,16 @@ mod tests {
         store.save(&config).unwrap();
         assert_eq!(store.load().unwrap(), config);
         profile.name = "重命名".into();
+        profile.environment = "Production".into();
+        profile.tags = vec!["Web".into(), "中文".into()];
         config.upsert_server(profile).unwrap();
         store.save(&config).unwrap();
+        assert_eq!(store.load().unwrap(), config);
+        let before = fs::read(store.path()).unwrap();
+        let mut invalid = config.clone();
+        invalid.servers[0].tags = vec!["Web".into(), "WEB".into()];
+        assert!(store.save(&invalid).is_err());
+        assert_eq!(fs::read(store.path()).unwrap(), before);
         assert_eq!(store.load().unwrap(), config);
         let contents = fs::read_to_string(store.path()).unwrap();
         assert!(!contents.contains("password"));
@@ -590,6 +669,32 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn file_columns_are_isolated_per_server_and_pane_and_survive_old_configs() {
+        let dir = TestDir::new();
+        let store = dir.store();
+        let mut config = AppConfig::default();
+        let mut first = server();
+        let second = server();
+        first.file_columns.remote.permissions = true;
+        first.file_columns.remote.size = false;
+        first.file_columns.local.kind = true;
+        config.upsert_server(first.clone()).unwrap();
+        config.upsert_server(second.clone()).unwrap();
+        store.save(&config).unwrap();
+        let restored = store.load().unwrap();
+        assert_eq!(restored.servers[0].file_columns, first.file_columns);
+        assert_eq!(
+            restored.servers[1].file_columns,
+            crate::FileColumnSettings::default()
+        );
+        assert!(restored.servers[0].file_columns.local.size);
+        let mut old = serde_json::to_value(first).unwrap();
+        old.as_object_mut().unwrap().remove("file_columns");
+        let old: crate::ServerProfile = serde_json::from_value(old).unwrap();
+        assert_eq!(old.file_columns, crate::FileColumnSettings::default());
     }
 
     #[test]
@@ -755,5 +860,42 @@ mod tests {
         assert!(config.trust_host("host", 22, "SHA256:invalid").is_err());
         config.trust_host("[::1]", 22, &first).unwrap();
         assert_eq!(config.trusted_fingerprint("::1", 22), Some(first.as_str()));
+    }
+    #[test]
+    fn workstation_preferences_and_locations_roundtrip_without_leaking_between_servers() {
+        use crate::preferences::*;
+        let dir = TestDir::new();
+        let store = dir.store();
+        let mut config = AppConfig::default();
+        let mut first = server();
+        first.locations.local_directory = Some(dir.0.clone());
+        first.locations.last_local = Some(dir.0.clone());
+        first.locations.last_remote = Some("/srv/first".into());
+        first.connection = Some(ConnectionSettings {
+            timeout_seconds: 5,
+            keepalive_seconds: 0,
+        });
+        let second = server();
+        config.upsert_server(first.clone()).unwrap();
+        config.upsert_server(second).unwrap();
+        config.settings.display.units = SizeUnits::Decimal;
+        config.settings.display.decimals = 3;
+        config.settings.display.group_digits = true;
+        config.settings.display.dates = DateStyle::Iso;
+        config.settings.display.timezone = DisplayTimezone::Utc;
+        config.settings.logging.timestamps = false;
+        config.settings.logging.max_size_mib = 50;
+        config.settings.updates.interval_days = 7;
+        config.settings.upload_conflict = Some(crate::ExistingFileAction::Skip);
+        store.save(&config).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded, config);
+        assert_eq!(loaded.servers[1].locations.last_remote, None);
+        first.host = "other.example.org".into();
+        config.upsert_server(first).unwrap();
+        assert!(config.servers[0].locations.last_remote.is_none());
+        assert!(config.servers[0].locations.last_local.is_none());
+        config.settings.connection.timeout_seconds = 0;
+        assert!(store.save(&config).is_err());
     }
 }

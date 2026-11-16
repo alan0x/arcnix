@@ -1,10 +1,13 @@
 use super::*;
 
 pub(super) fn files(ui: Ui) -> impl Widget {
-    splitter::panes(ui.clone(), pane(ui.clone(), false), pane(ui, true))
+    col().class("files-workspace").fill((
+        file_context::task_status(ui.clone()),
+        splitter::panes(ui.clone(), pane(ui.clone(), false), pane(ui, true)),
+    ))
 }
 
-fn ready(s: &State, remote: bool) -> bool {
+pub(super) fn ready(s: &State, remote: bool) -> bool {
     if remote {
         s.connected && s.sftp_available && s.remote_ready
     } else {
@@ -25,7 +28,10 @@ fn selection(s: &mut State, remote: bool) -> &mut HashSet<String> {
         &mut s.local_selection
     }
 }
-fn begin_file(ui: &Ui, remote: bool, rename: bool) {
+pub(super) fn begin_file(ui: &Ui, remote: bool, rename: bool) {
+    if ui.state.with(|s| s.file_pending.is_some()) {
+        return;
+    }
     ui.state.revise(|s| {
         s.name = if rename {
             let entries = file_browser::entries(s, remote);
@@ -84,8 +90,6 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
     let transfer = ui.clone();
     let filter = ui.clone();
     let menu = ui.clone();
-    let mkdir = ui.clone();
-    let rename = ui.clone();
     let all = ui.clone();
     let clear = ui.clone();
     col().class(state.map(move |s| if file_browser::icons(s, remote) { "file-pane icons-view" } else { "file-pane details-view" }.to_owned())).fill((
@@ -196,6 +200,7 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
                     menu.state.revise(|s| {
                         s.host_menu = None;
                         s.group_menu = None;
+                        s.file_context=None;
                         s.file_menu = if s.file_menu == Some(remote) {
                             None
                         } else {
@@ -203,31 +208,7 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
                         }
                     })
                 }),
-                col()
-                    .class(state.map(move |s| {
-                        if s.file_menu == Some(remote) {
-                            "pane-menu"
-                        } else {
-                            "hidden"
-                        }
-                        .into()
-                    }))
-                    .fill((
-                        sapid::button()
-                            .class("menu-item")
-                            .label(i18n::bind("新建文件夹"))
-                            .enabled(state.map(move |s| ready(s, remote)))
-                            .on_press(move || begin_file(&mkdir, remote, false)),
-                        sapid::button()
-                            .class("menu-item")
-                            .label(i18n::bind("重命名"))
-                            .enabled(
-                                state.map(move |s| {
-                                    ready(s, remote) && selected(s, remote).len() == 1
-                                }),
-                            )
-                            .on_press(move || begin_file(&rename, remote, true)),
-                    )),
+                file_context::menu(ui.clone(),remote),
             )),
         )),
         row()
@@ -274,14 +255,16 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
             )),
         row().class("file-header").fill((
             sort_button(ui.clone(), remote, Sort::Name, "名称", "column-name"),
-            sort_button(ui.clone(), remote, Sort::Size, "大小", "column-size"),
-            sort_button(
+            when(state.map(move |s| file_columns::visible(s, remote).size), { let ui = ui.clone(); move || sort_button(ui.clone(), remote, Sort::Size, "大小", "column-size") }),
+            when(state.map(move |s| file_columns::visible(s, remote).kind), move || text().class("column-type").content(i18n::bind("类型"))),
+            when(state.map(move |s| file_columns::visible(s, remote).modified), { let ui = ui.clone(); move || sort_button(
                 ui.clone(),
                 remote,
                 Sort::Modified,
                 "修改时间",
                 "column-modified",
-            ),
+            ) }),
+            when(state.map(move |s| file_columns::visible(s, remote).permissions), move || text().class("column-permissions").content(i18n::bind("权限"))),
         )),
         file_browser::listing(ui.clone(), remote),
         text()

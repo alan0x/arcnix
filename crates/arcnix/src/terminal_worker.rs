@@ -22,7 +22,7 @@ pub enum Action {
 pub enum Command {
     Attach {
         epoch: u64,
-        profile: ServerProfile,
+        profile: Box<ServerProfile>,
         fingerprint: String,
         secret: Zeroizing<String>,
     },
@@ -41,7 +41,7 @@ pub enum Event {
 }
 struct Credentials {
     epoch: u64,
-    profile: ServerProfile,
+    profile: Box<ServerProfile>,
     fingerprint: String,
     secret: Zeroizing<String>,
 }

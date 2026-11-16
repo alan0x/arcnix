@@ -2,15 +2,18 @@ use super::*;
 
 #[derive(Clone, Default)]
 pub(super) struct SettingsState {
+    pub configuration_backup: crate::configuration_backup_ui::BackupState,
     pub error: String,
+    pub log_error: String,
+    pub log_directory_draft: Option<String>,
 }
 
 impl Ui {
-    fn update_preferences(&self, change: impl FnOnce(&mut AppSettings)) {
+    pub(super) fn update_preferences(&self, change: impl FnOnce(&mut AppSettings)) {
         let previous_language = self.state.with(|s| s.config.settings.language);
         let mut config = self.state.with(|s| s.config.clone());
         change(&mut config.settings);
-        let result = if self.writable {
+        let result = if self.writable.get() {
             self.store.save(&config)
         } else {
             Err(anyhow::anyhow!(
@@ -20,13 +23,14 @@ impl Ui {
         match result {
             Ok(()) => {
                 let language = config.settings.language;
+                formatting::configure(config.settings.display);
+                if language != previous_language {
+                    i18n::set_language(language);
+                }
                 self.state.revise(|s| {
                     s.config = config;
                     s.settings.error.clear();
                 });
-                if language != previous_language {
-                    i18n::set_language(language);
-                }
             }
             Err(error) => self.state.revise(|s| {
                 s.settings.error = format!("Could not save settings: {error:#}");
@@ -57,7 +61,7 @@ impl Ui {
     }
 }
 
-fn choice(
+pub(super) fn choice(
     ui: &Ui,
     label: &'static str,
     active: impl Fn(&State) -> bool + 'static,
@@ -76,7 +80,6 @@ fn section(
     ui: &Ui,
     category: navigation::SettingsSection,
     title: &'static str,
-    label: &'static str,
     description: &'static str,
     controls: impl IntoChildren + 'static,
 ) -> impl Widget {
@@ -90,14 +93,15 @@ fn section(
             .to_owned()
         }))
         .fill((
-            text()
-                .class("settings-section-title")
-                .content(i18n::bind(title)),
-            col().class("settings-field").fill((
-                text().class("field-label").content(i18n::bind(label)),
-                text().class("subtle").content(i18n::bind(description)),
-                row().class("choice-list settings-choices").fill(controls),
+            row().class("help-heading").fill((
+                text()
+                    .class("settings-section-title")
+                    .content(i18n::bind(title)),
+                crate::help_ui::tip(title, description),
             )),
+            col()
+                .class("settings-field")
+                .fill(row().class("choice-list settings-choices").fill(controls)),
         ))
 }
 
@@ -112,43 +116,161 @@ pub(super) fn page(ui: Ui) -> impl Widget {
     let hide = ui.clone();
     let intervals = ui.clone();
     col().class("settings-page").fill((
-        col().class("settings-heading").fill((
-            text().class("page-title").content(i18n::bind("Application settings")),
-            text().class("subtle").content(i18n::bind("Customize this application on your computer.")),
-        )),
-        text().class(state.map(|s| {
-            if s.settings.error.is_empty() { "hidden" } else { "software-error settings-error" }.to_string()
-        })).content(i18n::bind(state.map(|s| s.settings.error.clone()))),
+        feedback(
+            &ui,
+            |s| s.settings.error.clone(),
+            "software-error settings-error",
+        ),
         col().class("settings-sections").fill((
-            section(&ui, navigation::SettingsSection::General, "General", "Language", "Choose the language used throughout the application.", (
-                choice(&ui, "English", |s| s.config.settings.language == Language::English, move || english.change_language(Language::English)),
-                choice(&ui, "简体中文", |s| s.config.settings.language == Language::SimplifiedChinese, move || chinese.change_language(Language::SimplifiedChinese)),
-            )),
-            section(&ui, navigation::SettingsSection::Appearance, "Appearance", "Theme", "Choose a color theme.", (
-                choice(&ui, "Follow system", |s| s.config.settings.theme == Theme::System, move || system.change_theme(Theme::System)),
-                choice(&ui, "Dark", |s| s.config.settings.theme == Theme::Dark, move || dark.change_theme(Theme::Dark)),
-                choice(&ui, "Light", |s| s.config.settings.theme == Theme::Light, move || light.change_theme(Theme::Light)),
-            )),
-            section(&ui, navigation::SettingsSection::Files, "Files", "Hidden files", "Show or hide dotfiles in local and remote file lists.", (
-                choice(&ui, "Show hidden files", |s| s.config.settings.show_hidden_files, move || show.change_hidden_files(true)),
-                choice(&ui, "Hide hidden files", |s| !s.config.settings.show_hidden_files, move || hide.change_hidden_files(false)),
-            )),
-            section(&ui, navigation::SettingsSection::Monitoring, "Monitoring", "Resource refresh interval", "Refresh resource values only while the Resources page is open.",
-                each(vec![3u64, 5, 10, 30]).key(|seconds| *seconds).children(move |item| {
-                    let seconds = item.value.get();
-                    let ui = intervals.clone();
-                    sapid::button()
-                        .class(state.map(move |s| {
-                            if s.config.settings.resource_interval_seconds == seconds { "choice active" } else { "choice" }.to_string()
-                        }))
-                        .label(i18n::bind(format!("Every {seconds} seconds")))
-                        .on_press(move || ui.change_resource_interval(seconds))
-                }),
+            section(
+                &ui,
+                navigation::SettingsSection::General,
+                "Language",
+                "Choose the language used throughout the application.",
+                (
+                    choice(
+                        &ui,
+                        "English",
+                        |s| s.config.settings.language == Language::English,
+                        move || english.change_language(Language::English),
+                    ),
+                    choice(
+                        &ui,
+                        "简体中文",
+                        |s| s.config.settings.language == Language::SimplifiedChinese,
+                        move || chinese.change_language(Language::SimplifiedChinese),
+                    ),
+                ),
             ),
+            section(
+                &ui,
+                navigation::SettingsSection::General,
+                "Theme",
+                "Choose a color theme.",
+                (
+                    choice(
+                        &ui,
+                        "Follow system",
+                        |s| s.config.settings.theme == Theme::System,
+                        move || system.change_theme(Theme::System),
+                    ),
+                    choice(
+                        &ui,
+                        "Dark",
+                        |s| s.config.settings.theme == Theme::Dark,
+                        move || dark.change_theme(Theme::Dark),
+                    ),
+                    choice(
+                        &ui,
+                        "Light",
+                        |s| s.config.settings.theme == Theme::Light,
+                        move || light.change_theme(Theme::Light),
+                    ),
+                ),
+            ),
+            preferences_ui::connection(ui.clone()),
+            section(
+                &ui,
+                navigation::SettingsSection::Files,
+                "Hidden files",
+                "Show or hide dotfiles in local and remote file lists.",
+                (
+                    choice(
+                        &ui,
+                        "Show hidden files",
+                        |s| s.config.settings.show_hidden_files,
+                        move || show.change_hidden_files(true),
+                    ),
+                    choice(
+                        &ui,
+                        "Hide hidden files",
+                        |s| !s.config.settings.show_hidden_files,
+                        move || hide.change_hidden_files(false),
+                    ),
+                ),
+            ),
+            preferences_ui::display(ui.clone()),
+            preferences_ui::transfers(ui.clone()),
+            section(
+                &ui,
+                navigation::SettingsSection::Monitoring,
+                "Resource refresh interval",
+                "Refresh resource values only while the Resources page is open.",
+                each(vec![3u64, 5, 10, 30])
+                    .key(|seconds| *seconds)
+                    .children(move |item| {
+                        let seconds = item.value.get();
+                        let ui = intervals.clone();
+                        sapid::button()
+                            .class(state.map(move |s| {
+                                if s.config.settings.resource_interval_seconds == seconds {
+                                    "choice active"
+                                } else {
+                                    "choice"
+                                }
+                                .to_string()
+                            }))
+                            .label(i18n::bind(format!("Every {seconds} seconds")))
+                            .on_press(move || ui.change_resource_interval(seconds))
+                    }),
+            ),
+            preferences_ui::logging(ui.clone()),
+            panel(
+                &ui,
+                navigation::SettingsSection::About,
+                "Application",
+                row().class("about-product").fill((
+                    text().class("brand-icon").content(""),
+                    col().class("about-identity").fill((
+                        text().class("about-name").content("Arcnix"),
+                        text()
+                            .class("subtle")
+                            .content(i18n::bind(format!("Version {}", env!("CARGO_PKG_VERSION")))),
+                    )),
+                )),
+            ),
+            updates_ui::panel(ui.clone()),
+            crate::configuration_backup_ui::panel(ui.clone()),
         )),
-        col().class("settings-footer").fill((
-            text().class("subtle").content(i18n::bind("Changes are saved automatically.")),
-            text().class("subtle").content(i18n::bind("Preferences are saved on this computer. File pane sizes and conflict choices remain separate for each server.")),
-        )),
+        when(
+            state.map(|s| s.settings_section != navigation::SettingsSection::About),
+            || {
+                text()
+                    .class("subtle settings-footer")
+                    .content(i18n::bind("Changes are saved automatically."))
+            },
+        ),
     ))
+}
+pub(super) fn feedback(
+    ui: &Ui,
+    read: fn(&State) -> String,
+    class: &'static str,
+) -> impl Widget + use<> {
+    let state = ui.state;
+    when(state.map(move |s| !read(s).trim().is_empty()), move || {
+        text().class(class).content(i18n::bind(state.map(read)))
+    })
+}
+pub(super) fn panel<B: Widget + 'static>(
+    ui: &Ui,
+    category: navigation::SettingsSection,
+    title: &'static str,
+    body: B,
+) -> impl Widget + use<B> {
+    col()
+        .class(ui.state.map(move |s| {
+            if s.settings_section == category {
+                "settings-section"
+            } else {
+                "hidden"
+            }
+            .to_owned()
+        }))
+        .fill((
+            text()
+                .class("settings-section-title")
+                .content(i18n::bind(title)),
+            body,
+        ))
 }

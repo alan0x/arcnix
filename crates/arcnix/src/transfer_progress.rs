@@ -82,15 +82,7 @@ impl Meter {
     }
 }
 pub(super) fn bytes(value: u64) -> String {
-    if value >= 1 << 30 {
-        format!("{:.1} GiB", value as f64 / (1u64 << 30) as f64)
-    } else if value >= 1 << 20 {
-        format!("{:.1} MiB", value as f64 / (1u64 << 20) as f64)
-    } else if value >= 1 << 10 {
-        format!("{:.1} KiB", value as f64 / 1024.)
-    } else {
-        format!("{value} B")
-    }
+    super::formatting::bytes(value)
 }
 pub(super) fn percent(job: &TransferJob) -> f64 {
     if job.status == TransferStatus::Completed {

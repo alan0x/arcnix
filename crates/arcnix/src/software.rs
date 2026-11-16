@@ -1,4 +1,4 @@
-use arcnix_core::packages::{Package, PackageAction, PackagePlan, SystemEnvironment};
+use arcnix_core::packages::{Package, PackageAction, SystemEnvironment};
 
 use super::*;
 
@@ -9,36 +9,13 @@ pub(super) struct SoftwareState {
     pub query: String,
     pub installed_view: bool,
     pub pending: Option<u64>,
-    pub plan: Option<PackagePlan>,
-    pub plan_id: Option<u64>,
-    pub apply_serial: Option<u64>,
-    pub sudo_secret: String,
-    pub log: String,
     pub status: String,
     pub error: String,
-    pub exit_code: Option<i32>,
-    task_started: bool,
 }
 
 pub(super) enum Event {
     Environment(std::result::Result<SystemEnvironment, String>),
     Packages(std::result::Result<Vec<Package>, String>),
-    Preview(std::result::Result<PackagePlan, String>),
-    Started,
-    Output(String),
-    Finished(std::result::Result<CommandOutput, String>),
-}
-
-fn append_log(log: &mut String, text: &str) {
-    log.push_str(text);
-    if log.len() > 128 * 1024 {
-        let boundary = log
-            .char_indices()
-            .map(|(i, _)| i)
-            .find(|i| *i >= log.len() - 96 * 1024)
-            .unwrap_or(0);
-        log.drain(..boundary);
-    }
 }
 
 impl Ui {
@@ -99,55 +76,12 @@ impl Ui {
         if !self.software_available(true) {
             return;
         }
-        let serial = self.send(Action::PackagePreview(action));
-        self.state.revise(|s| {
-            s.software.pending = Some(serial);
-            s.software.plan = None;
-            s.software.plan_id = None;
-            s.software.sudo_secret.clear();
-            s.software.error.clear();
-            s.software.status = "正在生成操作预览…".into();
-        });
-    }
-    pub(super) fn software_apply(&self) {
-        if !self.software_available(true)
-            || !self
+        match arcnix_core::scripts::Template::package(action) {
+            Ok(template) => self.choose_server_script(template),
+            Err(error) => self
                 .state
-                .with(|s| s.dialog == Some(Dialog::PackageConfirm))
-        {
-            return;
+                .revise(|s| s.software.error = format!("{error:#}")),
         }
-        let details = self.state.with(|s| {
-            let env = s.software.environment.as_ref()?;
-            if !env.is_root && !env.sudo_available {
-                return None;
-            }
-            Some((s.software.plan_id?, s.software.sudo_secret.clone()))
-        });
-        let Some((plan_id, secret)) = details else {
-            self.state
-                .revise(|s| s.dialog_error = "当前连接没有可用的管理员权限".into());
-            return;
-        };
-        if secret.len() > 1024 || secret.contains(['\n', '\r', '\0']) {
-            self.state
-                .revise(|s| s.dialog_error = "管理员密码包含无效字符或过长".into());
-            return;
-        }
-        self.state.revise(|s| {
-            s.system_task_running = true;
-            s.dialog = None;
-            s.dialog_error.clear();
-            s.software.sudo_secret.clear();
-            s.software.log.clear();
-            s.software.exit_code = None;
-            s.software.error.clear();
-            s.software.status = "系统任务已排队，正在等待 SSH 通道…".into();
-            s.software.task_started = false;
-        });
-        let serial = self.send(Action::PackageApply { plan_id, secret });
-        self.state
-            .revise(|s| s.software.apply_serial = Some(serial));
     }
 }
 
@@ -208,111 +142,11 @@ pub(super) fn event(ui: &Ui, serial: u64, event: Event) {
                 }
             });
         }
-        Event::Preview(result) => {
-            if !ui.state.with(|s| s.software.pending == Some(serial)) {
-                return;
-            }
-            let success = result.is_ok();
-            ui.state.revise(|s| {
-                s.software.pending = None;
-                match result {
-                    Ok(plan) => {
-                        s.software.plan = Some(plan);
-                        s.software.plan_id = Some(serial);
-                        s.software.status = "操作预览已就绪，尚未执行".into();
-                        s.software.sudo_secret.clear();
-                    }
-                    Err(e) => {
-                        s.software.error = e;
-                        s.software.status = "无法生成操作预览".into();
-                    }
-                }
-            });
-            if success {
-                ui.open_dialog(Dialog::PackageConfirm);
-            }
-        }
-        Event::Started => {
-            if ui.state.with(|s| s.software.apply_serial == Some(serial)) {
-                ui.state.revise(|s| {
-                    s.software.status = "正在执行系统任务…".into();
-                    s.software.task_started = true;
-                });
-            }
-        }
-        Event::Output(output) => {
-            if ui.state.with(|s| s.software.apply_serial == Some(serial)) {
-                ui.state
-                    .revise(|s| append_log(&mut s.software.log, &output));
-            }
-        }
-        Event::Finished(result) => {
-            if !ui.state.with(|s| s.software.apply_serial == Some(serial)) {
-                return;
-            }
-            let success = result.as_ref().is_ok_and(|output| output.exit_code == 0);
-            ui.state.revise(|s| {
-                s.system_task_running = false;
-                s.software.apply_serial = None;
-                s.software.plan = None;
-                s.software.plan_id = None;
-                s.software.sudo_secret.clear();
-                match result {
-                    Ok(output) => {
-                        s.software.exit_code = Some(output.exit_code);
-                        s.software.status = if output.exit_code == 0 {
-                            "系统任务已完成".into()
-                        } else {
-                            format!("系统任务失败 · 退出码 {}", output.exit_code)
-                        };
-                        if output.exit_code != 0 {
-                            s.software.error =
-                                "操作返回错误，部分变更可能已生效。请查看输出并重新查询已安装状态，修复原因后再生成预览。"
-                                    .into();
-                        }
-                        append_log(
-                            &mut s.software.log,
-                            &i18n::translate(&format!("\n[退出码 {}]\n", output.exit_code)),
-                        );
-                    }
-                    Err(e) => {
-                        s.software.status = if s.software.task_started {"任务结果未确认，请重新连接并检查已安装状态"}else{"系统任务未执行"}.into();
-                        s.software.error = e.clone();
-                        append_log(&mut s.software.log, &i18n::translate(&format!("\n[任务错误] {e}\n")));
-                    }
-                }
-            });
-            if success {
-                if ui
-                    .state
-                    .with(|s| !s.software.installed_view && !s.software.query.trim().is_empty())
-                {
-                    ui.software_search();
-                } else {
-                    ui.software_installed();
-                }
-            }
-            ui.schedule();
-        }
     }
 }
 
-pub(super) fn on_connection_lost(ui: &Ui, message: &str) {
-    ui.state.revise(|s| {
-        if s.system_task_running {
-            s.software.error =
-                "SSH 连接中断，远程任务结果尚未确认。请重连并查询已安装软件。".into();
-            append_log(
-                &mut s.software.log,
-                &i18n::translate(&format!("\n[连接中断] {message}\n")),
-            );
-        }
-        s.system_task_running = false;
-        s.software.pending = None;
-        s.software.sudo_secret.clear();
-        s.software.plan = None;
-        s.software.plan_id = None;
-    });
+pub(super) fn on_connection_lost(ui: &Ui, _message: &str) {
+    ui.state.revise(|s| s.software.pending = None);
 }
 
 fn ready(s: &State) -> bool {
@@ -424,7 +258,7 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                     sapid::button()
                         .class("button")
                         .label(i18n::bind("更新软件源索引"))
-                        .enabled(state.map(ready))
+                        .enabled(state.map(|s| ready(s) && !scripts_ui::busy(s)))
                         .on_press(move || refresh.software_preview(PackageAction::RefreshIndex)),
                 )),
                 text()
@@ -441,43 +275,8 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                     }))
                     .content(i18n::bind(state.map(|s| s.software.error.clone()))),
                 package_table(table_ui),
-                col().class("software-task").fill((
-                    row().class("software-task-heading").fill((
-                        text().content(i18n::bind(state.map(|s| {
-                            s.software
-                                .exit_code
-                                .map(|code| {
-                                    format!(
-                                        "任务输出 · {} · 退出码 {code}",
-                                        if code == 0 {
-                                            "执行成功"
-                                        } else {
-                                            "执行失败"
-                                        }
-                                    )
-                                })
-                                .unwrap_or_else(|| "任务输出".into())
-                        }))),
-                        text().class("subtle").content(i18n::bind(state.map(|s| {
-                            if s.system_task_running {
-                                "任务执行期间不能切换服务器，请保持窗口和连接。"
-                            } else {
-                                "安装操作需先预览并确认。"
-                            }
-                            .to_string()
-                        }))),
-                    )),
-                    text()
-                        .class("software-output")
-                        .selectable(true)
-                        .content(i18n::bind(state.map(|s| {
-                            if s.software.log.is_empty() {
-                                "尚未执行系统任务".into()
-                            } else {
-                                s.software.log.clone()
-                            }
-                        }))),
-                )),
+                text().class("subtle").content(i18n::bind("Installations and index updates run as server-owned tasks. Review their plans and results in Tasks; closing Arcnix does not stop submitted work.")),
+                btn("View server tasks", { let ui=ui.clone(); move || ui.navigate(navigation::Page::Tasks) }),
             ))
         }),
     ))
@@ -537,7 +336,9 @@ fn package_table(ui: Ui) -> impl Widget {
                                 }
                                 .to_string()
                             })))
-                            .enabled(state.map(move |s| ready(s) && !package.get().installed))
+                            .enabled(state.map(move |s| {
+                                ready(s) && !scripts_ui::busy(s) && !package.get().installed
+                            }))
                             .on_press(move || {
                                 install.software_preview(PackageAction::Install(vec![
                                     package.get().name,
@@ -564,154 +365,4 @@ fn package_table(ui: Ui) -> impl Widget {
                 .to_string()
             }))),
     ))
-}
-
-pub(super) fn dialogs(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    when(
-        state.map(|s| s.dialog == Some(Dialog::PackageConfirm)),
-        move || {
-            let submit = ui.clone();
-            let cancel = ui.clone();
-            modal(
-                ui.clone(),
-                "确认系统操作",
-                col().class("form-stack").fill((
-                    text()
-                        .class("dialog-description")
-                        .content(i18n::bind(state.map(|s| {
-                            s.config
-                                .servers
-                                .iter()
-                                .find(|p| Some(&p.id) == s.selected.as_ref())
-                                .map(|p| {
-                                    format!(
-                                        "目标服务器：{} · {}@{}:{}",
-                                        p.name, p.username, p.host, p.port
-                                    )
-                                })
-                                .unwrap_or_default()
-                        }))),
-                    text()
-                        .class("pane-title")
-                        .content(i18n::bind(state.map(|s| {
-                            s.software
-                                .plan
-                                .as_ref()
-                                .map(|p| match &p.action {
-                                    PackageAction::Install(names) => {
-                                        format!("安装 {}", names.join("、"))
-                                    }
-                                    PackageAction::RefreshIndex => "更新软件源索引".into(),
-                                })
-                                .unwrap_or_default()
-                        }))),
-                    text()
-                        .class("subtle")
-                        .content(i18n::bind("请检查预览。只有点击下方确认按钮后才会执行。")),
-                    text()
-                        .class("package-preview")
-                        .selectable(true)
-                        .content(i18n::bind(state.map(|s| {
-                            s.software
-                                .plan
-                                .as_ref()
-                                .map(|p| p.preview.clone())
-                                .unwrap_or_default()
-                        }))),
-                    text()
-                        .class("field-label")
-                        .content(i18n::bind("将执行的命令")),
-                    text()
-                        .class("package-command")
-                        .selectable(true)
-                        .content(state.map(|s| {
-                            match (&s.software.environment, &s.software.plan) {
-                                (Some(env), Some(plan)) => arcnix_core::packages::build_execution(
-                                    env,
-                                    plan,
-                                    !s.software.sudo_secret.is_empty(),
-                                )
-                                .map(|e| command_display(&e.command))
-                                .unwrap_or_else(|e| e.to_string()),
-                                _ => String::new(),
-                            }
-                        })),
-                    when(
-                        state.map(|s| {
-                            s.software
-                                .environment
-                                .as_ref()
-                                .is_some_and(|e| !e.is_root && e.sudo_available)
-                        }),
-                        move || {
-                            col().class("field").fill((
-                                text()
-                                    .class("field-label")
-                                    .content(i18n::bind("管理员密码（sudo 需要时填写）")),
-                                input()
-                                    .name(i18n::bind("sudo 管理员密码"))
-                                    .purpose(Purpose::Password)
-                                    .value(state.map(|s| s.software.sudo_secret.clone()))
-                                    .on(value_changed, move |e| {
-                                        if let glory::ui::Event::ValueChanged { value, .. } = e {
-                                            state.revise(|s| s.software.sudo_secret = value);
-                                        }
-                                    }),
-                                text().class("subtle").content(i18n::bind(
-                                    "仅用于本次提权，不保存，也不会写入命令或日志。",
-                                )),
-                            ))
-                        },
-                    ),
-                    text().class("subtle").content(i18n::bind(state.map(|s| {
-                        s.software
-                            .environment
-                            .as_ref()
-                            .map(|e| {
-                                if e.is_root {
-                                    "当前为 root 会话，无需再次提权。"
-                                } else if e.sudo_available {
-                                    "留空时使用非交互 sudo；需要密码时请填写本次管理员密码。"
-                                } else {
-                                    "当前服务器没有 sudo，请使用 root 或具备管理员权限的账号连接。"
-                                }
-                                .to_string()
-                            })
-                            .unwrap_or_default()
-                    }))),
-                )),
-                (
-                    btn("取消", move || {
-                        cancel.state.revise(|s| s.software.sudo_secret.clear());
-                        cancel.close_dialog();
-                    }),
-                    sapid::button()
-                        .class("button primary")
-                        .label(i18n::bind("确认执行"))
-                        .enabled(state.map(|s| {
-                            ready(s)
-                                && s.software.plan_id.is_some()
-                                && s.software
-                                    .environment
-                                    .as_ref()
-                                    .is_some_and(|e| e.is_root || e.sudo_available)
-                        }))
-                        .on_press(move || submit.software_apply()),
-                ),
-            )
-        },
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn task_log_is_bounded_without_splitting_unicode() {
-        let mut log = "测".repeat(50000);
-        append_log(&mut log, "\n完成");
-        assert!(log.len() <= 128 * 1024);
-        assert!(log.ends_with("完成"));
-    }
 }

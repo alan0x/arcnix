@@ -61,6 +61,7 @@ pub enum JournalPeriod {
     RecentHour,
     Today,
     Boot,
+    Window { start: u64, end: u64 },
 }
 impl JournalPeriod {
     pub fn label(self) -> &'static str {
@@ -68,6 +69,7 @@ impl JournalPeriod {
             Self::RecentHour => "最近一小时",
             Self::Today => "今天",
             Self::Boot => "本次启动",
+            Self::Window { .. } => "诊断采样时段",
         }
     }
 }
@@ -161,6 +163,32 @@ pub fn parse_capabilities(text: &str) -> Result<LogCapabilities> {
     Ok(caps)
 }
 
+fn valid_unit_filter(unit: &str) -> bool {
+    let bytes = unit.as_bytes();
+    if bytes.len() > 256 || bytes.first() == Some(&b'-') {
+        return false;
+    }
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\\' {
+            if index + 3 >= bytes.len()
+                || bytes[index + 1] != b'x'
+                || !bytes[index + 2..index + 4]
+                    .iter()
+                    .all(u8::is_ascii_hexdigit)
+            {
+                return false;
+            }
+            index += 4;
+        } else if byte.is_ascii_alphanumeric() || b"@._:+-".contains(&byte) {
+            index += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
 pub fn read_command(query: &LogQuery) -> Result<String> {
     ensure!(
         (1..=MAX_LINES).contains(&query.limit),
@@ -178,13 +206,8 @@ pub fn read_command(query: &LogQuery) -> Result<String> {
     }
     let unit = query.unit.trim();
     ensure!(
-        unit.len() <= 256
-            && (unit.is_empty()
-                || (unit.as_bytes()[0].is_ascii_alphanumeric()
-                    && unit
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"@._:+-".contains(&b)))),
-        "服务名称仅支持字母、数字和 @ . _ : + -，且需以字母或数字开头"
+        valid_unit_filter(unit),
+        "Invalid journal unit name; use a literal unit with valid hexadecimal escapes"
     );
     // JSON mode implies --quiet in journalctl, which hides privilege warnings.
     // A zero-entry text probe retains those warnings on stderr without reading
@@ -193,11 +216,18 @@ pub fn read_command(query: &LogQuery) -> Result<String> {
         "# arcnix:logs:read\nLC_ALL=C journalctl --no-pager -n 0 >/dev/null; LC_ALL=C journalctl --no-pager --output=json --output-fields=__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,SYSLOG_IDENTIFIER,PRIORITY,MESSAGE -n {}",
         query.limit
     );
-    command.push_str(match query.period {
-        JournalPeriod::RecentHour => " --since='1 hour ago'",
-        JournalPeriod::Today => " --since=today",
-        JournalPeriod::Boot => " --boot=0",
-    });
+    match query.period {
+        JournalPeriod::RecentHour => command.push_str(" --since='1 hour ago'"),
+        JournalPeriod::Today => command.push_str(" --since=today"),
+        JournalPeriod::Boot => command.push_str(" --boot=0"),
+        JournalPeriod::Window { start, end } => {
+            ensure!(
+                start <= end && end <= 253_402_300_799 && end - start <= 3600,
+                "Invalid bounded journal time window"
+            );
+            command.push_str(&format!(" --since='@{start}' --until='@{end}'"));
+        }
+    }
     if !unit.is_empty() {
         command.push_str(&format!(" --unit='{unit}'"));
     }

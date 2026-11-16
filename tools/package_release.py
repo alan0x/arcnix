@@ -94,6 +94,8 @@ def package(binary, target, tag, output, version):
             shutil.copy2(vendor / name / "LICENSE", licenses / "LICENSE")
         shutil.copy2(vendor / "README.md", staging / "LICENSES/README.md")
         if platform == "windows-amd64":
+            # Raw executable used by the in-app updater; GitHub records its digest.
+            shutil.copy2(binary, output / f"{stem}.exe")
             archive = output / f"{stem}.zip"
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as stream:
                 for path in sorted(staging.rglob("*")):

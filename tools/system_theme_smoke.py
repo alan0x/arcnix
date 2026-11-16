@@ -82,11 +82,11 @@ def main():
             before = config.read_bytes()
             page.emulate_media(color_scheme="dark")
             theme(page, "dark")
-            dark_icon = page.locator(".brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
+            dark_icon = page.locator(".navigation-rail .brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
             page.screenshot(path=str(output / "follow-system-dark.png"))
             page.emulate_media(color_scheme="light")
             theme(page, "light")
-            light_icon = page.locator(".brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
+            light_icon = page.locator(".navigation-rail .brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
             assert dark_icon != light_icon
             expect(follow).to_have_class(re.compile(r"choice active"))
             assert config.read_bytes() == before, "OS changes must not overwrite the saved preference"

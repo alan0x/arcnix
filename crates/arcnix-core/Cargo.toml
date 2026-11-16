@@ -20,7 +20,12 @@ directories = "6"
 # so the shipped client needs neither system OpenSSL nor the ssh executable.
 ssh2 = { version = "0.9.7", features = ["openssl-on-win32", "vendored-openssl"] }
 sha2 = "0.10"
+similar = "3.2.1"
 base64 = "0.22"
+flate2 = "1.1.11"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+semver = "1"
+tokio = { version = "1", features = ["rt", "net", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

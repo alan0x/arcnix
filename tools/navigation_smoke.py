@@ -67,7 +67,8 @@ def main():
         page = browser.contexts[0].pages[0]
         page.set_default_timeout(10000)
         page.set_viewport_size(dict(width=1440, height=980))
-        expect(page.locator(".server-landing")).to_be_visible()
+        has_servers = json.loads(config.read_text(encoding="utf-8"))["config"].get("servers", [])
+        expect(page.locator(".server-inventory" if has_servers else ".server-landing")).to_be_visible()
         return browser, page
 
     def stop(browser):
@@ -87,20 +88,20 @@ def main():
         profile = dict(id="navigation-test", name="Development", host=host, port=int(port), username="arcnix", auth="PrivateKey", private_key=peer["client_key_ed25519"], initial_remote_path="/")
         offline = dict(profile, id="offline-test", name="Staging", port=9)
         config = output / "smoke-config.json"
-        config.write_text(json.dumps(dict(version=1, config=dict(servers=[profile, offline], groups=[], trusted_hosts=[dict(host=host, port=int(port), fingerprint=peer["host_key_rsa_fingerprint"])], local_directory=str(local)))), encoding="utf-8")
+        config.write_text(json.dumps(dict(version=1, config=dict(servers=[profile, offline], groups=[], trusted_hosts=[dict(host=host, port=int(port), fingerprint=peer["host_key_rsa_fingerprint"])], local_directory=str(local), settings=dict(language="English", theme="Dark", show_hidden_files=True, resource_interval_seconds=3)))), encoding="utf-8")
         with sync_playwright() as playwright:
             browser, page = launch(playwright, config)
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
-            expect(page.locator(".navigation-rail button")).to_have_count(2)
+            expect(page.locator(".navigation-rail button")).to_have_count(7)
             expect(page.locator(".rail-notifications")).to_have_count(0)
             expect(page.locator(".home-page")).to_have_count(0)
             page.locator(".rail-logo").click()
-            expect(page.locator(".server-landing")).to_be_visible()
+            expect(page.locator(".server-inventory")).to_be_visible()
             expect(page.locator(".module-nav")).to_have_count(0)
             expect(page.locator(".files-module")).to_have_count(0)
             page.locator(".rail-servers").click()
-            expect(page.get_by_text("Choose a server", exact=True)).to_be_visible()
+            expect(page.locator(".inventory-row")).to_have_count(2)
             expect(page.locator(".module-nav")).to_have_count(0)
             page.screenshot(path=str(output / "servers-unselected-dark.png"))
             page.locator(".host-select").first.click()
@@ -113,7 +114,7 @@ def main():
             page.locator(".overview-connect").click()
             page.get_by_role("dialog").get_by_role("button", name="Connect", exact=True).click()
             expect(page.locator(".connection-state")).to_have_text("SSH connected")
-            expect(page.locator(".module-nav .module-tab")).to_have_count(5)
+            expect(page.locator(".module-nav .module-tab")).to_have_count(6)
             expect(page.locator(".files-module")).to_be_visible()
             page.screenshot(path=str(output / "server-connected-dark.png"))
             page.get_by_role("button", name="Terminal", exact=True).click()
@@ -130,13 +131,13 @@ def main():
             expect(reader).to_contain_text("navigation-session-preserved")
             checks.append("Clicking the logo preserves the connected workspace and terminal session")
 
-            dark_icon = page.locator(".brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
+            dark_icon = page.locator(".navigation-rail .brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
             page.locator(".settings-link").click()
             expect(page.get_by_role("button", name="English", exact=True)).to_be_visible()
-            page.locator(".context-sidebar").get_by_role("button", name="Appearance", exact=True).click()
+            page.locator(".context-sidebar").get_by_role("button", name="General", exact=True).click()
             page.get_by_role("button", name="Light", exact=True).click()
             expect(page.locator(".app")).to_have_class("app theme-light")
-            light_icon = page.locator(".brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
+            light_icon = page.locator(".navigation-rail .brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
             assert dark_icon != light_icon
             page.screenshot(path=str(output / "settings-light.png"))
             page.locator(".rail-servers").click()

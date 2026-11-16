@@ -103,14 +103,16 @@ jobs:
           cd dist
           archives=(arcnix-*.zip arcnix-*.tar.gz)
           test "${#archives[@]}" -eq 4
-          sha256sum "${archives[@]}" > SHA256SUMS
+          executables=(arcnix-*-windows-amd64.exe)
+          test "${#executables[@]}" -eq 1
+          sha256sum "${archives[@]}" "${executables[@]}" > SHA256SUMS
           tag="$GITHUB_REF_NAME"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${archives[@]}" SHA256SUMS --clobber
+            gh release upload "$tag" "${archives[@]}" "${executables[@]}" SHA256SUMS --clobber
           else
             flags=()
             if [[ "$tag" == *-* ]]; then flags+=(--prerelease); fi
-            gh release create "$tag" "${archives[@]}" SHA256SUMS \
+            gh release create "$tag" "${archives[@]}" "${executables[@]}" SHA256SUMS \
               --verify-tag --title "Arcnix $tag" --generate-notes "${flags[@]}"
           fi
 

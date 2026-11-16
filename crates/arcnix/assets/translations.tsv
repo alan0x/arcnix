@@ -149,6 +149,12 @@ CPU 使用率	CPU usage
 SSH / SFTP · 凭据不写入配置	SSH / SFTP · Credentials are not stored
 当前配置读取失败，不能覆盖。请修复配置后重启。	The configuration could not be read. Repair it and restart before saving changes.
 名称	Name
+删除文件	Delete files
+删除	Delete
+永久删除	Delete permanently
+永久删除所选项目及文件夹内的内容？此操作无法撤销，不会移入回收站。	Permanently delete the selected items and folder contents? This cannot be undone. Items will not go to the recycle bin.
+已删除 {count} 个项目	Deleted {count} entries
+删除未完成：{message}	Deletion incomplete: {message}
 主机地址	Host address
 端口	Port
 用户名	Username
@@ -585,3 +591,1449 @@ Ctrl+C 中断 · Ctrl+Shift+C 复制 · Ctrl+Shift+V 粘贴	Ctrl+C interrupt · 
 正在准备传输…	Preparing transfer…
 正在完成传输…	Finalizing transfer…
 跟随系统	Follow system
+
+运维操作	Operations
+刷新服务	Refresh services
+服务	Services
+命令	Commands
+筛选服务	Filter services
+状态	Status
+日志	Logs
+启动…	Start…
+停止…	Stop…
+重启…	Restart…
+已加载的 systemd 服务。选择一项以查看详情或预览操作。	Loaded systemd services. Select a row to inspect it or review an action.
+正在加载…	Loading…
+没有已加载的服务	No loaded services
+常用命令可用于不同服务器，执行前请核对目标和命令。	Saved commands are shared across servers. Review the target and command before running.
+新建命令	New command
+暂无常用命令。可添加常用操作，请勿在命令中保存密码或令牌。	No saved commands. Add a command you use often; do not store passwords or tokens in it.
+运行命令…	Run command…
+编辑命令	Edit command
+删除命令	Delete command
+输出	Output
+命令以非交互方式运行，最多执行五分钟。交互程序请使用终端。	Commands run without an interactive terminal, with a five-minute limit. Use Terminal for interactive programs.
+最近操作 · 当前连接	Recent operations · current connection
+保存命令	Save command
+命令名称	Command name
+Shell 命令	Shell command
+以管理员身份执行	Run as administrator
+命令文本将保存在本机，请勿包含密码或令牌。	Command text is saved locally. Do not include passwords or tokens.
+预览操作	Review operation
+该操作会在上方服务器执行。停止或重启服务可能中断连接。	This operation runs on the server shown above. Stopping or restarting services may interrupt connections.
+管理员密码（可选）	Administrator password (optional)
+留空使用免密 sudo，密码不会保存。	Leave empty to use passwordless sudo. The password is not saved.
+执行操作	Run operation
+正在等待 SSH 任务通道…	Waiting for the SSH worker…
+正在运行…	Running…
+退出码：{code}	Exit code: {code}
+服务详情	Service details
+服务器操作已结束	Server operation finished
+操作返回错误，请检查输出并核对服务器状态。	The operation returned an error. Inspect the output and verify the server state.
+结果未确认，请先检查服务器状态再重试。	Result unknown. Verify the server state before trying again.
+操作未启动	Operation did not start
+连接已中断，远程操作可能仍在运行，请在重连后核对结果。	Connection lost. The remote operation may still be running; verify its result after reconnecting.
+结果未确认	Result unknown
+
+打开文件夹	Open folder
+复制所选路径	Copy selected paths
+复制当前目录路径	Copy directory path
+清空选择	Clear selection
+属性	Properties
+路径已复制	Paths copied
+文件夹大小未递归统计，最多显示 100 条路径。	Folder sizes are not scanned. Up to 100 paths are shown.
+
+刷新	Refresh
+
+正在停止删除，等待当前文件请求结束…	Stopping deletion; waiting for the current file request…
+正在准备删除…	Preparing deletion…
+正在扫描：已发现 {count} 项	Scanning: {count} entries found
+正在删除：{done} / {total} 项	Deleting: {done} / {total} entries
+停止删除	Stop deletion
+显示列	Visible columns
+类型	Type
+路径	Path
+权限预览	Permission preview
+未统计	Not calculated
+字节	bytes
+删除已停止：{message}	Deletion stopped: {message}
+文件任务仍在处理当前请求，请稍后重试。	A file task is finishing its current request. Please try again shortly.
+名称始终显示。设置会自动保存到当前服务器。	Name is always visible. Changes are saved automatically for this server.
+恢复默认	Restore defaults
+完成	Done
+多个项目	Multiple items
+所有者 / 组	Owner / Group
+当前权限	Current permissions
+混合权限	Mixed permissions
+仅修改所选项目，不递归修改文件夹内容。符号链接不支持权限修改。	Applies only to the selected items, without changing folder contents. Symbolic links cannot be edited.
+读取	Read
+写入	Write
+执行	Execute
+所有者	Owner
+组	Group
+其他用户	Others
+八进制权限	Octal permissions
+特殊位通过四位八进制值设置；读写执行勾选会保留特殊位。	Set special bits using four octal digits. The checkboxes preserve these bits.
+本地 Windows 权限由系统 ACL 管理；此处仅查看基本信息。	Windows manages local permissions through ACLs. Basic information is shown here.
+正在保存权限…	Saving permissions…
+正在读取属性…	Loading properties…
+权限已保存	Permissions saved
+保存权限	Save permissions
+已更新 {count} 项权限	Updated permissions for {count} entries
+更新权限失败：{message}	Permission update failed: {message}
+
+显示格式	Display formats
+文件大小	File sizes
+二进制单位 · KiB / MiB	IEC · KiB / MiB
+十进制单位 · KB / MB	Decimal · KB / MB
+精确字节数	Exact bytes
+小数位数	Decimal places
+使用千位分隔	Use thousands separators
+日期与时间	Dates and times
+相对时间	Relative time
+ISO 8601	ISO 8601
+系统格式	System format
+本地时区	Local timezone
+UTC	UTC
+连接设置	Connection
+连接超时	Connection timeout
+SSH 保活	SSH keepalive
+{seconds} 秒	{seconds} seconds
+连接设置在下次连接时生效，命令及文件变更不会自动重放。	Connection changes apply on the next connection. Commands and file changes are never replayed automatically.
+目标文件已存在时	Existing files
+目标文件已存在时的默认操作，服务器和会话规则优先于这些默认值。	Default behavior when a destination already exists. Server and session choices override these defaults.
+始终询问	Ask every time
+上传策略	Uploads
+下载策略	Downloads
+日志设置	Logging
+客户端操作日志	Client operation log
+为新日志条目显示时间戳	Show timestamps in new log entries
+将操作日志写入文件	Write operation logs to files
+日志目录	Log directory
+应用目录	Apply directory
+日志大小上限	Maximum log size
+保留的历史日志数	Rotated log files
+导出当前日志…	Export current log…
+导出当前日志	Export current log
+选择文件夹	Select folder
+默认本地目录	Default local directory
+记住此服务器的浏览位置	Remember browsing locations for this server
+记住的浏览位置优先于默认目录，清除记录后将从默认目录开始。	Remembered locations take precedence over the default directories. Clear them to start at the defaults again.
+清除浏览位置记录	Clear remembered locations
+使用应用的默认连接设置	Use application connection defaults
+编辑文件	Edit file
+编辑远程文件	Edit remote file
+文件内容	File contents
+正在读取远程文件…	Loading remote file…
+编辑后的文件超过 1 MiB	Edited file exceeds 1 MiB
+远程文件已保存	Remote file saved
+有未保存的修改	Unsaved changes
+要放弃未保存的修改吗？	Discard unsaved changes?
+继续编辑	Keep editing
+放弃修改	Discard changes
+从服务器重新载入	Reload from server
+保存到服务器	Save to server
+软件更新	Updates
+自动检查更新	Check for updates automatically
+每天	Daily
+每周	Weekly
+每月	Monthly
+空闲时下载并安装已校验的更新	Download and install verified updates when idle
+检查会访问项目的 GitHub 发布服务，安装将等待 SSH 断开且全部任务结束。	Checks contact the official GitHub release service. Installation waits until SSH is disconnected and all tasks are finished.
+开发构建已暂停后台更新，可手动检查、下载并安装更新。	Development build: background updates are paused. Manual update checks and installation are available.
+尚未检查更新	Updates have not been checked
+正在检查更新…	Checking for updates…
+当前已是最新稳定版本	You are using the latest stable version
+尚无可访问的已发布版本	No published release is available yet
+有新版本可用	A new version is available
+正在下载并校验更新…	Downloading and verifying update…
+更新已校验，等待安装	Update verified and ready to install
+正在准备重启…	Preparing restart…
+检查更新失败	Update check failed
+上次检查：	Last checked:
+取消下载	Cancel download
+请先断开 SSH、完成待处理任务并关闭对话框，再安装更新；正在进行的工作不会被中断。	To install, disconnect SSH, finish pending tasks and close any open dialogs. No active work will be interrupted.
+立即检查	Check now
+查看发布页面	Open releases
+下载更新	Download update
+重启并安装	Restart and install
+正在验证新版本，应用将自动重启。	The new version is being verified. The application will restart automatically.
+更新已校验，将在 {seconds} 秒后重启。	Update verified. Restarting in {seconds} seconds.
+上次更新未完成，当前仍使用原版本。	The last update could not be completed. The previous version is still in use.
+查看更新	View updates
+稍后	Later
+
+服务器传输默认策略	Transfer defaults
+继承应用默认值	Inherit application default
+修改将保存在此服务器上并用于后续传输，正在进行的传输保持原有选择。	Changes are saved for this server and affect future transfers. Active transfers keep their current choices.
+该服务器的文件冲突处理已恢复为全局默认设置	File conflict handling for this server now inherits the application defaults
+关于	About
+应用程序	Application
+版本 {version}	Version {version}
+日志文件	Log files
+超时与保活	Timeout and keepalive
+预览	Preview
+留空则使用默认日志目录。	Leave empty to use the default log directory.
+运维脚本	Scripts
+任务中心	Tasks
+官方脚本	Official scripts
+我的脚本	My scripts
+搜索脚本	Search scripts
+新建脚本	New script
+在服务器上运行…	Run on servers…
+复制到我的脚本	Copy to my scripts
+选择运行目标时再选择服务器，无需先连接当前服务器。	Select targets when running a script. No active server selection is required.
+任务由服务器上的 systemd 服务执行，关闭 Arcnix 不会停止已提交的任务。	Jobs run as server-owned systemd services. Closing Arcnix does not stop submitted jobs.
+没有找到脚本，可创建脚本或切换到官方脚本库。	No scripts found. Create a script or choose the official library.
+正在检查	Checking
+可执行	Ready
+执行就绪的目标	Execute ready targets
+停止后续目标	Stop pending targets
+已提交的服务器任务将继续运行。	Already submitted server jobs continue running.
+运行脚本后将在这里显示任务。	Run a script to create your first task.
+选择服务器运行脚本	Run script on servers
+预检查只读取状态。请核对每台服务器的执行计划后提交。需要 root 或 sudo，以及 systemd-run。	Preflight is read-only. Review every target plan before submitting server jobs. Root or sudo and systemd-run are required.
+最大并行服务器数量	Maximum parallel servers
+选择已信任的服务器	Select trusted servers
+请先在 Servers 中连接并保存主机指纹。	Connect and save the host fingerprint in Servers first.
+SSH 密码或私钥口令	SSH password or key passphrase
+参数和脚本正文请勿包含密码或令牌；凭据仅用于本次提交。	Parameters and script text must not contain passwords or tokens. Credentials are used only for this submission.
+检查目标	Check targets
+查询服务器结果	Query server result
+重新连接以读取服务器保存的日志和退出结果，不会重复提交任务。	Reconnect to read server-owned logs and the exit result. This does not submit or repeat the task.
+查询	Query
+本地保存最近 10 个任务及有限日志；完整日志和结果保留在各服务器上。	Recent 10 tasks are stored locally. Output is a bounded tail; full logs and results remain on each server.
+安装 Nginx	Install Nginx
+安装 restic	Install restic
+安装 Git	Install Git
+安装诊断工具	Install diagnostic tools
+磁盘与 inode 用量	Disk and inode usage
+失败的服务	Failed services
+监听端口	Listening ports
+目录用量	Directory usage
+编辑	Edit
+运行中	Running
+已取消	Cancelled
+安装发行版提供的 Nginx 软件包。仅支持 Debian / Ubuntu APT，可能启动 Web 服务。	Install the distribution Nginx package. Debian / Ubuntu APT; may start a web service.
+安装发行版提供的备份客户端。仅支持 Debian / Ubuntu APT。	Install the distribution backup client. Debian / Ubuntu APT.
+安装发行版提供的 Git 软件包。仅支持 Debian / Ubuntu APT。	Install the distribution Git package. Debian / Ubuntu APT.
+安装 curl、lsof 和 dnsutils。仅支持 Debian / Ubuntu APT。	Install curl, lsof and dnsutils. Debian / Ubuntu APT.
+读取文件系统空间及 inode 用量，适用于 Linux。	Read filesystem space and inode usage. Linux.
+列出失败的 systemd 服务，不修改服务状态。	List failed systemd services without modifying them.
+读取监听的 TCP 和 UDP 套接字，需要 ss 工具。	Read listening TCP and UDP sockets. Requires ss.
+读取指定目录的大小，请输入绝对路径。	Read one directory's size. Enter an absolute directory path.
+备份与恢复	Backups
+新建备份策略	New backup policy
+安装 restic…	Install restic…
+备份策略	Backup policy
+策略名称	Policy name
+仓库位置	Repository location
+服务器密码文件	Server password file
+源目录	Source directory
+排除规则（每行一个）	Exclude patterns (one per line)
+每组保留最近快照数	Keep last snapshots per group
+备份服务器	Backup servers
+保存策略	Save policy
+删除策略	Delete policy
+浏览快照…	Browse snapshots…
+备份快照	Backup snapshots
+来源服务器	Source server
+加载快照	Load snapshots
+恢复…	Restore…
+恢复快照	Restore snapshot
+新的恢复目录	New restore directory
+预览恢复计划…	Review restore…
+初始化仓库	Initialize repository
+立即备份	Back up now
+验证仓库数据	Verify repository data
+应用保留策略	Apply retention
+恢复并验证	Restore and verify
+备份进度	Backup progress
+关闭	Close
+当前策略和服务器没有快照。	No snapshots found for this policy and server.
+跨服务器管理备份策略。备份、检查和恢复均在服务器上执行。	Manage backup policies across servers. Backups, checks and restores run on the servers.
+在每台服务器安装 restic，准备权限为 600 的密码文件，再初始化仓库。请单独保管仓库密码副本。	Install restic on each server, prepare a password file with mode 600, then initialize a repository. Keep a separate copy of the repository password.
+本页创建按需运行的服务器任务。普通文件备份不保证运行中数据库的一致性。	This page creates on-demand server jobs. A file backup does not guarantee consistency for a running database.
+创建策略即可备份目录并浏览可恢复的快照。	Create a policy to back up directories and browse recoverable snapshots.
+使用绝对仓库路径、sftp:user@host:/path 或 s3:https://host/bucket/path。存储后端凭据须在服务器配置。	Use an absolute repository path, sftp:user@host:/path, or s3:https://host/bucket/path. Backend credentials must be configured on the server.
+删除策略仅移除本地设置。应用保留策略前会预览待删除快照；回收仓库空间是独立操作。	Deleting a policy removes its local settings only. Retention removes snapshots after a dry-run preview; reclaiming repository space is a separate operation.
+仅删除本地策略，保留服务器上的仓库和快照。	Only the local policy is removed. Server repositories and snapshots are preserved.
+恢复到源目录和仓库之外的新绝对路径。拒绝已有目标目录，验证恢复内容后才报告成功。	Restore to a new absolute directory outside the source and repository. Existing destinations are refused. Restored data is verified before success is reported.
+
+{percent}% · {done} / {total} · {files} / {total_files} 个文件	{percent}% · {done} / {total} · {files} / {total_files} files
+本机仓库与服务器存在共同故障风险，灾难恢复请使用独立存储。	Local repositories share the server failure risk. Use separate storage for disaster recovery.
+快照中的路径层级会在目标目录下重建。	Snapshot paths are recreated beneath the destination directory.
+备份源类型	Backup source type
+目录文件	Directory files
+数据库主机	Database host
+数据库端口	Database port
+数据库名称	Database name
+数据库用户	Database user
+数据库认证文件	Database auth file
+新数据库名称	New database name
+恢复 PostgreSQL 数据库	Restore PostgreSQL database
+恢复到新的 PostgreSQL 数据库…	Restore to new PostgreSQL database…
+预览数据库恢复…	Review database restore…
+备份	Backup
+完整性检查	Integrity check
+文件恢复	File restore
+数据库恢复	Database restore
+没有保存的成功确认	No saved successful confirmation
+较早的策略设置	Earlier policy settings
+较早的服务器身份	Earlier server identity
+确认日期为已核实成功任务的开始时间。失败或结果未知的尝试保留此前成功记录。	Confirmation dates are successful task start times. Failed or unknown attempts preserve earlier successes.
+数据库导出时，源目录应为服务器上已有的私有暂存目录。数据库密码留在权限为 400 或 600 的服务器文件中。	For database exports, Source directory is an existing private staging directory. Database passwords stay in a server file with mode 400 or 600.
+PostgreSQL 需要 pg_dump、pg_restore、psql 和 pgpass 文件。MySQL/MariaDB 需要原生客户端及客户端选项文件，仅支持 InnoDB 表；导出期间应避免修改表结构。	PostgreSQL requires pg_dump, pg_restore, psql and a pgpass file. MySQL/MariaDB requires native clients and a client option file; only InnoDB tables are supported and schema changes must be avoided during export.
+使用不同名称创建新的 PostgreSQL 数据库，恢复账户需有 CREATEDB 权限。拒绝已有数据库，不导入所有者和授权；恢复失败时保留新数据库供检查。	Create a new PostgreSQL database with a different name. The restore role needs CREATEDB. Existing databases are refused; owners and grants are not imported. A failed restore leaves the new database for inspection.
+MySQL 导出恢复为文件后受控导入；PostgreSQL 还支持恢复到新数据库。	MySQL exports are recovered as files for a controlled import. PostgreSQL also supports restoring into a new database.
+MySQL 需要对该数据库或全局直接授予 SELECT，避免仅能看到部分表时静默导出不完整数据。	MySQL requires a direct SELECT grant on the exact database or globally, so table-only visibility cannot silently produce a partial export.
+数据库客户端安装模板…	Database client installers…
+安装 PostgreSQL 客户端	Install PostgreSQL client
+安装 MySQL/MariaDB 客户端	Install MySQL/MariaDB client
+安装发行版提供的 PostgreSQL 客户端。pg_dump 主版本应与源数据库匹配；仅支持 Debian / Ubuntu APT。	Install distribution PostgreSQL clients. Match the pg_dump major version to the source database. Debian / Ubuntu APT.
+安装发行版提供的 MySQL 兼容客户端，仅支持 Debian / Ubuntu APT。	Install distribution MySQL-compatible clients. Debian / Ubuntu APT.
+诊断	Diagnostics
+配置发布	Configurations
+配置目标文件	Configuration destination
+完整 Nginx 配置	Full Nginx configuration
+自定义应用配置	Custom application configuration
+要重载的服务	Service to reload
+应用健康检查 URL	Application health URL
+响应须包含的文本（可选）	Response must contain text (optional)
+候选配置校验命令	Candidate validation command
+重载命令	Reload command
+健康检查命令	Health check command
+健康检查时限（秒）	Health check timeout (seconds)
+候选配置（UTF-8）	Candidate configuration (UTF-8)
+在服务器上预览配置…	Review configuration on servers…
+准备配置变更…	Prepare configuration change…
+安装 Python 3…	Install Python 3…
+安装 Python 3	Install Python 3
+安装用于服务器配置准备和恢复的 Python 3，仅支持 Debian / Ubuntu APT。	Install Python 3 for server-owned configuration preparation and recovery. Debian / Ubuntu APT.
+最近的配置变更	Recent configuration changes
+服务器恢复记录位置	Server recovery record location
+查看任务及本次会话差异	View task and session diff
+恢复之前记录的版本…	Restore previous recorded version…
+本次会话配置差异	Session-only configuration diff
+跨服务器审核并发布配置。需要 SFTP、Python 3.8+、root 或 sudo 和 systemd。	Review and publish configuration across servers. SFTP, Python 3.8+, root or sudo and systemd are required.
+服务器保存候选内容、原始备份、校验日志和恢复记录。客户端关闭后，已提交的健康检查和恢复仍继续运行。	Servers keep the candidate, original backup, validation logs and recovery record. Submitted health checks and recovery continue after Arcnix closes.
+命令以服务器 root 身份执行。校验命令的 $1 为私有候选文件，重载和健康检查的 $1 为生效路径。检查须能脱离客户端独立完成。	Commands run as root on the server. Validation receives the private candidate as $1; reload and health receive the live path as $1. Use independent checks that can finish without the client.
+目标须为现有、无符号链接的真实路径常规文件，且只有一个硬链接。候选内容私有上传，不写入本地任务历史；差异仅在本次会话保留。	The existing destination must be a canonical regular file with one link. Content is uploaded privately and kept out of local task history. Diffs are held only in this session.
+Nginx 使用完整配置，重载指定服务并检查 HTTP 健康状态。恢复时不使用新版本的预期响应内容；自定义命令也须支持检查和恢复之前的版本。	Nginx uses a complete configuration file, reloads the selected service and checks HTTP health. Recovery checks the previous configuration without the new-response expectation. Custom commands must also handle recovery of the previous version.
+发布失败会停止后续提交，已提交任务自行恢复。本地保留最近 10 批任务；服务器恢复记录保留到明确清理。	Publication failures stop further submissions. Already submitted jobs perform their own recovery. Recent 10 batches are kept locally; server recovery records remain until explicitly removed.
+预检查会在各服务器私有上传候选并保存原文件。发布前请审核本次会话差异；执行前不会修改生效文件。	Preflight uploads a private candidate and saves the original on each server. Review the session-only diff before publishing. The live file is unchanged until execution.
+最大并行提交数；服务器接收后各自独立执行	Maximum parallel submissions; accepted jobs run independently on all servers
+请输入无符号链接的绝对配置文件路径	Enter a canonical absolute configuration file path
+健康检查时限须为 3 至 300 秒	Health check duration must be between 3 and 300 seconds
+健康 URL 须为 HTTP 或 HTTPS，且不能含凭据、查询串或片段	Health URL must be HTTP or HTTPS without credentials, query or fragment
+请填写有界的校验、重载和健康检查命令	Provide bounded validation, reload and health commands
+请输入最多 128 KiB、使用 LF 换行的 UTF-8 配置文本	Enter UTF-8 configuration text up to 128 KiB with LF line endings
+候选配置已校验	Candidate validated
+正在发布配置	Publishing configuration
+正在检查应用健康状态	Checking application health
+配置已发布，健康检查已确认	Configuration published and health confirmed
+记录版本已恢复，健康检查已确认	Recorded configuration restored and health confirmed
+正在恢复之前的配置	Recovering previous configuration
+原文件状态已恢复，正在检查服务恢复状态	Previous file state restored; checking service recovery
+发布失败，之前的配置与服务已恢复	Publication failed; previous configuration and service recovered
+任务失败，服务恢复状态需要检查	Task failed; service recovery requires inspection
+发布已拒绝，生效文件未被修改	Publication refused before changing the live file
+配置检查项…	Configure checks…
+安装诊断工具…	Install check tools…
+安装 curl、lsof、dnsutils、coreutils、iproute2、openssl 和 findutils，仅支持 Debian / Ubuntu APT。	Install curl, lsof, dnsutils, coreutils, iproute2, openssl and findutils. Debian / Ubuntu APT.
+检查详情与建议	Findings and suggestions
+按需服务器诊断	On-demand server diagnostics
+磁盘空间	Filesystem space
+文件系统 inode	Filesystem inodes
+失败的 systemd 服务	Failed systemd services
+TCP 监听端口	Listening TCP ports
+本地证书到期检查	Local certificate expiry
+配置校验	Configuration validation
+配置文件（可选，留空使用默认）	Configuration file (optional; default if empty)
+用量警告阈值 (%)	Warning usage (%)
+用量严重阈值 (%)	Critical usage (%)
+预期 TCP 端口（可选，逗号分隔）	Expected TCP ports (optional, comma-separated)
+PEM 证书路径（可选）	PEM certificate path (optional)
+证书到期预警天数	Certificate warning days
+跳过配置校验	Skip configuration validation
+以管理员身份检查	Run checks as administrator
+选择服务器并检查计划…	Choose servers and review checks…
+最近的诊断	Recent diagnostic runs
+查看任务及原始输出	View task and raw output
+打开服务器工作区	Open server workspace
+统计目录大小…	Measure a directory…
+检查通过	Check passed
+警告	Warning
+严重	Critical
+信息	Information
+不可用或无法判断	Unavailable or inconclusive
+用量阈值必须满足 1 <= 警告 < 严重 <= 100	Usage thresholds must satisfy 1 <= warning < critical <= 100
+请输入数字用量阈值	Enter numeric usage thresholds
+请输入数字证书预警天数	Enter numeric certificate warning days
+证书预警天数须为 1 至 3650	Certificate warning days must be between 1 and 3650
+至少选择一项诊断检查	Select at least one diagnostic check
+最多填写 16 个 TCP 端口	Enter at most 16 TCP ports
+TCP 端口须为 1 至 65535 的数字，用逗号分隔	Expected TCP ports must be comma-separated numbers from 1 to 65535
+TCP 端口不能为零	TCP port must be nonzero
+采样时间 {time} · {count} 项问题 · {unknown} 项无法判断	Sampled {time} · {count} findings · {unknown} inconclusive
+用量警告 ≥{warning}%，严重 ≥{critical}%	Usage warning ≥{warning}%, critical ≥{critical}%
+预期 TCP：{ports}	Expected TCP: {ports}
+PEM：{path} · {days} 天	PEM: {path} · {days} days
+配置：{validator} · {path}	Configuration: {validator} · {path}
+仅显示清单	Inventory only
+默认配置	Default configuration
+{label} · {count} 个失败服务	{label} · {count} failed services
+{label} · {count} 个预期端口未监听	{label} · {count} missing TCP ports
+诊断结果不完整。重复检查前请核验服务器任务。	Diagnostic results are not complete. Inspect the server task before repeating checks.
+按需跨服务器执行所选检查。结果仅反映采样时刻，不进行持续监控。	Run selected checks across servers on demand. Results describe one point in time, not continuous monitoring.
+检查由服务器任务执行。处理前请审核结果；不会自动清理、重启或重载服务。	Checks run in server-owned tasks. Review findings before taking action; no automatic cleanup, restart or reload is performed.
+磁盘检查排除 tmpfs、devtmpfs 和 squashfs。端口检查仅检查本机监听，不测试网络可达性。	Space checks exclude tmpfs, devtmpfs and squashfs. TCP checks inspect local listeners; they do not test network reachability.
+受保护的配置检查可能需要管理员权限。缺少工具、权限不足和超时均标记为无法判断。	Protected configuration checks may require administrator access. Missing tools, denied permissions and timed-out checks remain inconclusive.
+诊断与其他任务共用最近 10 个批次的历史。采集成功仍可能包含警告、严重问题或不可用的检查。	Diagnostic runs share the recent 10-task history. A successful collection can still contain warnings, critical findings or unavailable checks.
+尚无诊断结果。选择检查项和目标服务器以开始。	No diagnostic results yet. Choose checks and target servers to begin.
+删除数据前先检查大目录及已删除但仍被进程占用的文件，并确认备份。	Inspect large directories and deleted files still held open before removing data. Confirm backups first.
+检查包含大量小文件的目录。仅释放磁盘空间不能解决 inode 耗尽。	Inspect directories with many small files. Free space alone does not resolve inode exhaustion.
+先在服务器运维页查看失败服务及其日志，再决定是否重启。	Inspect the failed service and its journal in server Operations before deciding whether to restart it.
+将监听端口与预期端口对照。正在监听不代表防火墙可达或应用健康。	Compare listeners with the expected TCP ports. A listener does not prove firewall reachability or application health.
+使用服务器现有工具续期、校验证书后，再审核服务重载。本项仅检查每个所选本地 PEM 文件中第一张证书的到期时间。	Renew the certificate through its existing server-side tooling, validate it, then review the service reload. This check covers the first certificate in each selected local PEM file only.
+查看校验输出、权限及引用文件，修正配置后再审核重载。本次没有重载服务。	Read the validator output, check permissions and referenced files, and correct the configuration before reviewing a reload. No service was reloaded.
+每台服务器同时只运行一项 Arcnix 全局变更操作，按需诊断可并行运行。客户端关闭后服务器锁仍有效。	Each server runs one global Arcnix operation at a time; diagnostics may run alongside it. Server locks survive client closure.
+查看服务器任务	View server tasks
+安装和索引更新由服务器任务执行。请在任务中心审核计划、查看结果；关闭 Arcnix 不会停止已提交的操作。	Installations and index updates run as server-owned tasks. Review their plans and results in Tasks; closing Arcnix does not stop submitted work.
+服务变更和保存命令由服务器任务执行。请在任务中心审核计划、查看结果；交互程序请使用终端。	Service changes and saved commands run as server-owned tasks. Review their plans and results in Tasks; use Terminal for interactive programs.
+服务变更可能中断连接。运行前请核对每个目标上的服务单元。	Service changes may interrupt connections. Check the unit on every target before running.
+请先连接服务器，并等待当前操作结束	Connect a server and wait for the current operation to finish
+安装软件包	Install packages
+更新 APT 软件源索引	Update APT package index
+启动服务	Start service
+停止服务	Stop service
+重启服务	Restart service
+最近批次	Recent batches
+服务器记录	Server records
+连接服务器记录…	Connect to server records…
+连接服务器记录	Connect to server records
+清除记录访问凭据	Forget record credentials
+安装记录工具…	Install record tools…
+读取服务器记录	Read server records
+上一页记录	Previous records
+刷新记录	Refresh records
+更早记录	Older records
+查看已保存日志	View saved log
+已保存的服务器任务日志	Saved server task log
+刷新已保存日志	Refresh saved log
+读取服务器记录中…	Reading server records…
+读取已保存日志中…	Reading saved log…
+记录浏览已连接	Record browser connected
+已断开；请重新连接以刷新记录或读取日志	Disconnected; reconnect to refresh records or read logs
+此页没有已保存的服务器任务	No saved server tasks on this page
+日志不可用	Log unavailable
+缺少元数据的旧记录	Legacy record without metadata
+记录元数据无效，仍可使用任务 ID	Record metadata is invalid; the task ID remains available
+创建时间	Created
+记录修改时间	Record modified
+记录 {start}–{end}	Records {start}–{end}
+停止中	Stopping
+脚本任务	Script
+服务任务	Service
+诊断任务	Diagnostic
+配置任务	Configuration
+没有已确认的退出结果	No confirmed exit result
+已保存的退出码：{code}	Saved exit code: {code}
+服务状态不可用，仍可读取已保存文件	Service state unavailable; saved files are still readable
+服务状态无法识别，请核验服务器任务	Unrecognized service state; inspect the server task
+已保存结果与服务失败状态冲突	Saved result conflicts with failed service state
+按 SSH 账户浏览已保存的任务，不依赖本地历史。查询不会提交或重复执行任务，记录与完整日志仍保存在服务器。	Browse this SSH account's saved tasks without relying on local history. Queries do not submit or repeat work. Records and full logs remain on the server.
+此页打开时凭据仅保留在内存。离开任务页或清除凭据会阻止新查询；已开始的读取可能在结束后才断开。结果为按需快照。	Credentials stay in memory while this page is open. Leave Tasks or forget credentials to prevent new queries; an in-flight read may finish before disconnecting. Results are snapshots.
+已保存的退出结果不能证明备份可恢复或应用健康。	Saved exit results do not prove that a backup can be restored or an application is healthy.
+独立于工作区选择服务器账户。仅读取已保存记录与服务状态，不需要 SFTP 或 sudo。	Select server accounts independently of the workspace. This only reads saved records and service state; it does not require SFTP or sudo.
+这里显示服务器已保存日志的有界尾部。查看不会启动任务，未知结果仍保留为未知。	This is a bounded tail of the saved server log. No job is started by viewing it; an unknown result remains unknown.
+服务器恢复记录	Server recovery records
+连接恢复记录…	Connect to recovery records…
+清除恢复记录凭据	Forget recovery credentials
+连接恢复记录	Connect to recovery records
+读取恢复记录	Read recovery records
+服务器恢复版本	Server recovery version
+查看恢复版本…	Inspect recovery version…
+刷新恢复版本	Refresh recovery version
+审核恢复…	Review restoration…
+正在读取恢复记录…	Reading recovery records…
+正在读取恢复版本…	Reading recovery version…
+已断开；请重新连接以读取恢复记录	Disconnected; reconnect to read recovery records
+此页没有已保存的配置记录	No saved configuration records on this page
+已准备；尚未确认执行	Prepared; execution is unconfirmed
+未观察到活动的服务器任务	No active server task observed
+服务状态无法读取	Service state unavailable
+记录元数据不可用或无效	Record metadata is unavailable or invalid
+{count} 条记录 · 记录目录已分配 {size}	{count} records · {size} allocated in record directories
+容量统计不完整：已排除链接、嵌套或无法读取的条目；不包含共享锁。	Capacity is incomplete: linked, nested or unreadable entries were excluded. Shared locks are not included.
+原始备份不可用或与摘要不符	Original backup is unavailable or does not match its digest
+无法安全比较当前配置	Current configuration cannot be safely compared
+当前配置缺失；恢复仍须重新审核差异	Current configuration is missing; restoration still requires a new reviewed preview
+按需浏览 root 私有恢复版本，不依赖本地任务历史。读取不会发布、重载或恢复配置；需要 Python 3.8+ 和 root 或 sudo，不需要 SFTP。	Browse root-private recovery versions without local task history. Reading does not publish, reload or restore configuration; Python 3.8+ and root or sudo are required, SFTP is not.
+凭据在离开配置中心或主动清除前仅保留于内存；在途读取可能稍后结束。阶段反映已保存的检查，本次不重新检查应用健康。	Credentials stay in memory until leaving Configurations or forgetting them. In-flight reads may finish later. Phases describe saved checks; current application health is not retested.
+选择已信任的服务器以读取其私有配置记录。管理员凭据仅用于按需读取，不会保存。	Choose trusted servers to read their private configuration records. Administrator credentials are used only for on-demand reads and are never saved.
+查看不会运行已保存的命令。恢复将为原服务器打开新的认证与任务审核，重新核对当前文件，并在更改前保存其当前状态。	Inspecting never runs saved commands. Restore opens a new authenticated task review for the original server, checks the current file again and preserves its current state before changing it.
+请重新连接恢复记录	Reconnect to recovery records
+服务器身份已变化；请重新连接恢复记录	Server identity changed; reconnect to recovery records
+服务器清单已变化；请重新连接恢复记录	Server inventory changed; reconnect to recovery records
+请先查看恢复记录	Inspect a recovery record first
+请等待记录读取完成	Wait for the record query
+读取版本前请刷新恢复记录	Reload recovery records before inspecting this version
+恢复前请查看并验证已停止的原始发布记录	Inspect and verify an inactive original publication before restoring
+已保存阶段：{phase}	Saved phase: {phase}
+读取已保存的恢复记录需要 Python 3.8+ 和 root 或 sudo，不需要 SFTP。	Read saved recovery records with Python 3.8+ and root or sudo; SFTP is not required.
+恢复前请刷新并验证恢复记录	Refresh and verify the recovery record before restoring
+记录读取失败；显示上次快照	Record query failed; showing the previous snapshot
+记录读取失败	Record query failed
+记录存储	Record storage
+任务记录存储	Task record storage
+配置恢复记录存储	Configuration recovery storage
+连接记录存储…	Connect to record storage…
+清除存储访问凭据	Forget storage credentials
+检查记录存储	Inspect record storage
+检查存储	Inspect storage
+查看占用和清理预览…	Inspect storage and cleanup…
+最小记录保留天数	Minimum record age (days)
+保留最新记录数（配置原始备份按文件路径分组）	Keep latest records (per path for configuration originals)
+正在检查记录存储…	Inspecting record storage…
+已断开；请重新连接以检查存储	Disconnected; reconnect to inspect storage
+存储读取失败；保留上次快照	Storage query failed; previous snapshots are retained
+存储读取已完成	Storage query completed
+刷新存储	Refresh storage
+选择本页候选	Select page candidates
+预览选中记录	Preview selected records
+选择记录	Select record
+清理候选	Cleanup candidate
+受保护记录	Protected record
+精确清理预览	Exact cleanup preview
+{count} 条记录 · 已分配 {allocated} · 逻辑大小 {logical}	{count} records · {allocated} allocated · {logical} logical
+最小保留 {days} 天 · 保留最新 {keep} 条	Minimum age: {days} days · Keep latest: {keep}
+选中 {selected} 条 · 候选 {eligible} 条 · 候选占用 {bytes}	{selected} selected · {eligible} candidates · {bytes} allocated in candidates
+存储统计不完整；此处仅包含已计量的记录目录与普通文件。	Storage measurement is incomplete; these bytes include only measured record directories and regular files.
+配置引用无法完整核验；清理候选继续受到保护	Configuration references are incomplete; cleanup candidates remain protected
+一次预览最多选择 100 条记录	Select at most 100 records for one preview
+请先读取记录存储，再生成清理预览	Read record storage before previewing cleanup
+请等待存储读取完成	Wait for the storage query
+请重新连接记录存储	Reconnect to record storage
+每个记录存储只选择一次	Choose each record store only once
+目录包含过多条目，需要手工检查	Too many entries; manual inspection is required
+链接、嵌套或不安全的条目须保留	Linked, nested or unsafe entries must be retained
+未识别的文件须保留	Unrecognized files must be retained
+配置任务的执行依据须保留	Configuration task evidence must be retained
+旧格式或无效任务元数据需要手工检查	Legacy or invalid task metadata requires manual inspection
+必要的任务依据缺失	Required task evidence is missing
+已准备或未完成的配置记录须保留	Prepared or unfinished configuration records must be retained
+必要的配置依据缺失	Required configuration evidence is missing
+配置备份校验失败	Configuration backup verification failed
+无效的私有配置元数据需要手工检查	Invalid private configuration metadata requires manual inspection
+记录不可读或在检查期间发生变化	Record is unavailable or changed during inspection
+活动或正在停止的服务器任务须保留	Active or stopping server tasks must be retained
+无法核验服务器任务状态	Server task state cannot be verified
+已保存的退出结果与服务状态矛盾	Saved exit result conflicts with service state
+记录比所选最小保留时间更新	Record is newer than the chosen minimum age
+记录受最新版本保留策略保护	Record is protected by the keep-latest policy
+无法完整核验配置引用	Configuration references could not be fully verified
+私有配置恢复记录使用了此任务编号	A private configuration recovery record uses this task ID
+其他配置记录引用此来源	Another configuration record references this source
+记录已不存在	Record no longer exists
+私有配置记录库不可用	Private configuration registry is unavailable
+无效的配置记录：{id}	Invalid configuration record: {id}
+缺失的配置来源引用：{id}	Missing referenced configuration source: {id}
+先查看实际占用和逻辑大小，再预览选中记录的精确对象。此页不会删除文件、截断日志或停止服务；需要 Python 3.8+ 和 root 或 sudo，不需要 SFTP。	Inspect allocated and logical bytes, then preview exact objects for selected records. This page never deletes files, truncates logs or stops services. Python 3.8+ and root or sudo are required; SFTP is not.
+活动、状态不明、被引用及保留策略保护的记录都会保留，配置引用由服务器核验。占用为按需快照，不保证能释放相同空间；统计不完整时排除链接和嵌套条目。	Active, uncertain, referenced and retained records are protected. Configuration references are checked on the server. Allocated bytes are a snapshot, not guaranteed free space; linked and nested entries are excluded when measurement is incomplete.
+凭据仅保留于页面内存，离开任务中心、切换视图或主动清除时移除；在途读取可能稍后结束。预览不会写入本地任务历史。	Credentials remain only in page memory and are cleared when leaving Tasks, changing views or forgetting them. In-flight reads may finish later. Previews are not stored in local task history.
+仅为预览：尚未移除任何对象，受保护记录保持完整。后续清理执行前必须重新核验这些依据。	Preview only: no objects have been removed. Protected records stay intact. A later cleanup operation must verify this evidence again before changing files.
+独立于工作区选择服务器账户。为核验私有配置引用，存储读取和预览需要 Python 3.8+ 和 root 或 sudo；不会删除记录。	Choose server accounts independently of the workspace. Storage queries and previews require Python 3.8+ and root or sudo to check private configuration references. They never delete records.
+最小保留天数为 0–3650，最新记录数为 0–1000；配置恢复每个路径至少保留一份原始备份	Use 0–3650 minimum days and 0–1000 retained records; configuration recovery must keep at least one original per path
+存储帮助	Storage help
+跨服务器预览记录占用与选中文件，不会更改服务器文件。	Preview record storage and selected files across servers. No server files are changed.
+审核服务器清理…	Review cleanup on servers…
+清理仅包含已核验预览中的候选。请重新认证并审核精确文件，再提交服务器任务。删除无法撤销；中断后可能保留私有暂存区和报告。	Cleanup uses only candidates from verified previews. Reauthenticate and review exact files before submitting server jobs. Deletion cannot be undone; interrupted jobs may leave a private quarantine and report.
+预检查会重新核验候选并冻结服务器私有计划，不移除记录。提交不可撤销的服务器清理前，请审核每台服务器的精确文件计划。	Preflight rechecks candidates and freezes a private server plan. It does not remove records. Review every exact file plan before submitting irreversible server cleanup.
+清理服务器记录	Clean up server records
+记录清理	Record cleanup
+清理报告	Cleanup reports
+连接清理报告…	Connect to cleanup reports…
+清除报告访问凭据	Forget report credentials
+连接清理报告	Connect to cleanup reports
+读取清理报告	Read cleanup reports
+独立于工作区选择服务器。读取清理报告需要 Python 3.8+ 和 root 或 sudo，不需要 SFTP。凭据仅保留于页面内存。	Select servers independently of the workspace. Reading cleanup reports requires Python 3.8+ and root or sudo, without SFTP. Credentials remain only in page memory.
+按需读取私有清理报告及当前文件元数据。已保存的移除意图与实际文件存在情况分别展示。此视图不会删除、恢复、重启或续跑任务。	Read private cleanup reports and current file metadata on demand. Saved removal intent and observed file presence are separate. This view never deletes, restores, restarts or resumes a task.
+正在读取清理报告…	Reading cleanup reports…
+已断开；请重新连接清理报告	Disconnected; reconnect to cleanup reports
+报告查询失败；保留上次快照	Report query failed; previous snapshots are retained
+清理报告查询完成	Cleanup report query completed
+审计记录占用	Audit record storage
+已处理记录	Records processed
+标记已删除文件	Files marked removed
+审计存储统计不完整；不包含暂存区和账户任务目录。	Audit storage measurement is incomplete; quarantines and account task directories are not included.
+上一页报告	Previous reports
+刷新报告	Refresh reports
+更多报告	More reports
+查看清理报告	Inspect cleanup report
+刷新报告详情	Refresh report details
+关闭报告详情	Close report details
+清理已准备；执行尚未确认	Cleanup prepared; execution unconfirmed
+保存阶段：正在清理	Saved phase: cleanup in progress
+保存阶段：清理完成	Saved phase: cleanup completed
+保存阶段：清理失败	Saved phase: cleanup failed
+保存阶段：清理已中断	Saved phase: cleanup interrupted
+清理报告不可用或无效	Cleanup report is unavailable or invalid
+完成报告与服务失败状态冲突	Completed report conflicts with failed service
+服务器任务失败	Server task failed
+与审核文件一致	Matches reviewed file
+预览后发生变化	Changed since preview
+文件缺失	File absent
+文件结构不安全	Unsafe file structure
+文件状态不可用	File state unavailable
+已证明暂存目录身份	Quarantined directory identity is proven
+无法证明暂存目录身份	Quarantined directory identity cannot be proven
+保存标记：已删除	Saved: removed
+保存标记：待执行 unlink；实际结果需核查	Saved: unlink pending; actual outcome needs inspection
+未记录移除	No removal recorded
+原始位置	Original location
+暂存位置	Quarantine location
+原始记录库不可用或已变化	Original record store is unavailable or changed
+无法核验清理暂存区	Cleanup quarantine cannot be verified
+未知暂存区条目需人工核查	Unrecognized quarantine entries require manual inspection
+未知记录条目需人工核查	Unrecognized record entries require manual inspection
+查询只读取元数据。残留导出需单独审核，完成后再选择已导出副本审核移除暂存文件。已删除的文件无法由此恢复，不会自动续跑任务。	Queries only read metadata. Review residual exports separately, then select a completed copy for a new release review. Previously deleted files cannot be recovered. No task resumes automatically.
+审核残留导出…	Review residual exports…
+审核暂存文件移除…	Review quarantine removal…
+使用此核验导出	Use this verified export
+残留导出	Residual export
+暂存移除	Residual release
+残留处置	Residual recovery
+导出残留文件	Export residual files
+移除已导出的暂存文件	Release exported residual copies
+预检查只冻结私有处置计划，不复制或移除文件。请审核残留及目标位置；移除前由服务器核验导出副本校验和。	Preflight freezes a private recovery plan without copying or releasing files. Review residuals and destination. Release verifies exported checksums on the server before deletion.
+残留处置记录不可用或无效	Residual recovery record is unavailable or invalid
+浏览文件…	Browse files…
+快照文件	Snapshot files
+快照目录	Snapshot directory
+打开快照目录	Open snapshot directory
+上级快照目录	Parent snapshot directory
+忘记备份访问凭据	Forget backup access
+正在读取快照文件…	Reading snapshot files…
+快照文件查询失败	Snapshot file query failed
+快照文件查询完成	Snapshot file query completed
+请重新加载快照以认证	Load snapshots again to authenticate
+上一页文件	Previous files
+更多文件	More files
+选择路径	Select path
+打开目录	Open directory
+选中的快照路径	Selected snapshot paths
+返回快照	Back to snapshots
+恢复选中项…	Restore selected…
+恢复完整快照	Restore the complete snapshot
+完整快照	Complete snapshot
+选中路径	Selected paths
+安装 Python 3…	Install Python 3…
+浏览快照文件和选定恢复需要服务器具备 Python 3.8+。	Snapshot file browsing and selected restores require Python 3.8+ on the server.
+正在提交	Submitting
+正在提交表示服务器尚未确认接收，关闭客户端可能中断该次提交。	Submitting means the server has not acknowledged receipt. Closing Arcnix may interrupt that submission.
+搜索目标服务器	Search target servers
+搜索服务器名称、地址、账户、端口、分组、环境或标签。筛选会保留选择及内存中的凭据；预检查前请展开查看隐藏的已选服务器。	Search server name, address, account, port, group, environment or tags. Filtering preserves selections and their in-memory credentials. Review hidden selected servers before checking targets.
+所有分组	All groups
+选择当前可见的已信任服务器	Select visible trusted servers
+取消当前可见项的选择	Clear visible selection
+清除全部选择	Clear all selections
+查看已选服务器	Review selected servers
+清除目标筛选	Clear target filters
+已选目标	Selected targets
+可见目标	Visible targets
+隐藏的已选项	Hidden selections
+部分已选服务器被筛选隐藏，请先查看已选服务器再预检查。	Some selected servers are hidden. Review selected servers before checking targets.
+此操作范围内没有符合当前筛选条件的服务器。	No servers match the current filters within this operation's scope.
+按需浏览快照元数据，可跨页选择普通文件或目录；选择目录会包含其内容。恢复将在新目标中重建快照路径。访问凭据仅保留在内存中，退出备份浏览或忘记访问时清除。	Browse snapshot metadata on demand. Select regular files or directories across pages; a selected directory includes its contents. Restore recreates snapshot paths in a new destination. Credentials remain in memory until backup browsing closes or access is forgotten.
+检查通过	Passed
+执行环境	Execution environment
+APT 安装	APT installation
+软件包：	Package:
+Python 3.8 或更高版本	Python 3.8 or later
+Nginx 可执行程序	Nginx executable
+Nginx 配置	Nginx configuration
+Nginx 服务	Nginx service
+restic 可执行程序	restic executable
+Git 可执行程序	Git executable
+诊断工具程序	Diagnostic executables
+PostgreSQL 导出客户端	PostgreSQL dump client
+PostgreSQL 恢复客户端	PostgreSQL restore client
+PostgreSQL SQL 客户端	PostgreSQL SQL client
+MySQL/MariaDB SQL 客户端	MySQL/MariaDB SQL client
+MySQL/MariaDB 导出客户端	MySQL/MariaDB dump client
+安装检查通过	Installation checks passed
+已保存安装检查；任务结果尚未确认	Saved installation checks; task result is not confirmed
+安装已中断，请核查部分变更	Installation was interrupted; inspect partial changes
+所需软件包已存在；安装或检查失败	Requested packages are present; installation or checks failed
+安装或软件包核验失败	Installation or package verification failed
+安装核验不完整或不一致。重试前请查询原服务器任务。	Installation verification is incomplete or inconsistent. Query the original server task before retrying.
+检查已安装软件包、Nginx 配置及服务，不检查 HTTP 和外部可达性。	Checks the installed package, Nginx configuration and service. HTTP and external reachability are not checked.
+仅检查客户端程序。数据库访问、权限及来源版本兼容性需单独检查。	Checks client executables only. Database access, privileges and source-version compatibility require separate checks.
+仅检查 restic 程序。仓库访问及恢复验证需单独检查。	Checks the restic executable only. Repository access and restore verification require separate checks.
+检查所需软件包及列出的程序。软件包脚本可能修改配置或启动服务。	Checks requested packages and listed executables. Package scripts may change configuration or start services.
+适用于 Debian/Ubuntu APT。预检查记录现有软件包版本，执行时重新核对系统版本和原生架构。	Debian/Ubuntu APT. Preflight records existing package versions. Execution rechecks the OS version and native architecture.
+安装失败可能留下部分变更。重试前请核查结果；不会自动回滚或移除软件包。	Failed installation can leave partial changes. Review results before retrying; no automatic rollback or removal.
+恢复演练	Recovery drill
+运行恢复演练…	Run recovery drill…
+PostgreSQL 恢复演练	PostgreSQL recovery drill
+审核恢复演练…	Review recovery drill…
+恢复验收检查	Recovery acceptance checks
+快照文件路径	Snapshot file path
+最小字节数	Minimum bytes
+预期 SHA-256（可选）	Expected SHA-256 (optional)
+表所属模式	Table schema
+表名称	Table name
+最小行数	Minimum rows
+移除此检查	Remove check
+添加验收检查	Add acceptance check
+验收检查：	Acceptance checks:
+快照：	Snapshot:
+来源服务器：	Source server:
+新目标：	New destination:
+完成于：	Finished:
+耗时：	Elapsed:
+文件：	File:
+表：	Table:
+最小字节数：	Minimum bytes:
+最小行数：	Minimum rows:
+快照与目标检查	Snapshot and destination checks
+恢复与原生校验	Restore and native verification
+恢复验收检查通过	Recovery acceptance checks passed
+已保存恢复演练检查；任务结果尚未确认	Saved recovery drill checks; task result is not confirmed
+恢复演练已中断，请核查保留的数据	Recovery drill was interrupted; inspect retained data
+恢复已完成，部分验收检查未通过	Restore completed; acceptance checks did not all pass
+恢复演练未成功完成	Recovery drill did not complete successfully
+恢复演练证明不完整或不一致。重试前请查询原服务器任务。	Recovery drill proof is incomplete or inconsistent. Query the original server task before retrying.
+本报告仅覆盖列出的验收检查，不启动应用，也不证明全部业务数据、权限或扩展可用。新数据会保留。	This report covers the listed acceptance checks. It does not start the application or prove all business data, permissions or extensions. New data is retained.
+在新数据库中只读统计指定的普通表或分区表。单条语句限时 30 秒，不允许行级过滤；这不验证全部业务数据、角色或扩展。	Count selected regular or partitioned tables in the new database using read-only queries. Statement timeout is 30 seconds; row filtering is disallowed. This does not validate all business data, roles or extensions.
+恢复完整快照，并按快照绝对路径检查可读普通文件。可设置最小字节数和已知 SHA-256 摘要。拒绝符号链接；每个文件的摘要检查限时 120 秒。	Restore the complete snapshot and check readable regular files by their absolute snapshot paths. Set a minimum byte count and optionally a known SHA-256 digest. Symbolic links are refused; a file checksum is limited to 120 seconds.
+成功、失败或中断后，演练数据均保留在新目录或新库中。清理需要另行人工决定。	Drill data is retained in the new directory or database after success, failure or interruption. Cleanup is a separate manual decision.
+仓库：	Repository:
+策略：	Policy:
+执行服务器：	Executed on:
+快照路径：	Snapshot paths:
+目标父目录或数据库暂存目录必须已存在、可写，并使用真实路径。	The destination parent or database staging directory must already exist, be writable and use its canonical path.
+恢复演练请求；尚无执行证明	Recovery drill request; no execution proof
+执行服务器：	Execution server:
+以下是请求中的检查条件，并不证明已发生变更。重试前请核查原任务及目标中的保留数据。查看此请求不会续跑任务。	These are requested checks, not confirmed changes. Inspect the original task and retained destination before retrying. No task is resumed by viewing this request.
+异机恢复…	Recover on another server…
+仓库访问服务器	Repository access server
+仓库访问服务器：	Repository access server:
+搜索恢复服务器	Recovery server search
+请选择仓库访问服务器	Choose a repository access server
+服务器配置已不存在	Server profile unavailable
+不会连接来源服务器。请选择能访问此仓库的已信任服务器。仓库和凭据文件路径沿用策略设置，需提前在每台访问或恢复服务器上准备。	The source server is not contacted. Choose a trusted server that can access this repository. Repository and credential-file paths come from the policy and must already be prepared on each access or restore server.
+未信任的服务器不可选择，请先在“服务器”中保存主机指纹。备份数据和仓库凭据不会经由桌面客户端复制。	Untrusted servers are disabled. Save their host fingerprint in Servers before using recovery access. No backup data or repository credentials are copied through the desktop.
+异机恢复：可选择原备份策略之外的已信任服务器。每个目标都必须能访问同一仓库及已准备的凭据文件。不会连接来源服务器；备份和保留清理的目标范围保持原策略限制。	Cross-server recovery: trusted restore targets may be outside the original backup policy. Each target must access the same repository and prepared credential files. The source server is not contacted; backup and retention target scopes are unchanged.
+来源服务器配置已不存在，请使用“异机恢复”。	Source server profile is unavailable. Use Recover on another server.
+导入脚本…	Import scripts…
+导出脚本…	Export scripts…
+导入脚本包	Import script bundle
+导出脚本包	Export script bundle
+脚本包路径	Script bundle path
+选择脚本包	Select script bundle
+选择脚本导出文件夹	Choose script export folder
+读取脚本包	Read bundle
+保留现有脚本并添加副本	Keep existing; add copies
+替换同名脚本	Replace scripts with matching names
+相同脚本已存在，将跳过	Identical script already exists; skipped
+预览导入…	Review import…
+确认导入	Apply import
+返回选择	Back to selection
+导出文件夹	Export folder
+脚本包文件名	Bundle file name
+选择全部脚本	Select all scripts
+清除脚本选择	Clear script selection
+预览导出…	Review export…
+写入新脚本包	Write new bundle
+分享副本名称	Shared script name
+分享副本说明	Shared script description
+分享副本命令	Shared script command
+已选择脚本：	Selected scripts:
+执行账户：	Execution account:
+SSH 账户	SSH account
+参数：	Parameters:
+新增脚本	New script
+新增副本	New copy
+替换现有脚本	Replace existing script
+现有定义：	Existing definition:
+审核后的定义：	Reviewed definition:
+请先读取并审核脚本定义，再确认保存。导入项属于用户 Shell 脚本，执行时仍需使用正常的服务器审核流程。	Read and review script definitions before saving. Imported entries are user shell scripts; execution still requires the normal server review.
+确认后只保存已审核的定义，不会重新读取来源文件的变化。现有脚本发生变化时需要重新审核。	Apply saves exactly the reviewed definitions. Changes to the source file are not reread. Existing script changes require a new review.
+选择脚本并编辑分享副本，移除写在其中的敏感值。修改只影响导出内容；脚本包仅包含脚本定义，不包含服务器配置或运行时参数值。	Choose scripts and edit a sharing copy to remove embedded secrets. These edits affect the export only. The bundle contains script definitions and excludes server profiles and run-time parameter values.
+将创建新文件，不替换已有文件；如有冲突，请选择其他名称。	A new file will be created. Existing files are not replaced; choose another name when needed.
+已将 {count} 个脚本导入“我的脚本”	Imported {count} scripts into My scripts
+已导出脚本包到 {path}	Exported script bundle to {path}
+选择新的脚本	Select new scripts
+请选择 Arcnix JSON 脚本包，最多 4 MiB、200 个脚本。	Choose an Arcnix JSON script bundle, up to 4 MiB and 200 scripts.
+变更脚本：	Changed scripts:
+跳过相同脚本：	Skipped identical scripts:
+文本	Text
+整数	Integer
+绝对路径	Absolute path
+选项	Choice
+布尔值	Boolean
+参数标签	Parameter label
+参数说明	Parameter help
+默认值	Default value
+选项，每行一个	Options, one per line
+整数下限	Minimum integer
+整数上限	Maximum integer
+配置参数	Configure parameters
+必填参数	Required argument
+允许存入预设	Allow in presets
+本地参数预设	Local parameter presets
+预设已失效	Stale preset
+预设名称	Preset name
+保存新预设	Save new preset
+更新选中预设	Update selected preset
+载入选中预设	Load selected preset
+删除选中预设	Delete selected preset
+使用空参数	Use empty argument
+重置参数默认值	Reset parameter defaults
+参数定义：	Parameter definitions:
+编辑命令后，配置未加引号的 {{name}} 参数。默认值会随脚本保存和分享；认证信息请使用服务器上的凭据文件路径。	Configure unquoted {{name}} arguments after editing the command. Defaults are saved and shared with the script; use server credential-file paths instead of secrets.
+可选参数留空会传入一个空参数。修改脚本或参数规则后，旧预设会失效；不再允许保存的值会被移除。	An optional empty value is passed as one empty argument. Changing the script or its parameter rules makes older presets stale; values that are no longer permitted are removed.
+仅保存标记为“允许存入预设”的字段。载入时，其他字段会重置为默认值。预设值保存在本机，不会包含在分享脚本包中。	Only fields marked Allow in presets are saved. Loading resets every other field to its default. Preset values stay on this device and are excluded from script bundles.
+请输入十进制整数，或将上下限留空	Enter a decimal integer or leave the bound empty
+脚本定义已更改，请重新打开	The script definition changed; reopen it
+请选择要更新的预设	Select a preset to update
+请选择预设	Select a preset
+参数值不得超过 2048 字节，也不得包含控制字符	Parameter values must contain at most 2048 bytes without control characters
+必填参数为空：{name}	Required parameter is empty: {name}
+请输入十进制整数：{name}	Enter a decimal integer: {name}
+整数格式无效或超出上下限：{name}	Integer is not canonical or outside its bounds: {name}
+请输入 1 到 65535 的端口号：{name}	Enter a port from 1 to 65535: {name}
+请输入规范的服务器绝对路径：{name}	Enter a canonical absolute server path: {name}
+请选择已声明的选项：{name}	Choose one of the declared options: {name}
+请选择 true 或 false：{name}	Choose true or false: {name}
+预设属于旧版脚本定义，请重新审核参数值并明确更新预设	Preset belongs to an earlier script definition; review values and update it explicitly
+脚本预设标识或名称重复	Duplicate script preset identifier or name
+每个脚本最多支持 10 个预设	Each script supports at most 10 presets
+预设值为空或超出限制	Preset values exceed their limit
+安装策略	Installation policy
+仅安装缺失的软件包	Install missing packages
+允许审核过的升级	Allow reviewed upgrades
+审核过的 APT 变更	Reviewed APT transaction
+已安装状态 SHA-256：	Installed-state SHA-256:
+变更计划 SHA-256：	Transaction SHA-256:
+审核动作数：	Reviewed actions:
+默认保护已有软件包及依赖。选择“允许审核过的升级”后，才允许预检查中展示的升级；禁止移除和降级。已安装状态或 dpkg 变更计划发生变化时，需要重新审核。	The default preserves installed packages, including dependencies. Allow reviewed upgrades enables changes shown in preflight; removals and downgrades are refused. A changed installed state or dpkg transaction requires a new review.
+已安装状态及实际 dpkg 动作必须与本次审核一致。计划变化后必须重新预检查。	Installed state and actual dpkg actions must match this review. A changed plan requires new preflight.
+计划会修改已有软件包，请选择“允许审核过的升级”后重新预检查	The plan changes an installed package; select Allow reviewed upgrades and check targets again
+计划会配置已有软件包，请选择“允许审核过的升级”后重新预检查	The plan configures an existing package; select Allow reviewed upgrades and check targets again
+APT 降级或版本比较无效，请重新核对计划	APT downgrade or invalid version comparison; check the plan again
+已安装状态 SHA-256：{digest}	Installed-state SHA-256: {digest}
+变更计划 SHA-256：{digest}	Transaction SHA-256: {digest}
+审核动作数：{count}	Reviewed actions: {count}
+旧版安装报告：当时未记录审核变更核验。	Legacy installer report: reviewed transaction checks were not recorded.
+
+
+帮助：{label}	Help: {label}
+服务器任务	Server tasks
+并行提交	Parallel submissions
+备份验证记录	Backup confirmation
+数据库导出	Database exports
+安装核验	Installation checks
+删除无法撤销。执行前请审核精确文件计划。	Deletion cannot be undone. Review the exact file plan before execution.
+服务器任务状态在查询期间发生变化，请重新查询原任务。	Server task state changed during the query; query the original task again.
+服务器保存的退出结果无效，请检查原任务。	Saved server task exit result is invalid; inspect the original task.
+服务器返回了其他任务的查询结果	Server task query returned a different task
+查询批次结果…	Query batch results…
+查询批次结果	Query batch results
+查询所选结果	Query selected results
+选择可查询目标	Select queryable targets
+并行查询	Parallel queries
+结果查询正在进行中	Result query already in progress
+任务保存的主机指纹已不再受信任	Saved task host fingerprint is no longer trusted
+正在读取服务器结果…	Reading server result…
+仅查询一次原服务器日志和当前任务状态，不提交、重试或持续监视任务。凭据仅用于本次查询；关闭客户端只会中断查询。	Read original server logs and current task states once. No tasks are submitted, retried or continuously monitored. Credentials stay in memory for this query; closing the client interrupts only the queries.
+此任务从未提交到服务器	This task was never submitted to the server
+服务器已不在清单中	Server no longer exists in the inventory
+服务器地址或账户已改变；请恢复原配置后查询此任务	Server address or account changed; restore its original configuration to query this task
+
+结果读取于 {time}	Snapshot read: {time}
+读取时间未记录	Read time unavailable
+结果快照	Result snapshot
+客户端按本机时钟记录当前快照的接收时间，这不是任务完成时间，也不代表持续确认服务器状态。查询失败保留上次读取时间，旧历史可能未记录时间。	Time this client received the displayed server snapshot, using this computer's clock. This is not the task completion time or continuous confirmation of its state. Failed queries retain the previous read time. Older history may have no recorded time.
+添加证书	Add certificate
+移除证书	Remove certificate
+额外 PEM 证书路径	Additional PEM certificate path
+添加配置检查	Add configuration check
+移除配置检查	Remove configuration check
+额外配置	Additional configuration
+额外配置文件（可选，空值使用默认配置）	Additional configuration file (optional; default if empty)
+多项巡检	Multiple diagnostic items
+额外证书：{certificates} · 配置：{configurations}	Additional certificates: {certificates} · configurations: {configurations}
+总计最多选择 20 项检查。每个 PEM 只检查第一张证书的到期时间，不验证证书链或网络实际返回的证书。配置文件须为完整 Nginx 或 OpenSSH 配置，空路径使用校验器默认配置，重复项会被拒绝。	Select up to 20 checks in total. Each PEM checks its first certificate's expiry; it does not validate the chain or the certificate served over the network. Configuration files must be full Nginx or OpenSSH configurations. Empty configuration paths use the validator default. Duplicate items are rejected.
+总计最多选择 20 项巡检	Select at most 20 diagnostic checks in total
+请选择 1 到 20 项巡检	Select between 1 and 20 diagnostic checks
+证书路径重复	Duplicate diagnostic certificate path
+配置检查重复	Duplicate diagnostic configuration check
+请选择配置校验器	Choose a configuration validator
+巡检请求超过 8192 字节，请缩短路径或拆分执行	Diagnostic request exceeds 8192 bytes; shorten paths or split the checks into separate runs
+清理审计存储	Cleanup audit storage
+残留导出存储	Residual export storage
+审计与导出存储…	Audit and export storage…
+审计与导出存储	Audit and export storage
+返回清理报告	Back to cleanup reports
+审计最短保留天数	Minimum audit age (days)
+保留最近审计记录数	Keep latest audit records
+连接以查看审计存储	Connect to inspect audit storage
+正在读取审计存储…	Reading audit storage…
+审计存储查询完成	Audit storage query completed
+刷新审计存储	Refresh audit storage
+预览所选审计记录	Preview selected audit records
+清除审计选择	Clear audit selection
+已选审计记录：{count} / 100	Selected audit records: {count} / 100
+上一页审计记录	Previous audit page
+下一页审计记录	Next audit page
+审计保留预览	Audit retention preview
+保留候选：{count}	Retention candidates: {count}
+保留候选	Retention candidate
+审计记录	Audit records
+尚未达到最短保留时间	Within the minimum retention age
+属于最近保留的审计记录	Among the latest retained audit records
+服务器任务仍在运行	Server task is still active
+服务器任务状态无法确认	Server task state is uncertain
+审计工作尚未确认完成	Audit work is not confirmed complete
+仍被其他审计记录引用	Referenced by another audit record
+来源暂存区仍有残留	Source quarantine still exists
+导出副本保持保护	Exported copies remain protected
+审计引用未能完整核验	Audit references could not be fully inspected
+记录内容未能完整核验	Record contents could not be fully inspected
+预览所选记录以核对保留条件	Preview selected records to assess retention
+审计记录无效	Invalid audit record
+请输入 0–3650 天最短时间和 1–1000 条保留记录	Use 0–3650 minimum days and 1–1000 retained audit records
+请输入数字格式的审计保留参数	Enter numeric audit retention values
+请选择 1 到 100 条审计记录	Select between 1 and 100 audit records
+审计存储范围与请求不符	Audit storage scope does not match the request
+审计预览与所选记录不符	Audit storage preview does not match the selected records
+审计存储分页与请求不符	Audit storage page does not match the request
+查看私有清理报告和残留导出副本。保留预览只读取元数据并列出候选的精确对象，不删除文件或停止任务。被引用记录、未解决的暂存残留、导出副本、未完成工作和无法确认的状态均受保护。占用是采样值，不保证可释放空间；保留参数用于下一次查询，不设置维护计划。	Inspect private cleanup reports and exported residual copies. Retention previews only read metadata and list exact candidate objects; they never delete files or stop tasks. Referenced records, unresolved quarantines, exported copies, incomplete work and uncertain states remain protected. Allocated bytes are a snapshot, not guaranteed reclaimable space. Policy fields apply to the next query; this does not schedule maintenance.
+实际占用	Allocated
+逻辑大小	Logical bytes
+审计清理结果	Audit cleanup results
+审计清理依据保持保护	Audit cleanup evidence remains protected
+审核审计清理…	Review audit cleanup…
+审计清理审核	Audit cleanup review
+清理审计记录	Clean up audit records
+已中断	Interrupted
+已停止	Stopped
+服务不存在	Service not found
+请刷新审计预览，取得已核验的清理候选	Refresh an audit preview with verified cleanup candidates first
+只能移除经过核验的清理审计候选	Only verified cleanup audit candidates may be retired
+请选择 1 到 32 组已核验的审计预览	Choose 1 to 32 verified audit previews
+仅包含已核验的清理审计候选。请在独立表单重新认证、审核后，再提交不可撤销的服务器任务。导出副本及受保护记录保留；中断时保留私有报告和剩余文件。不递归删除、不自动重放，也不提供通用撤销。	Only verified cleanup audit candidates are included. Review in a separate form with fresh credentials, then submit an irreversible server-owned job. Exported copies and protected records remain intact. Interrupted cleanup keeps a private report and remaining files. No recursive deletion, automatic replay or undo.
+查看审计清理	Inspect audit cleanup
+审计清理详情	Audit cleanup details
+刷新审计清理详情	Refresh audit cleanup details
+关闭审计清理详情	Close audit cleanup details
+未记录操作	No recorded action
+已记录移除	Removal recorded
+移除结果待确认	Removal pending confirmation
+下载导出…	Download export…
+下载残留导出	Download residual export
+下载导出	Export download
+正在读取导出清单…	Reading export inventory…
+导出可下载	Export ready to download
+正在下载导出…	Downloading export…
+导出下载已核验	Export download verified
+导出下载失败	Export download failed
+本地 ZIP 路径	Local ZIP path
+下载目录	Download directory
+刷新导出清单	Refresh export inventory
+下载 ZIP	Download ZIP
+{} 个数据文件 · {}	{} data files · {}
+请先查看已完成且停止的导出	Inspect a completed, stopped export first
+下载前请刷新导出清单	Refresh the export inventory before downloading
+导出清单与请求的记录不符	Export inventory does not match the requested record
+导出下载回执与审核的压缩包不符	Export download receipt does not match the reviewed bundle
+下载目标已存在或无法检查	Download destination already exists or cannot be inspected
+请选择绝对 ZIP 文件路径	Choose an absolute ZIP file path
+下载已取消	Download cancelled
+ZIP 包含导出的数据、原始元数据文件及审计依据。传输期间会重新核对校验值和导出的停止状态；服务器副本保留。仅核验通过才发布最终文件，绝不覆盖已有文件。关闭此弹窗或离开页面会取消本地传输；中断后可重新下载，强制关闭客户端可能留下 .partial 文件。	The ZIP includes exported data, original metadata sidecars and audit evidence. Checksums and the stopped export are checked again during transfer. The server copy remains intact. A final file is published only after verification; existing files are never overwritten. Closing this dialog or leaving the page cancels the local transfer. Interrupted downloads can be started again; forced client closure may leave a .partial file.
+未记录移除	No removal recorded
+目录身份已核验	Directory identity verified
+目录身份未核验	Directory identity unverified
+稳定快照	Stable snapshot
+检查期间发生变化	Changed during inspection
+检查期间服务状态变化	Service changed during inspection
+存在额外残留项	Unexpected residual entries
+请刷新审计清理结果后再查看此记录	Reload audit cleanup results before inspecting this record
+移动中	Moving
+已冻结	Frozen
+已移除	Removed
+已返还	Returned
+已暂存	Quarantined
+未变更	Unchanged
+已记录的移除确认与当前文件位置是不同依据。待确认表示报告无法确认移除；仅文件不存在不能证明已删除。这是元数据快照，任务运行或查询期间发生变化时请刷新。查看详情不会继续或重试清理，也不会执行已冻结的程序。	Stored removal acknowledgements and current file locations are separate evidence. Pending means the report cannot confirm an unlink; absence alone does not prove deletion. This is a metadata snapshot; refresh after an active or changed query. Inspection never resumes or retries cleanup and never executes the frozen program.
+停止服务器任务	Stop server tasks
+审核选中任务的停止…	Review selected stops…
+选择任务	Select task
+选中的服务器任务	Selected server tasks
+检查选中任务	Inspect selected tasks
+停止已核验任务	Stop verified tasks
+正在核验服务器任务…	Inspecting server tasks…
+可停止	Ready to stop
+已拒绝	Refused
+原任务已停止	Already stopped
+请选择 1 至 100 个服务器任务	Choose 1 to 100 server tasks
+停止可能留下部分变更，不会撤销原操作。	Stopping can leave partial changes. It does not roll back the operation.
+停止批次已保存，可在最近批次中查询各服务器结果。	Stop batch saved. View recent batches to query each server result.
+缺少完整停止报告，请查询原服务器任务	No complete stop report; query the original server task
+停止前核验原任务身份。仅提交通过核验的任务，被拒绝的任务保持原状。	Inspect the original task identity before stopping. Only verified tasks are submitted; refused tasks remain unchanged.
+服务器接收的停止任务会在客户端关闭后继续运行。离开审核将取消尚未开始的提交。请查询原停止批次，不要重复提交。	Accepted control jobs run on the server when Arcnix closes. Leaving this review cancels submissions that have not started. Query the original stop batch for results; never submit it again.
+需要管理员权限、Python 3、systemd、busctl 和 cgroup v2。停止操作绕过运维锁，以便结束正在运行的任务。	This uses administrator access and requires Python 3, systemd, busctl and cgroup v2. It bypasses the operation lock so a running operation can be stopped.
+无法核验任务记录	Task record cannot be verified
+服务与该账户任务不匹配	Service does not match this account task
+服务器账户已变化	Server account changed
+无法核验服务身份	Service identity cannot be verified
+无法核验原任务进程	Original process cannot be verified
+任务已不再运行	Task is no longer active
+任务身份已变化，请重新核验	Task identity changed; inspect again
+停止请求尚未确认	Stop request is unconfirmed
+未能在限定时间内确认停止	Termination was not confirmed in time
+停止控制任务已中断	Stop controller was interrupted
+sudo 密码（可选）	sudo password (optional)
+查看停止报告	Read stop report
+清除选中任务	Clear selected tasks
+每个停止批次中，同一服务器只能选择一个 SSH 账户	Choose one SSH account per server for each stop batch
+停止任务的核查依据必须保留	Task stop evidence must be retained
+导出诊断报告	Export diagnostic report
+导出诊断报告…	Export diagnostic report…
+导出报告…	Export report…
+已捕获的诊断快照	Captured diagnostic snapshot
+诊断报告导出	Diagnostic report export
+包含检查明细	Include finding details
+报告保存目录	Report folder
+选择报告目录	Choose report folder
+HTML 文件名	HTML file name
+预览报告	Review report
+保存 HTML 报告	Save HTML report
+服务器诊断报告	Server diagnostics report
+报告捕获时间	Report captured
+来源	Source
+最近批次	Recent batch
+服务器记录	Server record
+批次编号	Batch ID
+采集器版本	Collector revision
+批次创建时间	Batch created
+Arcnix 版本	Arcnix version
+检查明细	Finding details
+已包含	Included
+未包含	Excluded
+服务器地址	Server address
+主机指纹	Host fingerprint
+服务器任务目录	Server task directory
+快照接收时间	Snapshot received
+执行状态	Execution status
+已保存的退出码	Saved exit code
+服务器采样时间	Server sampled
+采集环境	Collection environment
+操作系统	Operating system
+内核与架构	Kernel and architecture
+检查范围	Check scope
+检查编号	Check key
+观察值	Observed value
+建议	Suggestion
+仅包含已保存的观察结果，不代表当前健康状态，也不会执行命令。	Saved observations only. This report does not describe current health or run commands.
+诊断报告缺失或不完整，未确认任何检查结论。	Diagnostic report is missing or incomplete; no findings are confirmed.
+已保存的结果与检查范围不符，未导出这些检查结论。	Saved findings do not match the recorded check selection; findings are omitted.
+已确认采集完成，检查结论仍需审核。	Collection confirmed; findings still require review.
+已保存的检查结论，执行结果尚未确认。	Saved findings; execution is not confirmed.
+原检查范围未记录，这些已保存的检查结论尚未核验。	Requested check selection was not recorded; these saved findings are unverified.
+该采集器未记录环境版本。	Environment versions were not recorded by this collector.
+导出当前捕获的已保存结果，不连接服务器。之后的任务更新不会改变这份快照；未知或不完整结果仍保持未确认。	Export the captured saved observations without contacting servers. Later task updates do not change this snapshot. Unknown or incomplete results remain unconfirmed.
+报告包含服务器地址、指纹和选中的路径。检查明细可选，可能含敏感服务器数据，请在分享前审核。脚本及执行预览不会导出。	Server addresses, fingerprints and selected paths are included. Details are optional and may contain sensitive server data; review the report before sharing. Scripts and execution previews are excluded.
+HTML 文件可离线查看，不含脚本或外部资源，不覆盖已有文件。	The HTML file works offline without scripts or external resources. Existing files are never overwritten.
+请输入普通的 HTML 文件名	Enter a plain HTML file name
+请选择已存在的报告目录	Choose an existing report folder
+报告文件已存在，请更换文件名	Report destination already exists; choose another file name
+采集环境尚未确认	Collection environment is not confirmed
+故障服务日志…	Failed service logs…
+诊断服务日志	Diagnostic service logs
+已保存的故障服务	Saved failed services
+已保存的发现，采集结果尚未确认	Saved finding; collection is unconfirmed
+诊断采样前后	Around diagnostic sampling
+以管理员读取日志	Read journal as administrator
+最多条数	Maximum entries
+正在读取服务日志…	Reading service logs…
+显示上次日志快照	Showing the previous log snapshot
+尚未读取日志快照	No log snapshot yet
+当前选择未返回 journal 条目	No journal entries returned for this selection
+读取服务日志	Read service logs
+原诊断服务器已不在配置中	Original diagnostic server is no longer configured
+诊断服务器身份已变化，请重新连接并核验原主机	Diagnostic server identity changed; reconnect and verify the original host
+请先选择诊断服务	Choose a diagnostic service first
+请等待日志查询完成	Wait for the log query
+日志响应超过读取上限	Service log response exceeded the read limit
+服务日志需要已选择的 journal 服务名	Service logs require the selected journal unit
+请选择已保存诊断中的服务	Choose a service from the saved diagnostic finding
+已保存的发现中没有可核验的服务名称	No verified service names are available in this saved finding
+journal 服务名无效，请使用有效十六进制转义的完整名称	Invalid journal unit name; use a literal unit with valid hexadecimal escapes
+journal 查询时间范围无效	Invalid bounded journal time window
+通过独立 SSH 连接，读取原服务器上已保存服务名的日志。当前工作区及传输保持连接，不重启服务，也不重新执行诊断。	Read one saved service name on the original server using an independent SSH connection. The current workspace and transfers stay connected. This does not restart the service or repeat diagnostics.
+诊断时段为采集开始前后各 15 分钟，可能包含同名服务的后续运行。日志可能已轮转或受账户权限限制，空结果不代表未发生故障。	The diagnostic window covers 15 minutes before and after the recorded collection start. It may include a later invocation of the same service. Logs may have rotated or be restricted by account permissions; empty results do not prove that no failure occurred.
+每次查询只读取有限快照，不自动刷新。凭据仅在弹窗打开期间保留于内存。管理员权限可选，仅用于此次日志读取。	Queries are bounded snapshots with no automatic refresh. Credentials remain in memory only while this dialog is open. Administrator access is optional and applies only to the journal read.
+旧退出结果未绑定运行实例，请核查原服务器任务	Legacy exit result has no runtime binding; inspect the original server task
+已保存的退出回执属于另一任务	Saved exit receipt belongs to a different task
+已保存的退出回执属于另一运行实例	Saved exit receipt belongs to a different service invocation
+无法核验此退出回执对应的服务运行实例	Cannot verify the service invocation for this saved exit receipt
+已保存的退出回执与当前服务运行实例不符	Saved exit receipt does not match the current service invocation
+新退出回执绑定任务和服务运行实例，缺少此绑定的旧结果保持未确认。任务完成不代表备份可恢复或应用健康。	New exit receipts bind the task and service invocation. Legacy results without this binding remain unconfirmed. A completed task does not prove that a backup can be restored or an application is healthy.
+核验期间服务状态发生变化，请重新核验。	Service state changed during inspection; inspect again
+对比当前文件	Compare current files
+读取配置快照…	Read configuration snapshots…
+读取配置快照	Read configuration snapshots
+配置文件路径	Configuration file path
+读取快照	Read snapshots
+以管理员读取	Read as administrator
+停止读取	Stop reading
+清除快照	Clear snapshots
+将基准用作草稿	Use baseline as draft
+设为基准	Use as baseline
+与基准对比	Compare with baseline
+文件内容相同	File contents match
+文件内容不同	File contents differ
+属主或权限不同	Ownership or permissions differ
+已隐藏已知凭据，内容判断使用完整校验和	Known credentials hidden; equality uses full checksums
+差异预览已缩短	Diff preview shortened
+快照来源	Snapshot origin
+正在读取快照…	Reading snapshot…
+快照已读取	Snapshot read
+尚无配置快照	No configuration snapshots
+尚无配置快照	No configuration snapshot
+正在结束上次快照读取…	Finishing previous snapshot read…
+上次快照，不参与比较	Previous snapshot; excluded from comparison
+尚无对比结果	No comparison yet
+快照读取已停止	Snapshot reading stopped
+请等待上次快照读取结束	Wait for the previous snapshot read
+请至少选择两台服务器进行对比	Select at least two servers to compare
+读取快照前请复核隐藏的已选服务器	Review hidden selected servers before reading snapshots
+已隐藏的已选服务器	Hidden selected servers
+配置快照不可用	Configuration snapshot unavailable
+配置服务器身份已变化，请重新读取快照	Configuration server identity changed; read snapshots again
+请先处理现有配置草稿，再复制基准	Review the existing configuration draft before copying a baseline
+请选择可用的基准快照	Choose an available baseline snapshot
+隐藏、缩短或空快照不能作为发布草稿	A hidden, shortened or empty snapshot cannot become a publication draft
+这不是普通配置文件	Not a regular configuration file
+配置文件超过 128 KiB	Configuration file exceeds 128 KiB
+读取期间文件发生变化，请重新读取快照	File changed during reading; read snapshots again
+配置文件不是 UTF-8 文本	Configuration file is not UTF-8 text
+不支持此配置文件路径	Unsupported configuration file path
+配置快照响应过大	Configuration snapshot response is too large
+配置快照校验和不符	Configuration snapshot checksum mismatch
+无换行	No line breaks
+混合换行格式	Mixed line endings
+通过独立 SSH 连接读取当前配置文件，需要 Python 3.8+，管理员权限可选，无需 SFTP 或 systemd。	Read current configuration files over independent SSH connections. Python 3.8+ is required; administrator access is optional. No SFTP or systemd is required.
+通过独立 SSH 连接读取每台所选服务器上的一个 UTF-8 文件，不发布或重载。各快照分别采集，之后文件发生变化不会自动更新。	Read one UTF-8 file on each selected server over independent SSH connections. Nothing is published or reloaded. Snapshots are taken separately and do not describe current configuration after later changes.
+文件正文、差异和凭据只保留在本页内存中，离开配置页时清除。已知认证值会隐藏，配置中的其他秘密仍可能可见。	File text, diffs and credentials stay in this page's memory. Leaving Configurations clears them. Known authentication values are hidden; other secrets inside configuration files may still be visible.
+选择读取成功的基准和对比服务器。内容判断使用完整文件校验和，属主、权限、换行和 BOM 单独显示。刷新失败保留的上次快照不能继续比较。	Choose a successfully read baseline and a server to compare. Content equality uses full file checksums; ownership, permissions, line endings and BOM remain visible. Failed refreshes retain a marked previous snapshot that cannot be compared.
+当前草稿为空时，可将未隐藏内容的基准复制为自定义发布草稿。复制仅填入编辑器，校验、重载、健康检查、目标及服务器变更仍需按正常流程审核。	An unredacted baseline can become a custom publication draft when the current draft is empty. Copying only fills the editor; validation, reload, health checks, targets and server changes still require the normal review.
+支持最大 128 KiB 的普通文件和可解析的符号路径。文件缺失、权限不足、文件变化及不支持的内容分别报告。查询有时限，不自动刷新。	Reads allow ordinary files up to 128 KiB, including resolved symbolic paths. Missing files, permissions, changed files and unsupported content remain separate results. Queries are finite and never refresh automatically.
+采样	Sampled
+接收	Received
+配置快照、差异及读取凭据只保留在内存中。离开配置页会清除比较数据；显式复制的草稿沿用编辑器的内存生命周期。已知认证值会隐藏，文件中的其他秘密仍可能可见。	Configuration snapshots, diffs and read credentials stay in memory. Leaving Configurations clears comparison data. Explicit draft copies follow the editor's normal memory lifecycle. Known authentication values are hidden; other file secrets may remain visible.
+在所选 Linux 服务器上通过 Python 3.8+ 读取同一个字面路径，管理员权限可选。停止读取会阻止排队读取并丢弃迟到结果，已发出的读取可能稍后结束。	Read the same literal path on selected Linux servers with Python 3.8+. Administrator access is optional. Stop reading prevents queued reads and discards late results; an in-flight read may finish before disconnecting.
+可用快照：{0}/{1} · 读取中：{2}	Available snapshots: {0}/{1} · Reading: {2}
+快照读取失败	Snapshot read failed
+快照读取错误详情	Snapshot read failure
+配置快照响应无效：{0}	Invalid configuration snapshot response: {0}
+
+会话趋势	Session trends
+资源采样	Resource sampling
+资源采样已暂停	Resource sampling paused
+暂停采样	Pause sampling
+继续采样	Resume sampling
+清除历史	Clear history
+1 分钟	1 min
+5 分钟	5 min
+15 分钟	15 min
+网络速率	Network rate
+接收	Receive
+发送	Transmit
+不可用	Unavailable
+等待采样	Waiting for samples
+最近读取	Latest read
+秒	s
+分钟	min
+只在此服务器的资源页打开时读取只读样本。离开后不再发送新请求，已发出的读取可能完成；客户端关闭期间不采集历史。	Read-only samples are collected only while this server's Resources page is open. Leaving the page stops new requests; an in-flight read may finish. No history is collected while the client is closed.
+暂停只停止自动采样，仍可手动刷新；连接变化会清空会话历史，样本不会写入磁盘。	Pause stops automatic sampling; manual refresh remains available. Connection changes clear the session history. Samples are not written to disk.
+显示本次连接最近 1、5 或 15 分钟的读取，以最后接收的读取为终点。时间轴使用客户端单调时钟，CPU 与网络速率使用服务器计数。缺失、失败、暂停及页面切换会断开曲线，不填充为零。	Show the last 1, 5 or 15 minutes of reads in this connection, ending at the latest received read. Times use this client's monotonic clock; CPU and network rates use server counters. Missing values, failed reads, pauses and page changes break the lines instead of filling them with zero.
+移动鼠标到图中，或聚焦后使用左右方向键、Home、End 查看样本。CPU 与内存固定为 0–100%；网络排除回环，接收与发送在所选范围共用刻度。	Move over a chart or focus it and use Left, Right, Home or End to inspect a sample. CPU and memory use a fixed 0–100% scale. Network shows receive and transmit rates excluding loopback, with a shared scale for the selected range.
+历史只保存在本次连接的内存中，最多 15 分钟、1,024 次读取。清除历史不会修改服务器；连接变化或关闭客户端后丢弃，不在其他页面或后台继续采集。	History is kept only in memory for this connection, up to 15 minutes and 1,024 reads. Clearing history does not change the server. Connection changes or closing the client discard it; collection does not run on another page or in the background.
+每 {} 秒	Every {} s
+采样已暂停 · 最近成功 {}	Sampling paused · Last success {}
+超过两个采样间隔才完成的读取会开始新的一段；间断后速率需要重新取得一对样本。暂停自动采样时，连续手动刷新仍可计算速率。	A read delayed by more than two sampling intervals starts a new segment. Rates need a fresh pair of samples after a gap. Consecutive manual refreshes can still calculate rates while automatic sampling is paused.
+使用配置参数	Use configuration parameters
+配置默认值	Default configuration values
+配置参数	Configuration parameters
+默认值：{name}	Default value: {name}
+配置参数值…	Configuration values…
+覆盖值：{}	Overrides: {}
+使用默认值	Use default values
+覆盖：{name}	Override: {name}
+此服务器的值：{name}	Server value: {name}
+启用参数模式后，在配置正文中使用 {{name}}；名称仅含 ASCII 字母、数字及下划线。四个左／右花括号生成两个字面花括号。值为单行文本，只替换一次，引号、美元符和替换值中的花括号保留原样。	Enable parameter mode to use {{name}} inside configuration text. Names use ASCII letters, digits and underscores. Four opening or closing braces produce two literal braces. Values are single-line text, expanded once; quotes, dollar signs and replacement braces stay literal.
+默认值用于所选服务器，除非明确选择覆盖；可以使用空值，但最终配置必须非空且不超过 128 KiB。替换不转义应用配置语法，发布前须审核每台服务器渲染后的差异和校验结果。	Defaults apply to selected servers unless you explicitly override a value. Empty values are allowed, but each final configuration must be nonempty and no larger than 128 KiB. Substitution does not escape application syntax; review each server's rendered diff and validation before publishing.
+每个配置参数须以两个右花括号结束	Close every configuration parameter with two closing braces
+配置参数名须使用 ASCII 字母、数字或下划线，并以字母或下划线开头	Configuration parameter names must use ASCII letters, digits or underscores and start with a letter or underscore
+配置参数最多 32 项	Use at most 32 configuration parameters
+请添加配置参数或关闭参数模式	Add a configuration parameter or turn parameter mode off
+配置值与模板参数不匹配	Configuration values do not match the template parameters
+配置值须为不含控制字符的单行文本，最多 4 KiB	Use single-line configuration values up to 4 KiB without control characters
+渲染后的配置超过 128 KiB	Rendered configuration exceeds 128 KiB
+渲染后的配置为空	Rendered configuration is empty
+配置模板已变化，请重新打开服务器审核	Configuration template changed; reopen the server review
+配置覆盖值包含未选中的服务器	Configuration overrides contain an unselected server
+请选择 1 至 32 个配置发布目标	Choose between 1 and 32 configuration publication targets
+配置候选与审核的发布不匹配	Configuration candidates do not match the reviewed publication
+此服务器没有已审核的配置候选	This server has no reviewed configuration candidate
+只有候选正文使用参数。目标路径、校验、重载和健康条件共用；请设置能验证每台服务器实际配置的检查。	Only candidate contents are parameterized. Destination, validation, reload and health settings are shared; choose checks that verify each server's actual configuration.
+丢弃草稿…	Discard draft…
+丢弃草稿	Discard draft
+丢弃配置草稿	Discard configuration draft
+丢弃配置正文和参数默认值？	Discard configuration text and parameter defaults?
+只清除内存中的草稿；已提交服务器任务、已保存版本及恢复记录保留。关闭此确认会保留草稿。	This clears only the in-memory draft. Submitted server tasks, saved versions and recovery records are retained. Closing this confirmation keeps the draft.
+重启前请处理配置草稿	Configuration draft needs review before restarting
+等待连接及正在进行的操作结束	Waiting for connections and pending work to finish
+重启条件	Restart readiness
+重启须等待 SSH 断开、操作结束、对话框关闭，并先处理内存中的配置草稿。可返回继续编辑或明确丢弃，不会自动保存或清除。	Restart waits for disconnected SSH, completed work, closed dialogs and no in-memory configuration draft. Return to the draft to keep editing or explicitly discard it; nothing is saved or discarded automatically.
+查看配置草稿	Review configuration draft
+草稿正文和默认值保存在编辑器内存中。成功开始预检查后按服务器冻结候选并清除运行表单值，校验未通过时保留输入。取消表单会清除运行值，取消选择会移除该服务器覆盖值，筛选保留已选值。	Draft text and defaults stay in editor memory. Starting preflight freezes per-server candidates and clears run-form values; invalid forms stay editable. Cancelling discards run values, deselection removes that server's overrides, and filtering preserves selected values.
+排查已删除文件占用…	Inspect deleted open files…
+已删除文件占用	Deleted open files
+通过独立 SSH 连接读取可见进程仍持有的已删除普通文件元数据，不读取文件正文、不截断文件、不停止进程。需要 Linux 和 Python 3.8+，无需 SFTP 或 systemd。	Read metadata for unlinked regular files still held by visible processes through an independent SSH connection. No file contents are read, files truncated, or processes stopped. Requires Linux and Python 3.8+; SFTP and systemd are not needed.
+每个设备上的同一 inode 只计一次，最多展示八个已观察到的持有者。已分配大小来自文件系统块数，不代表一定能释放的空间；共享块、内存文件和持续写入都会影响估算。不包含已关闭描述符、仅靠内存映射保留的文件。	Each inode is counted once per device, with up to eight observed holders. Allocated bytes use filesystem blocks and are not guaranteed reclaimable space; shared blocks, memory-backed files and active writes can affect the estimate. Memory mappings without an open descriptor are outside this scan.
+只扫描所选账户和 PID 命名空间可见的进程。权限、隐藏进程、并发退出和扫描上限均可能导致遗漏，不能视为全服务器完整清单。可明确选择管理员读取。查询有时限且不自动刷新；关闭后清除凭据并丢弃迟到结果。	Only processes visible to the chosen account and PID namespace are scanned. Permissions, hidden processes, concurrent exits and scan limits prevent a whole-server completeness claim. Administrator access is optional. Queries stop after a bounded scan and do not refresh automatically; closing clears credentials and ignores late results.
+以管理员身份读取进程元数据	Read process metadata as administrator
+正在读取已删除文件占用…	Reading deleted open files…
+显示上次文件占用快照	Showing the previous open file snapshot
+尚未读取文件占用	No open file snapshot yet
+已观察文件：{} · 已分配：{}	Observed files: {} · Allocated: {}
+扫描范围	Scan coverage
+UID {} · 采样 {} · 进程 {} · 描述符 {} · 无权限 {} · 已变化 {} · 无法读取 {} · 显示 {} / {}	UID {} · Sampled {} · Processes {} · Descriptors {} · Inaccessible {} · Changed {} · Unreadable {} · Showing {} of {}
+已达到扫描上限，仅显示观察结果	Scan limit reached; showing observed files
+部分进程或描述符无法读取	Some processes or descriptors were unavailable
+仅包含可见进程	Visible processes only
+未观察到已删除但仍被打开的普通文件	No deleted open regular files observed
+已分配 {} · 逻辑大小 {} · 引用数 {}	Allocated {} · Logical {} · References {}
+读取文件占用	Read open files
+分类标签	Labels
+服务器分类	Server labels
+环境（可选）	Environment (optional)
+标签（逗号分隔）	Tags (comma-separated)
+环境筛选	Environment filter
+标签筛选	Tag filter
+分类筛选	Server label filters
+环境和标签是保存在服务器配置中的本地备注，不改变 SSH 权限、主机信任或服务器设置；请勿填写凭据。	Environment and tags are local annotations saved in the server configuration. They do not change SSH permissions, host trust or server settings; keep credentials out of these fields.
+环境可留空；最多 16 个逗号分隔的标签，每项最多 32 个字符，标签去重不区分大小写。搜索包含分类信息；环境和标签筛选按完整值匹配且不区分大小写。仅修改分类时保留当前连接及传输。	Use an optional environment and up to 16 comma-separated tags, each up to 32 characters. Tags are unique ignoring case. Search matches labels; environment and tag filters match a complete label ignoring case. Changing labels alone keeps the current connection and transfers.
+筛选留空表示包含所有值。环境、标签、分组和搜索条件共同生效；分类筛选按完整值匹配且不区分大小写。筛选保留已选目标及凭据，继续前请检查隐藏选择。分类不能扩大操作允许的服务器范围。	Leave a label filter empty to include all values. Environment, tag, group and search filters combine; label filters match the whole value ignoring case. Filters preserve selected targets and credentials, so review hidden selections before continuing. Labels never expand an operation's allowed server scope.
+标签数：{}	Tags: {}
+环境最多 32 个字符，不能包含首尾空白或控制字符	Use an environment of at most 32 characters without surrounding whitespace or control characters
+服务器标签最多 16 个	Use at most 16 server tags
+服务器标签须唯一，每项最多 32 个字符，不能包含逗号、首尾空白或控制字符	Use distinct server tags of at most 32 characters without commas, surrounding whitespace or control characters
+服务器标签输入过长	Server tag input is too long
+原服务器已不存在	Original server no longer exists
+请等待当前操作完成	Wait for the current operation to finish
+请选择要诊断的服务器	Select servers to review diagnostics
+无匹配的本地确认记录	No matching local confirmation
+最近备份尝试	Latest backup attempt
+未保存主机指纹	Host fingerprint not saved
+磁盘 {} · inode {} · 故障服务 {}	Disk {} · Inodes {} · Failed services {}
+采集于 {}	Collected {}
+发现问题 {} · 无法判断 {}	Findings {} · Inconclusive {}
+记录已过期	Record outdated
+部分核心检查未记录	Partial core checks
+备份记录	Backup records
+未分配备份策略	No assigned backup policy
+已记录备份：{}/{}	Recorded backups: {}/{}
+最早成功时间 {}	Oldest success {}
+最近备份有失败	A latest backup attempt failed
+最近备份有待确认项	A latest backup attempt is unconfirmed
+打开工作区	Open workspace
+查看诊断任务	View diagnostic task
+打开备份策略	Open backup policies
+服务器总览	Server overview
+读取本地最近十批任务和已保存的备份确认记录。刷新仅更新本地汇总；可打开任务查询服务器结果，或审核新诊断。	Uses the ten most recent local task batches and saved backup confirmations. Refreshing reads local records only. Open a task to query its server result, or review a new diagnostic run.
+记录需匹配当前 SSH 身份和已保存的检查范围。缺失、不完整、过期或时间异常的记录需要核验。问题对应采样时刻，不能证明服务器当前健康。	Records must match the current SSH identity and saved check selection. Missing, incomplete, old or clock-mismatched records need verification. Recorded findings describe the sample time; they do not prove current health.
+备份覆盖率按所有已分配策略的当前版本和仓库计算。备份、完整性检查和恢复演练分别展示；日期使用成功任务的开始时间。记录时限仅用于本地核验，不代表备份计划。	Backup coverage includes every assigned policy at its current revision and repository. Backup, integrity check and recovery drill results are separate. Dates use successful task start times. Record age is a local review threshold, not a backup schedule.
+搜索和标签筛选保留跨页选择。连接前可审核最多 32 台可信服务器，每个地址只选一个账户。原工作区保留连接和终端；此页暂停资源采样。	Search and label filters preserve selections across pages. Review up to 32 trusted servers, one account per endpoint, before SSH work. The current workspace keeps its connection and terminal; resource sampling pauses here.
+刷新本地总览	Refresh local overview
+审核诊断…	Review diagnostics…
+当前工作区	Current workspace
+本地记录 · 汇总于 {}	Local records · Overview computed {}
+全部匹配	All matches
+已记录问题	Recorded findings
+需要核验	Needs verification
+匹配服务器 {} · 已记录问题 {} · 需要核验 {}	Matching servers {} · Recorded findings {} · Need verification {}
+记录时限	Record age
+1 天	1 day
+7 天	7 days
+30 天	30 days
+选择匹配的可信服务器	Select matching trusted servers
+清除总览筛选	Clear overview filters
+已选 {} · 隐藏选择 {}	Selected {} · Hidden selections {}
+没有符合总览筛选的服务器	No servers match the overview filters
+上一页服务器	Previous servers
+下一页服务器	More servers
+无匹配的诊断记录	No matching diagnostic record
+诊断结果待确认	Diagnostic result unconfirmed
+诊断报告不完整或不匹配	Diagnostic report incomplete or mismatched
+诊断记录时间待核验	Diagnostic record time needs review
+已记录诊断	Recorded diagnostics
+TLS 端点核验	TLS endpoint verification
+检查所选服务器的网络、时钟和 CA 信任库，再核对端点证书链、验证名称及到期时间。通过现有服务器工具修正或续期后重新检查。此项仅从该服务器检查直接 TLS，不包含 HTTP 健康、STARTTLS 或吊销检查。	Check the selected server's route, clock and CA store, then the endpoint's certificate chain, verification name and expiry. Correct or renew through the server's existing tooling and run this check again. This is direct TLS from this server, without HTTP health, STARTTLS or revocation checks.
+请输入 ASCII 域名或不带方括号的 IP 地址；TLS 主机字段不包含网址、路径或端口	Enter a DNS name in ASCII or an unbracketed IP address; URLs, paths and ports do not belong in a TLS host
+无效的 TLS IP 地址	Invalid TLS IP address
+TLS 端口须为 1 至 65535	TLS port must be between 1 and 65535
+TLS 端点及验证名称重复	Duplicate TLS endpoint and verification name
+TLS 端点：{} · {} 天	TLS endpoints: {} · {} days
+添加 TLS 端点	Add TLS endpoint
+TLS 端点	TLS endpoints
+TLS 端点	TLS endpoint
+移除 TLS 端点	Remove TLS endpoint
+TLS 连接主机	TLS connect host
+TLS 端口	TLS port
+TLS 验证名称（可选）	TLS verification name (optional)
+从每台所选 SSH 服务器连接指定域名或不带方括号的 IP 和端口。验证名称默认为连接主机；域名同时作为 SNI，IP 身份不发送 SNI。域名须为 ASCII，国际化域名使用 punycode。	Connect from each selected SSH server to a DNS name or unbracketed IP and port. The optional verification name defaults to the connect host. DNS names also set SNI; IP identities do not send SNI. Use ASCII DNS names, including punycode for international domains.
+使用该服务器的 OpenSSL CA 信任库核验实际叶证书、域名或 IP、证书链和有效期，再检查到期阈值。仅支持直接 TLS，不含 HTTP 健康、STARTTLS、客户端证书或吊销检查。单次通过不代表其他网络路径或所有负载均衡节点。	Verify the served leaf, hostname or IP, chain and validity with that server's OpenSSL CA store, then check its expiry warning threshold. Direct TLS only: no HTTP health, STARTTLS, client certificates or revocation check. A passing sample does not prove other network paths or all load-balancer nodes.
+每次连接限时 15 秒，私有输出大小有界。工具缺失、网络错误和超时保留无法判断。TLS 与其他检查共用总计 20 项和请求大小上限；结果保存精确端点及身份，续期或服务变更仍需单独操作。	Each connection is limited to 15 seconds, with bounded private output. Missing tools, network errors and timeouts remain inconclusive. TLS endpoints share the 20-check and request-size limits with other checks. Results keep the exact endpoint and identity; renewing or changing a service remains a separate operation.
+诊断权限	Diagnostic access
+配置备份	Configuration backup
+备份配置…	Back up configuration…
+恢复配置…	Restore configuration…
+备份配置	Back up configuration
+恢复配置	Restore configuration
+当前配置	Current configuration
+备份中的配置	Backup configuration
+配置快照	Configuration snapshot
+备份目录	Backup folder
+备份文件名	Backup file name
+选择备份目录…	Browse backup folder…
+配置备份文件	Configuration backup file
+选择备份文件…	Browse backup file…
+读取配置备份	Read configuration backup
+审核配置备份	Review configuration backup
+保存配置备份	Save configuration backup
+审核配置替换	Review configuration replacement
+恢复已审核配置	Restore reviewed configuration
+查看配置预览	Show configuration preview
+仅已正确读取的有效配置可导出备份	Only a loaded, valid configuration can be backed up
+请先审核配置备份	Review the configuration backup first
+请先读取配置备份	Read a configuration backup first
+请先审核配置替换	Review configuration replacement first
+请先完成正在处理的操作，再恢复配置	Finish active operations before restoring configuration
+已保存配置备份：{path}	Saved configuration backup: {path}
+已恢复配置，原文件保存在：{path}	Restored configuration. Previous file: {path}
+已恢复配置	Restored configuration
+替换已保存配置；保留本机 SSH 信任。	Replace saved configuration; keep this computer's SSH trust.
+恢复后将断开当前工作区连接。	Restoring disconnects the current workspace.
+忽略导入的信任条目：{}	Imported trust entries ignored: {}
+选择配置备份目录	Choose configuration backup folder
+选择配置备份	Select configuration backup
+预览最多显示 64 KiB；完整配置请查看备份文件。	Preview truncated at 64 KiB; inspect the backup file for the complete configuration.
+导出会固定审核时显示的配置。JSON 中的脚本和已存参数可能含敏感文字，请妥善保管。本地路径仅为引用，备份不复制密钥、文件或服务器数据；已有目标文件会保留。	The export freezes the configuration shown at review time. Keep private JSON files safe: saved scripts and arguments may contain sensitive text. Local paths are references; copying the backup does not copy keys, files or server data. Existing destination files are preserved.
+将服务器、分组、标签、脚本及已存参数、备份策略与确认记录、偏好和文件路径引用保存到私有的可读 JSON。密钥文件、会话密码、任务日志、配置草稿及服务器数据单独保管。已存文字和预设可能含敏感值，请勿随意分享。	Save servers, groups, labels, scripts and stored arguments, backup policies and confirmations, preferences and file-path references in a private readable JSON file. Key files, session passwords, task logs, configuration drafts and server data are stored separately. Saved text and presets can contain sensitive values; keep this backup private.
+恢复会替换已保存配置，并在文件保存成功后断开当前工作区。本机 SSH 信任保留，导入信任不会自动授权。最近任务历史仍单独保存，恢复的确认记录仍为历史观察；内存中的配置草稿保留。	Restoring replaces saved configuration and disconnects the current workspace after the file is saved. This computer's existing SSH trust stays in place; imported trust entries do not grant trust. Recent local task history stays separate and restored confirmations remain historical observations. Configuration drafts remain in memory.
+先审核文件和数量；源文件或当前设置变化后须重新审核。替换前会在活动配置旁保留原文件，包括其损坏字节。请关闭其他配置编辑器；提交前检查不提供跨应用事务。	Review the file and counts first. Changed source files or current settings require a new review. The previous configuration file, including corrupt bytes, is preserved beside the active file before replacement. Close other configuration editors; the final checks do not provide a transaction across unrelated applications.
+读取配置文件失败	Cannot read configuration file
+请选择普通配置文件	Choose a regular configuration file
+请选择不超过 4 MiB 的普通配置文件	Choose a regular configuration file up to 4 MiB
+配置文件超过 4 MiB	Configuration file exceeds 4 MiB
+配置快照超过 4 MiB	Configuration snapshot exceeds 4 MiB
+请选择已有的配置备份	Choose an existing configuration backup
+请输入不含路径分隔符或保留字符的普通配置文件名	Enter a plain configuration file name without path separators or reserved characters
+配置备份不能使用系统保留设备名	Reserved device names cannot be used for configuration backups
+请选择已有的备份目录	Choose an existing backup folder
+备份目标已存在，请使用其他文件名	Backup destination already exists; choose another file name
+无法检查备份目标	Cannot inspect backup destination
+备份目录不存在	Backup folder is missing
+备份目录已变化，请重新审核	Backup folder changed; review again
+无法创建私有配置备份	Cannot create private configuration backup
+备份预览已变化，请重新审核	Backup preview changed; review again
+无法检查当前配置	Cannot inspect current configuration
+当前配置须为普通文件，不能是链接	Current configuration must be a regular file, not a link
+当前配置文件已变化，请重新审核恢复	Current configuration file changed; review the restore again
+请选择活动配置之外的备份文件	Choose a backup separate from the active configuration file
+已保存设置已变化，请重新审核恢复	Saved settings changed; review the restore again
+配置备份已变化，请重新读取并审核	Configuration backup changed; read and review it again
+当前配置目录不存在	Current configuration folder is missing
+服务器 {} · 分组 {} · 脚本 {}	Servers {} · Groups {} · Scripts {}
+备份策略 {} · 已存预设 {} · 备份确认记录 {}	Backup policies {} · Saved presets {} · Backup confirmations {}
+当前配置无法读取，恢复前将保留原文件。	Current configuration is unreadable; its original file will be preserved.
+请选择不超过 {mib} MiB 的普通配置文件	Choose a regular configuration file up to {mib} MiB
+配置文件超过 {mib} MiB	Configuration file exceeds {mib} MiB
+查看原文件…	Review previous file…
+源文件 SHA-256	Source SHA-256
+快照 SHA-256	Snapshot SHA-256
+隐藏配置预览	Hide configuration preview
+收藏	Favorites
+加入收藏	Add to favorites
+取消收藏	Remove from favorites
+暂无收藏的脚本	No favorite scripts yet
+没有匹配的脚本	No matching scripts
+脚本已不可用	Script is no longer available
+最多支持 256 个脚本收藏	At most 256 script favorites are supported
+收藏脚本标识无效	Invalid favorite script identifier
+脚本收藏重复	Duplicate script favorite
+收藏引用当前脚本，不固定旧版本；运行前仍需审核目标与变更。	Favorites reference the current script, without pinning an older version. Review targets and changes before running.
+名称解析	Name resolution
+添加名称解析检查	Add name resolution check
+移除名称解析检查	Remove name resolution check
+待解析主机名	Hostname to resolve
+预期 IP 地址（可选，逗号分隔）	Expected IP addresses (optional, comma-separated)
+名称查询：{}	Name queries: {}
+{} · 解析地址数 {}	{} · {} resolved addresses
+请输入 ASCII 域名，不能使用 IP、URL、路径或端口	Enter an ASCII DNS hostname, without an IP literal, URL, path or port
+最多填写 8 个预期 IP 地址	Enter at most 8 expected IP addresses
+预期地址应为逗号分隔的 IPv4 或不带方括号的 IPv6	Expected addresses must be comma-separated IPv4 or unbracketed IPv6 literals
+预期 IP 地址重复	Duplicate expected IP address
+名称解析主机名重复	Duplicate name resolution hostname
+名称解析需要保存的 v2 检查范围	Name resolution checks require a saved v2 selection
+诊断报告已保存至 {path}	Saved diagnostic report to {path}
+使用 Python 3 在每台所选服务器上通过系统解析器查询 ASCII 主机名，国际域名使用 punycode。DNS、hosts 和缓存均可能提供结果，本检查不判断来源；末尾点号禁用 DNS 搜索扩展。	Resolve an ASCII hostname, including punycode, through each selected server's system resolver using Python 3. DNS, hosts entries and caches may contribute; this check does not identify the source. A final dot disables DNS search expansion.
+可选预期地址支持 IPv4 和不带方括号的 IPv6，必须全部包含，允许其他地址。每个名称最多 8 个预期地址、16 个实际地址。解析成功不证明网络或应用健康、DNSSEC 或 TTL。	Optional expected IPv4 or unbracketed IPv6 addresses must all be present; additional addresses are allowed. At most 8 expected and 16 observed addresses per name. Resolution alone does not prove network or application health, DNSSEC or TTLs.
+每次查询限时 15 秒并限制输出。缺少工具、解析错误、超时或结果超限保留无法判断。名称查询与其他检查共用 20 项及请求大小上限，不修改解析配置。	Each lookup has a 15-second limit and bounded output. Missing tools, lookup errors, timeouts and oversized results remain inconclusive. Name queries share the 20-check and request-size limits; no resolver configuration is changed.
+对照必需地址检查此服务器的系统解析设置、hosts 和缓存后重新查询。单次结果不能判断地址来自何处，也不证明可达性、DNSSEC、TTL 或所有 DNS 应答。	Compare this server's system resolver settings, hosts entries and caches with the required addresses, then check again. This sample does not identify which source supplied an address or prove reachability, DNSSEC, TTLs or every DNS answer.
+TCP 监听	TCP listeners
+排查 TCP 监听…	Inspect TCP listeners…
+读取 TCP 监听	Read TCP listeners
+正在读取 TCP 监听…	Reading TCP listeners…
+TCP 端口筛选（可选，逗号分隔）	TCP port filter (optional, comma-separated)
+暂无 TCP 监听快照	No TCP listener snapshot yet
+正在显示上次 TCP 监听快照	Showing the previous TCP listener snapshot
+已观察 TCP 监听：{} · 显示 {}	Observed TCP listeners: {} · Showing {}
+未观察到匹配的 TCP 监听	No matching TCP listeners observed
+进程信息不可用	Process information unavailable
+未记录 cgroup 单元	Cgroup unit not recorded
+监听元数据	Listener metadata
+读取达到上限，显示已观察的 TCP 监听	Scan limit reached; showing observed TCP listeners
+部分套接字或进程元数据不可用	Some socket or process metadata was unavailable
+仅包含可见进程及当前网络命名空间	Visible processes and current network namespace only
+观察到的持有者超过显示上限	More socket holders were observed than can be displayed
+请等待 TCP 监听查询	Wait for the TCP listener query
+TCP 端口筛选无效	Invalid TCP port filter
+TCP 监听响应大小或筛选范围无效	Invalid TCP listener response size or filter
+TCP 监听快照或查询范围无效	Invalid TCP listener snapshot or query scope
+TCP 监听身份无效	Invalid TCP listener identity
+TCP 监听进程元数据无效	Invalid TCP listener process metadata
+TCP 监听行未正确排序	TCP listener rows are not ordered
+TCP 监听响应超过读取上限	TCP listener response exceeded the read limit
+无法排查 TCP 监听（退出 {}）：{}	Cannot inspect TCP listeners (exit {}): {}
+TCP 监听读取器报告：{}	TCP listener reader reported: {}
+通过独立 SSH 连接读取 TCP 监听及可见进程元数据。需要 Linux /proc 和 Python 3.8+，无需 SFTP 或 systemd。当前工作区保持连接，不读取套接字正文、进程命令行或环境变量。	Read TCP listener and visible-process metadata through an independent SSH connection. Requires Linux /proc and Python 3.8+, without SFTP or systemd. The active workspace stays connected; no socket payload, command line or environment is read.
+结果范围为查询所在网络命名空间及可见 PID 命名空间，可按端口筛选。缺少进程明细不等于端口空闲；权限、其他命名空间及并发变化会限制覆盖。管理员读取为可选项。	Results cover the query's network namespace and visible PID namespace. Optional ports limit the sample. Missing process details do not mean a port is free; permissions, other namespaces and concurrent changes limit coverage. Administrator access is optional.
+读取后重新核对 PID 起始时间和套接字描述符。cgroup 服务名称只是观察到的关联，不代表已验证服务管理器状态或应用健康；快照不是原子采样。不停止进程、重启服务或修改防火墙。	PID start times and socket descriptors are rechecked. Cgroup service names are observed associations, not verified service-manager state or proof of application health. A snapshot is not atomic. No process is stopped, service restarted or firewall changed.
+查询有时限，最多显示 20 个监听及每个监听的八个持有者，不自动刷新。关闭会取消读取并清除凭据；刷新失败保留带时间的旧快照。	Queries are time bounded, show at most 20 listeners and eight holders per listener, and do not refresh automatically. Closing cancels the read and clears credentials. A failed refresh retains the previous dated snapshot.
+UID {} · 网络命名空间 {} · IP 地址族 {}	UID {} · Network namespace {} · IP families {}
+采样于 {}	Sampled {}
+进程 {} · 描述符 {} · 无权限 {} · 已变化 {} · 不可读 {}	Processes {} · Descriptors {} · Inaccessible {} · Changed {} · Unreadable {}
+限制：{}	Limits: {}
+时间上限	Time limit
+进程扫描上限	Process scan limit
+描述符扫描上限	Descriptor scan limit
+套接字表读取上限	Socket table read limit
+持有者显示上限	Holder display limit

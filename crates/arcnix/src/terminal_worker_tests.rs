@@ -41,7 +41,8 @@ fn terminal_remains_responsive_during_sftp_and_rejects_old_epochs() -> anyhow::R
                 port: address.port(),
                 username: "arcnix".into(),
                 ..Default::default()
-            },
+            }
+            .into(),
             None,
         ),
     )?;

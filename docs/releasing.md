@@ -23,6 +23,48 @@ on the existing release. GitHub assets do not depend on crates.io publication.
 `tools/package_release.py` reads Cargo metadata to locate the actual workspace
 target directory. It does not change Cargo home, the build directory or TEMP.
 
+## Desktop update channel
+
+Windows AMD64 packaging also emits `arcnix-vVERSION-windows-amd64.exe`, copied
+from the same binary as the ZIP. The release job uploads this executable and adds
+it to `SHA256SUMS`. The updater reads the published stable release from the fixed
+`taidge/arcnix` GitHub API, requires the exact executable name and download path,
+and verifies its size and GitHub API `sha256:` asset digest. Prereleases,
+downgrades, missing digests and unexpected URLs are rejected. HTTPS metadata
+plus an asset hash provides transport integrity, not an independent publisher
+signature or protection against a compromised release account.
+
+No new release is created by these local source changes. Until a matching stable
+release and executable asset are published, the UI reports that no accessible
+release is available or that automatic installation is unavailable. A missing
+digest must be fixed in the release channel; there is no insecure fallback.
+
+Only Windows x64 supports automatic replacement. Other platforms expose the
+release page. Background checks/installation are enabled in release builds and
+paused in development builds. The loopback fixture override is compiled into
+debug builds only. Check intervals are daily (default), weekly or monthly;
+automatic installation can be disabled independently.
+
+Verified files are staged beside the configuration under `updates`. A trusted
+copy of the current program validates the plan and acknowledges readiness before
+the current process exits. Installation requires a writable application folder,
+no SSH connection, no queued/running tasks and no open dialogs. After a deferrable
+30-second countdown it replaces the executable, preserves `arcnix.exe.previous`,
+starts the new program with the same configuration, and requires a startup
+acknowledgement within 30 seconds. An early exit or missing acknowledgement
+restores/restarts the old program. Failure details survive restart and suppress
+automatic retries of that version. Release assets are never executed before
+their API digest, architecture and reported version have been checked.
+
+Validate replacement and rollback only on disposable copies:
+
+```powershell
+python tools/update_smoke.py
+```
+
+The test uses loopback release metadata, compiled test executables and isolated
+configuration/WebView profiles. It never replaces the working installation.
+
 ## Platform requirements
 
 - **Windows:** MSVC build tools, native Windows Perl and NASM for building;
@@ -50,18 +92,18 @@ References: [GitHub runner platforms](https://docs.github.com/en/actions/referen
 3. Create and push a new matching tag, for example:
 
    ```sh
-   git tag v0.1.2
-   git push origin v0.1.2
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
-The example requires first updating the manifests to `0.1.2`. Existing release
+The example requires first updating the manifests to `0.2.0`. Existing release
 tags retain their original workflow and are not moved by CI configuration changes.
 No release is triggered by editing these workflows.
 
 Before pushing a tag, validate its version locally:
 
 ```sh
-python tools/check_release.py v0.1.2
+python tools/check_release.py v0.2.0
 ```
 
 Rustfmt uses **nightly-2026-11-04** to honor the project's existing unstable

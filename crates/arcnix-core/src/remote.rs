@@ -24,6 +24,91 @@ const TREE_DEPTH_LIMIT: usize = 64;
 const TREE_ENTRY_LIMIT: usize = 100_000;
 const STREAM_TAIL_LIMIT: usize = 256 * 1024;
 
+struct DeleteFiles<'a>(&'a Sftp);
+fn deletion_stamp(stat: ssh2::FileStat) -> crate::deletion::Stamp {
+    use crate::deletion::Kind;
+    let kind = if stat.file_type().is_symlink() {
+        Kind::Link
+    } else if stat.is_dir() {
+        Kind::Directory
+    } else {
+        Kind::File
+    };
+    crate::deletion::Stamp {
+        kind,
+        size: stat.size.unwrap_or(0),
+        modified: stat.mtime,
+    }
+}
+impl crate::deletion::FileSystem for DeleteFiles<'_> {
+    fn normalize(&self, path: &str) -> Result<PathBuf> {
+        validate_path(path)?;
+        ensure!(
+            path.starts_with('/')
+                && path != "/"
+                && !path.contains('\\')
+                && path
+                    .split('/')
+                    .skip(1)
+                    .all(|part| !part.is_empty() && part != "." && part != ".."),
+            "Deletion requires an absolute non-root remote path without traversal"
+        );
+        Ok(PathBuf::from(path))
+    }
+    fn stat(&self, path: &Path) -> Result<crate::deletion::Stamp> {
+        let stat = self.0.lstat(path)?;
+        Ok(deletion_stamp(stat))
+    }
+    fn children(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        Ok(self
+            .children_stamped(path, &|| Ok(()))?
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect())
+    }
+    fn children_stamped(
+        &self,
+        path: &Path,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Vec<(PathBuf, crate::deletion::Stamp)>> {
+        let mut entries = Vec::new();
+        let mut directory = self.0.opendir(path)?;
+        loop {
+            check()?;
+            let (child, stat) = match directory.readdir() {
+                Ok(entry) => entry,
+                Err(error) if error.code() == ErrorCode::Session(-16) => break,
+                Err(error) => return Err(error).context("Cannot list directory for deletion"),
+            };
+            // Inspect the raw protocol name first: Path::file_name returns None
+            // for "." and "..", which real SFTP servers include in READDIR.
+            let name = path_string(&child)?;
+            if name == "." || name == ".." {
+                continue;
+            }
+            ensure!(
+                !name.contains(['/', '\\', '\0']) && !name.is_empty(),
+                "Invalid remote child name {name:?} in {}",
+                path.display()
+            );
+            entries.push((path.join(name), deletion_stamp(stat)));
+            ensure!(
+                entries.len() < TREE_ENTRY_LIMIT,
+                "Directory exceeds deletion limits"
+            );
+        }
+        Ok(entries)
+    }
+    fn remove(&self, path: &Path, kind: crate::deletion::Kind) -> Result<()> {
+        if kind == crate::deletion::Kind::Directory {
+            self.0.rmdir(path)?;
+        } else {
+            self.0.unlink(path)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandStream {
     Stdout,
@@ -72,12 +157,16 @@ fn stream_deadline(deadline: Instant) -> Result<()> {
     }
     Ok(())
 }
-fn stream_retry<T>(
+fn stream_retry_checked<T>(
     deadline: Instant,
+    cancel: Option<&AtomicBool>,
     mut operation: impl FnMut() -> std::result::Result<T, ssh2::Error>,
 ) -> Result<T> {
     loop {
         stream_deadline(deadline)?;
+        if let Some(cancel) = cancel {
+            check_cancel(cancel)?;
+        }
         match operation() {
             Ok(value) => return Ok(value),
             Err(error) if error.code() == ErrorCode::Session(-37) => {
@@ -137,13 +226,21 @@ pub struct RemoteSession {
 
 impl PendingConnection {
     pub fn open(profile: &ServerProfile) -> Result<Self> {
-        Self::open_with_host_key_preference(profile, None, Instant::now() + TIMEOUT)
+        let settings = profile.connection.unwrap_or_default();
+        settings.validate()?;
+        Self::open_with_host_key_preference(
+            profile,
+            None,
+            Instant::now() + Duration::from_secs(settings.timeout_seconds.into()),
+        )
     }
 
     /// Re-negotiate the previously trusted host key when crypto backends have
     /// different defaults. Never trusts a different key or sends credentials.
     pub fn open_for_known_host(profile: &ServerProfile, expected: &str) -> Result<Self> {
-        let deadline = Instant::now() + TIMEOUT;
+        let settings = profile.connection.unwrap_or_default();
+        settings.validate()?;
+        let deadline = Instant::now() + Duration::from_secs(settings.timeout_seconds.into());
         let initial = Self::open_with_host_key_preference(profile, None, deadline)?;
         if initial.fingerprint == expected {
             return Ok(initial);
@@ -200,8 +297,18 @@ impl PendingConnection {
             .trim()
             .trim_start_matches('[')
             .trim_end_matches(']');
-        let addresses = (host, profile.port)
-            .to_socket_addrs()
+        let (resolved, receiver) = std::sync::mpsc::sync_channel(1);
+        let hostname = host.to_owned();
+        let port = profile.port;
+        std::thread::spawn(move || {
+            let result = (hostname.as_str(), port)
+                .to_socket_addrs()
+                .map(|addresses| addresses.collect::<Vec<_>>());
+            let _ = resolved.send(result);
+        });
+        let addresses = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .context("SSH name resolution timed out")?
             .context("Cannot resolve SSH host")?;
         let mut last_error = None;
         let mut socket = None;
@@ -239,9 +346,12 @@ impl PendingConnection {
         session.handshake().context("SSH handshake failed")?;
         // The shared deadline bounds key discovery, not later authentication or
         // file operations on the successfully matched connection.
-        socket.set_read_timeout(Some(TIMEOUT))?;
-        socket.set_write_timeout(Some(TIMEOUT))?;
-        session.set_timeout(TIMEOUT.as_millis() as u32);
+        let settings = profile.connection.unwrap_or_default();
+        let timeout = Duration::from_secs(settings.timeout_seconds.into());
+        socket.set_read_timeout(Some(timeout))?;
+        socket.set_write_timeout(Some(timeout))?;
+        session.set_timeout(settings.timeout_seconds * 1000);
+        session.set_keepalive(true, settings.keepalive_seconds);
         let (key, _) = session.host_key().context("Server supplied no host key")?;
         let fingerprint = format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(key)));
         Ok(Self {
@@ -325,6 +435,126 @@ impl PendingConnection {
 }
 
 impl RemoteSession {
+    pub fn read_text(
+        &self,
+        path: &str,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::Document> {
+        use crate::deletion::FileSystem;
+        check()?;
+        let files = DeleteFiles(self.sftp()?);
+        let path = files.normalize(path)?;
+        for parent in path.ancestors().skip(1).filter(|p| p.file_name().is_some()) {
+            ensure!(
+                files.stat(parent)?.kind == crate::deletion::Kind::Directory,
+                "Linked parent is not supported"
+            );
+        }
+        let before = self.sftp()?.lstat(&path)?;
+        ensure!(
+            before.is_file()
+                && !before.file_type().is_symlink()
+                && before
+                    .size
+                    .is_some_and(|n| n <= crate::text_files::LIMIT as u64),
+            "Only regular UTF-8 files up to 1 MiB can be edited"
+        );
+        let mut file = self.sftp()?.open(&path)?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 32768];
+        loop {
+            check()?;
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            ensure!(
+                bytes.len() + count <= crate::text_files::LIMIT,
+                "Text file exceeds 1 MiB"
+            );
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let after = self.sftp()?.lstat(&path)?;
+        ensure!(
+            before.size == after.size
+                && before.mtime == after.mtime
+                && before.perm == after.perm
+                && before.uid == after.uid
+                && before.gid == after.gid
+                && after.is_file()
+                && !after.file_type().is_symlink()
+                && bytes.len() as u64 == before.size.unwrap_or(0),
+            "Remote file changed while reading; reload it"
+        );
+        let mut document = crate::text_files::Document::decode(
+            path_string(&path)?.replace('\\', "/"),
+            bytes,
+            before.mtime,
+            before.perm.context("Remote permissions unavailable")? & 0o7777,
+        )?;
+        document.version.uid = before.uid;
+        document.version.gid = before.gid;
+        Ok(document)
+    }
+    pub fn save_text(
+        &self,
+        document: &crate::text_files::Document,
+        content: &str,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::Document> {
+        let bytes = document.encode(content)?;
+        let current = self.read_text(&document.path, &check)?;
+        ensure!(
+            current.version == document.version,
+            "Remote file changed since it was opened. Reload before saving; the file was not overwritten."
+        );
+        let partial = remote_partial(&document.path)?;
+        let result = (|| {
+            let mut output = self.sftp()?.open_mode(
+                Path::new(&partial),
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
+                0o600,
+                OpenType::File,
+            )?;
+            for chunk in bytes.chunks(32768) {
+                check()?;
+                output.write_all(chunk)?;
+            }
+            output.flush()?;
+            drop(output);
+            self.sftp()?
+                .setstat(
+                    Path::new(&partial),
+                    ssh2::FileStat {
+                        size: None,
+                        uid: document.version.uid,
+                        gid: document.version.gid,
+                        perm: None,
+                        atime: None,
+                        mtime: None,
+                    },
+                )
+                .context("Cannot preserve remote file ownership; original file was not replaced")?;
+            check()?;
+            let latest = self.read_text(&document.path, &check)?;
+            ensure!(
+                latest.version == document.version,
+                "Remote file changed during upload. Reload before saving; the file was not overwritten."
+            );
+            self.replace_remote(&partial, &document.path)?;
+            self.read_text(&document.path, &check)
+        })();
+        if self.sftp()?.lstat(Path::new(&partial)).is_ok() {
+            let _ = self.sftp()?.unlink(Path::new(&partial));
+        }
+        result
+    }
+    pub fn keepalive(&self) -> Result<()> {
+        self.session
+            .keepalive_send()
+            .context("SSH keepalive failed")?;
+        Ok(())
+    }
     /// Use only a dedicated SSH transport: PTY polling changes its blocking mode.
     pub fn into_terminal(self, columns: u32, rows: u32) -> Result<crate::terminal::Pty> {
         let Self { session, sftp } = self;
@@ -333,6 +563,26 @@ impl RemoteSession {
     }
     pub fn sftp_available(&self) -> bool {
         self.sftp.is_some()
+    }
+    /// Upload a new private task artifact without creating a local plaintext file.
+    pub fn put_private_task_file(&self, directory: &str, name: &str, bytes: &[u8]) -> Result<()> {
+        ensure!(
+            directory.starts_with('/')
+                && matches!(name, "runner.py" | "request.json" | "candidate")
+                && bytes.len() <= crate::configurations::LIMIT,
+            "Invalid configuration task artifact"
+        );
+        let path = format!("{directory}/{name}");
+        let mut file = self.sftp()?.open_mode(
+            Path::new(&path),
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
+            0o600,
+            OpenType::File,
+        )?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        drop(file);
+        Ok(())
     }
     fn sftp(&self) -> Result<&Sftp> {
         self.sftp
@@ -758,6 +1008,91 @@ impl RemoteSession {
         self.sftp()?
             .mkdir(Path::new(path), 0o755)
             .context("Cannot create remote directory")
+    }
+    pub fn file_metadata(&self, path: &str) -> Result<crate::permissions::Metadata> {
+        validate_path(path)?;
+        let stat = self.sftp()?.lstat(Path::new(path))?;
+        Ok(crate::permissions::Metadata {
+            size: stat.size.unwrap_or(0),
+            modified: stat.mtime,
+            directory: stat.is_dir(),
+            symlink: stat.file_type().is_symlink(),
+            mode: stat.perm.map(|p| p & 0o7777),
+            uid: stat.uid,
+            gid: stat.gid,
+        })
+    }
+    pub fn set_permissions(
+        &self,
+        targets: &[crate::permissions::Target],
+        mode: u32,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<usize> {
+        use crate::deletion::FileSystem;
+        ensure!(
+            !targets.is_empty() && targets.len() <= 1000 && mode <= 0o7777,
+            "Invalid permission request"
+        );
+        let files = DeleteFiles(self.sftp()?);
+        let validate = |target: &crate::permissions::Target| -> Result<PathBuf> {
+            check()?;
+            let path = files.normalize(&target.path)?;
+            for parent in path.ancestors().skip(1).filter(|p| p.file_name().is_some()) {
+                ensure!(
+                    files.stat(parent)?.kind == crate::deletion::Kind::Directory,
+                    "Linked parent is not supported"
+                );
+            }
+            let stat = self.sftp()?.lstat(&path)?;
+            ensure!(
+                !stat.file_type().is_symlink()
+                    && stat.is_dir() == target.directory
+                    && stat.perm.map(|p| p & 0o7777) == Some(target.mode),
+                "Permissions or target type changed; reopen Properties: {}",
+                target.path
+            );
+            Ok(path)
+        };
+        for target in targets {
+            validate(target)?;
+        }
+        let mut applied = 0;
+        let result: Result<usize> = (|| {
+            for target in targets {
+                let path = validate(target)?;
+                self.sftp()?
+                    .setstat(
+                        &path,
+                        ssh2::FileStat {
+                            size: None,
+                            uid: None,
+                            gid: None,
+                            perm: Some(mode),
+                            atime: None,
+                            mtime: None,
+                        },
+                    )
+                    .with_context(|| format!("Cannot change permissions: {}", target.path))?;
+                applied += 1;
+            }
+            Ok(applied)
+        })();
+        result.with_context(|| format!("Permissions applied to {applied} entries"))
+    }
+    pub fn delete(
+        &self,
+        targets: &[crate::deletion::Target],
+        check: impl Fn() -> Result<()>,
+    ) -> Result<usize> {
+        crate::deletion::remove(&DeleteFiles(self.sftp()?), targets, check)
+    }
+    pub fn delete_with_progress(
+        &self,
+        targets: &[crate::deletion::Target],
+        check: impl Fn() -> Result<()>,
+        progress: impl FnMut(crate::deletion::Progress),
+    ) -> Result<usize> {
+        crate::deletion::remove_with_progress(&DeleteFiles(self.sftp()?), targets, check, progress)
     }
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
         validate_path(from)?;
@@ -1220,58 +1555,152 @@ impl RemoteSession {
         command: &str,
         stdin: Option<&[u8]>,
         timeout: Duration,
+        on_output: impl FnMut(CommandStream, &[u8]),
+    ) -> Result<CommandOutput> {
+        let stdin = stdin.unwrap_or_default();
+        ensure!(stdin.len() <= 4096, "Command stdin exceeds 4096-byte limit");
+        self.exec_stream_input(command, stdin, timeout, false, on_output)
+    }
+
+    /// Uploads bounded task plans to their original SSH account, independently
+    /// of sudo password input. Only the fixed staging programs use this path.
+    /// A successful response requires the complete input to have been sent.
+    pub fn exec_task_upload(
+        &self,
+        command: &str,
+        input: &[u8],
+        timeout: Duration,
+        on_output: impl FnMut(CommandStream, &[u8]),
+    ) -> Result<CommandOutput> {
+        ensure!(
+            matches!(
+                command.lines().next(),
+                Some(
+                    "# arcnix:record-cleanup:stage"
+                        | "# arcnix:record-recovery:stage"
+                        | "# arcnix:audit-cleanup:stage"
+                        | "# arcnix:task-stop:stage"
+                )
+            ) && command.len() <= 32 * 1024,
+            "Task upload requires a fixed staging command"
+        );
+        ensure!(input.len() <= 4 * 1024 * 1024, "Task upload exceeds 4 MiB");
+        self.exec_stream_input(command, input, timeout, true, on_output)
+    }
+
+    fn exec_stream_input(
+        &self,
+        command: &str,
+        stdin: &[u8],
+        timeout: Duration,
+        require_complete_input: bool,
         mut on_output: impl FnMut(CommandStream, &[u8]),
+    ) -> Result<CommandOutput> {
+        self.exec_stream_controlled(
+            command,
+            stdin,
+            timeout,
+            require_complete_input,
+            None,
+            true,
+            |kind, bytes| {
+                on_output(kind, bytes);
+                Ok(())
+            },
+        )
+    }
+    pub(crate) fn exec_stream_checked(
+        &self,
+        command: &str,
+        stdin: Option<&[u8]>,
+        timeout: Duration,
+        cancel: Option<&AtomicBool>,
+        retain_stdout: bool,
+        on_output: impl FnMut(CommandStream, &[u8]) -> Result<()>,
+    ) -> Result<CommandOutput> {
+        let stdin = stdin.unwrap_or_default();
+        ensure!(stdin.len() <= 4096, "Command stdin exceeds 4096-byte limit");
+        self.exec_stream_controlled(
+            command,
+            stdin,
+            timeout,
+            false,
+            cancel,
+            retain_stdout,
+            on_output,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn exec_stream_controlled(
+        &self,
+        command: &str,
+        stdin: &[u8],
+        timeout: Duration,
+        require_complete_input: bool,
+        cancel: Option<&AtomicBool>,
+        retain_stdout: bool,
+        mut on_output: impl FnMut(CommandStream, &[u8]) -> Result<()>,
     ) -> Result<CommandOutput> {
         ensure!(!command.contains('\0'), "Command contains NUL");
         ensure!(
             (Duration::from_secs(1)..=Duration::from_secs(3600)).contains(&timeout),
             "Command timeout must be between 1 second and 1 hour"
         );
-        let stdin = stdin.unwrap_or_default();
-        ensure!(stdin.len() <= 4096, "Command stdin exceeds 4096-byte limit");
         let deadline = Instant::now() + timeout;
         let _restore = BlockingRestore {
             session: &self.session,
             blocking: self.session.is_blocking(),
         };
         self.session.set_blocking(false);
-        let mut channel = stream_retry(deadline, || self.session.channel_session())
+        let mut channel = stream_retry_checked(deadline, cancel, || self.session.channel_session())
             .context("Cannot open streaming command channel")?;
         let result = (|| {
-            stream_retry(deadline, || channel.exec(command))
+            stream_retry_checked(deadline, cancel, || channel.exec(command))
                 .context("Cannot start streaming command")?;
             let mut written = 0;
-            while written < stdin.len() {
-                stream_deadline(deadline)?;
-                match channel.write(&stdin[written..]) {
-                    Ok(0) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "Cannot send command stdin",
-                        )
-                        .into());
-                    }
-                    Ok(count) => written += count,
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5))
-                    }
-                    Err(_) if channel.eof() => break,
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            if let Err(error) = stream_retry(deadline, || channel.send_eof()) {
-                // A short-lived command may exit without reading stdin. Still
-                // drain its diagnostics and report its actual exit status.
-                if !channel.eof() {
-                    return Err(error).context("Cannot finish command stdin");
-                }
-            }
+            let mut eof_sent = false;
             let mut stdout = OutputTail::default();
             let mut stderr = OutputTail::default();
             let mut buffer = [0u8; 8192];
             loop {
                 stream_deadline(deadline)?;
+                if let Some(cancel) = cancel {
+                    check_cancel(cancel)?;
+                }
                 let mut advanced = false;
+                // Drain both output streams while uploading. A staging error
+                // or a full SSH output window must not deadlock a large input.
+                if written < stdin.len() && !channel.eof() {
+                    match channel.write(&stdin[written..]) {
+                        Ok(0) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "Cannot send command stdin",
+                            )
+                            .into());
+                        }
+                        Ok(count) => {
+                            written += count;
+                            advanced = true;
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(_) if channel.eof() => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                if written == stdin.len() && !eof_sent && !channel.eof() {
+                    match channel.send_eof() {
+                        Ok(()) => {
+                            eof_sent = true;
+                            advanced = true;
+                        }
+                        Err(error) if error.code() == ErrorCode::Session(-37) => {}
+                        Err(_) if channel.eof() => {}
+                        Err(error) => {
+                            return Err(error).context("Cannot finish command stdin");
+                        }
+                    }
+                }
                 for (id, kind, tail) in [
                     (0, CommandStream::Stdout, &mut stdout),
                     (1, CommandStream::Stderr, &mut stderr),
@@ -1279,8 +1708,10 @@ impl RemoteSession {
                     match channel.stream(id).read(&mut buffer) {
                         Ok(0) => {}
                         Ok(count) => {
-                            tail.push(&buffer[..count]);
-                            on_output(kind, &buffer[..count]);
+                            if id != 0 || retain_stdout {
+                                tail.push(&buffer[..count]);
+                            }
+                            on_output(kind, &buffer[..count])?;
                             advanced = true;
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
@@ -1294,7 +1725,11 @@ impl RemoteSession {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
-            stream_retry(deadline, || channel.wait_close())
+            ensure!(
+                !require_complete_input || written == stdin.len(),
+                "Task upload stopped before the complete input was sent"
+            );
+            stream_retry_checked(deadline, cancel, || channel.wait_close())
                 .context("Cannot finish streaming command")?;
             Ok(CommandOutput {
                 stdout: stdout.text(),

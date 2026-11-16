@@ -52,7 +52,8 @@ impl Bridge {
                 port: address.port(),
                 username: "arcnix".into(),
                 ..Default::default()
-            },
+            }
+            .into(),
             None,
         ))?;
         let fingerprint = match bridge.receive()?.update {

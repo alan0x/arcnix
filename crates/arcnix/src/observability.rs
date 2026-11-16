@@ -13,6 +13,10 @@ pub(super) struct MetricState {
     pub error: String,
     completed: Option<Instant>,
     updated: String,
+    pub history: arcnix_core::metric_history::History,
+    pub origin: Option<Instant>,
+    pub paused: bool,
+    pub window: u16,
 }
 #[derive(Clone, Default)]
 pub(super) struct LogsState {
@@ -85,7 +89,9 @@ impl Ui {
             return;
         }
         match self.state.with(|s| s.workspace_page) {
-            WorkspacePage::Resources => self.metrics_refresh(),
+            WorkspacePage::Resources if !self.state.with(|s| s.metrics.paused) => {
+                self.metrics_refresh()
+            }
             WorkspacePage::SystemLogs => {
                 if self.state.with(|s| s.system_logs.capabilities.is_none()) {
                     self.logs_discover();
@@ -107,6 +113,7 @@ impl Ui {
             WorkspacePage::Resources
                 if self.state.with(|s| {
                     s.metrics.pending.is_none()
+                        && !s.metrics.paused
                         && due(
                             s.metrics.completed,
                             s.config.settings.resource_interval_seconds,
@@ -138,22 +145,50 @@ pub(super) fn metrics_event(
         return;
     }
     ui.state.revise(|s| {
+        let workspace_visible = navigation::workspace_visible(s);
         let m = &mut s.metrics;
         m.pending = None;
+        if m.completed.is_some_and(|at| {
+            at.elapsed()
+                > Duration::from_secs(
+                    s.config
+                        .settings
+                        .resource_interval_seconds
+                        .saturating_mul(2),
+                )
+        }) {
+            m.history.interrupt();
+            m.previous = None;
+        }
         m.completed = Some(Instant::now());
+        let at = m
+            .origin
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            .as_secs_f64();
         match result {
             Ok(snapshot) => {
                 m.usage = Some(metrics::usage(&snapshot, m.previous.as_ref()));
+                m.history.push(at, m.usage.as_ref());
                 m.previous = Some(snapshot);
                 m.updated = clock_label();
                 m.error.clear();
             }
             Err(error) => {
+                m.history.push(at, None);
                 m.error = error;
                 m.previous = None;
             }
         }
+        if !workspace_visible || s.workspace_page != WorkspacePage::Resources {
+            m.history.interrupt();
+            m.previous = None;
+        }
     });
+}
+pub(super) fn metrics_leave(s: &mut State) {
+    s.metrics.history.interrupt();
+    s.metrics.previous = None;
 }
 pub(super) fn logs_capabilities_event(
     ui: &Ui,
@@ -591,14 +626,13 @@ pub(super) fn resources(ui: Ui) -> impl Widget {
     let refresh = ui.clone();
     col().class("observability-page resources-page").fill((
         row().class("observability-heading").fill((
-            col().fill((
+            row().class("help-heading").fill((
                 text().class("page-title").content(i18n::bind("资源概览")),
-                text().class("subtle").content(i18n::bind(state.map(|s| {
-                    format!(
-                        "每 {} 秒读取一次数值，仅在此页面自动刷新。",
-                        s.config.settings.resource_interval_seconds
-                    )
-                }))),
+                crate::help_ui::group("Resource sampling", &[
+                    "Read-only samples are collected only while this server's Resources page is open. Leaving the page stops new requests; an in-flight read may finish. No history is collected while the client is closed.",
+                    "Pause stops automatic sampling; manual refresh remains available. Connection changes clear the session history. Samples are not written to disk.",
+                ]),
+                text().class("subtle").content(i18n::bind(state.map(|s|format!("Every {} s",s.config.settings.resource_interval_seconds)))),
             )),
             icon_action("刷新资源数值", Icon::Refresh)
                 .enabled(
@@ -618,7 +652,9 @@ pub(super) fn resources(ui: Ui) -> impl Widget {
                 text()
                     .class("observability-status")
                     .content(i18n::bind(state.map(|s| {
-                        if s.system_task_running {
+                        if s.metrics.paused {
+                            if s.metrics.updated.is_empty(){"Resource sampling paused".into()}else{format!("Sampling paused · Last success {}",s.metrics.updated)}
+                        } else if s.system_task_running {
                             "系统任务执行中，自动采样已暂停".into()
                         } else if s.metrics.pending.is_some() {
                             "正在采样…".into()
@@ -759,6 +795,7 @@ pub(super) fn resources(ui: Ui) -> impl Widget {
                         })
                         .unwrap_or_else(missing)
                 }))),
+                crate::resource_trends::panel(ui.clone()),
                 text()
                     .class("observability-warning")
                     .content(i18n::bind(state.map(|s| {
@@ -801,9 +838,9 @@ pub(super) fn resources(ui: Ui) -> impl Widget {
                         ))
                     }),
                 ),
-                text().class("pane-title").content(i18n::bind("网络接口")),
-                text().class("subtle").content(i18n::bind(
-                    "接收 / 发送速率由两次采样计算；累计数值自接口启动起计。",
+                row().class("help-heading").fill((
+                    text().class("pane-title").content(i18n::bind("网络接口")),
+                    crate::help_ui::tip("网络接口","接收 / 发送速率由两次采样计算；累计数值自接口启动起计。"),
                 )),
                 col().class("resource-table").fill(
                     each(state.map(|s| {

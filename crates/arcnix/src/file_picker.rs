@@ -85,6 +85,16 @@ pub(super) fn private_key(
     choose: &str,
     all_files: &str,
 ) -> anyhow::Result<Option<PathBuf>> {
+    pick_path(current, title, choose, all_files, false)
+}
+#[cfg(windows)]
+fn pick_path(
+    current: Option<&Path>,
+    title: &str,
+    choose: &str,
+    all_files: &str,
+    folder: bool,
+) -> anyhow::Result<Option<PathBuf>> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
 
@@ -95,14 +105,11 @@ pub(super) fn private_key(
         CoTaskMemFree, CoUninitialize,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
-    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
     use windows::Win32::UI::Shell::{
-        FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR,
-        FOS_PATHMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem,
-        SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+        FileOpenDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
     };
     use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor};
-    use windows::core::{HRESULT, HSTRING, w};
+    use windows::core::{HRESULT, HSTRING};
     struct Apartment;
     impl Drop for Apartment {
         fn drop(&mut self) {
@@ -126,22 +133,17 @@ pub(super) fn private_key(
         let _apartment = Apartment;
         let dialog: IFileOpenDialog =
             CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-        dialog.SetOptions(
-            dialog.GetOptions()?
-                | FOS_FILEMUSTEXIST
-                | FOS_PATHMUSTEXIST
-                | FOS_FORCEFILESYSTEM
-                | FOS_DONTADDTORECENT
-                | FOS_NOCHANGEDIR,
-        )?;
+        configure_picker(&dialog, folder, all_files)?;
         dialog.SetTitle(&HSTRING::from(title))?;
         dialog.SetOkButtonLabel(&HSTRING::from(choose))?;
-        let filter_name = HSTRING::from(all_files);
-        dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
-            pszName: windows::core::PCWSTR(filter_name.as_ptr()),
-            pszSpec: w!("*"),
-        }])?;
-        if let Some(directory) = initial_directory(current) {
+        let directory = if folder && current.is_none() {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+        } else {
+            initial_directory(current)
+        };
+        if let Some(directory) = directory {
             let directory = HSTRING::from(directory.as_os_str());
             if let Ok(folder) = SHCreateItemFromParsingName::<_, _, IShellItem>(&directory, None) {
                 let _ = dialog.SetFolder(&folder);
@@ -158,9 +160,162 @@ pub(super) fn private_key(
         let name = item.GetDisplayName(SIGDN_FILESYSPATH)?;
         let path = PathBuf::from(OsString::from_wide(name.as_wide()));
         CoTaskMemFree(Some(name.0.cast()));
-        ensure!(path.is_file(), "Please select an existing file");
+        ensure!(
+            if folder {
+                path.is_dir()
+            } else {
+                path.is_file()
+            },
+            "Please select an existing path"
+        );
         Ok(Some(path))
     }
+}
+
+#[cfg(windows)]
+fn configure_picker(
+    dialog: &windows::Win32::UI::Shell::IFileOpenDialog,
+    folder: bool,
+    all_files: &str,
+) -> anyhow::Result<()> {
+    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+    use windows::Win32::UI::Shell::{
+        FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR,
+        FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
+    };
+    use windows::core::{HSTRING, PCWSTR, w};
+    unsafe {
+        dialog.SetOptions(
+            dialog.GetOptions()?
+                | if folder {
+                    FOS_PICKFOLDERS
+                } else {
+                    FOS_FILEMUSTEXIST
+                }
+                | FOS_PATHMUSTEXIST
+                | FOS_FORCEFILESYSTEM
+                | FOS_DONTADDTORECENT
+                | FOS_NOCHANGEDIR,
+        )?;
+        // Windows rejects SetFileTypes when FOS_PICKFOLDERS is active.
+        if !folder {
+            let name = HSTRING::from(all_files);
+            dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
+                pszName: PCWSTR(name.as_ptr()),
+                pszSpec: w!("*"),
+            }])?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod native_tests {
+    #[test]
+    fn native_folder_and_file_options_are_accepted_by_windows() -> anyhow::Result<()> {
+        use windows::Win32::System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+            CoUninitialize,
+        };
+        use windows::Win32::UI::Shell::{
+            FOS_FILEMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
+        };
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        }
+        struct Apartment;
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+        let _apartment = Apartment;
+        for folder in [true, false] {
+            let dialog: IFileOpenDialog =
+                unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)? };
+            super::configure_picker(&dialog, folder, "All files")?;
+            let options = unsafe { dialog.GetOptions()? };
+            assert_eq!(options.contains(FOS_PICKFOLDERS), folder);
+            if !folder {
+                assert!(options.contains(FOS_FILEMUSTEXIST));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn folder(current: Option<&Path>, title: &str) -> anyhow::Result<Option<PathBuf>> {
+    #[cfg(windows)]
+    {
+        pick_path(
+            current,
+            title,
+            &super::i18n::translate("Select folder"),
+            "",
+            true,
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (current, title);
+        anyhow::bail!("Enter the folder path manually on this platform")
+    }
+}
+#[cfg(windows)]
+pub(super) fn save(title: &str, name: &str) -> anyhow::Result<Option<PathBuf>> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    use windows::Win32::Foundation::ERROR_CANCELLED;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoTaskMemFree, CoUninitialize,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+    use windows::Win32::UI::Shell::{
+        FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
+        FileSaveDialog, IFileSaveDialog, SIGDN_FILESYSPATH,
+    };
+    use windows::core::{HRESULT, HSTRING};
+    // The dialog owns its native modal loop; no shell command is constructed.
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        struct Apartment;
+        impl Drop for Apartment {
+            fn drop(&mut self) {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+        let _apartment = Apartment;
+        let dialog: IFileSaveDialog =
+            CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)?;
+        dialog.SetTitle(&HSTRING::from(title))?;
+        dialog.SetFileName(&HSTRING::from(name))?;
+        dialog.SetOptions(
+            dialog.GetOptions()?
+                | FOS_FORCEFILESYSTEM
+                | FOS_PATHMUSTEXIST
+                | FOS_NOCHANGEDIR
+                | FOS_OVERWRITEPROMPT,
+        )?;
+        match dialog.Show(Some(GetActiveWindow())) {
+            Ok(()) => {}
+            Err(e) if e.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        }
+        let value = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+        let path = PathBuf::from(OsString::from_wide(value.as_wide()));
+        CoTaskMemFree(Some(value.0.cast()));
+        Ok(Some(path))
+    }
+}
+#[cfg(not(windows))]
+pub(super) fn save(_title: &str, _name: &str) -> anyhow::Result<Option<PathBuf>> {
+    anyhow::bail!("Native save dialogs are not available on this platform")
 }
 
 #[cfg(not(windows))]

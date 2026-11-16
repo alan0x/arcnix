@@ -32,6 +32,8 @@ pub enum Icon {
     Plus,
     Upload,
     Download,
+    Star,
+    StarFilled,
 }
 
 impl Icon {
@@ -63,6 +65,8 @@ impl Icon {
             Self::Plus => "plus",
             Self::Upload => "upload",
             Self::Download => "download",
+            Self::Star => "star",
+            Self::StarFilled => "star-filled",
         }
     }
     fn svg(self) -> &'static str {
@@ -93,6 +97,8 @@ impl Icon {
             Self::Plus => include_str!("../assets/icons/plus.svg"),
             Self::Upload => include_str!("../assets/icons/upload.svg"),
             Self::Download => include_str!("../assets/icons/download.svg"),
+            Self::Star => include_str!("../assets/icons/star.svg"),
+            Self::StarFilled => include_str!("../assets/icons/star-filled.svg"),
         }
     }
 }
@@ -172,6 +178,8 @@ pub fn css() -> String {
         Icon::Plus,
         Icon::Upload,
         Icon::Download,
+        Icon::Star,
+        Icon::StarFilled,
     ] {
         let encoded = icon
             .svg()

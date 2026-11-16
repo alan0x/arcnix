@@ -1,24 +1,58 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app_icon;
+mod backups_ui;
+mod batch_worker;
 mod browser;
+mod cleanup_records_ui;
+mod client_logs;
 mod clipboard;
+mod configuration_backup_ui;
+mod configuration_compare_ui;
+mod configuration_records_ui;
+mod configuration_template_ui;
+mod configurations_ui;
+mod deleted_files_ui;
+mod diagnostics_ui;
 mod file_browser;
+mod file_columns;
+mod file_context;
 mod file_picker;
+mod file_properties;
+mod formatting;
+mod help_ui;
 mod i18n;
 mod icons;
+mod installation_ui;
 mod navigation;
 mod observability;
-mod secret_output;
+mod operations;
+mod operations_worker;
+mod preferences_ui;
+mod record_maintenance_ui;
+mod recovery_ui;
+mod remote_editor;
+mod resource_trends;
+mod script_exchange_ui;
+mod script_parameters_ui;
+mod scripts_ui;
+mod server_inventory_ui;
+mod server_labels_ui;
 mod servers;
 mod settings;
 mod software;
 mod splitter;
+mod task_records_ui;
+mod task_refresh_ui;
+mod task_target_picker;
+mod tcp_listeners_ui;
 mod terminal;
 mod terminal_worker;
 #[cfg(test)]
 mod terminal_worker_tests;
 mod transfer_progress;
 mod transfer_ui;
+mod update_install;
+mod updates_ui;
 mod worker;
 #[cfg(test)]
 mod worker_conflict_tests;
@@ -41,15 +75,58 @@ use worker::{Action, Request, Update};
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
+    TransferDefaults,
+    RemoteEditor,
     Server,
-    Group { id: Option<String> },
+    Group {
+        id: Option<String>,
+    },
     Import,
     Connect,
-    File { remote: bool, rename: bool },
+    File {
+        remote: bool,
+        rename: bool,
+    },
+    FileProperties,
+    FileColumns {
+        remote: bool,
+    },
+    DeleteFiles {
+        remote: bool,
+        targets: Vec<arcnix_core::deletion::Target>,
+    },
     DeleteServer(String),
     DissolveGroup(String),
     DeleteGroupAndServers(String),
-    PackageConfirm,
+    SnippetEdit,
+    ScriptRun,
+    ScriptImport,
+    ScriptExport,
+    TaskRecordConnect,
+    TaskRecordLog,
+    TaskStop,
+    DiagnosticExport,
+    DiagnosticLogs,
+    DeletedFiles,
+    TcpListeners,
+    ConfigurationCompare,
+    ConfigurationDiscard,
+    ConfigurationBackup,
+    ConfigurationRestore,
+    ConfigurationRecordConnect,
+    ConfigurationRecordDetail,
+    RecordStorageConnect,
+    CleanupReportConnect,
+    ExportDownload,
+    BackupEdit,
+    BackupDelete(String),
+    BackupBrowse,
+    BackupFiles,
+    BackupRestore,
+    BackupDatabaseRestore,
+    ScriptRefresh(String, String),
+    ScriptBatchRefresh(String),
+    SnippetDelete(String),
     TransferConflict,
 }
 
@@ -58,6 +135,7 @@ enum WorkspacePage {
     #[default]
     Files,
     Software,
+    Operations,
     Resources,
     SystemLogs,
     Terminal,
@@ -70,13 +148,23 @@ struct State {
     group: Option<String>,
     collapsed_groups: HashSet<String>,
     search: String,
+    inventory: server_inventory_ui::InventoryState,
     editor: ServerProfile,
+    server_editor_original: Option<ServerProfile>,
+    server_tags: String,
+    server_editor_tab: u8,
     dialog: Option<Dialog>,
     dialog_error: String,
     host_menu: Option<String>,
     group_menu: Option<String>,
     file_menu: Option<bool>,
+    file_context: Option<file_context::Target>,
     file_pending: Option<u64>,
+    deletion: Option<file_context::Deletion>,
+    unassigned_columns: FileColumnSettings,
+    properties: Option<file_properties::Editor>,
+    remote_editor: Option<remote_editor::Editor>,
+    updates: updates_ui::UpdateState,
     import_pending: Option<u64>,
     activity_tab: u8,
     activity_open: bool,
@@ -89,6 +177,8 @@ struct State {
     connected: bool,
     sftp_available: bool,
     connecting: bool,
+    keepalive_at: std::time::Instant,
+    keepalive_pending: bool,
     fingerprint: Option<String>,
     epoch: u64,
     request_serial: u64,
@@ -116,12 +206,25 @@ struct State {
     name: String,
     jobs: Vec<TransferJob>,
     cancels: HashMap<String, Arc<AtomicBool>>,
+    inflight_transfers: HashSet<String>,
     logs: String,
     workspace_page: WorkspacePage,
     navigation: navigation::Page,
     settings_section: navigation::SettingsSection,
     unread_notifications: usize,
     software: software::SoftwareState,
+    operations: operations::OperationsState,
+    scripts: scripts_ui::ScriptsState,
+    task_records: task_records_ui::RecordState,
+    configuration_records: configuration_records_ui::RecordState,
+    configuration_compare: configuration_compare_ui::CompareState,
+    deleted_files: deleted_files_ui::DeletedFilesState,
+    tcp_listeners: tcp_listeners_ui::TcpListenersState,
+    record_storage: record_maintenance_ui::StorageState,
+    cleanup_reports: cleanup_records_ui::ReportsState,
+    backups: backups_ui::BackupState,
+    diagnostics: diagnostics_ui::DiagnosticsState,
+    configurations: configurations_ui::ConfigurationState,
     metrics: observability::MetricState,
     system_logs: observability::LogsState,
     system_task_running: bool,
@@ -138,10 +241,14 @@ struct State {
 }
 #[derive(Clone)]
 struct Ui {
+    update_controller: Arc<updates_ui::Controller>,
+    batch_controller: Rc<std::cell::RefCell<Option<batch_worker::Controller>>>,
+    batch_events: async_channel::Sender<batch_worker::Event>,
+    logger: Rc<client_logs::Logger>,
     state: Cage<State>,
     tx: Sender<Request>,
     store: Rc<ConfigStore>,
-    writable: bool,
+    writable: Cage<bool>,
     scope: Scope,
     shell_focus: Cage<Option<glory::render::NodeId>>,
 }
@@ -200,7 +307,7 @@ impl Ui {
             s.host_menu = None;
         });
         self.save();
-        self.log("该服务器的文件冲突处理已恢复为每次询问");
+        self.log("该服务器的文件冲突处理已恢复为全局默认设置");
     }
     fn select_server(&self, id: String) {
         if self
@@ -222,10 +329,29 @@ impl Ui {
                     / 1000.0;
                 s.selected = Some(id);
                 s.workspace_page = WorkspacePage::Files;
+                if let Some(profile) = s
+                    .config
+                    .servers
+                    .iter()
+                    .find(|p| Some(&p.id) == s.selected.as_ref())
+                {
+                    let location = if profile.locations.remember_paths {
+                        profile.locations.last_local.as_ref()
+                    } else {
+                        None
+                    }
+                    .or(profile.locations.local_directory.as_ref())
+                    .or(s.config.local_directory.as_ref());
+                    if let Some(path) = location {
+                        s.local_path = local_display(path);
+                    }
+                }
             });
+            self.refresh(false);
         }
         self.state.revise(|s| {
-            s.navigation = navigation::Page::Servers;
+            navigation::change_page(s, navigation::Page::Servers, "select-server");
+            s.inventory.visible = false;
             s.host_menu = None;
             s.group_menu = None;
         });
@@ -251,8 +377,20 @@ impl Ui {
         }
     }
     fn open_dialog(&self, dialog: Dialog) {
+        if self.state.with(|s| {
+            s.file_pending.is_some()
+                && (s.deletion.is_some()
+                    || s.properties.as_ref().is_some_and(|p| p.is_running())
+                    || remote_editor::busy(s))
+        }) {
+            self.error("文件任务仍在处理当前请求，请稍后重试。");
+            return;
+        }
         self.state.revise(|s| {
             s.dialog = Some(dialog);
+            if s.dialog == Some(Dialog::Server) {
+                s.server_editor_tab = 0;
+            }
             s.dialog_error.clear();
             s.host_menu = None;
             s.group_menu = None;
@@ -260,6 +398,15 @@ impl Ui {
         });
     }
     fn close_dialog(&self) {
+        if remote_editor::dismiss(self) {
+            return;
+        }
+        if file_context::dismiss_deletion(self) {
+            return;
+        }
+        if file_properties::dismiss(self) {
+            return;
+        }
         if self
             .state
             .with(|s| s.dialog == Some(Dialog::TransferConflict))
@@ -275,11 +422,57 @@ impl Ui {
             if s.file_pending.is_some() || s.import_pending.is_some() {
                 return;
             }
+            backups_ui::dismiss(s);
+            if matches!(s.dialog, Some(Dialog::ScriptImport | Dialog::ScriptExport)) {
+                script_exchange_ui::forget(s);
+            }
+            configuration_records_ui::dismiss(s);
+            configuration_compare_ui::dismiss(s);
+            cleanup_records_ui::dismiss(s);
+            record_maintenance_ui::dismiss(s);
             if s.dialog == Some(Dialog::Connect) {
                 s.secret.clear();
             }
-            if s.dialog == Some(Dialog::PackageConfirm) {
-                s.software.sudo_secret.clear();
+            if matches!(s.dialog, Some(Dialog::ScriptRefresh(..))) {
+                s.scripts.refresh_secret.clear();
+            }
+            task_refresh_ui::dismiss(s);
+            task_records_ui::dismiss(s);
+            diagnostics_ui::dismiss(s);
+            if matches!(
+                s.dialog,
+                Some(Dialog::ConfigurationBackup | Dialog::ConfigurationRestore)
+            ) {
+                configuration_backup_ui::forget(s);
+            }
+            if s.dialog == Some(Dialog::ScriptRun) {
+                if s.navigation == navigation::Page::Configurations
+                    && !s.configuration_records.visible
+                    && !s.configuration_compare.visible
+                    && s.scripts
+                        .template
+                        .as_ref()
+                        .and_then(|t| t.configuration.as_ref())
+                        .is_some_and(|j| j.record.restore_from.is_none())
+                {
+                    s.configurations.editing = true;
+                }
+                s.scripts.configuration_parameters = None;
+                s.scripts.credentials.clear();
+                s.scripts.values.clear();
+                s.scripts.preset_selected.clear();
+                s.scripts.preset_name.clear();
+            }
+            if s.dialog == Some(Dialog::TaskRecordConnect) {
+                s.task_records.secrets.clear();
+            }
+            if s.dialog == Some(Dialog::SnippetEdit) {
+                s.operations.editor = None;
+                s.scripts.parameter_editor = Default::default();
+            }
+
+            if s.dialog == Some(Dialog::FileProperties) {
+                s.properties = None;
             }
             s.dialog = None;
             s.dialog_error.clear();
@@ -302,7 +495,21 @@ impl Ui {
         self.log(message);
     }
     fn log(&self, message: impl AsRef<str>) {
-        let message = i18n::translate(message.as_ref());
+        let mut message = i18n::translate(message.as_ref());
+        let settings = self.state.with(|s| {
+            if !s.secret.is_empty() {
+                message = message.replace(s.secret.as_str(), "[redacted]");
+            }
+            s.config.settings.logging.clone()
+        });
+        if settings.timestamps {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            message = format!("[{}] {message}", formatting::timestamp(Some(now)));
+        }
+        self.logger.record(message.clone(), &settings);
         self.state.revise(|s| {
             if !s.logs.is_empty() && !s.logs.ends_with('\n') {
                 s.logs.push('\n');
@@ -355,7 +562,7 @@ impl Ui {
         self.schedule();
     }
     fn save(&self) {
-        if !self.writable {
+        if !self.writable.get() {
             self.log("配置读取失败，已禁止覆盖。请修复配置文件后重新启动。");
             return;
         }
@@ -376,7 +583,10 @@ impl Ui {
                 .find(|p| Some(&p.id) == s.selected.as_ref())
                 .cloned()
         });
-        if let Some(profile) = profile {
+        if let Some(mut profile) = profile {
+            if profile.connection.is_none() {
+                profile.connection = Some(self.state.with(|s| s.config.settings.connection));
+            }
             self.cancel_all();
             self.state.revise(|s| {
                 s.epoch += 1;
@@ -388,8 +598,14 @@ impl Ui {
                 s.remote_ready = false;
                 s.remote.clear();
                 s.remote_selection.clear();
-                s.remote_path = profile.initial_remote_path.clone();
+                s.remote_path = if profile.locations.remember_paths {
+                    profile.locations.last_remote.clone()
+                } else {
+                    None
+                }
+                .unwrap_or_else(|| profile.initial_remote_path.clone());
                 s.software = Default::default();
+                s.operations = Default::default();
                 s.metrics = Default::default();
                 s.system_logs = Default::default();
             });
@@ -398,12 +614,15 @@ impl Ui {
                     .trusted_fingerprint(&profile.host, profile.port)
                     .map(str::to_owned)
             });
-            self.send(Action::Probe(profile, known));
+            self.send(Action::Probe(profile.into(), known));
         } else {
             self.log("请先新建并选择服务器");
         }
     }
     fn disconnect(&self) {
+        remote_editor::cancel(self);
+        file_context::cancel_deletion(self);
+        file_properties::cancel(self);
         if self.state.with(|s| s.system_task_running) {
             self.error("系统软件任务正在执行，请等待完成后断开连接");
             return;
@@ -429,6 +648,7 @@ impl Ui {
             s.remote_selection.clear();
             s.remote_request = 0;
             s.software = Default::default();
+            s.operations = Default::default();
             s.metrics = Default::default();
             s.system_logs = Default::default();
             s.session_rules.clear();
@@ -489,6 +709,8 @@ impl Ui {
     }
     fn refresh(&self, remote: bool) {
         let path = self.state.revise(|s| {
+            s.file_menu = None;
+            s.file_context = None;
             s.file_browser.reset(remote);
             if remote {
                 s.remote_ready = false;
@@ -571,6 +793,9 @@ impl Ui {
     fn schedule(&self) {
         let next = self.state.revise(|s| {
             if s.system_task_running
+                || s.deletion.is_some()
+                || s.remote_editor.is_some()
+                || s.properties.as_ref().is_some_and(|p| p.is_running())
                 || !s.connected
                 || s.queue_paused
                 || !s.cancels.is_empty()
@@ -582,6 +807,7 @@ impl Ui {
                 j.status == TransferStatus::Queued && Some(&j.server_id) == s.selected.as_ref()
             })?;
             job.status = TransferStatus::Running;
+            s.inflight_transfers.insert(job.id.clone());
             s.transfer_now = std::time::Instant::now();
             s.transfer_meters.insert(
                 job.id.clone(),
@@ -606,9 +832,16 @@ impl Ui {
                             .find(|rule| {
                                 rule.server_id == job.server_id && rule.direction == job.direction
                             })
-                            .map(|rule| match rule.action {
-                                ExistingFileAction::Overwrite => ConflictAction::Overwrite,
-                                ExistingFileAction::Skip => ConflictAction::Skip,
+                            .map(|rule| rule.action)
+                            .or(if job.direction == TransferDirection::Upload {
+                                s.config.settings.upload_conflict
+                            } else {
+                                s.config.settings.download_conflict
+                            })
+                            .and_then(|action| match action {
+                                ExistingFileAction::Ask => None,
+                                ExistingFileAction::Overwrite => Some(ConflictAction::Overwrite),
+                                ExistingFileAction::Skip => Some(ConflictAction::Skip),
                             })
                     })
             });
@@ -759,13 +992,6 @@ fn local_display(path: &Path) -> String {
     }
     value.strip_prefix("\\\\?\\").unwrap_or(&value).to_string()
 }
-fn command_display(command: &str) -> String {
-    command
-        .lines()
-        .filter(|line| !line.starts_with("# arcnix:packages:"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 fn accepts_listing(latest: u64, received: u64) -> bool {
     latest != 0 && latest == received
 }
@@ -780,35 +1006,10 @@ fn finished_status(result: std::result::Result<(), String>, cancelled: bool) -> 
     }
 }
 fn modified(timestamp: Option<u64>) -> String {
-    let Some(timestamp) = timestamp else {
-        return "—".into();
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let seconds = now.saturating_sub(timestamp);
-    let label = if seconds < 60 {
-        "刚刚".into()
-    } else if seconds < 3600 {
-        format!("{} 分钟前", seconds / 60)
-    } else if seconds < 86400 {
-        format!("{} 小时前", seconds / 3600)
-    } else {
-        format!("{} 天前", seconds / 86400)
-    };
-    i18n::translate(&label)
+    formatting::modified(timestamp)
 }
 fn size(bytes: u64) -> String {
-    if bytes >= 1 << 30 {
-        format!("{:.1} GB", bytes as f64 / (1u64 << 30) as f64)
-    } else if bytes >= 1 << 20 {
-        format!("{:.1} MB", bytes as f64 / (1u64 << 20) as f64)
-    } else if bytes >= 1 << 10 {
-        format!("{:.1} KB", bytes as f64 / 1024.)
-    } else {
-        format!("{bytes} B")
-    }
+    formatting::bytes(bytes)
 }
 fn btn(label: impl Into<String>, action: impl FnMut() + 'static) -> sapid::Button {
     sapid::button()
@@ -858,13 +1059,23 @@ fn modal(
                     .class("modal-scrim")
                     .label(i18n::bind("关闭对话框"))
                     .focus(FocusMode::Programmatic)
-                    .enabled(
-                        ui.state
-                            .map(|s| s.file_pending.is_none() && s.import_pending.is_none()),
-                    )
+                    .enabled(ui.state.map(|s| {
+                        (s.file_pending.is_none()
+                            || file_context::deletion_dialog(s)
+                            || file_properties::running(s)
+                            || (s.dialog == Some(Dialog::RemoteEditor) && remote_editor::busy(s)))
+                            && s.import_pending.is_none()
+                    }))
                     .on(activate, move |_| scrim.close_dialog()),
                 col()
-                    .class("modal-card")
+                    .class(ui.state.map(|s| {
+                        if s.dialog == Some(Dialog::RemoteEditor) {
+                            "modal-card remote-editor-modal"
+                        } else {
+                            "modal-card"
+                        }
+                        .to_owned()
+                    }))
                     .role(Role::Dialog)
                     .name(i18n::bind(title.clone()))
                     .focus(FocusMode::Programmatic)
@@ -874,7 +1085,12 @@ fn modal(
                             text().class("dialog-title").content(i18n::bind(title)),
                             close_action("关闭对话框")
                                 .enabled(ui.state.map(|s| {
-                                    s.file_pending.is_none() && s.import_pending.is_none()
+                                    (s.file_pending.is_none()
+                                        || file_context::deletion_dialog(s)
+                                        || file_properties::running(s)
+                                        || (s.dialog == Some(Dialog::RemoteEditor)
+                                            && remote_editor::busy(s)))
+                                        && s.import_pending.is_none()
                                 }))
                                 .on_press(move || close.close_dialog()),
                         )),
@@ -921,9 +1137,16 @@ fn module_tab(ui: Ui, page: WorkspacePage, label: &'static str) -> impl Widget {
         }))
         .label(i18n::bind(label))
         .on_press(move || {
-            ui.state.revise(|s| s.workspace_page = page);
+            ui.state.revise(|s| {
+                if s.workspace_page == WorkspacePage::Resources && page != WorkspacePage::Resources
+                {
+                    observability::metrics_leave(s);
+                }
+                s.workspace_page = page;
+            });
             ui.observability_enter();
             ui.terminal_enter();
+            ui.operations_enter();
         })
 }
 
@@ -936,7 +1159,7 @@ fn connection_controls(ui: Ui) -> impl Widget {
                     .servers
                     .iter()
                     .find(|p| Some(&p.id) == s.selected.as_ref())
-                    .map(|p| p.name.clone())
+                    .map(|p| format!("{}@{}", p.username, p.host))
                     .unwrap_or_default()
             })),
             text()
@@ -1057,7 +1280,9 @@ fn app(ui: Ui) -> impl Widget {
                 .node_ref(ui.shell_focus)
                 .semantics(state.map(|s| {
                     Some(Box::new(Semantics {
-                        inert: s.dialog.is_some() || s.fingerprint.is_some(),
+                        inert: s.dialog.is_some()
+                            || s.fingerprint.is_some()
+                            || updates_ui::applying(s),
                         ..Default::default()
                     }))
                 }))
@@ -1084,9 +1309,34 @@ fn app(ui: Ui) -> impl Widget {
                         s.file_menu = None;
                     })
                 }),
-            servers::dialogs(ui.clone()),
-            workspace::file_dialog(ui.clone()),
-            software::dialogs(ui.clone()),
+            fragment((
+                updates_ui::banner(ui.clone()),
+                servers::dialogs(ui.clone()),
+                updates_ui::overlay(ui.clone()),
+                workspace::file_dialog(ui.clone()),
+                file_context::dialogs(ui.clone()),
+                remote_editor::dialogs(ui.clone()),
+                file_columns::dialog(ui.clone()),
+                cleanup_records_ui::dialog(ui.clone()),
+                cleanup_records_ui::download_dialog(ui.clone()),
+                script_exchange_ui::dialogs(ui.clone()),
+            )),
+            operations::dialogs(ui.clone()),
+            scripts_ui::dialogs(ui.clone()),
+            fragment((
+                diagnostics_ui::dialogs(ui.clone()),
+                task_records_ui::dialogs(ui.clone()),
+                configuration_backup_ui::dialogs(ui.clone()),
+            )),
+            fragment((
+                configuration_records_ui::dialogs(ui.clone()),
+                fragment((
+                    configuration_compare_ui::dialog(ui.clone()),
+                    configurations_ui::dialogs(ui.clone()),
+                )),
+            )),
+            record_maintenance_ui::dialog(ui.clone()),
+            backups_ui::dialogs(ui.clone()),
             transfer_ui::dialogs(ui.clone()),
             when(state.map(|s| s.fingerprint.is_some()), move || {
                 let trust = trust.clone();
@@ -1119,22 +1369,65 @@ fn app(ui: Ui) -> impl Widget {
 }
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
-    let store = Rc::new(match args.next().as_deref() {
-        Some("--config") => {
-            let path = args.next().ok_or("--config requires a path")?;
-            if args.next().is_some() {
-                return Err("Unexpected argument".into());
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|arg| arg == "--apply-update") {
+        if arguments.len() != 2 {
+            return Err("--apply-update requires one prepared plan".into());
+        }
+        update_install::apply(Path::new(&arguments[1]))?;
+        return Ok(());
+    }
+    if arguments == ["--version"] {
+        println!("arcnix {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let mut config_path = None;
+    let mut health_marker = None;
+    let mut args = arguments.into_iter();
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--config" if config_path.is_none() => {
+                config_path = Some(PathBuf::from(
+                    args.next().ok_or("--config requires a path")?,
+                ))
             }
-            ConfigStore::at(path.into())
+            "--update-health" if health_marker.is_none() => {
+                health_marker = Some(PathBuf::from(
+                    args.next().ok_or("--update-health requires a path")?,
+                ))
+            }
+            "--help" => {
+                println!("Arcnix desktop\nUsage: arcnix [--config <path>] [--version]");
+                return Ok(());
+            }
+            _ => return Err("Usage: arcnix [--config <path>] [--version]".into()),
         }
-        Some("--help") => {
-            println!("Arcnix desktop\nUsage: arcnix [--config <path>]");
-            return Ok(());
-        }
-        Some(_) => return Err("Usage: arcnix [--config <path>]".into()),
-        None => ConfigStore::default_location()?,
+    }
+    let store = Rc::new(if let Some(path) = config_path {
+        ConfigStore::at(path)
+    } else {
+        ConfigStore::default_location()?
     });
+    if let Some(path) = &health_marker {
+        let root = std::fs::canonicalize(
+            store
+                .path()
+                .parent()
+                .ok_or("Missing configuration directory")?
+                .join("updates"),
+        )?;
+        if !path.is_absolute()
+            || !path
+                .parent()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .is_some_and(|p| p.starts_with(&root))
+            || !path.file_name().is_some_and(|p| {
+                p.to_string_lossy().starts_with("startup-") && p.to_string_lossy().ends_with(".ok")
+            })
+        {
+            return Err("Invalid update startup acknowledgement path".into());
+        }
+    }
     let (config, error) = match store.load() {
         Ok(c) => (c, None),
         Err(e) => (
@@ -1142,11 +1435,17 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Some(format!("配置读取失败，禁止覆盖: {e:#}")),
         ),
     };
+    if health_marker.is_some() && error.is_some() {
+        return Err("Updated application could not load the saved configuration".into());
+    }
     let path = config
         .local_directory
         .clone()
         .unwrap_or(std::env::current_dir()?);
     let (tx, rx) = worker::start();
+    let (update_controller, update_rx) = updates_ui::start()?;
+    formatting::configure(config.settings.display);
+    let logger = Rc::new(client_logs::Logger::new(store.path()));
     let window = WindowApp::new();
     let scope = window.app().scope();
     i18n::init(scope, config.settings.language);
@@ -1156,13 +1455,23 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         group: None,
         collapsed_groups: HashSet::new(),
         search: String::new(),
+        inventory: Default::default(),
         editor: ServerProfile::default(),
+        server_editor_tab: 0,
+        server_editor_original: None,
+        server_tags: String::new(),
         dialog: None,
         dialog_error: String::new(),
         host_menu: None,
         group_menu: None,
         file_menu: None,
+        file_context: None,
         file_pending: None,
+        deletion: None,
+        unassigned_columns: FileColumnSettings::default(),
+        properties: None,
+        remote_editor: None,
+        updates: Default::default(),
         import_pending: None,
         activity_tab: 0,
         activity_open: true,
@@ -1175,6 +1484,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         connected: false,
         sftp_available: false,
         connecting: false,
+        keepalive_at: std::time::Instant::now(),
+        keepalive_pending: false,
         fingerprint: None,
         epoch: 0,
         request_serial: 0,
@@ -1202,17 +1513,25 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         name: String::new(),
         jobs: vec![],
         cancels: HashMap::new(),
-        logs: error
-            .clone()
-            .map(|message| i18n::translate(&message))
-            .unwrap_or_else(|| {
-                i18n::translate("Arcnix 已就绪。新建服务器并连接，或浏览本地目录。")
-            }),
+        inflight_transfers: HashSet::new(),
+        logs: String::new(),
         workspace_page: WorkspacePage::Files,
         navigation: Default::default(),
         settings_section: Default::default(),
         unread_notifications: 0,
         software: Default::default(),
+        operations: Default::default(),
+        scripts: Default::default(),
+        task_records: Default::default(),
+        configuration_records: Default::default(),
+        configuration_compare: Default::default(),
+        deleted_files: Default::default(),
+        tcp_listeners: Default::default(),
+        record_storage: Default::default(),
+        cleanup_reports: Default::default(),
+        backups: Default::default(),
+        diagnostics: Default::default(),
+        configurations: Default::default(),
         metrics: Default::default(),
         system_logs: Default::default(),
         system_task_running: false,
@@ -1227,15 +1546,39 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         transfer_meters: HashMap::new(),
         transfer_summaries: HashMap::new(),
     });
+    let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
+        update_controller,
+        batch_controller: Rc::new(std::cell::RefCell::new(None)),
+        batch_events,
+        logger,
         state,
         tx,
         store,
-        writable: error.is_none(),
+        writable: scope.cage(error.is_none()),
         scope: scope.clone(),
         shell_focus: scope.cage(None),
     };
+    ui.log(
+        error
+            .as_deref()
+            .unwrap_or("Arcnix 已就绪。新建服务器并连接，或浏览本地目录。"),
+    );
     ui.refresh(false);
+    scripts_ui::restore(&ui);
+    let batch_ui = ui.clone();
+    scope.spawn(async move {
+        while let Ok(event) = batch_rx.recv().await {
+            scripts_ui::event(&batch_ui, event);
+        }
+    })?;
+    updates_ui::restore(&ui);
+    let updates = ui.clone();
+    scope.spawn(async move {
+        while let Ok(event) = update_rx.recv().await {
+            updates_ui::event(&updates, event);
+        }
+    })?;
     // Coalesce ticks while the UI is busy. Sampling itself is also gated by
     // the active page and a single pending request in observability state.
     let (ticks, tick_rx) = async_channel::bounded(1);
@@ -1249,15 +1592,32 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     });
     let polling = ui.clone();
     scope.spawn(async move {
+        let mut health_marker = health_marker;
         while tick_rx.recv().await.is_ok() {
+            if let Some(path) = health_marker.take() {
+                use std::io::Write;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(path)
+                {
+                    let _ = writeln!(file, "arcnix {}", env!("CARGO_PKG_VERSION"));
+                    let _ = file.sync_all();
+                }
+            }
             polling.observability_tick();
             polling.transfer_tick();
+            preferences_ui::tick(&polling);
+            updates_ui::tick(&polling);
         }
     })?;
     let events = ui.clone();
     scope.spawn(async move {while let Ok(response)=rx.recv().await {
-        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}){continue;}
+        if let Update::Finished(id, _)=&response.update { state.revise(|s|{s.inflight_transfers.remove(id);}); }
+        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)|Update::TextFile(_)){continue;}
         match response.update {
+            Update::Alive=>state.revise(|s|s.keepalive_pending=false),
+            Update::Operations(event)=>operations::event(&events,response.serial,event),
             Update::Terminal(event)=>terminal::update(&events,event),
             Update::Fingerprint(fingerprint)=>{
                 let known=state.with(|s|s.config.servers.iter().find(|p|Some(&p.id)==s.selected.as_ref()).and_then(|p|s.config.trusted_fingerprint(&p.host,p.port)).map(str::to_owned));
@@ -1265,13 +1625,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.sftp_available=sftp;});events.log("SSH 认证成功");if sftp{events.refresh(true);}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
+            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;});events.log("SSH 认证成功");if sftp{events.refresh(true);}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
-            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path);});events.save();}
-            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(true);s.remote_path=path;s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});},
+            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
+            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){events.error(format!("读取目录失败：{message}"));}},
-            Update::ConnectionLost(message)=>{terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferReport(id,summary)=>{events.log(format!("传输结果：写入 {} 个文件，跳过 {} 个文件",summary.transferred_files,summary.skipped_files));state.revise(|s|{s.transfer_summaries.insert(id,summary);});},
             Update::Progress(id,done,total,actual)=>state.revise(|s|{s.transfer_now=std::time::Instant::now();if let Some(m)=s.transfer_meters.get_mut(&id){m.observe(actual,s.transfer_now);}
@@ -1282,6 +1642,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 let file=state.with(|s|if s.file_pending==Some(response.serial){s.dialog.clone()}else{None});
                 if let Some(Dialog::File{remote,..})=file {state.revise(|s|{s.file_pending=None;s.dialog=None;s.dialog_error.clear();s.notice.clear();});events.refresh(remote);}
             },
+            Update::Deleted{remote,result}=>file_context::deleted(&events,response.serial,remote,result),
+            Update::DeletionProgress(progress)=>file_context::deletion_progress(&events,response.serial,progress),
+            Update::FileMetadata(result)=>file_properties::metadata(&events,response.serial,result),
+            Update::Permissions(result)=>file_properties::finished(&events,response.serial,result),
+            Update::TextFile(result)=>remote_editor::event(&events,response.serial,result),
             Update::Error(message)=>{
                 let pending=state.with(|s|s.file_pending==Some(response.serial)||s.import_pending==Some(response.serial));
                 if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
@@ -1293,14 +1658,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Update::SystemLogs(result)=>observability::logs_event(&events,response.serial,result),
             Update::PackageEnvironment(result)=>software::event(&events,response.serial,software::Event::Environment(result)),
             Update::PackageList(result)=>software::event(&events,response.serial,software::Event::Packages(result)),
-            Update::PackagePreview(result)=>software::event(&events,response.serial,software::Event::Preview(result)),
-            Update::PackageStarted=>software::event(&events,response.serial,software::Event::Started),
-            Update::PackageOutput(text)=>software::event(&events,response.serial,software::Event::Output(text)),
-            Update::PackageFinished(result)=>{software::event(&events,response.serial,software::Event::Finished(result));events.schedule();},
             Update::Imported(report)=>{
                 let warning_count=report.warnings.len();
                 for warning in &report.warnings {events.log(format!("SSH 配置导入：{warning}"));}
-                let result=state.with(|s|{let (config,imported,skipped)=import_profiles(&s.config,report.servers)?;anyhow::ensure!(events.writable,"配置读取失败，禁止覆盖");events.store.save(&config)?;Ok::<_,anyhow::Error>((config,imported,skipped))});
+                let result=state.with(|s|{let (config,imported,skipped)=import_profiles(&s.config,report.servers)?;anyhow::ensure!(events.writable.get(),"配置读取失败，禁止覆盖");events.store.save(&config)?;Ok::<_,anyhow::Error>((config,imported,skipped))});
                 state.revise(|s|s.import_pending=None);
                 match result {
                     Ok((config,imported,skipped))=>{
@@ -1312,19 +1673,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
         }
     }})?;
-    window.mount(
-        when(
-            state.map(|s| s.config.settings.language == Language::English),
-            {
-                let ui = ui.clone();
-                move || app(ui.clone())
-            },
-        )
-        .otherwise({
-            let ui = ui.clone();
-            move || app(ui.clone())
-        }),
-    )?;
+    // Locale bindings patch the existing document. Remounting it would retire
+    // live button identities while their browser activations are still queued.
+    window.mount(app(ui.clone()))?;
     Shell::new().run(
         window,
         Config {
@@ -1334,6 +1685,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 [
                     include_str!("../assets/system-theme.js"),
                     include_str!("../assets/file-list-events.js"),
+                    include_str!("../assets/remote-editor-events.js"),
+                    include_str!("../assets/help-events.js"),
+                    include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/vendor/xterm/xterm.js"),
                     include_str!("../assets/vendor/addon-fit/addon-fit.js"),

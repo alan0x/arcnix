@@ -26,6 +26,24 @@ def main():
             browser=pw.chromium.connect_over_cdp(f'http://127.0.0.1:{port}');page=browser.contexts[0].pages[0];page.set_default_timeout(8000);page.set_viewport_size(dict(width=1440,height=980));errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
             tree=page.locator('.server-tree');folders=page.locator('.tree-folder');prod=folders.filter(has=page.get_by_role('button',name='Production',exact=True));stage=folders.filter(has=page.get_by_role('button',name='Staging',exact=True))
             expect(folders).to_have_count(3);expect(tree.locator('.host-row')).to_have_count(3)
+            # Pointer selection uses the whole-row highlight; keyboard focus
+            # belongs to the row, never an extra rectangle around its text.
+            local_row=tree.locator(':scope > .host-row').first
+            local_select=local_row.locator('.host-select')
+            local_select.click();expect(local_row).to_have_class(re.compile(r'\bselected\b'))
+            expect(local_select).to_have_css('outline-style','none')
+            expect(local_row).to_have_css('outline-style','none')
+            page.keyboard.press('Tab');expect(local_row.locator('.host-more')).to_be_focused()
+            expect(local_row.locator('.host-more')).to_have_css('outline-style','solid')
+            page.keyboard.press('Shift+Tab');expect(local_select).to_be_focused()
+            expect(local_select).to_have_css('outline-style','none')
+            assert .5<float(local_row.evaluate("el=>parseFloat(getComputedStyle(el).outlineWidth)"))<1.5
+            expect(local_row).to_have_css('outline-style','solid')
+            local_select.click();expect(local_row).to_have_css('outline-style','none')
+            prod.locator('.group-button').focus();page.keyboard.press('ArrowRight')
+            expect(prod.locator('.group-button')).to_have_css('outline-style','none')
+            expect(prod.locator('.tree-folder-row')).to_have_css('outline-style','solid')
+            local_select.click()
             expect(prod.locator('.tree-chevron')).to_have_text('')
             assert 'data:image/svg+xml' in prod.locator('.tree-chevron').evaluate("el=>getComputedStyle(el).maskImage")
             geometry=prod.locator('.group-button').evaluate("el=>[...el.children].filter(x=>x.getClientRects().length).map(x=>{const r=x.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})")
@@ -83,7 +101,7 @@ def main():
             page.keyboard.press('Shift+F10');expect(menu).to_be_visible();expect(menu.locator('button').first).to_be_focused();page.keyboard.press('ArrowDown');expect(menu.locator('button').nth(1)).to_be_focused();page.keyboard.press('Escape')
             # Context menus can switch targets even while the common dismiss scrim is active.
             stage.locator('.group-button').click(button='right');page.locator('.host-row').last.click(button='right',force=True);expect(page.locator('.host-row.menu-open')).to_have_count(1);page.keyboard.press('Escape')
-            page.locator('.settings-link').click();page.locator('.context-sidebar').get_by_role('button',name='Appearance',exact=True).click();page.get_by_role('button',name='Light',exact=True).click();page.locator('.rail-servers').click();page.screenshot(path=str(out/'tree-light.png'))
+            page.locator('.settings-link').click();page.locator('.context-sidebar').get_by_role('button',name='General',exact=True).click();page.get_by_role('button',name='Light',exact=True).click();page.locator('.rail-servers').click();page.screenshot(path=str(out/'tree-light.png'))
             page.set_viewport_size(dict(width=900,height=700));page.locator('.group-more').last.click();box=menu.bounding_box();assert box['y']>=0 and box['y']+box['height']<=700;page.screenshot(path=str(out/'tree-narrow-menu.png'))
             page.keyboard.press('Escape');expect(menu).to_have_count(0);page.set_viewport_size(dict(width=1440,height=980))
             stage.locator('.group-more').click();menu.get_by_role('button',name='Dissolve group (keep servers)',exact=True).click()
@@ -101,11 +119,11 @@ def main():
             before=config.read_bytes();page.keyboard.press('Escape');expect(dialog).to_have_count(0);assert config.read_bytes()==before
             renamed.locator('.group-button').click(button='right');menu.get_by_role('button',name='Delete group & servers',exact=True).click();dialog.locator('.modal-footer button').last.click();expect(dialog).to_have_count(0)
             saved=json.loads(config.read_text())['config'];assert len(saved['servers'])==3 and all(g['id']!='a' for g in saved['groups'])
-            expect(page.get_by_text('Choose a server',exact=True)).to_be_visible()
+            expect(page.locator('.server-inventory')).to_be_visible();expect(page.locator('.inventory-row')).to_have_count(3)
             empty_folder.locator('.group-button').click(button='right');menu.get_by_role('button',name='Delete group & servers',exact=True).click();expect(dialog).to_contain_text('0 saved server profiles');dialog.locator('.modal-footer button').last.click();expect(dialog).to_have_count(0)
             assert len(json.loads(config.read_text())['config']['servers'])==3
             assert not errors,errors
-            print('Passed: SVG alignment; native drag ordering/reload; dissolve/purge/cancel; tree nesting; independent/global collapse; inherited server creation; group rename; server reassignment; search; matching right-click/More menus; keyboard navigation; theme and menu bounds.')
+            print('Passed: pointer highlight without inner focus frames; keyboard row focus and More focus; SVG alignment; native drag ordering/reload; dissolve/purge/cancel; tree nesting; independent/global collapse; inherited server creation; group rename; server reassignment; search; matching right-click/More menus; keyboard navigation; theme and menu bounds.')
             browser.close()
     finally:
         if process.poll() is None:process.terminate();process.wait(timeout=10)

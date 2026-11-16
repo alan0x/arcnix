@@ -4,6 +4,8 @@ pub(super) fn new_server(ui: &Ui) {
     ui.navigate(navigation::Page::Servers);
     ui.state.revise(|s| {
         s.editor = ServerProfile::default();
+        s.server_editor_original = None;
+        s.server_tags.clear();
         s.editor.group_id = s.group.clone().filter(|id| !id.is_empty());
         s.port = "22".into();
     });
@@ -22,6 +24,8 @@ pub(super) fn edit_server(ui: &Ui, id: &str) {
     if let Some(profile) = profile {
         ui.state.revise(|s| {
             s.port = profile.port.to_string();
+            s.server_editor_original = Some(profile.clone());
+            s.server_tags = profile.tags.join(", ");
             s.editor = profile;
         });
         ui.open_dialog(Dialog::Server);
@@ -70,21 +74,19 @@ fn expanded(s: &State, id: &str) -> bool {
     !s.search.trim().is_empty() || !s.collapsed_groups.contains(id)
 }
 
-fn matches_server(profile: &ServerProfile, query: &str) -> bool {
-    format!("{} {} {}", profile.name, profile.host, profile.username)
-        .to_lowercase()
-        .contains(query)
-}
-
 fn matching_servers(s: &State, group: Option<&str>) -> Vec<ServerProfile> {
     let query = s.search.trim().to_lowercase();
-    let group_matches = group
+    let group_name = group
         .and_then(|id| s.config.groups.iter().find(|g| g.id == id))
-        .is_some_and(|g| g.name.to_lowercase().contains(&query));
+        .map(|g| g.name.as_str())
+        .unwrap_or_default();
     s.config
         .servers
         .iter()
-        .filter(|p| p.group_id.as_deref() == group && (group_matches || matches_server(p, &query)))
+        .filter(|p| {
+            p.group_id.as_deref() == group
+                && arcnix_core::server_labels::matches(p, group_name, &query)
+        })
         .cloned()
         .collect()
 }
@@ -202,6 +204,7 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
     let add = ui.clone();
     let group = ui.clone();
     let menu = ui.clone();
+    let inventory = ui.clone();
     col().class("sidebar server-explorer").fill((
         row()
             .class(state.map(|s| {
@@ -239,13 +242,18 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
                     move || root_menu(ui.clone())
                 }),
             )),
+        btn("Server overview", move || inventory.open_server_inventory())
+            .class("button server-inventory-open"),
         row().class("server-search").fill((
             input()
                 .name(i18n::bind("搜索"))
                 .value(state.map(|s| s.search.clone()))
                 .on(value_changed, move |event| {
                     if let Event::ValueChanged { value, .. } = event {
-                        state.revise(|s| s.search = value);
+                        state.revise(|s| {
+                            s.search = value;
+                            s.inventory.page = 0;
+                        });
                     }
                 }),
             text()
@@ -410,11 +418,14 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
                 when(
                     state.map(|s| {
                         !s.search.trim().is_empty()
-                            && !s
-                                .config
-                                .servers
-                                .iter()
-                                .any(|p| matches_server(p, &s.search.trim().to_lowercase()))
+                            && !s.config.servers.iter().any(|p| {
+                                arcnix_core::server_labels::matches(
+                                    p,
+                                    arcnix_core::target_selection::group_name(&s.config, p)
+                                        .unwrap_or_default(),
+                                    &s.search,
+                                )
+                            })
                             && !s.config.groups.iter().any(|g| {
                                 g.name
                                     .to_lowercase()
@@ -511,6 +522,11 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                         format!("{}@{}:{}{status}", p.username, p.host, p.port)
                                     },
                                 ))),
+                                when(value.map(|p| !p.environment.is_empty()), move || {
+                                    text()
+                                        .class("server-environment")
+                                        .content(value.map(|p| p.environment.clone()))
+                                }),
                             ))
                             .on_press(move || {
                                 let id = value.get().id;
@@ -597,7 +613,7 @@ fn cancel(ui: Ui) -> sapid::Button {
 
 fn persist(ui: &Ui, config: &AppConfig) -> anyhow::Result<()> {
     anyhow::ensure!(
-        ui.writable,
+        ui.writable.get(),
         "当前配置读取失败，不能覆盖。请修复配置后重启。"
     );
     ui.store.save(config)
@@ -616,111 +632,123 @@ fn server_dialog(ui: Ui) -> impl Widget {
     let key = ui.clone();
     let ungrouped = ui.clone();
     let save = ui.clone();
-    let body = col().class("form-stack").fill((
-        field(
-            "名称",
-            &ui,
-            |s| s.editor.name.clone(),
-            |s, v| s.editor.name = v,
-        ),
-        row().class("form-row host-port").fill((
+    let general = col()
+        .class(state.map(|s| {
+            if s.server_editor_tab == 0 {
+                "form-stack"
+            } else {
+                "hidden"
+            }
+            .to_owned()
+        }))
+        .fill((
             field(
-                "主机地址",
+                "名称",
                 &ui,
-                |s| s.editor.host.clone(),
-                |s, v| s.editor.host = v,
+                |s| s.editor.name.clone(),
+                |s, v| s.editor.name = v,
             ),
-            field("端口", &ui, |s| s.port.clone(), |s, v| s.port = v),
-        )),
-        field(
-            "用户名",
-            &ui,
-            |s| s.editor.username.clone(),
-            |s, v| s.editor.username = v,
-        ),
-        col().class("field").fill((
-            text().class("field-label").content(i18n::bind("认证方式")),
-            row().class("segmented").fill((
-                sapid::button()
-                    .class(state.map(|s| {
-                        if s.editor.auth == AuthMethod::Password {
-                            "segment active"
-                        } else {
-                            "segment"
-                        }
-                        .to_owned()
-                    }))
-                    .label(i18n::bind("密码"))
-                    .on_press(move || {
-                        password
-                            .state
-                            .revise(|s| s.editor.auth = AuthMethod::Password)
-                    }),
-                sapid::button()
-                    .class(state.map(|s| {
-                        if s.editor.auth == AuthMethod::PrivateKey {
-                            "segment active"
-                        } else {
-                            "segment"
-                        }
-                        .to_owned()
-                    }))
-                    .label(i18n::bind("私钥"))
-                    .on_press(move || key.state.revise(|s| s.editor.auth = AuthMethod::PrivateKey)),
+            row().class("form-row host-port").fill((
+                field(
+                    "主机地址",
+                    &ui,
+                    |s| s.editor.host.clone(),
+                    |s, v| s.editor.host = v,
+                ),
+                field("端口", &ui, |s| s.port.clone(), |s, v| s.port = v),
             )),
-        )),
-        when(state.map(|s| s.editor.auth == AuthMethod::PrivateKey), {
-            let ui = ui.clone();
-            move || file_picker::field(ui.clone())
-        }),
-        col().class("field").fill((
-            text().class("field-label").content(i18n::bind("分组")),
-            row().class("choice-list").fill((
-                sapid::button()
-                    .class(state.map(|s| {
-                        if s.editor.group_id.is_none() {
-                            "choice active"
-                        } else {
-                            "choice"
-                        }
-                        .to_owned()
-                    }))
-                    .label(i18n::bind("未分组"))
-                    .on_press(move || ungrouped.state.revise(|s| s.editor.group_id = None)),
-                each(state.map(|s| s.config.groups.clone()))
-                    .key(|g| g.id.clone())
-                    .children({
-                        let ui = ui.clone();
-                        move |item| {
-                            let value = item.value;
+            field(
+                "用户名",
+                &ui,
+                |s| s.editor.username.clone(),
+                |s, v| s.editor.username = v,
+            ),
+            col().class("field").fill((
+                text().class("field-label").content(i18n::bind("认证方式")),
+                row().class("segmented").fill((
+                    sapid::button()
+                        .class(state.map(|s| {
+                            if s.editor.auth == AuthMethod::Password {
+                                "segment active"
+                            } else {
+                                "segment"
+                            }
+                            .to_owned()
+                        }))
+                        .label(i18n::bind("密码"))
+                        .on_press(move || {
+                            password
+                                .state
+                                .revise(|s| s.editor.auth = AuthMethod::Password)
+                        }),
+                    sapid::button()
+                        .class(state.map(|s| {
+                            if s.editor.auth == AuthMethod::PrivateKey {
+                                "segment active"
+                            } else {
+                                "segment"
+                            }
+                            .to_owned()
+                        }))
+                        .label(i18n::bind("私钥"))
+                        .on_press(move || {
+                            key.state.revise(|s| s.editor.auth = AuthMethod::PrivateKey)
+                        }),
+                )),
+            )),
+            when(state.map(|s| s.editor.auth == AuthMethod::PrivateKey), {
+                let ui = ui.clone();
+                move || file_picker::field(ui.clone())
+            }),
+            col().class("field").fill((
+                text().class("field-label").content(i18n::bind("分组")),
+                row().class("choice-list").fill((
+                    sapid::button()
+                        .class(state.map(|s| {
+                            if s.editor.group_id.is_none() {
+                                "choice active"
+                            } else {
+                                "choice"
+                            }
+                            .to_owned()
+                        }))
+                        .label(i18n::bind("未分组"))
+                        .on_press(move || ungrouped.state.revise(|s| s.editor.group_id = None)),
+                    each(state.map(|s| s.config.groups.clone()))
+                        .key(|g| g.id.clone())
+                        .children({
                             let ui = ui.clone();
-                            sapid::button()
-                                .class(state.map(move |s| {
-                                    if s.editor.group_id.as_deref() == Some(&value.get().id) {
-                                        "choice active"
-                                    } else {
-                                        "choice"
-                                    }
-                                    .to_owned()
-                                }))
-                                .label(value.map(|g| g.name.clone()))
-                                .on_press(move || {
-                                    ui.state
-                                        .revise(|s| s.editor.group_id = Some(value.get().id))
-                                })
-                        }
-                    }),
+                            move |item| {
+                                let value = item.value;
+                                let ui = ui.clone();
+                                sapid::button()
+                                    .class(state.map(move |s| {
+                                        if s.editor.group_id.as_deref() == Some(&value.get().id) {
+                                            "choice active"
+                                        } else {
+                                            "choice"
+                                        }
+                                        .to_owned()
+                                    }))
+                                    .label(value.map(|g| g.name.clone()))
+                                    .on_press(move || {
+                                        ui.state
+                                            .revise(|s| s.editor.group_id = Some(value.get().id))
+                                    })
+                            }
+                        }),
+                )),
             )),
-        )),
-        field(
-            "初始远程目录",
-            &ui,
-            |s| s.editor.initial_remote_path.clone(),
-            |s, v| s.editor.initial_remote_path = v,
-        ),
-        text()
-            .class("subtle")
-            .content(i18n::bind("密码与私钥口令将在连接时输入。")),
+            text()
+                .class("subtle")
+                .content(i18n::bind("密码与私钥口令将在连接时输入。")),
+        ));
+    let body = fragment((
+        preferences_ui::server_tabs(ui.clone()),
+        general,
+        preferences_ui::server_files(ui.clone()),
+        preferences_ui::server_connection(ui.clone()),
+        server_labels_ui::editor(ui.clone()),
     ));
     modal(
         ui.clone(),
@@ -729,33 +757,57 @@ fn server_dialog(ui: Ui) -> impl Widget {
         (
             cancel(ui),
             btn("保存服务器", move || {
-                let result = save
-                    .state
-                    .with(|s| -> anyhow::Result<(AppConfig, ServerProfile)> {
-                        let mut profile = s.editor.clone();
-                        anyhow::ensure!(
-                            !s.system_task_running || s.selected.as_ref() != Some(&profile.id),
-                            "系统软件任务正在执行，完成后才能修改当前服务器"
-                        );
-                        profile.name = profile.name.trim().into();
-                        profile.host = profile.host.trim().into();
-                        profile.username = profile.username.trim().into();
-                        profile.port = s
-                            .port
-                            .trim()
-                            .parse()
-                            .map_err(|_| anyhow::anyhow!("端口应为 1–65535 的数字"))?;
-                        let mut config = s.config.clone();
-                        config.upsert_server(profile.clone())?;
-                        persist(&save, &config)?;
-                        Ok((config, profile))
-                    });
+                let result =
+                    save.state
+                        .with(|s| -> anyhow::Result<(AppConfig, ServerProfile, bool)> {
+                            let mut profile = s.editor.clone();
+                            profile.name = profile.name.trim().into();
+                            profile.host = profile.host.trim().into();
+                            profile.username = profile.username.trim().into();
+                            profile.port = s
+                                .port
+                                .trim()
+                                .parse()
+                                .map_err(|_| anyhow::anyhow!("端口应为 1–65535 的数字"))?;
+                            profile.environment = profile.environment.trim().into();
+                            profile.tags = arcnix_core::server_labels::parse_tags(&s.server_tags)?;
+                            let labels_only =
+                                s.server_editor_original.as_ref().is_some_and(|original| {
+                                    arcnix_core::server_labels::same_except_labels(
+                                        original, &profile,
+                                    )
+                                });
+                            anyhow::ensure!(
+                                labels_only
+                                    || !s.system_task_running
+                                    || s.selected.as_ref() != Some(&profile.id),
+                                "系统软件任务正在执行，完成后才能修改当前服务器"
+                            );
+                            if labels_only {
+                                let mut current = s
+                                    .config
+                                    .servers
+                                    .iter()
+                                    .find(|p| p.id == profile.id)
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("Original server no longer exists")
+                                    })?;
+                                current.environment = profile.environment;
+                                current.tags = profile.tags;
+                                profile = current;
+                            }
+                            let mut config = s.config.clone();
+                            config.upsert_server(profile.clone())?;
+                            persist(&save, &config)?;
+                            Ok((config, profile, labels_only))
+                        });
                 match result {
-                    Ok((config, profile)) => {
+                    Ok((config, profile, labels_only)) => {
                         let same = save
                             .state
                             .with(|s| s.selected.as_ref() == Some(&profile.id));
-                        if same {
+                        if same && !labels_only {
                             save.disconnect();
                         }
                         save.state.revise(|s| {
@@ -766,12 +818,18 @@ fn server_dialog(ui: Ui) -> impl Widget {
                                 s.collapsed_groups.remove(group);
                             }
                             s.search.clear();
-                            s.jobs.retain(|j| {
-                                j.server_id != profile.id || j.status == TransferStatus::Completed
-                            });
+                            if !labels_only {
+                                s.jobs.retain(|j| {
+                                    j.server_id != profile.id
+                                        || j.status == TransferStatus::Completed
+                                });
+                            }
                             // Creating another site must not interrupt an active SSH
                             // session; disconnected workspaces can select the saved site.
-                            if same || (!s.connected && !s.connecting) {
+                            if (same && !labels_only) || (!s.connected && !s.connecting) {
+                                if !labels_only {
+                                    s.inventory.visible = false;
+                                }
                                 s.file_split =
                                     profile.file_pane_ratio.unwrap_or(500) as f64 / 1000.0;
                                 s.selected = Some(profile.id);

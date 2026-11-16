@@ -110,7 +110,7 @@ pub(super) fn view_controls(ui: Ui, remote: bool) -> impl Widget {
             }),
     ))
 }
-fn file_kind(entry: &FileEntry) -> String {
+pub(super) fn file_kind(entry: &FileEntry) -> String {
     if entry.is_symlink {
         i18n::translate("链接")
     } else if entry.is_dir {
@@ -121,19 +121,8 @@ fn file_kind(entry: &FileEntry) -> String {
         i18n::translate("文件")
     }
 }
-fn timestamp(value: Option<u64>) -> String {
-    value
-        .and_then(|v| i64::try_from(v).ok())
-        .and_then(|v| time::OffsetDateTime::from_unix_timestamp(v).ok())
-        .map(|date| {
-            date.to_offset(time::UtcOffset::local_offset_at(date).unwrap_or(time::UtcOffset::UTC))
-        })
-        .and_then(|date| {
-            date.format(&time::format_description::well_known::Rfc3339)
-                .ok()
-        })
-        .map(|value| value.replace('T', " "))
-        .unwrap_or_else(|| "—".into())
+pub(super) fn timestamp(value: Option<u64>) -> String {
+    formatting::timestamp(value)
 }
 pub(super) fn information(ui: Ui, remote: bool) -> impl Widget {
     let state = ui.state;
@@ -230,7 +219,7 @@ pub(super) fn information(ui: Ui, remote: bool) -> impl Widget {
             })),
     ))
 }
-fn path(s: &State, remote: bool) -> &str {
+pub(super) fn path(s: &State, remote: bool) -> &str {
     if remote {
         &s.remote_path
     } else {
@@ -337,6 +326,12 @@ fn transfer_roots(all: &[FileEntry], selected: &HashSet<String>, remote: bool) -
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum GestureKind {
+    Context,
+    Rename,
+    Delete,
+    CopyPaths,
+    Properties,
+    Refresh,
     Select,
     Activate,
     Expand,
@@ -353,6 +348,10 @@ struct Gesture {
     toggle: bool,
     #[serde(default)]
     range: bool,
+}
+pub(super) fn clear_selection(s: &mut State, remote: bool) {
+    selection(s, remote).clear();
+    s.file_browser.pane_mut(remote).anchor = None;
 }
 pub(super) fn select(ui: &Ui, remote: bool, target: &str, toggle: bool, range: bool) {
     ui.state.revise(|s| {
@@ -398,7 +397,7 @@ fn navigate(ui: &Ui, remote: bool, target: String) {
     });
     ui.refresh(remote);
 }
-fn activate(ui: &Ui, remote: bool, target: &str) {
+pub(super) fn activate(ui: &Ui, remote: bool, target: &str) {
     let entry = ui.state.with(|s| {
         entries(s, remote)
             .into_iter()
@@ -409,6 +408,9 @@ fn activate(ui: &Ui, remote: bool, target: &str) {
             navigate(ui, remote, entry.path);
         } else {
             select(ui, remote, &entry.path, false, false);
+            if remote {
+                remote_editor::open(ui, &entry.path);
+            }
         }
     }
 }
@@ -501,6 +503,33 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
         return;
     };
     match event.kind {
+        GestureKind::Context => file_context::open(ui, remote, &event.path),
+        GestureKind::Delete => file_context::begin_delete(ui, remote),
+        GestureKind::Rename => {
+            if ui.state.with(|s| {
+                workspace::ready(s, remote)
+                    && (!remote || !s.system_task_running)
+                    && (if remote {
+                        &s.remote_selection
+                    } else {
+                        &s.local_selection
+                    })
+                    .len()
+                        == 1
+            }) {
+                workspace::begin_file(ui, remote, true);
+            }
+        }
+        GestureKind::CopyPaths => file_context::copy_paths(ui, remote, false),
+        GestureKind::Properties => file_context::properties(ui, remote),
+        GestureKind::Refresh => {
+            if ui
+                .state
+                .with(|s| !remote || (s.connected && s.sftp_available && !s.system_task_running))
+            {
+                ui.refresh(remote);
+            }
+        }
         GestureKind::Select => select(ui, remote, &event.path, event.toggle, event.range),
         GestureKind::Activate => activate(ui, remote, &event.path),
         GestureKind::Expand => toggle_tree(ui, remote, &event.path, Some(true)),
@@ -526,6 +555,7 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
             }
             .to_owned()
         }))
+        .focus(FocusMode::Programmatic)
         .fill((
             // Native pointer modifiers are absent from Glory 0.7's Activate event.
             // This private bridge carries a finite gesture; Rust validates the path
@@ -621,18 +651,50 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                     .on_press(move || {
                                         activate(&open, remote, &entry.get().entry.path)
                                     }),
-                                text().class("file-size").content(i18n::bind(entry.map(|r| {
-                                    if r.entry.is_dir {
-                                        "文件夹".into()
-                                    } else if r.entry.is_symlink {
-                                        "链接".into()
-                                    } else {
-                                        size(r.entry.size)
-                                    }
-                                }))),
-                                text()
-                                    .class("file-modified")
-                                    .content(entry.map(|r| modified(r.entry.modified))),
+                                when(
+                                    state.map(move |s| file_columns::visible(s, remote).size),
+                                    move || {
+                                        text().class("file-size").content(i18n::bind(entry.map(
+                                            |r| {
+                                                if r.entry.is_dir {
+                                                    "—".into()
+                                                } else if r.entry.is_symlink {
+                                                    "链接".into()
+                                                } else {
+                                                    size(r.entry.size)
+                                                }
+                                            },
+                                        )))
+                                    },
+                                ),
+                                when(
+                                    state.map(move |s| file_columns::visible(s, remote).kind),
+                                    move || {
+                                        text()
+                                            .class("file-type")
+                                            .content(entry.map(|r| file_kind(&r.entry)))
+                                    },
+                                ),
+                                when(
+                                    state.map(move |s| file_columns::visible(s, remote).modified),
+                                    move || {
+                                        text()
+                                            .class("file-modified")
+                                            .content(entry.map(|r| modified(r.entry.modified)))
+                                    },
+                                ),
+                                when(
+                                    state
+                                        .map(move |s| file_columns::visible(s, remote).permissions),
+                                    move || {
+                                        text().class("file-permissions").content(entry.map(|r| {
+                                            r.entry
+                                                .permissions
+                                                .map(|m| format!("{:04o}", m & 0o7777))
+                                                .unwrap_or_else(|| "—".into())
+                                        }))
+                                    },
+                                ),
                             ))
                     }),
             ),

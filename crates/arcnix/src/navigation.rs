@@ -1,10 +1,15 @@
 //! Application navigation is independent of the active SSH workspace.
 use super::*;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Page {
     #[default]
     Servers,
+    Scripts,
+    Tasks,
+    Backups,
+    Diagnostics,
+    Configurations,
     Notifications,
     Settings,
 }
@@ -13,15 +18,36 @@ pub(super) enum Page {
 pub(super) enum SettingsSection {
     #[default]
     General,
-    Appearance,
+    Connection,
     Files,
+    Transfers,
     Monitoring,
+    Logging,
+    About,
+}
+
+impl SettingsSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Connection => "Connection",
+            Self::Files => "Files",
+            Self::Transfers => "Transfers",
+            Self::Monitoring => "Monitoring",
+            Self::Logging => "Logging",
+            Self::About => "About",
+        }
+    }
 }
 
 impl Ui {
     pub(super) fn navigate(&self, page: Page) {
+        self.navigate_from(page, "action");
+    }
+
+    fn navigate_from(&self, page: Page, source: &'static str) {
         self.state.revise(|s| {
-            s.navigation = page;
+            change_page(s, page, source);
             s.host_menu = None;
             s.group_menu = None;
             s.file_menu = None;
@@ -36,8 +62,54 @@ impl Ui {
     }
 }
 
+/// Keep leaving-page cleanup consistent for rail and application actions.
+pub(super) fn change_page(s: &mut State, page: Page, _source: &'static str) {
+    if s.navigation == Page::Servers && page != Page::Servers {
+        observability::metrics_leave(s);
+    }
+    #[cfg(debug_assertions)]
+    let backup_access_before = backups_ui::access_retained(s);
+    if page != Page::Scripts {
+        crate::script_exchange_ui::forget(s);
+    }
+    if page != Page::Settings {
+        configuration_backup_ui::forget(s);
+    }
+    if s.navigation != page {
+        crate::diagnostics_ui::dismiss(s);
+    }
+    if page != Page::Backups {
+        backups_ui::forget(s);
+    }
+    if page != Page::Tasks {
+        crate::task_refresh_ui::dismiss(s);
+        task_records_ui::forget(s);
+        record_maintenance_ui::forget(s);
+        cleanup_records_ui::forget(s);
+    }
+    if page != Page::Configurations {
+        configuration_records_ui::forget(s);
+        configuration_compare_ui::forget(s);
+    }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("ARCNIX_TEST_TRACE_INPUT").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        eprintln!(
+            "ARCNIX_NAVIGATION {}",
+            serde_json::json!({
+                "sequence": SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                "at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+                "from": format!("{:?}", s.navigation), "to": format!("{page:?}"), "source": _source,
+                "backup_access_before": backup_access_before, "backup_access_after": backups_ui::access_retained(s),
+            })
+        );
+    }
+    s.navigation = page;
+}
+
 pub(super) fn workspace_visible(s: &State) -> bool {
     s.navigation == Page::Servers
+        && !server_inventory_ui::shown(s)
         && s.connected
         && s.config
             .servers
@@ -63,7 +135,7 @@ fn rail_button(
             )
         }))
         .fill(icons::glyph(icon))
-        .on_press(move || ui.navigate(page))
+        .on_press(move || ui.navigate_from(page, "rail"))
 }
 
 fn rail(ui: Ui) -> impl Widget {
@@ -76,6 +148,29 @@ fn rail(ui: Ui) -> impl Widget {
                 .fill(text().class("brand-icon").content("")),
             text().class("rail-divider").content(""),
             rail_button(&ui, Page::Servers, "服务器", Icon::Server, "rail-servers"),
+            rail_button(&ui, Page::Scripts, "Scripts", Icon::File, "rail-scripts"),
+            rail_button(&ui, Page::Tasks, "Tasks", Icon::List, "rail-tasks"),
+            rail_button(
+                &ui,
+                Page::Backups,
+                "Backups",
+                Icon::Download,
+                "rail-backups",
+            ),
+            rail_button(
+                &ui,
+                Page::Diagnostics,
+                "Diagnostics",
+                Icon::Search,
+                "rail-diagnostics",
+            ),
+            rail_button(
+                &ui,
+                Page::Configurations,
+                "Configurations",
+                Icon::Edit,
+                "rail-configurations",
+            ),
             col().class("rail-bottom").fill(rail_button(
                 &ui,
                 Page::Settings,
@@ -108,6 +203,11 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                     Page::Notifications => "通知",
                     Page::Settings => "Settings",
                     Page::Servers => "服务器",
+                    Page::Scripts => "Scripts",
+                    Page::Tasks => "Tasks",
+                    Page::Backups => "Backups",
+                    Page::Diagnostics => "Diagnostics",
+                    Page::Configurations => "Configurations",
                 }
                 .to_owned()
             }))),
@@ -129,9 +229,12 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                 col().class("context-links").fill(
                     each(vec![
                         SettingsSection::General,
-                        SettingsSection::Appearance,
+                        SettingsSection::Connection,
                         SettingsSection::Files,
+                        SettingsSection::Transfers,
                         SettingsSection::Monitoring,
+                        SettingsSection::Logging,
+                        SettingsSection::About,
                     ])
                     .key(|section| *section as u8)
                     .children({
@@ -148,12 +251,7 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                                     }
                                     .to_owned()
                                 }))
-                                .label(i18n::bind(match section {
-                                    SettingsSection::General => "General",
-                                    SettingsSection::Appearance => "Appearance",
-                                    SettingsSection::Files => "Files",
-                                    SettingsSection::Monitoring => "Monitoring",
-                                }))
+                                .label(i18n::bind(section.label()))
                                 .on_press(move || {
                                     choose.state.revise(|s| s.settings_section = section)
                                 })
@@ -365,8 +463,10 @@ fn tabs(ui: Ui) -> impl Widget {
             .on_press({
                 let ui = ui.clone();
                 move || {
-                    ui.state
-                        .revise(|s| s.workspace_page = WorkspacePage::Software);
+                    ui.state.revise(|s| {
+                        observability::metrics_leave(s);
+                        s.workspace_page = WorkspacePage::Software;
+                    });
                     if ui.state.with(|s| {
                         s.connected
                             && s.software.environment.is_none()
@@ -376,6 +476,7 @@ fn tabs(ui: Ui) -> impl Widget {
                     }
                 }
             }),
+        module_tab(ui.clone(), WorkspacePage::Operations, "运维操作"),
         module_tab(ui.clone(), WorkspacePage::Resources, "资源概览"),
         module_tab(ui.clone(), WorkspacePage::SystemLogs, "系统日志"),
         module_tab(ui, WorkspacePage::Terminal, "终端"),
@@ -402,6 +503,13 @@ fn server_modules(ui: Ui) -> impl Widget {
             },
         ),
         when(
+            state.map(|s| s.workspace_page == WorkspacePage::Operations),
+            {
+                let ui = ui.clone();
+                move || operations::page(ui.clone())
+            },
+        ),
+        when(
             state.map(|s| s.workspace_page == WorkspacePage::Resources),
             {
                 let ui = ui.clone();
@@ -413,6 +521,48 @@ fn server_modules(ui: Ui) -> impl Widget {
             move || observability::logs(ui.clone()),
         ),
     ))
+}
+
+fn global_sidebar(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    when(
+        state.map(|s| matches!(s.navigation, Page::Scripts | Page::Tasks)),
+        {
+            let ui = ui.clone();
+            move || scripts_ui::sidebar(ui.clone())
+        },
+    )
+    .otherwise({
+        let ui = ui.clone();
+        move || {
+            when(state.map(|s| s.navigation == Page::Backups), {
+                let ui = ui.clone();
+                move || backups_ui::sidebar(ui.clone())
+            })
+            .otherwise({
+                let ui = ui.clone();
+                move || {
+                    when(state.map(|s| s.navigation == Page::Diagnostics), {
+                        let ui = ui.clone();
+                        move || diagnostics_ui::sidebar(ui.clone())
+                    })
+                    .otherwise({
+                        let ui = ui.clone();
+                        move || {
+                            when(state.map(|s| s.navigation == Page::Configurations), {
+                                let ui = ui.clone();
+                                move || configurations_ui::sidebar(ui.clone())
+                            })
+                            .otherwise({
+                                let ui = ui.clone();
+                                move || context_sidebar(ui.clone())
+                            })
+                        }
+                    })
+                }
+            })
+        }
+    })
 }
 
 pub(super) fn shell(ui: Ui) -> impl Widget {
@@ -427,22 +577,37 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
         })
         .otherwise({
             let ui = ui.clone();
-            move || context_sidebar(ui.clone())
+            move || global_sidebar(ui.clone())
         }),
         col().class("main-panel").fill((
             row().class("page-header").fill((
-                text()
-                    .class("page-header-title")
-                    .content(i18n::bind(state.map(|s| {
-                        match s.navigation {
-                            Page::Servers => "服务器",
-                            Page::Notifications => "所有活动",
-                            Page::Settings => "应用偏好设置",
+                text().class("page-header-title").content(state.map(|s| {
+                    match s.navigation {
+                        Page::Servers if server_inventory_ui::shown(s) => {
+                            i18n::translate("Server overview")
                         }
-                        .to_owned()
-                    }))),
+                        Page::Servers => s
+                            .config
+                            .servers
+                            .iter()
+                            .find(|p| Some(&p.id) == s.selected.as_ref())
+                            .map(|p| p.name.clone())
+                            .unwrap_or_else(|| i18n::translate("服务器")),
+                        Page::Scripts => i18n::translate("Scripts"),
+                        Page::Tasks => i18n::translate("Tasks"),
+                        Page::Backups => i18n::translate("Backups"),
+                        Page::Diagnostics => i18n::translate("Diagnostics"),
+                        Page::Configurations => i18n::translate("Configurations"),
+                        Page::Notifications => i18n::translate("所有活动"),
+                        Page::Settings => i18n::translate(s.settings_section.label()),
+                    }
+                })),
                 when(
-                    state.map(|s| s.navigation == Page::Servers && s.selected.is_some()),
+                    state.map(|s| {
+                        s.navigation == Page::Servers
+                            && s.selected.is_some()
+                            && !server_inventory_ui::shown(s)
+                    }),
                     {
                         let ui = ui.clone();
                         move || connection_controls(ui.clone())
@@ -476,6 +641,26 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                         close_action("忽略提示")
                             .on_press(move || dismiss.state.revise(|s| s.notice.clear())),
                     )),
+                when(state.map(|s| s.navigation == Page::Scripts), {
+                    let ui = ui.clone();
+                    move || scripts_ui::page(ui.clone())
+                }),
+                when(state.map(|s| s.navigation == Page::Tasks), {
+                    let ui = ui.clone();
+                    move || scripts_ui::tasks_page(ui.clone())
+                }),
+                when(state.map(|s| s.navigation == Page::Backups), {
+                    let ui = ui.clone();
+                    move || backups_ui::page(ui.clone())
+                }),
+                when(state.map(|s| s.navigation == Page::Diagnostics), {
+                    let ui = ui.clone();
+                    move || diagnostics_ui::page(ui.clone())
+                }),
+                when(state.map(|s| s.navigation == Page::Configurations), {
+                    let ui = ui.clone();
+                    move || configurations_ui::page(ui.clone())
+                }),
                 when(state.map(|s| s.navigation == Page::Settings), {
                     let ui = ui.clone();
                     move || settings::page(ui.clone())
@@ -485,12 +670,20 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                     move || notifications(ui.clone())
                 }),
                 when(
-                    state.map(|s| s.navigation == Page::Servers && !workspace_visible(s)),
+                    state.map(|s| {
+                        s.navigation == Page::Servers
+                            && !workspace_visible(s)
+                            && !server_inventory_ui::shown(s)
+                    }),
                     {
                         let ui = ui.clone();
                         move || server_landing(ui.clone())
                     },
                 ),
+                when(state.map(server_inventory_ui::shown), {
+                    let ui = ui.clone();
+                    move || server_inventory_ui::page(ui.clone())
+                }),
                 when(
                     state.map(|s| {
                         workspace_visible(s) && s.workspace_page != WorkspacePage::Terminal

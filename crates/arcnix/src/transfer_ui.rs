@@ -60,41 +60,14 @@ impl Ui {
 }
 
 fn size(bytes: u64) -> String {
-    let (unit, divisor) = if bytes >= 1024 * 1024 * 1024 {
-        ("GiB", 1024.0 * 1024.0 * 1024.0)
-    } else if bytes >= 1024 * 1024 {
-        ("MiB", 1024.0 * 1024.0)
-    } else if bytes >= 1024 {
-        ("KiB", 1024.0)
-    } else {
-        return i18n::translate(&format!("{bytes} 字节"));
-    };
-    i18n::translate(&format!(
-        "{:.2} {unit}（{bytes} 字节）",
-        bytes as f64 / divisor
-    ))
+    format!(
+        "{} ({bytes} {})",
+        formatting::bytes(bytes),
+        i18n::translate("字节")
+    )
 }
-
 fn modified(seconds: Option<u64>) -> String {
-    let Some(seconds) = seconds.filter(|seconds| *seconds <= 253_402_300_799) else {
-        return i18n::translate("修改时间未知");
-    };
-    let z = (seconds / 86400) as i64 + 719468;
-    let era = z / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    year += i64::from(month <= 2);
-    i18n::translate(&format!(
-        "修改于 {year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
-        seconds / 3600 % 24,
-        seconds / 60 % 60,
-        seconds % 60
-    ))
+    formatting::timestamp(seconds)
 }
 
 fn action_choice(ui: Ui, action: ConflictAction, label: &'static str) -> impl Widget {

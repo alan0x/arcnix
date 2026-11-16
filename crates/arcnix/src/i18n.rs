@@ -225,4 +225,42 @@ mod tests {
             assert_eq!(translate_for(value, Language::English), value);
         }
     }
+    #[test]
+    fn recovery_access_and_unconfirmed_request_labels_translate_both_directions() {
+        for (zh, en) in [
+            ("异机恢复…", "Recover on another server…"),
+            ("仓库访问服务器", "Repository access server"),
+            (
+                "恢复演练请求；尚无执行证明",
+                "Recovery drill request; no execution proof",
+            ),
+            ("执行服务器：", "Execution server:"),
+        ] {
+            assert_eq!(translate_for(en, Language::SimplifiedChinese), zh);
+            assert_eq!(
+                translate_for(zh, Language::English),
+                if zh == "执行服务器：" {
+                    "Executed on:"
+                } else {
+                    en
+                }
+            );
+        }
+    }
+    #[test]
+    fn typed_parameters_and_value_errors_translate_without_changing_names() {
+        for (zh, en) in [
+            ("配置参数", "Configure parameters"),
+            ("载入选中预设", "Load selected preset"),
+            ("预设已失效", "Stale preset"),
+            ("绝对路径", "Absolute path"),
+            (
+                "请输入 1 到 65535 的端口号：server_port",
+                "Enter a port from 1 to 65535: server_port",
+            ),
+        ] {
+            assert_eq!(translate_for(en, Language::SimplifiedChinese), zh);
+            assert_eq!(translate_for(zh, Language::English), en);
+        }
+    }
 }

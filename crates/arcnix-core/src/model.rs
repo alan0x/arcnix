@@ -7,12 +7,40 @@ pub enum AuthMethod {
     Password,
     PrivateKey,
 }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct VisibleFileColumns {
+    pub size: bool,
+    pub kind: bool,
+    pub modified: bool,
+    pub permissions: bool,
+}
+impl Default for VisibleFileColumns {
+    fn default() -> Self {
+        Self {
+            size: true,
+            kind: false,
+            modified: true,
+            permissions: false,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct FileColumnSettings {
+    pub local: VisibleFileColumns,
+    pub remote: VisibleFileColumns,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerProfile {
     pub id: String,
     pub name: String,
     pub group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub environment: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -21,6 +49,12 @@ pub struct ServerProfile {
     pub initial_remote_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_pane_ratio: Option<u16>,
+    #[serde(default)]
+    pub file_columns: FileColumnSettings,
+    #[serde(default)]
+    pub locations: crate::preferences::FileLocations,
+    #[serde(default)]
+    pub connection: Option<crate::preferences::ConnectionSettings>,
 }
 
 impl Default for ServerProfile {
@@ -29,6 +63,8 @@ impl Default for ServerProfile {
             id: new_id(),
             name: String::new(),
             group_id: None,
+            environment: String::new(),
+            tags: vec![],
             host: String::new(),
             port: 22,
             username: String::new(),
@@ -36,6 +72,9 @@ impl Default for ServerProfile {
             private_key: None,
             initial_remote_path: ".".into(),
             file_pane_ratio: None,
+            file_columns: FileColumnSettings::default(),
+            locations: Default::default(),
+            connection: None,
         }
     }
 }
@@ -69,6 +108,16 @@ pub struct TrustedHost {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AppConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_favorites: Vec<crate::script_favorites::Favorite>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_presets: Vec<crate::script_parameters::Preset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backup_evidence: Vec<crate::backup_evidence::Evidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backup_policies: Vec<crate::backups::Policy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snippets: Vec<crate::operations::Snippet>,
     pub groups: Vec<ServerGroup>,
     pub servers: Vec<ServerProfile>,
     pub trusted_hosts: Vec<TrustedHost>,
@@ -111,6 +160,18 @@ pub struct AppSettings {
     pub theme: Theme,
     pub show_hidden_files: bool,
     pub resource_interval_seconds: u64,
+    #[serde(default)]
+    pub connection: crate::preferences::ConnectionSettings,
+    #[serde(default)]
+    pub display: crate::preferences::DisplaySettings,
+    #[serde(default)]
+    pub logging: crate::preferences::LogSettings,
+    #[serde(default)]
+    pub updates: crate::preferences::UpdateSettings,
+    #[serde(default)]
+    pub upload_conflict: Option<ExistingFileAction>,
+    #[serde(default)]
+    pub download_conflict: Option<ExistingFileAction>,
 }
 impl Default for AppSettings {
     fn default() -> Self {
@@ -119,12 +180,19 @@ impl Default for AppSettings {
             theme: Theme::System,
             show_hidden_files: true,
             resource_interval_seconds: 3,
+            connection: Default::default(),
+            display: Default::default(),
+            logging: Default::default(),
+            updates: Default::default(),
+            upload_conflict: None,
+            download_conflict: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExistingFileAction {
+    Ask,
     Overwrite,
     Skip,
 }

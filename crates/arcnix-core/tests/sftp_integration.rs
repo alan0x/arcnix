@@ -31,6 +31,378 @@ fn connect() -> Result<RemoteSession> {
     let fingerprint = pending.fingerprint().to_owned();
     pending.authenticate("arcnix-test", &fingerprint)
 }
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn text_editor_preserves_format_permissions_and_refuses_changed_remote_content() -> Result<()> {
+    let session = connect()?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::write(&source, b"\xef\xbb\xbfsecret=fixture-only\r\nvalue=old\r\n")?;
+    let path = format!("/editor-{}.txt", new_id());
+    let cancel = AtomicBool::new(false);
+    session.upload(&source, &path, &cancel, |_, _| {})?;
+    let document = session.read_text(&path, || Ok(()))?;
+    assert!(document.bom && document.crlf);
+    let saved = session.save_text(&document, "secret=fixture-only\nvalue=new\n", || Ok(()))?;
+    assert_eq!(saved.version.mode, document.version.mode);
+    assert_eq!(saved.version.uid, document.version.uid);
+    assert_eq!(saved.version.gid, document.version.gid);
+    assert!(session.save_text(&document, "stale\n", || Ok(())).is_err());
+    let download = temp.join("verified");
+    session.download(&path, &download, &cancel, |_, _| {})?;
+    assert_eq!(
+        fs::read(download)?,
+        b"\xef\xbb\xbfsecret=fixture-only\r\nvalue=new\r\n"
+    );
+    assert!(
+        session
+            .save_text(&saved, "canceled\n", || anyhow::bail!("Canceled"))
+            .is_err()
+    );
+    assert_eq!(session.read_text(&path, || Ok(()))?.content, saved.content);
+    let fixture: serde_json::Value =
+        serde_json::from_slice(&fs::read(std::env::var("ARCNIX_TEST_FIXTURE")?)?)?;
+    let root = fs::canonicalize(fixture["root"].as_str().context("Missing fixture root")?)?;
+    let actual = root.join(path.trim_start_matches('/'));
+    assert!(actual.starts_with(&root));
+    let mut changed = fs::read(&actual)?;
+    let last = changed.iter().rposition(|b| *b == b'w').unwrap();
+    changed[last] = b'x';
+    fs::write(&actual, &changed)?;
+    let modified =
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(saved.version.modified.unwrap());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&actual)?
+        .set_times(fs::FileTimes::new().set_modified(modified))?;
+    let current = session.read_text(&path, || Ok(()))?;
+    assert_eq!(current.version.size, saved.version.size);
+    assert_eq!(current.version.modified, saved.version.modified);
+    assert_ne!(current.version.hash, saved.version.hash);
+    assert!(
+        session
+            .save_text(&saved, "do not overwrite\n", || Ok(()))
+            .is_err()
+    );
+    assert_eq!(fs::read(actual)?, changed);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn text_editor_rejects_binary_and_connection_overrides_keep_ssh_operational() -> Result<()> {
+    let mut profile = profile()?;
+    profile.connection = Some(arcnix_core::preferences::ConnectionSettings {
+        timeout_seconds: 5,
+        keepalive_seconds: 5,
+    });
+    let pending = PendingConnection::open(&profile)?;
+    let fingerprint = pending.fingerprint().to_owned();
+    let session = pending.authenticate("arcnix-test", &fingerprint)?;
+    session.keepalive()?;
+    let temp = Temp::new()?;
+    let source = temp.join("binary");
+    fs::write(&source, [0, 1, 2])?;
+    let path = format!("/binary-{}", new_id());
+    session.upload(&source, &path, &AtomicBool::new(false), |_, _| {})?;
+    assert!(session.read_text(&path, || Ok(())).is_err());
+    assert!(
+        session
+            .read_text("/folder/../welcome.txt", || Ok(()))
+            .is_err()
+    );
+    profile.connection.as_mut().unwrap().timeout_seconds = 0;
+    assert!(PendingConnection::open(&profile).is_err());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn permissions_update_selected_entries_without_recursing_or_changing_content() -> Result<()> {
+    use arcnix_core::permissions::Target;
+    let session = connect()?;
+    let directory = format!("/permissions-{}", new_id());
+    session.mkdir(&directory)?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::write(&source, b"permission test data")?;
+    let file = format!("{directory}/child.txt");
+    let cancel = AtomicBool::new(false);
+    session.upload(&source, &file, &cancel, |_, _| {})?;
+    let original = session.file_metadata(&file)?;
+    let root = session.file_metadata(&directory)?;
+    assert_eq!(
+        session.set_permissions(
+            &[Target {
+                path: directory.clone(),
+                mode: root.mode.unwrap(),
+                directory: true
+            }],
+            0o750,
+            || Ok(())
+        )?,
+        1
+    );
+    assert_eq!(session.file_metadata(&directory)?.mode, Some(0o750));
+    assert_eq!(session.file_metadata(&file)?.mode, original.mode);
+    let target = Target {
+        path: file.clone(),
+        mode: original.mode.unwrap(),
+        directory: false,
+    };
+    assert!(
+        session
+            .set_permissions(std::slice::from_ref(&target), 0o10000, || Ok(()))
+            .is_err()
+    );
+    assert!(
+        session
+            .set_permissions(std::slice::from_ref(&target), 0o644, || anyhow::bail!(
+                "Canceled"
+            ))
+            .is_err()
+    );
+    session.set_permissions(std::slice::from_ref(&target), 0o4755, || Ok(()))?;
+    let changed = session.file_metadata(&file)?;
+    assert_eq!(changed.mode, Some(0o4755));
+    assert_eq!(changed.size, original.size);
+    assert_eq!(changed.modified, original.modified);
+    assert!(
+        session
+            .set_permissions(&[target], 0o600, || Ok(()))
+            .is_err()
+    );
+    let download = temp.join("verified");
+    session.download(&file, &download, &cancel, |_, _| {})?;
+    assert_eq!(fs::read(download)?, b"permission test data");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn permissions_report_denial_and_reject_traversal_before_writing() -> Result<()> {
+    use arcnix_core::permissions::Target;
+    let session = connect()?;
+    let directory = format!("/fixture-mode-denied-{}", new_id());
+    session.mkdir(&directory)?;
+    let mode = session.file_metadata(&directory)?.mode.unwrap();
+    let target = Target {
+        path: directory.clone(),
+        mode,
+        directory: true,
+    };
+    let error = session
+        .set_permissions(&[target], 0o700, || Ok(()))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("applied to 0 entries"));
+    assert_eq!(session.file_metadata(&directory)?.mode, Some(mode));
+    for path in [
+        "/",
+        "/folder/../welcome.txt",
+        ".",
+        "relative",
+        "/folder\\child",
+    ] {
+        assert!(
+            session
+                .set_permissions(
+                    &[Target {
+                        path: path.into(),
+                        mode,
+                        directory: true
+                    }],
+                    0o700,
+                    || Ok(())
+                )
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn deletion_emits_scan_and_partial_progress_and_honors_cancel() -> Result<()> {
+    use arcnix_core::deletion::{Phase, Target};
+    let session = connect()?;
+    let directory = format!("/delete-progress-{}", new_id());
+    session.mkdir(&directory)?;
+    session.mkdir(&format!("{directory}/nested"))?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::write(&source, b"data")?;
+    for index in 0..8 {
+        session.upload(
+            &source,
+            &format!("{directory}/nested/{index}"),
+            &AtomicBool::new(false),
+            |_, _| {},
+        )?;
+    }
+    let target = Target::from(
+        &session
+            .list_dir("/")?
+            .1
+            .into_iter()
+            .find(|e| e.path == directory)
+            .unwrap(),
+    );
+    let cancel = AtomicBool::new(false);
+    let mut last = 0;
+    let result = session.delete_with_progress(
+        &[target],
+        || {
+            anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Canceled");
+            Ok(())
+        },
+        |progress| {
+            assert!(progress.scanned >= last);
+            last = progress.scanned;
+            if progress.phase == Phase::Deleting && progress.removed == 2 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        },
+    );
+    assert!(format!("{:#}", result.unwrap_err()).contains("after removing 2 entries"));
+    assert_eq!(session.list_dir(&format!("{directory}/nested"))?.1.len(), 6);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn deletion_skips_dot_entries_and_preserves_sibling_directory() -> Result<()> {
+    use arcnix_core::deletion::Target;
+    let session = connect()?;
+    let directory = format!("/delete-dots-{}", new_id());
+    let sibling = format!("{directory}-keep");
+    session.mkdir(&directory)?;
+    session.mkdir(&format!("{directory}/nested"))?;
+    session.mkdir(&format!("{directory}/nested/empty"))?;
+    session.mkdir(&sibling)?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::write(&source, b"keep sibling content")?;
+    let cancel = AtomicBool::new(false);
+    session.upload(
+        &source,
+        &format!("{directory}/nested/中文.txt"),
+        &cancel,
+        |_, _| {},
+    )?;
+    session.upload(&source, &format!("{sibling}/keep.txt"), &cancel, |_, _| {})?;
+    let target = Target::from(
+        &session
+            .list_dir("/")?
+            .1
+            .into_iter()
+            .find(|e| e.path == directory)
+            .unwrap(),
+    );
+    assert_eq!(session.delete(&[target], || Ok(()))?, 4);
+    assert!(session.list_dir(&directory).is_err());
+    assert_eq!(session.list_dir(&sibling)?.1.len(), 1);
+    let download = temp.join("verified");
+    session.download(
+        &format!("{sibling}/keep.txt"),
+        &download,
+        &cancel,
+        |_, _| {},
+    )?;
+    assert_eq!(fs::read(download)?, b"keep sibling content");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn deletion_recurses_deduplicates_and_rejects_stale_selection() -> Result<()> {
+    use arcnix_core::deletion::Target;
+    let session = connect()?;
+    let directory = format!("/delete-{}", new_id());
+    session.mkdir(&directory)?;
+    session.mkdir(&format!("{directory}/nested"))?;
+    let temp = Temp::new()?;
+    let source = temp.join("source");
+    fs::write(&source, b"delete test")?;
+    session.upload(
+        &source,
+        &format!("{directory}/nested/中文.txt"),
+        &AtomicBool::new(false),
+        |_, _| {},
+    )?;
+    let selected = session
+        .list_dir("/")?
+        .1
+        .into_iter()
+        .find(|e| e.path == directory)
+        .unwrap();
+    let child = session.list_dir(&directory)?.1.remove(0);
+    assert_eq!(
+        session.delete(&[Target::from(&selected), Target::from(&child)], || Ok(()))?,
+        3
+    );
+    assert!(session.list_dir(&directory).is_err());
+    let file = format!("/delete-stale-{}", new_id());
+    session.upload(&source, &file, &AtomicBool::new(false), |_, _| {})?;
+    let mut target = Target::from(
+        &session
+            .list_dir("/")?
+            .1
+            .into_iter()
+            .find(|e| e.path == file)
+            .unwrap(),
+    );
+    target.size += 1;
+    assert!(session.delete(&[target], || Ok(())).is_err());
+    assert!(session.list_dir("/")?.1.iter().any(|e| e.path == file));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn deletion_rejects_unsafe_paths_and_reports_permission_failure() -> Result<()> {
+    use arcnix_core::deletion::Target;
+    let session = connect()?;
+    for path in [
+        "/",
+        ".",
+        "relative",
+        "/folder/../welcome.txt",
+        "/folder\\welcome.txt",
+        "/folder/",
+    ] {
+        let target = Target {
+            path: path.into(),
+            directory: true,
+            symlink: false,
+            size: 0,
+            modified: None,
+        };
+        assert!(session.delete(&[target], || Ok(())).is_err());
+    }
+    let directory = format!("/fixture-delete-denied-{}", new_id());
+    session.mkdir(&directory)?;
+    let target = Target::from(
+        &session
+            .list_dir("/")?
+            .1
+            .into_iter()
+            .find(|e| e.path == directory)
+            .unwrap(),
+    );
+    assert!(
+        session
+            .delete(std::slice::from_ref(&target), || anyhow::bail!(
+                "Connection changed"
+            ))
+            .is_err()
+    );
+    assert!(session.list_dir(&directory).is_ok());
+    let error = session.delete(&[target], || Ok(())).unwrap_err();
+    assert!(format!("{error:#}").contains("after removing 0 entries"));
+    assert!(session.list_dir(&directory).is_ok());
+    Ok(())
+}
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Result<Self> {

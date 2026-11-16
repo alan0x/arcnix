@@ -4,7 +4,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use arcnix_core::metrics::{self, ResourceSnapshot};
-use arcnix_core::packages::{self, PackageAction, PackagePlan, SystemEnvironment};
+use arcnix_core::packages::{self, SystemEnvironment};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::system_logs::{self, LogCapabilities, LogQuery, LogSnapshot};
 use arcnix_core::{local, *};
@@ -23,8 +23,10 @@ pub struct ConflictDecision {
 }
 
 pub enum Action {
+    Keepalive,
+    Operations(crate::operations_worker::Action),
     Terminal(crate::terminal_worker::Action),
-    Probe(ServerProfile, Option<String>),
+    Probe(Box<ServerProfile>, Option<String>),
     Authenticate {
         secret: String,
         fingerprint: String,
@@ -39,8 +41,28 @@ pub enum Action {
     LocalMkdir(PathBuf),
     RemoteMkdir(String),
     LocalRename(PathBuf, PathBuf),
+    Delete {
+        remote: bool,
+        targets: Vec<arcnix_core::deletion::Target>,
+        cancel: Arc<AtomicBool>,
+    },
     ImportSshConfig(PathBuf),
     RemoteRename(String, String),
+    FileMetadata(String),
+    TextRead {
+        path: String,
+        cancel: Arc<AtomicBool>,
+    },
+    TextSave {
+        document: arcnix_core::text_files::Document,
+        content: String,
+        cancel: Arc<AtomicBool>,
+    },
+    Permissions {
+        targets: Vec<arcnix_core::permissions::Target>,
+        mode: u32,
+        cancel: Arc<AtomicBool>,
+    },
     TransferInteractive {
         job: TransferJob,
         cancel: Arc<AtomicBool>,
@@ -49,11 +71,6 @@ pub enum Action {
     PackageDetect,
     PackageSearch(String),
     PackageInstalled,
-    PackagePreview(PackageAction),
-    PackageApply {
-        plan_id: u64,
-        secret: String,
-    },
     MetricsSample,
     LogsDiscover,
     LogsRead(LogQuery),
@@ -74,6 +91,12 @@ impl Action {
     }
 }
 pub enum Update {
+    TextFile(Result<arcnix_core::text_files::Document, String>),
+    Alive,
+    FileMetadata(Result<arcnix_core::permissions::Metadata, String>),
+    Permissions(Result<usize, String>),
+    DeletionProgress(arcnix_core::deletion::Progress),
+    Operations(crate::operations_worker::Event),
     Terminal(crate::terminal_worker::Event),
     Fingerprint(String),
     Connected(bool),
@@ -88,6 +111,10 @@ pub enum Update {
     Progress(String, u64, u64, u64),
     Finished(String, Result<(), String>),
     Log(String),
+    Deleted {
+        remote: bool,
+        result: Result<usize, String>,
+    },
     Error(String),
     ConnectionError(String),
     Imported(arcnix_core::ssh_config::ImportReport),
@@ -98,10 +125,6 @@ pub enum Update {
     ConnectionLost(String),
     PackageEnvironment(Result<SystemEnvironment, String>),
     PackageList(Result<Vec<packages::Package>, String>),
-    PackagePreview(Result<PackagePlan, String>),
-    PackageStarted,
-    PackageOutput(String),
-    PackageFinished(Result<CommandOutput, String>),
     Metrics(Result<ResourceSnapshot, String>),
     LogCapabilities(Result<LogCapabilities, String>),
     SystemLogs(Result<LogSnapshot, String>),
@@ -116,6 +139,44 @@ pub struct Response {
     pub epoch: u64,
     pub serial: u64,
     pub update: Update,
+}
+fn publish_file_result<T>(
+    result: anyhow::Result<T>,
+    send: impl FnOnce(std::result::Result<T, String>),
+) -> anyhow::Result<()> {
+    match result {
+        Ok(value) => {
+            send(Ok(value));
+            Ok(())
+        }
+        Err(error) => {
+            let lost = arcnix_core::transport_error::is_connection_error(&error);
+            send(Err(format!("{error:#}")));
+            if lost { Err(error) } else { Ok(()) }
+        }
+    }
+}
+fn deletion_progress(
+    events: async_channel::Sender<Response>,
+    epoch: u64,
+    serial: u64,
+) -> impl FnMut(arcnix_core::deletion::Progress) {
+    let mut previous = None;
+    let mut last = std::time::Instant::now();
+    move |progress| {
+        if previous != Some(progress.phase)
+            || last.elapsed().as_millis() >= 100
+            || (progress.total > 0 && progress.removed == progress.total)
+        {
+            previous = Some(progress.phase);
+            last = std::time::Instant::now();
+            let _ = events.try_send(Response {
+                epoch,
+                serial,
+                update: Update::DeletionProgress(progress),
+            });
+        }
+    }
 }
 pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
     let (tx, rx) = mpsc::channel::<Request>();
@@ -141,6 +202,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 | Action::Children { remote: false, .. }
                 | Action::LocalMkdir(_)
                 | Action::LocalRename(..)
+                | Action::Delete { remote: false, .. }
                 | Action::ImportSshConfig(_) => {
                     if local_tx.send(request).is_err() {
                         break;
@@ -187,6 +249,22 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 Action::LocalRename(from, to) => {
                     local::rename(&from, &to).map(|_| Update::Log("本地文件已重命名".into()))
                 }
+                Action::Delete {
+                    remote: false,
+                    targets,
+                    cancel,
+                } => Ok(Update::Deleted {
+                    remote: false,
+                    result: local::delete_with_progress(
+                        &targets,
+                        || {
+                            anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Deletion canceled");
+                            Ok(())
+                        },
+                        deletion_progress(local_events.clone(), epoch, serial),
+                    )
+                    .map_err(|e| format!("{e:#}")),
+                }),
                 Action::ImportSshConfig(path) => {
                     arcnix_core::ssh_config::import_file(&path).map(Update::Imported)
                 }
@@ -221,7 +299,6 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
         let mut active_server = String::new();
         let mut active_profile: Option<ServerProfile> = None;
         let mut package_environment: Option<SystemEnvironment> = None;
-        let mut package_plan: Option<(u64, PackagePlan)> = None;
         for Request {
             epoch,
             serial,
@@ -235,6 +312,33 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     update,
                 });
             };
+            if let Action::Operations(action) = action {
+                let kind = action.kind();
+                let result: anyhow::Result<()> = (|| {
+                    anyhow::ensure!(
+                        epoch == generation.load(Ordering::Acquire) && epoch == active_epoch,
+                        "Server connection has changed"
+                    );
+                    let remote = session
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Connect a server first"))?;
+                    crate::operations_worker::handle(remote, action, |e| {
+                        send(Update::Operations(e))
+                    })
+                })();
+                if let Err(error) = result {
+                    if arcnix_core::transport_error::is_connection_error(&error) {
+                        session = None;
+                        pending = None;
+                        send(Update::ConnectionLost(format!("{error:#}")));
+                    }
+                    send(Update::Operations(crate::operations_worker::Event::Failed(
+                        kind,
+                        format!("{error:#}"),
+                    )));
+                }
+                continue;
+            }
             if matches!(
                 action,
                 Action::MetricsSample | Action::LogsDiscover | Action::LogsRead(_)
@@ -269,7 +373,6 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         session = None;
                         pending = None;
                         package_environment = None;
-                        package_plan = None;
                         send(Update::ConnectionLost(format!("{error:#}")));
                     }
                     let message = format!("{error:#}");
@@ -283,111 +386,33 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             }
             if matches!(
                 action,
-                Action::PackageDetect
-                    | Action::PackageSearch(_)
-                    | Action::PackageInstalled
-                    | Action::PackagePreview(_)
-                    | Action::PackageApply { .. }
+                Action::PackageDetect | Action::PackageSearch(_) | Action::PackageInstalled
             ) {
-                let kind = match &action {
-                    Action::PackageDetect => 0,
-                    Action::PackageSearch(_) | Action::PackageInstalled => 1,
-                    Action::PackagePreview(_) => 2,
-                    _ => 3,
-                };
+                let detect = matches!(action, Action::PackageDetect);
                 let outcome: anyhow::Result<()> = (|| {
                     anyhow::ensure!(
                         epoch == generation.load(Ordering::Acquire) && epoch == active_epoch,
-                        "连接已切换，系统软件操作已停止"
+                        "Server connection has changed"
                     );
                     let remote = session
                         .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
-                    if package_environment.is_none() || matches!(action, Action::PackageDetect) {
-                        package_plan = None;
+                        .ok_or_else(|| anyhow::anyhow!("Connect a server first"))?;
+                    if package_environment.is_none() || detect {
                         package_environment = Some(packages::detect(remote)?);
                     }
                     let environment = package_environment.as_ref().expect("environment detected");
-                    match action {
+                    send(match action {
                         Action::PackageDetect => {
-                            send(Update::PackageEnvironment(Ok(environment.clone())))
+                            Update::PackageEnvironment(Ok(environment.clone()))
                         }
-                        Action::PackageSearch(query) => send(Update::PackageList(Ok(
-                            packages::search(remote, environment, &query)?,
-                        ))),
-                        Action::PackageInstalled => send(Update::PackageList(Ok(
-                            packages::installed(remote, environment)?,
-                        ))),
-                        Action::PackagePreview(action) => {
-                            package_plan = None;
-                            let plan = packages::preview(remote, environment, action)?;
-                            package_plan = Some((serial, plan.clone()));
-                            send(Update::PackagePreview(Ok(plan)));
+                        Action::PackageSearch(query) => {
+                            Update::PackageList(Ok(packages::search(remote, environment, &query)?))
                         }
-                        Action::PackageApply { plan_id, secret } => {
-                            let (approved_id, plan) = package_plan
-                                .take()
-                                .ok_or_else(|| anyhow::anyhow!("安装预览已失效，请重新预览操作"))?;
-                            anyhow::ensure!(
-                                approved_id == plan_id,
-                                "安装预览不属于当前任务，请重新预览"
-                            );
-                            let execution =
-                                packages::build_execution(environment, &plan, !secret.is_empty())?;
-                            anyhow::ensure!(
-                                secret.len() <= 1024 && !secret.contains(['\n', '\r', '\0']),
-                                "管理员密码格式无效"
-                            );
-                            let mut bytes = secret.into_bytes();
-                            let mut stdout = crate::secret_output::SecretOutput::new(&bytes);
-                            let mut stderr = crate::secret_output::SecretOutput::new(&bytes);
-                            let mut input = if execution.use_stdin_password {
-                                bytes.push(b'\n');
-                                Some(bytes)
-                            } else {
-                                bytes.fill(0);
-                                None
-                            };
-                            send(Update::PackageStarted);
-                            send(Update::PackageOutput(format!(
-                                "$ {}\n",
-                                crate::command_display(&execution.command)
-                            )));
-                            let result = remote.exec_stream(
-                                &execution.command,
-                                input.as_deref(),
-                                std::time::Duration::from_secs(1800),
-                                |stream, bytes| {
-                                    let text = match stream {
-                                        arcnix_core::remote::CommandStream::Stdout => {
-                                            stdout.push(bytes)
-                                        }
-                                        arcnix_core::remote::CommandStream::Stderr => {
-                                            stderr.push(bytes)
-                                        }
-                                    };
-                                    if !text.is_empty() {
-                                        send(Update::PackageOutput(text));
-                                    }
-                                },
-                            );
-                            for text in [stdout.finish(), stderr.finish()] {
-                                if !text.is_empty() {
-                                    send(Update::PackageOutput(text));
-                                }
-                            }
-                            if let Some(bytes) = input.as_mut() {
-                                bytes.fill(0);
-                            }
-                            // The page receives output through the filtered stream only;
-                            // do not expose an unfiltered retained tail in the final event.
-                            let mut output = result?;
-                            output.stdout.clear();
-                            output.stderr.clear();
-                            send(Update::PackageFinished(Ok(output)));
+                        Action::PackageInstalled => {
+                            Update::PackageList(Ok(packages::installed(remote, environment)?))
                         }
                         _ => unreachable!(),
-                    }
+                    });
                     Ok(())
                 })();
                 if let Err(error) = outcome {
@@ -395,15 +420,13 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         session = None;
                         pending = None;
                         package_environment = None;
-                        package_plan = None;
                         send(Update::ConnectionLost(format!("{error:#}")));
                     }
                     let message = format!("{error:#}");
-                    send(match kind {
-                        0 => Update::PackageEnvironment(Err(message)),
-                        1 => Update::PackageList(Err(message)),
-                        2 => Update::PackagePreview(Err(message)),
-                        _ => Update::PackageFinished(Err(message)),
+                    send(if detect {
+                        Update::PackageEnvironment(Err(message))
+                    } else {
+                        Update::PackageList(Err(message))
                     });
                 }
                 continue;
@@ -499,6 +522,14 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 continue;
             }
             let browsing = matches!(action, Action::Remote(_));
+            let file_kind = match &action {
+                Action::TextRead { .. } | Action::TextSave { .. } => Some(3),
+                Action::Delete { .. } => Some(0),
+                Action::Permissions { .. } => Some(1),
+                Action::FileMetadata(_) => Some(2),
+                _ => None,
+            };
+            let mut file_completed = false;
             let child_path = match &action {
                 Action::Children { remote: true, path } => Some(path.clone()),
                 _ => None,
@@ -512,8 +543,8 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 );
                 match action {
                     Action::Probe(profile, expected) => {
+                        let profile = *profile;
                         package_environment = None;
-                        package_plan = None;
                         active_epoch = epoch;
                         active_server = profile.id.clone();
                         active_profile = Some(profile.clone());
@@ -544,7 +575,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         if let Some(profile) = active_profile.clone() {
                             let _ = terminal.send(crate::terminal_worker::Command::Attach {
                                 epoch,
-                                profile,
+                                profile: Box::new(profile),
                                 fingerprint,
                                 secret,
                             });
@@ -555,7 +586,6 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     }
                     Action::Disconnect => {
                         package_environment = None;
-                        package_plan = None;
                         active_epoch = epoch;
                         session = None;
                         pending = None;
@@ -569,6 +599,33 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                             .as_mut()
                             .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                         match action {
+                            Action::TextRead { path, cancel } => {
+                                file_completed = true;
+                                publish_file_result(
+                                    remote.read_text(&path, || {
+                                        anyhow::ensure!(
+                                            generation.load(Ordering::Acquire) == epoch
+                                                && !cancel.load(Ordering::Relaxed),
+                                            "File read canceled or connection changed"
+                                        );
+                                        Ok(())
+                                    }),
+                                    |result| send(Update::TextFile(result)),
+                                )?;
+                            }
+                            Action::TextSave {
+                                document,
+                                content,
+                                cancel,
+                            } => {
+                                file_completed = true;
+                                let content = zeroize::Zeroizing::new(content);
+                                publish_file_result(remote.save_text(&document,&content,||{anyhow::ensure!(generation.load(Ordering::Acquire)==epoch&&!cancel.load(Ordering::Relaxed),"File save canceled or connection changed; reload to verify the remote result");Ok(())}),|result|send(Update::TextFile(result)))?;
+                            }
+                            Action::Keepalive => {
+                                remote.keepalive()?;
+                                send(Update::Alive);
+                            }
                             Action::Remote(path) => {
                                 let (path, entries) = remote.list_dir(&path)?;
                                 send(Update::Remote(path, entries));
@@ -603,6 +660,57 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                                 remote.rename(&from, &to)?;
                                 send(Update::Log("远程文件已重命名".into()));
                             }
+                            Action::FileMetadata(path) => {
+                                file_completed = true;
+                                publish_file_result(remote.file_metadata(&path), |result| {
+                                    send(Update::FileMetadata(result))
+                                })?;
+                            }
+                            Action::Permissions {
+                                targets,
+                                mode,
+                                cancel,
+                            } => {
+                                file_completed = true;
+                                publish_file_result(
+                                    remote.set_permissions(&targets, mode, || {
+                                        anyhow::ensure!(
+                                            generation.load(Ordering::Acquire) == epoch
+                                                && !cancel.load(Ordering::Relaxed),
+                                            "Permission update canceled or connection changed"
+                                        );
+                                        Ok(())
+                                    }),
+                                    |result| send(Update::Permissions(result)),
+                                )?;
+                            }
+                            Action::Delete {
+                                remote: true,
+                                targets,
+                                cancel,
+                            } => {
+                                file_completed = true;
+                                publish_file_result(
+                                    remote.delete_with_progress(
+                                        &targets,
+                                        || {
+                                            anyhow::ensure!(
+                                                generation.load(Ordering::Acquire) == epoch
+                                                    && !cancel.load(Ordering::Relaxed),
+                                                "Deletion canceled or connection changed"
+                                            );
+                                            Ok(())
+                                        },
+                                        deletion_progress(events.clone(), epoch, serial),
+                                    ),
+                                    |result| {
+                                        send(Update::Deleted {
+                                            remote: true,
+                                            result,
+                                        })
+                                    },
+                                )?;
+                            }
                             _ => unreachable!(),
                         }
                     }
@@ -610,6 +718,26 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 Ok(())
             })();
             if let Err(error) = result {
+                if let Some(kind) = file_kind {
+                    if !file_completed {
+                        let message = format!("{error:#}");
+                        send(match kind {
+                            0 => Update::Deleted {
+                                remote: true,
+                                result: Err(message),
+                            },
+                            1 => Update::Permissions(Err(message)),
+                            2 => Update::FileMetadata(Err(message)),
+                            _ => Update::TextFile(Err(message)),
+                        });
+                    }
+                    if had_session && arcnix_core::transport_error::is_connection_error(&error) {
+                        session = None;
+                        pending = None;
+                        send(Update::ConnectionLost(format!("{error:#}")));
+                    }
+                    continue;
+                }
                 if had_session && arcnix_core::transport_error::is_connection_error(&error) {
                     session = None;
                     pending = None;
@@ -691,6 +819,64 @@ mod tests {
     }
 
     #[test]
+    fn file_tasks_finish_when_disconnected_or_queued_on_an_expired_connection() -> Result<()> {
+        let (tx, rx) = start();
+        for (serial, action) in [
+            (
+                1,
+                Action::Delete {
+                    remote: true,
+                    targets: vec![],
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            ),
+            (
+                2,
+                Action::Permissions {
+                    targets: vec![],
+                    mode: 0o644,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            ),
+            (3, Action::FileMetadata("/file".into())),
+        ] {
+            tx.send(Request {
+                epoch: 0,
+                serial,
+                action,
+            })?;
+            let response = receive(&rx)?;
+            assert_eq!(response.serial, serial);
+            assert!(matches!(
+                response.update,
+                Update::Deleted { result: Err(_), .. }
+                    | Update::Permissions(Err(_))
+                    | Update::FileMetadata(Err(_))
+            ));
+        }
+        tx.send(Request {
+            epoch: 12,
+            serial: 4,
+            action: Action::Disconnect,
+        })?;
+        assert!(matches!(receive(&rx)?.update, Update::Disconnected));
+        tx.send(Request {
+            epoch: 0,
+            serial: 5,
+            action: Action::Delete {
+                remote: true,
+                targets: vec![],
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
+        })?;
+        assert!(matches!(
+            receive(&rx)?.update,
+            Update::Deleted { result: Err(_), .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "requires loopback SSH fixture"]
     fn observation_bridge_uses_ssh_without_sftp_and_rejects_stale_session() -> Result<()> {
         let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
@@ -713,7 +899,8 @@ mod tests {
                     port: address.port(),
                     username: "arcnix-nosftp".into(),
                     ..Default::default()
-                },
+                }
+                .into(),
                 None,
             ),
         )?;
@@ -787,7 +974,7 @@ mod tests {
             })
             .map_err(|_| anyhow::anyhow!("worker request channel closed"))
         };
-        send(77, Action::Probe(profile, None))?;
+        send(77, Action::Probe(profile.into(), None))?;
         let response = receive(&rx)?;
         assert_eq!(response.epoch, 77);
         let fingerprint = match response.update {
@@ -932,7 +1119,7 @@ mod tests {
         tx.send(Request {
             epoch: 1,
             serial: 1,
-            action: Action::Probe(profile, None),
+            action: Action::Probe(profile.into(), None),
         })
         .map_err(|_| anyhow::anyhow!("worker stopped"))?;
         accepted_rx.recv_timeout(Duration::from_secs(2))?;
@@ -959,7 +1146,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires loopback SSH fixture; never runs actual apt"]
-    fn package_plans_are_session_bound_single_use_and_stream_results() -> Result<()> {
+    fn workspace_package_queries_remain_read_only_and_reject_stale_connections() -> Result<()> {
         let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
         anyhow::ensure!(address.ip().is_loopback(), "fixture must be loopback");
         let profile = ServerProfile {
@@ -978,7 +1165,7 @@ mod tests {
             })
             .map_err(|_| anyhow::anyhow!("worker stopped"))
         };
-        send(1, Action::Probe(profile, None))?;
+        send(1, Action::Probe(profile.into(), None))?;
         let fingerprint = match receive(&rx)?.update {
             Update::Fingerprint(f) => f,
             _ => anyhow::bail!("expected fingerprint"),
@@ -996,97 +1183,22 @@ mod tests {
             receive(&rx)?.update,
             Update::PackageEnvironment(Ok(_))
         ));
-        send(
-            4,
-            Action::PackagePreview(PackageAction::Install(vec!["nginx".into()])),
-        )?;
-        assert!(matches!(
-            receive(&rx)?.update,
-            Update::PackagePreview(Ok(_))
-        ));
-        send(
-            5,
-            Action::PackageApply {
-                plan_id: 99,
-                secret: String::new(),
-            },
-        )?;
-        assert!(matches!(
-            receive(&rx)?.update,
-            Update::PackageFinished(Err(_))
-        ));
-        send(
-            6,
-            Action::PackagePreview(PackageAction::Install(vec!["nginx".into()])),
-        )?;
-        assert!(matches!(
-            receive(&rx)?.update,
-            Update::PackagePreview(Ok(_))
-        ));
-        send(
-            7,
-            Action::PackageApply {
-                plan_id: 6,
-                secret: "fixture-transient-secret".into(),
-            },
-        )?;
-        assert!(matches!(receive(&rx)?.update, Update::PackageStarted));
-        let mut text = String::new();
-        let mut chunks = 0;
-        loop {
-            match receive(&rx)?.update {
-                Update::PackageOutput(chunk) => {
-                    chunks += 1;
-                    text.push_str(&chunk);
-                }
-                Update::PackageFinished(Ok(output)) => {
-                    assert_eq!(output.exit_code, 0);
-                    assert!(output.stdout.is_empty() && output.stderr.is_empty());
-                    break;
-                }
-                Update::PackageFinished(Err(e)) => anyhow::bail!("package fixture failed: {e}"),
-                _ => anyhow::bail!("unexpected package update"),
-            }
+        send(4, Action::PackageSearch("nginx".into()))?;
+        match receive(&rx)?.update {
+            Update::PackageList(Ok(items)) => assert!(items.iter().any(|p| p.name == "nginx")),
+            _ => anyhow::bail!("expected package search results"),
         }
-        assert!(chunks >= 3);
-        assert!(text.contains("Package operation completed"));
-        assert!(!text.contains("fixture-transient-secret"));
-        send(
-            8,
-            Action::PackageApply {
-                plan_id: 6,
-                secret: String::new(),
-            },
-        )?;
-        assert!(
-            matches!(receive(&rx)?.update, Update::PackageFinished(Err(_))),
-            "plan must not replay"
-        );
-        send(9, Action::PackagePreview(PackageAction::RefreshIndex))?;
-        assert!(matches!(
-            receive(&rx)?.update,
-            Update::PackagePreview(Ok(_))
-        ));
+        send(5, Action::PackageInstalled)?;
+        assert!(matches!(receive(&rx)?.update, Update::PackageList(Ok(_))));
         tx.send(Request {
             epoch: 101,
-            serial: 10,
+            serial: 6,
             action: Action::Disconnect,
         })
         .map_err(|_| anyhow::anyhow!("worker stopped"))?;
         assert!(matches!(receive(&rx)?.update, Update::Disconnected));
-        tx.send(Request {
-            epoch: 101,
-            serial: 11,
-            action: Action::PackageApply {
-                plan_id: 9,
-                secret: String::new(),
-            },
-        })
-        .map_err(|_| anyhow::anyhow!("worker stopped"))?;
-        assert!(matches!(
-            receive(&rx)?.update,
-            Update::PackageFinished(Err(_))
-        ));
+        send(7, Action::PackageInstalled)?;
+        assert!(matches!(receive(&rx)?.update, Update::PackageList(Err(_))));
         Ok(())
     }
 }
