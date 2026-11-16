@@ -63,6 +63,7 @@ pub(super) fn field(ui: super::Ui) -> impl glory::prelude::Widget {
     ))
 }
 
+#[cfg(windows)]
 pub(super) fn initial_directory(current: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = current {
         if path.is_dir() {
