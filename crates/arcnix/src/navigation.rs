@@ -64,6 +64,9 @@ impl Ui {
 
 /// Keep leaving-page cleanup consistent for rail and application actions.
 pub(super) fn change_page(s: &mut State, page: Page, _source: &'static str) {
+    if page != Page::Servers {
+        s.workbench.fullscreen = false;
+    }
     if s.navigation != page {
         s.terminal.menu = None;
     }
@@ -114,6 +117,8 @@ pub(super) fn workspace_visible(s: &State) -> bool {
     s.navigation == Page::Servers
         && !server_inventory_ui::shown(s)
         && s.connected
+        && s.workbench.active != server_desktop::Tab::Home
+        && s.workspace_page != WorkspacePage::Desktop
         && s.config
             .servers
             .iter()
@@ -327,12 +332,18 @@ fn server_landing(ui: Ui) -> impl Widget {
         when(state.map(|s| s.selected.is_some()), {
             let ui = ui.clone();
             move || {
-                let connect = ui.clone();
                 let edit = ui.clone();
                 col().class("server-overview").fill((
                     text()
                         .class("overview-server-icon action-glyph glyph-server")
                         .content(""),
+                    icon_action("编辑服务器", Icon::Settings)
+                        .class("icon-button overview-edit")
+                        .on_press(move || {
+                            if let Some(id) = state.with(|s| s.selected.clone()) {
+                                servers::edit_server(&edit, &id);
+                            }
+                        }),
                     text().class("home-title").content(state.map(|s| {
                         s.config
                             .servers
@@ -347,7 +358,7 @@ fn server_landing(ui: Ui) -> impl Widget {
                             if s.connecting {
                                 "正在建立安全连接…"
                             } else {
-                                "连接后即可使用文件、软件、资源、日志与终端。"
+                                "选择桌面管理服务器，或打开独立的文件传输工作区。"
                             }
                             .to_owned()
                         }))),
@@ -363,29 +374,9 @@ fn server_landing(ui: Ui) -> impl Widget {
                             })
                         }),
                     )),
-                    row().class("home-actions").fill((
-                        sapid::button()
-                            .class("button primary overview-connect")
-                            .label(i18n::bind(state.map(|s| {
-                                if s.connecting {
-                                    "取消连接"
-                                } else {
-                                    "连接服务器"
-                                }
-                                .to_owned()
-                            })))
-                            .on_press(move || {
-                                if state.with(|s| s.connecting) {
-                                    connect.disconnect();
-                                } else {
-                                    connect.open_dialog(Dialog::Connect);
-                                }
-                            }),
-                        btn("编辑服务器", move || {
-                            if let Some(id) = state.with(|s| s.selected.clone()) {
-                                servers::edit_server(&edit, &id);
-                            }
-                        }),
+                    row().class("workspace-entries").fill((
+                        server_desktop::entry(ui.clone(), server_desktop::Tab::Desktop),
+                        server_desktop::entry(ui.clone(), server_desktop::Tab::Files),
                     )),
                     text()
                         .class("overview-footnote subtle")
@@ -449,83 +440,6 @@ fn notifications(ui: Ui) -> impl Widget {
     ))
 }
 
-fn tabs(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    row().class("module-nav").fill((
-        module_tab(ui.clone(), WorkspacePage::Files, "文件管理"),
-        sapid::button()
-            .class(state.map(|s| {
-                if s.workspace_page == WorkspacePage::Software {
-                    "module-tab active"
-                } else {
-                    "module-tab"
-                }
-                .to_owned()
-            }))
-            .label(i18n::bind("系统软件"))
-            .on_press({
-                let ui = ui.clone();
-                move || {
-                    ui.state.revise(|s| {
-                        observability::metrics_leave(s);
-                        s.workspace_page = WorkspacePage::Software;
-                    });
-                    if ui.state.with(|s| {
-                        s.connected
-                            && s.software.environment.is_none()
-                            && s.software.pending.is_none()
-                    }) {
-                        ui.software_detect();
-                    }
-                }
-            }),
-        module_tab(ui.clone(), WorkspacePage::Operations, "运维操作"),
-        module_tab(ui.clone(), WorkspacePage::Resources, "资源概览"),
-        module_tab(ui.clone(), WorkspacePage::SystemLogs, "系统日志"),
-        module_tab(ui, WorkspacePage::Terminal, "终端"),
-    ))
-}
-
-fn server_modules(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    col().class("server-modules").fill((
-        when(state.map(|s| s.workspace_page == WorkspacePage::Files), {
-            let ui = ui.clone();
-            move || {
-                col().class("files-module").fill((
-                    workspace::files(ui.clone()),
-                    workspace::activity(ui.clone()),
-                ))
-            }
-        }),
-        when(
-            state.map(|s| s.workspace_page == WorkspacePage::Software),
-            {
-                let ui = ui.clone();
-                move || software::page(ui.clone())
-            },
-        ),
-        when(
-            state.map(|s| s.workspace_page == WorkspacePage::Operations),
-            {
-                let ui = ui.clone();
-                move || operations::page(ui.clone())
-            },
-        ),
-        when(
-            state.map(|s| s.workspace_page == WorkspacePage::Resources),
-            {
-                let ui = ui.clone();
-                move || observability::resources(ui.clone())
-            },
-        ),
-        when(
-            state.map(|s| s.workspace_page == WorkspacePage::SystemLogs),
-            move || observability::logs(ui.clone()),
-        ),
-    ))
-}
-
 fn global_sidebar(ui: Ui) -> impl Widget {
     let state = ui.state;
     when(
@@ -572,39 +486,63 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
     let state = ui.state;
     let view_log = ui.clone();
     let dismiss = ui.clone();
-    row().class("navigation-shell").fill((
-        rail(ui.clone()),
-        when(state.map(|s| s.navigation == Page::Servers), {
-            let ui = ui.clone();
-            move || servers::sidebar(ui.clone())
-        })
-        .otherwise({
-            let ui = ui.clone();
-            move || global_sidebar(ui.clone())
-        }),
-        col().class("main-panel").fill((
-            row().class("page-header").fill((
-                text().class("page-header-title").content(state.map(|s| {
-                    match s.navigation {
-                        Page::Servers if server_inventory_ui::shown(s) => {
-                            i18n::translate("Server overview")
+    row()
+        .class(state.map(|s| {
+            if server_desktop::fullscreen(s) {
+                "navigation-shell desktop-fullscreen"
+            } else {
+                "navigation-shell"
+            }
+            .to_owned()
+        }))
+        .fill((
+            rail(ui.clone()),
+            when(state.map(|s| s.navigation == Page::Servers), {
+                let ui = ui.clone();
+                move || servers::sidebar(ui.clone())
+            })
+            .otherwise({
+                let ui = ui.clone();
+                move || global_sidebar(ui.clone())
+            }),
+            col().class("main-panel").fill((
+                row().class("page-header").fill((
+                    text().class("page-header-title").content(state.map(|s| {
+                        match s.navigation {
+                            Page::Servers if server_inventory_ui::shown(s) => {
+                                i18n::translate("Server overview")
+                            }
+                            Page::Servers => s
+                                .config
+                                .servers
+                                .iter()
+                                .find(|p| Some(&p.id) == s.selected.as_ref())
+                                .map(|p| p.name.clone())
+                                .unwrap_or_else(|| i18n::translate("服务器")),
+                            Page::Scripts => i18n::translate("Scripts"),
+                            Page::Tasks => i18n::translate("Tasks"),
+                            Page::Backups => i18n::translate("Backups"),
+                            Page::Diagnostics => i18n::translate("Diagnostics"),
+                            Page::Configurations => i18n::translate("Configurations"),
+                            Page::Notifications => i18n::translate("所有活动"),
+                            Page::Settings => i18n::translate(s.settings_section.label()),
                         }
-                        Page::Servers => s
-                            .config
-                            .servers
-                            .iter()
-                            .find(|p| Some(&p.id) == s.selected.as_ref())
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| i18n::translate("服务器")),
-                        Page::Scripts => i18n::translate("Scripts"),
-                        Page::Tasks => i18n::translate("Tasks"),
-                        Page::Backups => i18n::translate("Backups"),
-                        Page::Diagnostics => i18n::translate("Diagnostics"),
-                        Page::Configurations => i18n::translate("Configurations"),
-                        Page::Notifications => i18n::translate("所有活动"),
-                        Page::Settings => i18n::translate(s.settings_section.label()),
-                    }
-                })),
+                    })),
+                    when(
+                        state.map(|s| {
+                            s.navigation == Page::Servers
+                                && s.selected.is_some()
+                                && !server_inventory_ui::shown(s)
+                        }),
+                        {
+                            let ui = ui.clone();
+                            move || connection_controls(ui.clone())
+                        },
+                    ),
+                    when(state.map(|s| s.navigation != Page::Servers), || {
+                        text().class("header-product").content("Arcnix")
+                    }),
+                )),
                 when(
                     state.map(|s| {
                         s.navigation == Page::Servers
@@ -613,93 +551,104 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                     }),
                     {
                         let ui = ui.clone();
-                        move || connection_controls(ui.clone())
+                        move || server_desktop::tabs(ui.clone())
                     },
                 ),
-                when(state.map(|s| s.navigation != Page::Servers), || {
-                    text().class("header-product").content("Arcnix")
-                }),
-            )),
-            when(state.map(workspace_visible), {
-                let ui = ui.clone();
-                move || tabs(ui.clone())
-            }),
-            col().class("workspace-content").fill((
-                row()
-                    .class(state.map(|s| {
-                        if s.notice.is_empty() {
-                            "hidden"
-                        } else {
-                            "notice"
-                        }
-                        .to_owned()
-                    }))
-                    .fill((
-                        text()
-                            .class("notice-text")
-                            .content(i18n::bind(state.map(|s| s.notice.clone()))),
-                        btn("查看操作日志", move || {
-                            view_log.navigate(Page::Notifications)
+                col().class("workspace-content").fill((
+                    row()
+                        .class(state.map(|s| {
+                            if s.notice.is_empty() {
+                                "hidden"
+                            } else {
+                                "notice"
+                            }
+                            .to_owned()
+                        }))
+                        .fill((
+                            text()
+                                .class("notice-text")
+                                .content(i18n::bind(state.map(|s| s.notice.clone()))),
+                            btn("查看操作日志", move || {
+                                view_log.navigate(Page::Notifications)
+                            }),
+                            close_action("忽略提示")
+                                .on_press(move || dismiss.state.revise(|s| s.notice.clear())),
+                        )),
+                    when(state.map(|s| s.navigation == Page::Scripts), {
+                        let ui = ui.clone();
+                        move || scripts_ui::page(ui.clone())
+                    }),
+                    when(state.map(|s| s.navigation == Page::Tasks), {
+                        let ui = ui.clone();
+                        move || scripts_ui::tasks_page(ui.clone())
+                    }),
+                    when(state.map(|s| s.navigation == Page::Backups), {
+                        let ui = ui.clone();
+                        move || backups_ui::page(ui.clone())
+                    }),
+                    when(state.map(|s| s.navigation == Page::Diagnostics), {
+                        let ui = ui.clone();
+                        move || diagnostics_ui::page(ui.clone())
+                    }),
+                    when(state.map(|s| s.navigation == Page::Configurations), {
+                        let ui = ui.clone();
+                        move || configurations_ui::page(ui.clone())
+                    }),
+                    when(state.map(|s| s.navigation == Page::Settings), {
+                        let ui = ui.clone();
+                        move || settings::page(ui.clone())
+                    }),
+                    when(state.map(|s| s.navigation == Page::Notifications), {
+                        let ui = ui.clone();
+                        move || notifications(ui.clone())
+                    }),
+                    when(
+                        state.map(|s| {
+                            s.navigation == Page::Servers
+                                && (s.selected.is_none()
+                                    || s.workbench.active == server_desktop::Tab::Home)
+                                && !server_inventory_ui::shown(s)
                         }),
-                        close_action("忽略提示")
-                            .on_press(move || dismiss.state.revise(|s| s.notice.clear())),
+                        {
+                            let ui = ui.clone();
+                            move || server_landing(ui.clone())
+                        },
+                    ),
+                    when(state.map(server_inventory_ui::shown), {
+                        let ui = ui.clone();
+                        move || server_inventory_ui::page(ui.clone())
+                    }),
+                    fragment((
+                        when(
+                            state.map(|s| {
+                                s.navigation == Page::Servers
+                                    && !server_inventory_ui::shown(s)
+                                    && s.workbench.active != server_desktop::Tab::Home
+                                    && !s.connected
+                            }),
+                            {
+                                let ui = ui.clone();
+                                move || server_desktop::reconnect(ui.clone())
+                            },
+                        ),
+                        when(
+                            state.map(|s| {
+                                workspace_visible(s)
+                                    && s.workbench.active == server_desktop::Tab::Files
+                            }),
+                            {
+                                let ui = ui.clone();
+                                move || {
+                                    col().class("files-module").fill((
+                                        workspace::files(ui.clone()),
+                                        workspace::activity(ui.clone()),
+                                    ))
+                                }
+                            },
+                        ),
+                        server_desktop::desktop(ui),
                     )),
-                when(state.map(|s| s.navigation == Page::Scripts), {
-                    let ui = ui.clone();
-                    move || scripts_ui::page(ui.clone())
-                }),
-                when(state.map(|s| s.navigation == Page::Tasks), {
-                    let ui = ui.clone();
-                    move || scripts_ui::tasks_page(ui.clone())
-                }),
-                when(state.map(|s| s.navigation == Page::Backups), {
-                    let ui = ui.clone();
-                    move || backups_ui::page(ui.clone())
-                }),
-                when(state.map(|s| s.navigation == Page::Diagnostics), {
-                    let ui = ui.clone();
-                    move || diagnostics_ui::page(ui.clone())
-                }),
-                when(state.map(|s| s.navigation == Page::Configurations), {
-                    let ui = ui.clone();
-                    move || configurations_ui::page(ui.clone())
-                }),
-                when(state.map(|s| s.navigation == Page::Settings), {
-                    let ui = ui.clone();
-                    move || settings::page(ui.clone())
-                }),
-                when(state.map(|s| s.navigation == Page::Notifications), {
-                    let ui = ui.clone();
-                    move || notifications(ui.clone())
-                }),
-                when(
-                    state.map(|s| {
-                        s.navigation == Page::Servers
-                            && !workspace_visible(s)
-                            && !server_inventory_ui::shown(s)
-                    }),
-                    {
-                        let ui = ui.clone();
-                        move || server_landing(ui.clone())
-                    },
-                ),
-                when(state.map(server_inventory_ui::shown), {
-                    let ui = ui.clone();
-                    move || server_inventory_ui::page(ui.clone())
-                }),
-                when(
-                    state.map(|s| {
-                        workspace_visible(s) && s.workspace_page != WorkspacePage::Terminal
-                    }),
-                    {
-                        let ui = ui.clone();
-                        move || server_modules(ui.clone())
-                    },
-                ),
-                // Keep the terminal surface mounted when navigating; its native SSH session
-                // continues.
-                terminal::page(ui),
+                )),
             )),
-        )),
-    ))
+        ))
 }

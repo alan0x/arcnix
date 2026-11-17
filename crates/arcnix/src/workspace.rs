@@ -7,6 +7,23 @@ pub(super) fn files(ui: Ui) -> impl Widget {
     ))
 }
 
+pub(super) fn explorer(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let transfers = ui.clone();
+    col().class("remote-explorer").fill((
+        row().class("explorer-toolbar").fill((
+            crate::help_ui::tip_raw("Download destination", state.map(|s| s.local_path.clone())),
+            text_action("Transfer files", Icon::Upload)
+                .class("button with-icon compact")
+                .on_press(move || transfers.open_workbench(server_desktop::Tab::Files)),
+        )),
+        file_context::task_status(ui.clone()),
+        col()
+            .class("remote-slot explorer-slot")
+            .fill(pane(ui, true)),
+    ))
+}
+
 pub(super) fn ready(s: &State, remote: bool) -> bool {
     if remote {
         s.connected && s.sftp_available && s.remote_ready

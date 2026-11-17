@@ -36,6 +36,7 @@ mod resource_trends;
 mod script_exchange_ui;
 mod script_parameters_ui;
 mod scripts_ui;
+mod server_desktop;
 mod server_inventory_ui;
 mod server_labels_ui;
 mod servers;
@@ -143,12 +144,14 @@ enum Dialog {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum WorkspacePage {
     #[default]
+    Desktop,
     Files,
     Software,
     Operations,
     Resources,
     SystemLogs,
     Terminal,
+    Explorer,
 }
 
 #[derive(Clone)]
@@ -219,6 +222,7 @@ struct State {
     inflight_transfers: HashSet<String>,
     logs: String,
     workspace_page: WorkspacePage,
+    workbench: server_desktop::Workbench,
     navigation: navigation::Page,
     settings_section: navigation::SettingsSection,
     unread_notifications: usize,
@@ -341,7 +345,8 @@ impl Ui {
                     .unwrap_or(500) as f64
                     / 1000.0;
                 s.selected = Some(id);
-                s.workspace_page = WorkspacePage::Files;
+                s.workspace_page = WorkspacePage::Desktop;
+                s.workbench = Default::default();
                 if let Some(profile) = s
                     .config
                     .servers
@@ -694,6 +699,14 @@ impl Ui {
             s.system_logs = Default::default();
             s.session_rules.clear();
             s.queue_rules.clear();
+            s.workbench.apps.clear();
+            s.workbench.fullscreen = false;
+            s.workbench.desktop_page = WorkspacePage::Desktop;
+            s.workspace_page = if s.workbench.active == server_desktop::Tab::Files {
+                WorkspacePage::Files
+            } else {
+                WorkspacePage::Desktop
+            };
         });
         self.send(Action::Disconnect);
     }
@@ -1166,32 +1179,6 @@ fn modal(
     })
 }
 
-fn module_tab(ui: Ui, page: WorkspacePage, label: &'static str) -> impl Widget {
-    sapid::button()
-        .class(ui.state.map(move |s| {
-            if s.workspace_page == page {
-                "module-tab active"
-            } else {
-                "module-tab"
-            }
-            .to_string()
-        }))
-        .label(i18n::bind(label))
-        .on_press(move || {
-            ui.state.revise(|s| {
-                if s.workspace_page == WorkspacePage::Resources && page != WorkspacePage::Resources
-                {
-                    observability::metrics_leave(s);
-                }
-                s.workspace_page = page;
-                s.terminal.menu = None;
-            });
-            ui.observability_enter();
-            ui.terminal_enter();
-            ui.operations_enter();
-        })
-}
-
 fn connection_controls(ui: Ui) -> impl Widget {
     let state = ui.state;
     row().class("connection-controls").fill((
@@ -1247,7 +1234,7 @@ fn connection_controls(ui: Ui) -> impl Widget {
                 } else if s.config.servers.is_empty() {
                     "添加服务器"
                 } else {
-                    "连接服务器"
+                    "Desktop"
                 }
                 .to_string()
             })))
@@ -1260,7 +1247,7 @@ fn connection_controls(ui: Ui) -> impl Widget {
                 } else if state.with(|s| s.config.servers.is_empty()) {
                     servers::new_server(&ui);
                 } else {
-                    ui.open_dialog(Dialog::Connect);
+                    ui.open_workbench(server_desktop::Tab::Desktop);
                 }
             }),
     ))
@@ -1290,6 +1277,16 @@ fn app(ui: Ui) -> impl Widget {
             {
                 if keyboard_ui.state.with(|s| s.fingerprint.is_some()) {
                     keyboard_ui.disconnect();
+                } else if keyboard_ui.state.with(|s| {
+                    server_desktop::fullscreen(s)
+                        && s.dialog.is_none()
+                        && s.host_menu.is_none()
+                        && s.group_menu.is_none()
+                        && s.file_menu.is_none()
+                        && s.file_context.is_none()
+                        && s.terminal.menu.is_none()
+                }) {
+                    keyboard_ui.state.revise(|s| s.workbench.fullscreen = false);
                 } else {
                     keyboard_ui.close_dialog();
                     keyboard_ui.state.revise(|s| {
@@ -1561,7 +1558,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         cancels: HashMap::new(),
         inflight_transfers: HashSet::new(),
         logs: String::new(),
-        workspace_page: WorkspacePage::Files,
+        workspace_page: WorkspacePage::Desktop,
+        workbench: Default::default(),
         navigation: Default::default(),
         settings_section: Default::default(),
         unread_notifications: 0,
@@ -1674,13 +1672,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;});events.log("SSH 认证成功");if sftp{events.refresh(true);}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
+            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});events.log("SSH 认证成功");if sftp{events.refresh(true);}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){events.error(format!("读取目录失败：{message}"));}},
-            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
             Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),

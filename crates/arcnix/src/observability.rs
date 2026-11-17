@@ -421,10 +421,12 @@ pub(super) fn logs(ui: Ui) -> impl Widget {
                 )),
             )),
             row().class("toolbar-actions").fill((
-                icon_action("重新检测日志源", Icon::Refresh)
+                icon_action("重新检测日志源", Icon::Search)
+                    .class("icon-button logs-discover")
                     .enabled(state.map(log_ready))
                     .on_press(move || discover.logs_discover()),
                 icon_action("刷新系统日志", Icon::Refresh)
+                    .class("icon-button logs-refresh")
                     .enabled(state.map(log_ready))
                     .on_press(move || refresh.logs_refresh()),
             )),

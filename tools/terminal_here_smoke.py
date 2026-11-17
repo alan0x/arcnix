@@ -45,7 +45,7 @@ def main():
                 page.keyboard.press('Enter')
 
             def files():
-                page.get_by_role('button', name='Files', exact=True).click()
+                app.workspace('Transfer files')
 
             def here(name=None):
                 if name is None:
@@ -65,7 +65,7 @@ def main():
 
             # Leave a partially entered command in the existing shell. Opening
             # a directory must not send a cd into that foreground input stream.
-            page.get_by_role('button', name='Terminal', exact=True).click()
+            app.application('Terminal')
             terminal_running()
             command('echo ORIGINAL_SESSION_MARKER')
             expect(reader).to_contain_text('ORIGINAL_SESSION_MARKER')
@@ -156,7 +156,7 @@ def main():
 
             page.get_by_role('button', name='Disconnect', exact=True).click()
             app.connect()
-            page.get_by_role('button', name='Terminal', exact=True).click()
+            app.application('Terminal')
             terminal_running()
             expect(tabs).to_have_count(1)
             expect(reader).not_to_contain_text('ORIGINAL_SESSION_MARKER')

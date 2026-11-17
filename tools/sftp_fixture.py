@@ -1290,9 +1290,13 @@ ARCNIX_METRICS_END
                 channel.sendall(payload.encode())
                 channel.send_exit_status(0)
             elif text.startswith("# arcnix:logs:discover"):
+                with (self.fixture_root / 'system-log-queries.jsonl').open('a') as audit:
+                    audit.write(json.dumps(dict(action='discover')) + '\n')
                 channel.sendall(b"ARCNIX_LOGS_V1\njournal\nsyslog\nauth\n")
                 channel.send_exit_status(0)
             elif text.startswith("# arcnix:logs:read"):
+                with (self.fixture_root / 'system-log-queries.jsonl').open('a') as audit:
+                    audit.write(json.dumps(dict(action='read')) + '\n')
                 if "denied.service" in text:
                     channel.sendall_stderr(b"Permission denied reading system journal\n")
                     channel.send_exit_status(1)

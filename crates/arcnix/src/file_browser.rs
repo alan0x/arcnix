@@ -39,6 +39,9 @@ struct FileDrag {
     entries: Vec<FileEntry>,
 }
 impl BrowserState {
+    pub(super) fn cancel_drag(&mut self) {
+        self.drag = None;
+    }
     fn pane(&self, remote: bool) -> &PaneState {
         if remote { &self.remote } else { &self.local }
     }

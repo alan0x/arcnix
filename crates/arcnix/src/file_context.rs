@@ -148,7 +148,8 @@ pub(super) fn open(ui: &Ui, remote: bool, path: &str) {
     if ui.state.with(|s| {
         s.dialog.is_some()
             || !navigation::workspace_visible(s)
-            || s.workspace_page != WorkspacePage::Files
+            || !(s.workspace_page == WorkspacePage::Files
+                || (remote && s.workspace_page == WorkspacePage::Explorer))
     }) {
         return;
     }

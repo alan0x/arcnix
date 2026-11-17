@@ -208,6 +208,15 @@
     function applicationKey(event) {
         if(handledKeys.has(event))return true;
         if(event.type!=='keydown' || event.isComposing || !(event.target instanceof Element))return false;
+        // Fullscreen Escape also works when hiding its entry button moves focus
+        // to the document. Dialogs and menus retain their own dismissal first.
+        const exitFullscreen=document.querySelector('.desktop-fullscreen-exit');
+        if(event.key==='Escape' && !event.ctrlKey && !event.metaKey && !event.altKey
+            && !event.shiftKey && exitFullscreen?.getClientRects().length
+            && ![...document.querySelectorAll('[role=dialog],.pane-menu')].some(el=>el.getClientRects().length)){
+            handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();
+            exitFullscreen.click();return true;
+        }
         if(event.target.closest('[role=dialog]'))return false;
         const menu=event.target.closest('.terminal-context-menu');
         if(!menu && !terminalModule(event.target))return false;

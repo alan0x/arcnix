@@ -139,9 +139,23 @@ class Desktop:
             }""")
     def connect(self, index=0):
         self.page.locator('.host-select').nth(index).click()
-        self.page.locator('.overview-connect').click()
+        self.workspace('Home')
+        self.page.locator('.overview-transfer').click()
         self.page.get_by_role('dialog', name='Connect to server', exact=True).get_by_role('button', name='Connect', exact=True).click()
         expect(self.page.locator('.connection-state')).to_have_text('SSH connected')
+    def workspace(self, label):
+        tabs = self.page.locator('.workbench-tabs')
+        expect(tabs).to_be_visible()
+        button = tabs.get_by_role('button', name=label, exact=True)
+        if button.count():
+            if button.get_attribute('aria-pressed') != 'true':
+                button.click()
+        else:
+            tabs.get_by_role('button', name='Home', exact=True).click()
+            self.page.locator('.overview-connect' if label == 'Desktop' else '.overview-transfer').click()
+    def application(self, label):
+        self.workspace('Desktop')
+        self.page.locator('.desktop-dock').get_by_role('button', name=label, exact=True).click()
     def settings(self, section):
         self.page.locator('.settings-link').click()
         self.page.locator('.context-links').get_by_role('button', name=section, exact=True).click()

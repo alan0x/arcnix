@@ -48,11 +48,16 @@ def main():
         with sync_playwright() as pw:
             browser=pw.chromium.connect_over_cdp(endpoint);page=browser.contexts[0].pages[0];page.set_default_timeout(10000);page.set_viewport_size(dict(width=1440,height=980))
             try:
-                page.locator('.host-select').first.click();page.locator('.overview-connect').click();page.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click();expect(page.locator('.connection-state')).to_have_text('SSH connected')
+                page.locator('.host-select').first.click();page.locator('.overview-transfer').click();page.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click();expect(page.locator('.connection-state')).to_have_text('SSH connected')
                 left=page.locator('.local-slot');right=page.locator('.remote-slot');menu=page.locator('.file-context-menu')
                 def file(pane,name):return pane.get_by_role('button',name=name,exact=True)
                 def blank(pane):
-                    box=pane.locator('.file-list-container').bounding_box();box=box if box['height']>16 else pane.locator('.file-empty').bounding_box();page.mouse.click(box['x']+box['width']-20,box['y']+box['height']-8,button='right');expect(menu).to_be_visible()
+                    box=pane.locator('.file-list-container').bounding_box()
+                    box=box if box['height']>16 else pane.locator('.file-empty').bounding_box()
+                    frame=pane.bounding_box()
+                    bottom=min(box['y']+box['height'],frame['y']+frame['height']-28,page.viewport_size['height']-8)
+                    page.mouse.click(box['x']+box['width']-20,bottom-8,button='right')
+                    expect(menu).to_be_visible()
                 def action(name):menu.get_by_role('button',name=name,exact=True).click()
                 file(left,'alpha.txt').click();file(left,'beta-中文.txt').click(modifiers=['Control']);file(left,'alpha.txt').click(button='right');expect(menu).to_be_visible();expect(left.locator('.row-selected')).to_have_count(2)
                 expect(menu.get_by_role('button',name='Rename',exact=True)).to_be_disabled();action('Copy selected paths');expect(menu).to_have_count(0);copied(str(local/'alpha.txt')+'\n'+str(local/'beta-中文.txt'))
@@ -89,7 +94,7 @@ def main():
                 left.get_by_role('button',name='Local file actions',exact=True).click();more=page.locator('.file-actions-menu');expect(more).to_be_visible();expect(more.get_by_role('button',name='Rename',exact=True)).to_be_enabled();page.keyboard.press('Escape');expect(more).to_have_count(0)
                 page.set_viewport_size(dict(width=1000,height=700));blank(right);box=menu.bounding_box();assert box['x']>=7 and box['y']>=7 and box['x']+box['width']<=993 and box['y']+box['height']<=693;page.screenshot(path=str(out/'menu-narrow.png'));page.keyboard.press('Escape');expect(menu).to_have_count(0)
                 checks.append('Icon grids and existing More buttons share the same actions; outside click dismisses and narrow-window menus stay inside the viewport')
-                page.locator('.host-select').nth(1).click();page.locator('.overview-connect').click();page.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click();expect(page.locator('.connection-state')).to_have_text('SSH connected')
+                page.locator('.host-select').nth(1).click();page.locator('.overview-transfer').click();page.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click();expect(page.locator('.connection-state')).to_have_text('SSH connected')
                 expect(right.locator('.pane-summary').first).to_contain_text('Unavailable')
                 blank(right);expect(menu.get_by_role('button',name='New folder',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='Refresh',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='Visible columns',exact=True)).to_be_focused();page.keyboard.press('Escape');expect(menu).to_have_count(0)
                 page.locator('.settings-link').click();page.get_by_role('button',name='简体中文',exact=True).click();expect(page.locator('.context-title')).to_have_text('设置');page.locator('.rail-servers').click();left.get_by_role('button',name='alpha.txt',exact=True).click(button='right');expect(menu.get_by_role('button',name='属性',exact=True)).to_be_visible();expect(menu.get_by_role('button',name='刷新',exact=True)).to_be_visible();page.screenshot(path=str(out/'menu-chinese.png'));page.keyboard.press('Escape')

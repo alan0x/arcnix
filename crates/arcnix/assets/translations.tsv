@@ -2095,3 +2095,20 @@ SIGKILL 会立即结束此进程，未保存的数据可能丢失。此进程的
 进程已结束，正在以当前连接用户的身份刷新端口	Process ended; refreshing ports as the connected user
 无法获取网络命名空间身份，已禁用强制结束	Network namespace identity is unavailable; force ending is disabled
 显示上次的端口快照	Showing the previous port snapshot
+桌面	Desktop
+传输文件	Transfer files
+终端、资源、软件与服务，尽在服务器桌面。	Terminal, resources, software and services in one desktop.
+在本地与服务器之间浏览、上传和下载文件。	Browse, upload and download between your computer and server.
+选择桌面管理服务器，或打开独立的文件传输工作区。	Open your server desktop, or start a separate file transfer workspace.
+选择应用，开始工作。	Open an app to get started.
+连接服务器以打开此工作区。	Connect to your server to open this workspace.
+关闭桌面标签	Close Desktop tab
+关闭文件传输标签	Close Transfer files tab
+最小化窗口	Minimize window
+切换最大化	Toggle maximize
+关闭应用	Close application
+显示桌面	Show desktop
+资源管理器	File explorer
+全屏桌面	Fullscreen desktop
+退出桌面全屏	Exit desktop fullscreen
+下载保存位置	Download destination

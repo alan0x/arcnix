@@ -67,7 +67,7 @@ def main():
                 page.locator('.host-select').first.click()
 
             def connect():
-                page.locator('.overview-connect').click()
+                page.locator('.overview-transfer').click()
                 page.get_by_role('dialog', name='Connect to server', exact=True).get_by_role('button', name='Connect', exact=True).click()
                 expect(page.locator('.connection-state')).to_have_text('SSH connected')
 

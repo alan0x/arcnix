@@ -77,7 +77,7 @@ impl Ui {
             return;
         }
         self.state.revise(|s| {
-            s.workspace_page = WorkspacePage::SystemLogs;
+            server_desktop::select_app(s, WorkspacePage::SystemLogs);
             s.system_logs.query = arcnix_core::system_logs::LogQuery {
                 unit,
                 ..Default::default()

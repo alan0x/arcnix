@@ -222,7 +222,7 @@ impl Ui {
         self.state.revise(|s| {
             s.file_menu = None;
             s.file_context = None;
-            s.workspace_page = WorkspacePage::Terminal;
+            server_desktop::select_app(s, WorkspacePage::Terminal);
         });
         self.terminal_open(100, 30, Some(directory), true);
     }
@@ -304,6 +304,11 @@ impl Ui {
             }
         });
         self.send(Action::Terminal(TerminalAction::Close { id }));
+    }
+    pub(super) fn terminal_close_all(&self) {
+        for id in self.state.with(|s| s.terminal.ids()) {
+            self.terminal_close_tab(id);
+        }
     }
     fn terminal_new_tab(&self, source: u64) {
         let directory = self.state.with(|s| {

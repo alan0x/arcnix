@@ -34,6 +34,8 @@ pub enum Icon {
     Download,
     Star,
     StarFilled,
+    Fullscreen,
+    ExitFullscreen,
 }
 
 impl Icon {
@@ -67,6 +69,8 @@ impl Icon {
             Self::Download => "download",
             Self::Star => "star",
             Self::StarFilled => "star-filled",
+            Self::Fullscreen => "fullscreen",
+            Self::ExitFullscreen => "exit-fullscreen",
         }
     }
     fn svg(self) -> &'static str {
@@ -99,6 +103,8 @@ impl Icon {
             Self::Download => include_str!("../assets/icons/download.svg"),
             Self::Star => include_str!("../assets/icons/star.svg"),
             Self::StarFilled => include_str!("../assets/icons/star-filled.svg"),
+            Self::Fullscreen => include_str!("../assets/icons/fullscreen.svg"),
+            Self::ExitFullscreen => include_str!("../assets/icons/exit-fullscreen.svg"),
         }
     }
 }
@@ -225,6 +231,8 @@ pub fn css() -> String {
         Icon::Download,
         Icon::Star,
         Icon::StarFilled,
+        Icon::Fullscreen,
+        Icon::ExitFullscreen,
     ] {
         let encoded = icon
             .svg()
@@ -235,6 +243,11 @@ pub fn css() -> String {
             ".glyph-{}{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n",
             icon.name()
         ));
+        if matches!(icon, Icon::Folder) {
+            css.push_str(&format!(
+                ".app-explorer .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n"
+            ));
+        }
     }
     for (name, icon) in [
         ("right", sapid::Icon::ChevronRight),

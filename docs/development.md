@@ -14,7 +14,8 @@ Rust + Glory + Sapid 桌面服务器管理工作台。通过 SSH 管理多台服
 
 最左侧为固定图标导航栏：Logo 暂时仅作标识，点击不执行操作；**Servers** 打开服务器列表，其下为全局 **Scripts**、**Tasks**、**Backups**、**Diagnostics** 和 **Configurations**，底部提供 **Settings**。应用默认进入服务器页，左侧第二列随当前页面显示服务器列表或设置分类，右侧显示具体内容。
 
-- Servers 未选择服务器且已有配置时显示本地记录总览，空配置保留添加提示；侧栏也可随时打开总览。选择但未连接时显示服务器详情及连接入口。SSH 连接成功后才显示 Files、Software、Operations、Resources、System logs 和 Terminal 操作标签。断开连接后回到服务器详情。
+- Servers 未选择服务器且已有配置时显示本地记录总览，空配置保留添加提示；侧栏也可随时打开总览。选择服务器后，首个浏览器式标签固定为 **Home**，显示服务器详情及 **Desktop**、**Transfer files** 两个入口。点击入口按首次打开顺序向右新增标签，重复点击切换到已有标签，首次访问时进行 SSH 认证。三个标签共享当前服务器连接；切换服务器时重置标签。
+- **Desktop** 使用壁纸、应用图标、底部 Dock 和应用窗口组织 Terminal、Resources、Software、Operations、System logs，文件管理独立位于 **Transfer files**。窗口可最小化、最大化和关闭；Dock 的圆点表示已打开应用。切换标签或关闭 Desktop 标签保留终端会话，重新打开可继续；关闭 Terminal 应用会关闭它的全部 PTY。资源采样只在资源窗口前台显示时进行，Home、文件传输及最小化后停止新请求。断开 SSH 后保留标签并显示重新连接入口。
 - 主菜单不提供通知按钮；操作提示中的“查看操作日志”仍可查看本次会话最近 100 条记录，记录不跨重启保存。
 - 设置页左侧提供 General、Connection、Files、Transfers、Monitoring、Logging 和 About。分类标题只在页面顶部显示，内部按具体用途分组；切换全局页面保留当前 SSH 连接及终端会话，资源自动采样仅在对应服务器页面可见时进行。
 
@@ -51,7 +52,7 @@ cargo run --locked -p arcnix --bin arcnix -- --config ./my-config.json
 ## 使用
 
 1. 点击侧栏“新建服务器”，在模态对话框填写地址、端口、用户名，明确选择认证方式和分组。每个站点悬停时出现“…”菜单，编辑／删除针对该站点，删除前会显示确认。分组操作也在对应条目的菜单中；“新建分组”和“导入 SSH 配置”各自打开独立对话框。
-2. 在 Servers 中选择左侧服务器后，点击详情卡片或右上角“连接服务器”，在连接对话框中输入密码或私钥口令。右上角统一显示当前服务器、SSH 状态和连接／取消／断开操作，所有模块共享；服务器“…”菜单也保留入口。没有站点时可从服务器列表添加。第一次连接先通过可信渠道核对 SSH 指纹，再选择保存信任或仅本次信任。已保存主机的指纹变化会拒绝认证。
+2. 在 Servers 中选择左侧服务器后，点击详情卡片的 Desktop／Transfer files 或右上角 Desktop，在连接对话框中输入密码或私钥口令。右上角统一显示当前服务器、SSH 状态和连接／取消／断开操作，所有模块共享；服务器“…”菜单也保留入口。没有站点时可从服务器列表添加。第一次连接先通过可信渠道核对 SSH 指纹，再选择保存信任或仅本次信任。已保存主机的指纹变化会拒绝认证。
 3. 文件列表单击只选中当前项，Ctrl 单击增减选择，Shift 单击按当前排序选择范围，支持 Ctrl+A、Ctrl+空格、Shift+方向键。双击或 Enter 进入文件夹；详细列表中的 `›`／`⌄` 按需展开、收起子目录。路径栏按目录分段，点击任意一段可直接跳转；编辑图标或 Ctrl+L 输入完整路径，Enter 跳转、Escape 取消，复制图标将当前完整路径写入系统剪贴板。点击列标题排序，“筛选”按名称筛选。文件传输递归包含空目录，不跟随符号链接。
 4. 各文件栏的“…”菜单提供新建文件夹和重命名，输入表单统一使用对话框。重命名需要选中一个项目，默认拒绝覆盖已有目标。操作失败会在对话框中显示原因，成功后才关闭。
 5. 底部在“传输／操作日志”标签间切换，可收起。传输队列支持进度、取消、重试、批量重试和状态筛选。暂停会阻止后续任务开始，当前任务继续运行。服务器资源统一在顶部“资源概览”查看。
@@ -107,7 +108,7 @@ Windows 默认配置路径为 `%APPDATA%\arcnix\Arcnix\config\config.json`。配
 
 ## Terminal
 
-连接服务器后点击顶部 **Terminal**，自动打开交互式 SSH 终端。支持 ANSI 颜色、UTF-8、键盘输入、Ctrl+C、窗口大小同步和最近 5000 行滚动历史；切换页面、语言或返回文件管理会保留当前终端会话与显示内容。工具栏提供复制选中文字、粘贴、清空显示、重新启动和关闭终端的图标按钮。
+连接服务器后打开 **Desktop → Terminal**，自动打开交互式 SSH 终端。支持 ANSI 颜色、UTF-8、键盘输入、Ctrl+C、窗口大小同步和最近 5000 行滚动历史；切换页面、语言或返回文件管理会保留当前终端会话与显示内容。工具栏提供复制选中文字、粘贴、清空显示、重新启动和关闭终端的图标按钮。
 
 远程文件的右键菜单提供 **Terminal here／在此处打开终端**：文件夹进入其自身目录，文件进入父目录，空白处进入当前目录；多选时禁用。入口会新开终端标签，保留原终端的会话、正在运行的程序及显示内容。最多保留 8 个标签，标签上的关闭按钮仅关闭该会话，工具栏重启仅重启当前标签并保留其起始目录。起始目录通过 SSH 会话启动命令按字面值传递，支持空格、中文、引号等字符；控制字符及非绝对路径不接受，目录不存在时显示退出错误，不回退到主目录。
 
@@ -166,6 +167,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 ```powershell
 python tools/navigation_smoke.py
+python tools/server_desktop_smoke.py
 python tools/server_tree_smoke.py
 python tools/system_theme_smoke.py
 ```
@@ -207,6 +209,8 @@ tools/sftp_fixture.py   仅用于回环测试的 SSH/SFTP 服务
 
 ## 界面回归
 
+服务器首页右上角齿轮进入编辑。桌面标签右侧可将服务器桌面铺满应用内容区域；桌面顶栏按钮或 Escape 恢复原布局，弹窗和菜单优先处理 Escape，终端控件与 SSH 会话保留。桌面内“资源管理器”复用现有 SFTP 文件操作，仅显示远程目录，与“传输文件”共享路径、筛选和选择；下载使用当前本地目录，保存位置收进工具栏 `?`，也可跳转到双栏选择本地目录。日志工具栏放大镜重新检测日志源并读取日志，刷新按钮只读取当前查询。`python tools/server_desktop_smoke.py` 覆盖这些入口、实际文件内容、全屏与弹窗层级、语言和窄窗口。
+
 文件区右键菜单与工具栏“…”共用 Rust 操作入口，项目菜单按当前选择显示；右键多选中的项目保留全部选择，右键其他项目单选，空白处清空选择并显示目录操作。复制所选路径使用按显示顺序排列的完整路径，以换行分隔；本地路径移除 Windows 内部命名空间前缀。属性不递归扫描文件夹大小，多选最多展示 100 条路径。
 
 Shift+F10／菜单键打开菜单，方向键和 Home／End 移动焦点，Escape 关闭并恢复焦点；F2 重命名，Delete 打开删除确认，Alt+Enter 查看属性，Ctrl+Shift+C 复制所选路径，F5 刷新。路径输入框保留正常的文本编辑行为。`python tools/file_context_smoke.py` 会自行启动隔离的回环 SSH 服务，验证本地、SFTP 和键盘交互，不读取默认配置或真实服务器凭据。
@@ -218,6 +222,7 @@ python -m pip install --target artifacts/python playwright paramiko
 python tools/ui_smoke.py
 python tools/ui_smoke.py --packages --legacy-host-key --isolated-crypto-runtime
 python tools/navigation_smoke.py
+python tools/server_desktop_smoke.py
 python tools/operations_smoke.py
 python tools/file_context_smoke.py
 python tools/file_options_smoke.py
