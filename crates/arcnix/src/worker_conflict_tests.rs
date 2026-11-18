@@ -113,6 +113,7 @@ impl Bridge {
                 status: TransferStatus::Queued,
             },
             cancel,
+            paused: Arc::default(),
             policy: None,
         })?;
         Ok(id)

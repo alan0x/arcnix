@@ -56,7 +56,7 @@ impl Ui {
     }
 
     pub(super) fn change_resource_interval(&self, seconds: u64) {
-        if [3, 5, 10, 30].contains(&seconds) {
+        if AppSettings::RESOURCE_INTERVALS.contains(&seconds) {
             self.update_preferences(|settings| settings.resource_interval_seconds = seconds);
         }
     }
@@ -196,8 +196,8 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                 &ui,
                 navigation::SettingsSection::Monitoring,
                 "Resource refresh interval",
-                "Refresh resource values only while the Resources page is open.",
-                each(vec![3u64, 5, 10, 30])
+                "Default resource refresh interval for server desktops.",
+                each(AppSettings::RESOURCE_INTERVALS.to_vec())
                     .key(|seconds| *seconds)
                     .children(move |item| {
                         let seconds = item.value.get();
@@ -220,27 +220,53 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                 &ui,
                 navigation::SettingsSection::About,
                 "Application",
-                row().class("about-product").fill((
-                    text().class("brand-icon").content(""),
-                    col().class("about-identity").fill((
-                        text().class("about-name").content("Arcnix"),
-                        text()
-                            .class("subtle")
-                            .content(i18n::bind(format!("Version {}", env!("CARGO_PKG_VERSION")))),
-                    )),
-                )),
+                about(ui.clone()),
             ),
             updates_ui::panel(ui.clone()),
             crate::configuration_backup_ui::panel(ui.clone()),
         )),
         when(
-            state.map(|s| s.settings_section != navigation::SettingsSection::About),
+            state.map(|s| {
+                !matches!(
+                    s.settings_section,
+                    navigation::SettingsSection::About | navigation::SettingsSection::Updates
+                )
+            }),
             || {
                 text()
                     .class("subtle settings-footer")
                     .content(i18n::bind("Changes are saved automatically."))
             },
         ),
+    ))
+}
+pub(super) fn about(ui: Ui) -> impl Widget {
+    let website_ui = ui.clone();
+    col().class("desktop-settings-pane about-details").fill((
+        row().class("about-product").fill((
+            text().class("brand-icon").content(""),
+            col().class("about-identity").fill((
+                text().class("about-name").content("Arcnix"),
+                text()
+                    .class("subtle")
+                    .content(i18n::bind(concat!("Version ", env!("CARGO_PKG_VERSION")))),
+            )),
+        )),
+        text()
+            .class("subtle")
+            .content(i18n::bind(concat!("License ", env!("CARGO_PKG_LICENSE")))),
+        row().fill((
+            text_action("Official website · arcnix.org", Icon::Go).on_press(move || {
+                if let Err(error) = open_url(env!("CARGO_PKG_HOMEPAGE")) {
+                    website_ui.error(error.to_string());
+                }
+            }),
+            text_action("Project on GitHub", Icon::Go).on_press(move || {
+                if let Err(error) = open_url(env!("CARGO_PKG_REPOSITORY")) {
+                    ui.error(error.to_string());
+                }
+            }),
+        )),
     ))
 }
 pub(super) fn feedback(

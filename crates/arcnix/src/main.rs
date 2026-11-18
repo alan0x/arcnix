@@ -3,21 +3,26 @@ mod app_icon;
 mod backups_ui;
 mod batch_worker;
 mod browser;
+#[cfg(windows)]
+mod web_browser;
+#[cfg(windows)]
+mod browser_cookies;
+#[cfg(windows)]
+mod web_browser_native;
 mod cleanup_records_ui;
 mod client_logs;
 mod clipboard;
 mod compose_ui;
 mod configuration_backup_ui;
-mod configuration_compare_ui;
-mod configuration_records_ui;
-mod configuration_template_ui;
-mod configurations_ui;
 mod deleted_files_ui;
 mod desktop_customization_ui;
+mod desktop_shortcuts_ui;
 mod diagnostics_ui;
 mod disks_ui;
 mod docker_ui;
+mod explorer_search;
 mod explorer_ui;
+mod explorer_transfer;
 mod file_browser;
 mod file_columns;
 mod file_context;
@@ -30,10 +35,12 @@ mod icons;
 mod installation_ui;
 mod monitor_ui;
 mod navigation;
+mod network_ui;
 mod observability;
 mod operations;
 mod operations_worker;
 mod preferences_ui;
+mod processes_ui;
 mod record_maintenance_ui;
 mod recovery_ui;
 mod remote_editor;
@@ -45,7 +52,6 @@ mod scripts_ui;
 mod server_apps_ui;
 mod server_apps_worker;
 mod server_desktop;
-mod server_inventory_ui;
 mod server_labels_ui;
 mod servers;
 mod settings;
@@ -90,11 +96,19 @@ use glory::wry::shell::{Config, Shell, WindowApp};
 use icons::{Icon, close_action, icon_action, text_action};
 use worker::{Action, Request, Update};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FileAction {
+    CreateFile,
+    CreateFolder,
+    Rename,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
     SoftwareInstall,
+    ConfigureNetwork,
+    BrowserForwardingRepair,
     StartupService,
-    DesktopSettings,
     ExplorerColor {
         path: String,
         directory: bool,
@@ -105,6 +119,7 @@ enum Dialog {
         id: u64,
     },
     TransferDefaults,
+    TransferProgress(TransferDirection),
     RemoteEditor,
     Server,
     Group {
@@ -114,7 +129,7 @@ enum Dialog {
     Connect,
     File {
         remote: bool,
-        rename: bool,
+        action: FileAction,
     },
     FileProperties,
     FileColumns {
@@ -139,12 +154,8 @@ enum Dialog {
     DeletedFiles,
     TcpListeners,
     TerminatePortProcess,
-    ConfigurationCompare,
-    ConfigurationDiscard,
     ConfigurationBackup,
     ConfigurationRestore,
-    ConfigurationRecordConnect,
-    ConfigurationRecordDetail,
     RecordStorageConnect,
     CleanupReportConnect,
     ExportDownload,
@@ -166,13 +177,13 @@ enum WorkspacePage {
     Desktop,
     Files,
     Software,
-    Operations,
     Resources,
-    SystemLogs,
     Terminal,
     Explorer,
     Docker,
     Editor,
+    Browser,
+    Settings,
 }
 
 #[derive(Clone)]
@@ -182,7 +193,6 @@ struct State {
     group: Option<String>,
     collapsed_groups: HashSet<String>,
     search: String,
-    inventory: server_inventory_ui::InventoryState,
     editor: ServerProfile,
     server_editor_original: Option<ServerProfile>,
     server_tags: String,
@@ -215,6 +225,7 @@ struct State {
     keepalive_at: std::time::Instant,
     keepalive_pending: bool,
     fingerprint: Option<String>,
+    sync_scope: Option<String>,
     epoch: u64,
     request_serial: u64,
     local_request: u64,
@@ -241,10 +252,14 @@ struct State {
     name: String,
     jobs: Vec<TransferJob>,
     cancels: HashMap<String, Arc<AtomicBool>>,
+    transfer_pauses: HashMap<String, Arc<AtomicBool>>,
+    explorer_uploads: explorer_transfer::Uploads,
     inflight_transfers: HashSet<String>,
     logs: String,
     workspace_page: WorkspacePage,
     workbench: server_desktop::Workbench,
+    #[cfg(windows)]
+    web_browser: web_browser::Browser,
     server_apps: server_apps_ui::DesktopState,
     docker: docker_ui::DockerState,
     disks: disks_ui::DiskState,
@@ -257,15 +272,12 @@ struct State {
     operations: operations::OperationsState,
     scripts: scripts_ui::ScriptsState,
     task_records: task_records_ui::RecordState,
-    configuration_records: configuration_records_ui::RecordState,
-    configuration_compare: configuration_compare_ui::CompareState,
     deleted_files: deleted_files_ui::DeletedFilesState,
     tcp_listeners: tcp_listeners_ui::TcpListenersState,
     record_storage: record_maintenance_ui::StorageState,
     cleanup_reports: cleanup_records_ui::ReportsState,
     backups: backups_ui::BackupState,
     diagnostics: diagnostics_ui::DiagnosticsState,
-    configurations: configurations_ui::ConfigurationState,
     metrics: observability::MetricState,
     ports: resource_ports_ui::PortState,
     system_logs: observability::LogsState,
@@ -402,7 +414,6 @@ impl Ui {
         }
         self.state.revise(|s| {
             navigation::change_page(s, navigation::Page::Servers, "select-server");
-            s.inventory.visible = false;
             s.host_menu = None;
             s.group_menu = None;
         });
@@ -478,11 +489,13 @@ impl Ui {
             }
             backups_ui::dismiss(s);
             resource_ports_ui::dismiss(s);
+            #[cfg(windows)]
+            if s.dialog == Some(Dialog::BrowserForwardingRepair) {
+                web_browser::cancel_forwarding_review(s);
+            }
             if matches!(s.dialog, Some(Dialog::ScriptImport | Dialog::ScriptExport)) {
                 script_exchange_ui::forget(s);
             }
-            configuration_records_ui::dismiss(s);
-            configuration_compare_ui::dismiss(s);
             cleanup_records_ui::dismiss(s);
             record_maintenance_ui::dismiss(s);
             if s.dialog == Some(Dialog::Connect) {
@@ -501,18 +514,6 @@ impl Ui {
                 configuration_backup_ui::forget(s);
             }
             if s.dialog == Some(Dialog::ScriptRun) {
-                if s.navigation == navigation::Page::Configurations
-                    && !s.configuration_records.visible
-                    && !s.configuration_compare.visible
-                    && s.scripts
-                        .template
-                        .as_ref()
-                        .and_then(|t| t.configuration.as_ref())
-                        .is_some_and(|j| j.record.restore_from.is_none())
-                {
-                    s.configurations.editing = true;
-                }
-                s.scripts.configuration_parameters = None;
                 s.scripts.credentials.clear();
                 s.scripts.values.clear();
                 s.scripts.preset_selected.clear();
@@ -630,8 +631,9 @@ impl Ui {
             for (old, new) in changes {
                 transfer_details::reset(s, &old, &new);
                 if let Some(batch) = s.batch_ids.remove(&old) {
-                    s.batch_ids.insert(new, batch);
+                    s.batch_ids.insert(new.clone(), batch);
                 }
+                s.explorer_uploads.retry(&old, new);
             }
             s.transfer_meters
                 .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
@@ -665,16 +667,20 @@ impl Ui {
                 profile.connection = Some(self.state.with(|s| s.config.settings.connection));
             }
             self.cancel_all();
+            #[cfg(windows)]
+            self.close_web_browser();
             self.state.revise(|s| {
                 s.epoch += 1;
                 s.cancels.clear();
                 s.connected = false;
                 s.connecting = true;
+                s.sync_scope = None;
                 s.terminal = Default::default();
                 s.fingerprint = None;
                 s.remote_ready = false;
                 s.remote.clear();
                 s.remote_selection.clear();
+                s.file_browser.reset_remote_history();
                 s.remote_path = if profile.locations.remember_paths {
                     profile.locations.last_remote.clone()
                 } else {
@@ -711,6 +717,8 @@ impl Ui {
             return;
         }
         self.cancel_all();
+        #[cfg(windows)]
+        self.close_web_browser();
         if self
             .state
             .with(|s| s.dialog == Some(Dialog::TransferConflict))
@@ -723,6 +731,7 @@ impl Ui {
             s.cancels.clear();
             s.connected = false;
             s.sftp_available = false;
+            s.sync_scope = None;
             s.connecting = false;
             s.fingerprint = None;
             s.secret.clear();
@@ -730,6 +739,7 @@ impl Ui {
             s.remote.clear();
             s.remote_selection.clear();
             s.remote_request = 0;
+            s.file_browser.reset_remote_history();
             s.software = Default::default();
             s.server_apps = Default::default();
             s.docker = Default::default();
@@ -743,9 +753,8 @@ impl Ui {
             s.system_logs = Default::default();
             s.session_rules.clear();
             s.queue_rules.clear();
-            s.workbench.apps.clear();
+            s.workbench.reset_open_windows();
             s.workbench.fullscreen = false;
-            s.workbench.desktop_page = WorkspacePage::Desktop;
             s.workspace_page = if s.workbench.active == server_desktop::Tab::Files {
                 WorkspacePage::Files
             } else {
@@ -760,6 +769,8 @@ impl Ui {
             for m in s.transfer_meters.values_mut() {
                 m.finish(s.transfer_now);
             }
+            s.transfer_pauses.clear();
+            s.explorer_uploads.abort();
             for c in s.cancels.values() {
                 c.store(true, Ordering::Relaxed);
             }
@@ -793,9 +804,10 @@ impl Ui {
                 profile.port,
                 s.fingerprint.clone()?,
                 s.secret.clone(),
+                arcnix_core::browser::profile_key(profile, s.fingerprint.as_deref()?),
             ))
         });
-        if let Some((host, port, fingerprint, secret)) = details {
+        if let Some((host, port, fingerprint, secret, sync_scope)) = details {
             if remember {
                 let result = self
                     .state
@@ -807,6 +819,7 @@ impl Ui {
                 self.save();
             }
             self.state.revise(|s| {
+                s.sync_scope = Some(sync_scope);
                 s.fingerprint = None;
                 s.secret.clear();
             });
@@ -890,13 +903,7 @@ impl Ui {
             self.log("请先连接并成功读取两个目录，再选择文件或目录；不传输符号链接");
             return;
         }
-        let batch = new_id();
-        self.state.revise(|s| {
-            for job in &jobs {
-                s.batch_ids.insert(job.id.clone(), batch.clone());
-            }
-            s.jobs.extend(jobs);
-        });
+        self.state.revise(|s| enqueue_transfers(s, jobs));
         self.schedule();
     }
     fn schedule(&self) {
@@ -916,6 +923,7 @@ impl Ui {
             while s.cancels.len() < usize::from(limit) {
                 let index = s.jobs.iter().position(|job| {
                     job.status == TransferStatus::Queued
+                        && !workspace::transfer_paused(s, &job.id)
                         && Some(&job.server_id) == s.selected.as_ref()
                         && !s.jobs.iter().any(|active| {
                             s.cancels.contains_key(&active.id)
@@ -935,22 +943,24 @@ impl Ui {
                 );
                 let cancel = Arc::new(AtomicBool::new(false));
                 s.cancels.insert(job.id.clone(), cancel.clone());
-                next.push((job.clone(), cancel));
+                let paused = s.transfer_pauses.entry(job.id.clone()).or_default().clone();
+                next.push((job.clone(), cancel, paused));
             }
             next
         });
-        for (job, cancel) in next {
+        for (job, cancel, paused) in next {
             let policy = self
                 .state
                 .with(|s| transfer_ui::policy(s, &job.id, job.direction));
             self.send(Action::TransferInteractive {
                 job,
                 cancel,
+                paused,
                 policy,
             });
         }
     }
-    fn mutate_file(&self, remote: bool, rename: bool) {
+    fn mutate_file(&self, remote: bool, action: FileAction) {
         let operation = self.state.with(|s| {
             if (remote && !s.remote_ready) || (!remote && !s.local_ready) {
                 return Err("请先成功读取目标目录");
@@ -967,12 +977,7 @@ impl Ui {
             } else {
                 &s.local_path
             };
-            let to = if remote {
-                remote_join(base, name)
-            } else {
-                Path::new(base).join(name).to_string_lossy().into_owned()
-            };
-            if rename {
+            if action == FileAction::Rename {
                 let selected = if remote {
                     &s.remote_selection
                 } else {
@@ -997,18 +1002,19 @@ impl Ui {
                         .to_string_lossy()
                         .into_owned()
                 };
-                Ok(if remote {
+                return Ok(if remote {
                     Action::RemoteRename(from, to)
                 } else {
                     Action::LocalRename(from.into(), to.into())
-                })
-            } else {
-                Ok(if remote {
-                    Action::RemoteMkdir(to)
-                } else {
-                    Action::LocalMkdir(to.into())
-                })
+                });
             }
+            Ok(match (action, remote) {
+                (FileAction::CreateFile, true) => Action::RemoteCreateFile(remote_join(base, name)),
+                (FileAction::CreateFile, false) => Action::LocalCreateFile(Path::new(base).join(name)),
+                (FileAction::CreateFolder, true) => Action::RemoteMkdir(remote_join(base, name)),
+                (FileAction::CreateFolder, false) => Action::LocalMkdir(Path::new(base).join(name)),
+                (FileAction::Rename, _) => unreachable!(),
+            })
         });
         match operation {
             Ok(action) => {
@@ -1109,6 +1115,36 @@ fn modified(timestamp: Option<u64>) -> String {
 fn size(bytes: u64) -> String {
     formatting::bytes(bytes)
 }
+fn open_url(url: &str) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        use windows::core::{HSTRING, w};
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &HSTRING::from(url),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            )
+        };
+        anyhow::ensure!(result.0 as isize > 32, "Could not open the link");
+    }
+    #[cfg(not(windows))]
+    {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        std::process::Command::new(opener).arg(url).spawn()?;
+    }
+    Ok(())
+}
+
 fn btn(label: impl Into<String>, action: impl FnMut() + 'static) -> sapid::Button {
     sapid::button()
         .label(i18n::bind(label.into()))
@@ -1137,6 +1173,14 @@ fn field(
             }),
     ))
 }
+fn enqueue_transfers(s: &mut State, jobs: Vec<TransferJob>) {
+    let batch = new_id();
+    for job in &jobs {
+        s.batch_ids.insert(job.id.clone(), batch.clone());
+    }
+    s.jobs.extend(jobs);
+}
+
 fn modal(
     ui: Ui,
     title: impl Into<String>,
@@ -1176,10 +1220,10 @@ fn modal(
                         .on(activate, move |_| scrim.close_dialog()),
                     col()
                         .class(ui.state.map(|s| {
-                            if s.dialog == Some(Dialog::RemoteEditor) {
-                                "modal-card remote-editor-modal"
-                            } else {
-                                "modal-card"
+                            match s.dialog {
+                                Some(Dialog::RemoteEditor) => "modal-card remote-editor-modal",
+                                Some(Dialog::TransferProgress(_)) => "modal-card transfer-progress-modal",
+                                _ => "modal-card",
                             }
                             .to_owned()
                         }))
@@ -1233,44 +1277,49 @@ fn modal(
     })
 }
 
+fn connection_target(state: Cage<State>) -> impl Widget {
+    text().class("connection-target").content(state.map(|s| {
+        if !s.connected {
+            return String::new();
+        }
+        s.config
+            .servers
+            .iter()
+            .find(|p| Some(&p.id) == s.selected.as_ref())
+            .map(|p| format!("{}@{}", p.username, p.host))
+            .unwrap_or_default()
+    }))
+}
+
 fn connection_controls(ui: Ui) -> impl Widget {
     let state = ui.state;
     row().class("connection-controls").fill((
-        col().class("connection-copy").fill((
-            text().class("connection-target").content(state.map(|s| {
-                s.config
-                    .servers
-                    .iter()
-                    .find(|p| Some(&p.id) == s.selected.as_ref())
-                    .map(|p| format!("{}@{}", p.username, p.host))
-                    .unwrap_or_default()
-            })),
-            text()
-                .class(state.map(|s| {
-                    if s.connected {
-                        "connection-state online"
-                    } else if s.connecting {
-                        "connection-state connecting"
-                    } else {
-                        "connection-state"
-                    }
-                    .to_string()
-                }))
-                .content(i18n::bind(state.map(|s| {
-                    if s.connected {
-                        "SSH 已连接"
-                    } else if s.connecting {
-                        "SSH 正在连接…"
-                    } else if s.config.servers.is_empty() {
-                        "尚未添加服务器"
-                    } else if s.selected.is_none() {
-                        "请选择左侧服务器"
-                    } else {
-                        "SSH 未连接"
-                    }
-                    .to_string()
-                }))),
-        )),
+        connection_target(state),
+        text()
+            .class(state.map(|s| {
+                if s.connected {
+                    "connection-state online"
+                } else if s.connecting {
+                    "connection-state connecting"
+                } else {
+                    "connection-state"
+                }
+                .to_string()
+            }))
+            .content(i18n::bind(state.map(|s| {
+                if s.connected {
+                    "SSH 已连接"
+                } else if s.connecting {
+                    "SSH 正在连接…"
+                } else if s.config.servers.is_empty() {
+                    "尚未添加服务器"
+                } else if s.selected.is_none() {
+                    "请选择左侧服务器"
+                } else {
+                    "SSH 未连接"
+                }
+                .to_string()
+            }))),
         sapid::button()
             .class(state.map(|s| {
                 if s.connected || s.connecting {
@@ -1385,7 +1434,7 @@ fn app(ui: Ui) -> impl Widget {
                     if s.dialog.is_none()
                         && (s.host_menu.is_some()
                             || s.group_menu.is_some()
-                            || s.file_menu.is_some())
+                            || (s.file_menu.is_some() && !file_context::desktop_menu_open(s)))
                     {
                         "menu-dismiss"
                     } else {
@@ -1408,9 +1457,9 @@ fn app(ui: Ui) -> impl Widget {
                 updates_ui::overlay(ui.clone()),
                 workspace::file_dialog(ui.clone()),
                 explorer_ui::color_dialog(ui.clone()),
+                network_ui::dialog(ui.clone()),
                 fragment((
                     file_context::dialogs(ui.clone()),
-                    server_apps_ui::dialogs(ui.clone()),
                     software_install_ui::dialogs(ui.clone()),
                     fragment(docker_ui::dialogs(ui.clone())),
                     terminal_menu::dialogs(ui.clone()),
@@ -1428,17 +1477,15 @@ fn app(ui: Ui) -> impl Widget {
                 diagnostics_ui::dialogs(ui.clone()),
                 task_records_ui::dialogs(ui.clone()),
                 configuration_backup_ui::dialogs(ui.clone()),
-            )),
-            fragment((
-                configuration_records_ui::dialogs(ui.clone()),
-                fragment((
-                    configuration_compare_ui::dialog(ui.clone()),
-                    configurations_ui::dialogs(ui.clone()),
-                )),
+                #[cfg(windows)]
+                web_browser::forwarding_dialog(ui.clone()),
             )),
             record_maintenance_ui::dialog(ui.clone()),
             backups_ui::dialogs(ui.clone()),
-            transfer_ui::dialogs(ui.clone()),
+            fragment((
+                transfer_ui::dialogs(ui.clone()),
+                workspace::transfer_progress_dialog(ui.clone()),
+            )),
             when(state.map(|s| s.fingerprint.is_some()), move || {
                 let trust = trust.clone();
                 let once = once.clone();
@@ -1556,7 +1603,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         group: None,
         collapsed_groups: HashSet::new(),
         search: String::new(),
-        inventory: Default::default(),
         editor: ServerProfile::default(),
         server_editor_tab: 0,
         server_editor_original: None,
@@ -1589,6 +1635,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         keepalive_at: std::time::Instant::now(),
         keepalive_pending: false,
         fingerprint: None,
+        sync_scope: None,
         epoch: 0,
         request_serial: 0,
         local_request: 0,
@@ -1615,10 +1662,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         name: String::new(),
         jobs: vec![],
         cancels: HashMap::new(),
+        transfer_pauses: HashMap::new(),
+        explorer_uploads: Default::default(),
         inflight_transfers: HashSet::new(),
         logs: String::new(),
         workspace_page: WorkspacePage::Desktop,
         workbench: Default::default(),
+        #[cfg(windows)]
+        web_browser: Default::default(),
         server_apps: Default::default(),
         docker: Default::default(),
         disks: Default::default(),
@@ -1631,15 +1682,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         operations: Default::default(),
         scripts: Default::default(),
         task_records: Default::default(),
-        configuration_records: Default::default(),
-        configuration_compare: Default::default(),
         deleted_files: Default::default(),
         tcp_listeners: Default::default(),
         record_storage: Default::default(),
         cleanup_reports: Default::default(),
         backups: Default::default(),
         diagnostics: Default::default(),
-        configurations: Default::default(),
         metrics: Default::default(),
         ports: Default::default(),
         system_logs: Default::default(),
@@ -1718,6 +1766,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 }
             }
             polling.observability_tick();
+            polling.tick_desktop_clock();
+            polling.tick_desktop_sync();
+            #[cfg(windows)]
+            browser_cookies::tick(&polling);
             polling.transfer_tick();
             preferences_ui::tick(&polling);
             updates_ui::tick(&polling);
@@ -1738,16 +1790,27 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
+            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
+                #[cfg(windows)]
+                if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
+                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
-            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
+            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{file_browser::remote_listed(s,&path);s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
-            Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){events.error(format!("读取目录失败：{message}"));}},
-            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+            Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){if remote{state.revise(file_browser::remote_browse_failed);}events.error(format!("读取目录失败：{message}"));}},
+            #[cfg(windows)]
+            Update::BrowserProxy(result)=>web_browser::proxy_event(&events,response.serial,result),
+            #[cfg(windows)]
+            Update::BrowserDiagnosis(diagnosis)=>web_browser::diagnosis_event(&events,response.serial,diagnosis),
+            #[cfg(windows)]
+            Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(&events,response.serial,result),
+            Update::ConnectionLost(message)=>{
+                #[cfg(windows)]
+                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
-            Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
+            Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
             Update::TransferReport(id,summary)=>{events.log(format!("传输结果：写入 {} 个文件，跳过 {} 个文件",summary.transferred_files,summary.skipped_files));state.revise(|s|{s.transfer_summaries.insert(id,summary);});},
             Update::Progress(id,done,total,actual)=>state.revise(|s|{s.transfer_now=std::time::Instant::now();if let Some(m)=s.transfer_meters.get_mut(&id){m.observe(actual,s.transfer_now);}
                 if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.transferred_bytes=done;job.total_bytes=total;}}),
@@ -1757,8 +1820,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 state.revise(|s|{
                     s.transfer_now=std::time::Instant::now();
                     if let Some(m)=s.transfer_meters.get_mut(&id){m.finish(s.transfer_now);}
+                    s.transfer_pauses.remove(&id);
                     let cancelled=s.cancels.remove(&id).is_some_and(|c|c.load(Ordering::Relaxed));
-                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();transfer_details::finish(s,&id,&status);}
+                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();s.explorer_uploads.finish(&id,&status);transfer_details::finish(s,&id,&status);}
                 });
                 if state.with(|s|s.cancels.is_empty()) {events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}}
                 events.schedule();
@@ -1778,7 +1842,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
                 else {events.error(format!("错误：{message}"));}
             },
-            Update::ConnectionError(message)=>{state.revise(|s|{s.connecting=false;s.fingerprint=None;s.secret.clear();});events.error(format!("连接失败：{message}"));},
+            Update::ConnectionError(message)=>{state.revise(|s|{s.connecting=false;s.fingerprint=None;s.sync_scope=None;s.secret.clear();});events.error(format!("连接失败：{message}"));},
             Update::Metrics(result)=>observability::metrics_event(&events,response.serial,result),
             Update::Ports(result)=>resource_ports_ui::event(&events,response.serial,result),
             Update::PortTerminated(result)=>resource_ports_ui::terminated(&events,response.serial,result),
@@ -1812,6 +1876,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 state,
                 fullscreen: false,
                 wallpapers: wallpapers.clone(),
+                #[cfg(windows)]
+                browser: web_browser_native::Host::new(ui.clone()),
             })),
             asset_provider: Some(wallpapers),
             initialization_script: Some(
@@ -1825,7 +1891,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/desktop-geometry.js"),
+                    include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/desktop-motion.js"),
+                    include_str!("../assets/desktop-shortcuts.js"),
                     include_str!("../assets/vendor/xterm/xterm.js"),
                     include_str!("../assets/vendor/addon-fit/addon-fit.js"),
                     include_str!("../assets/terminal.js"),
@@ -1836,9 +1904,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             width: 1440.,
             height: 980.,
             css: format!(
-                "{}\n{}\n{}",
+                "{}\n{}\n{}\n{}",
                 include_str!("style.css"),
                 icons::css(),
+                desktop_customization_ui::customization_css(),
                 include_str!("../assets/vendor/xterm/xterm.css")
             ),
             ..Default::default()

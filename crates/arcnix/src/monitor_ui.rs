@@ -10,17 +10,21 @@ pub(super) enum Section {
     Memory,
     Disks,
     Network,
-    Ports,
+    Processes,
+    Services,
+    Logs,
 }
 
 impl Section {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 8] = [
         Self::Overview,
         Self::Cpu,
         Self::Memory,
         Self::Disks,
         Self::Network,
-        Self::Ports,
+        Self::Processes,
+        Self::Services,
+        Self::Logs,
     ];
 
     fn label(self) -> &'static str {
@@ -30,7 +34,9 @@ impl Section {
             Self::Memory => "Memory",
             Self::Disks => "Disks",
             Self::Network => "Network",
-            Self::Ports => "Ports",
+            Self::Processes => "Processes",
+            Self::Services => "Services",
+            Self::Logs => "Logs",
         }
     }
 
@@ -41,7 +47,9 @@ impl Section {
             Self::Memory => Icon::Server,
             Self::Disks => Icon::Disks,
             Self::Network => Icon::Upload,
-            Self::Ports => Icon::List,
+            Self::Processes => Icon::Terminal,
+            Self::Services => Icon::Services,
+            Self::Logs => Icon::Logs,
         }
     }
 
@@ -52,7 +60,9 @@ impl Section {
             Self::Memory => "monitor-memory",
             Self::Disks => "monitor-disks",
             Self::Network => "monitor-network",
-            Self::Ports => "monitor-ports",
+            Self::Processes => "monitor-processes",
+            Self::Services => "monitor-services",
+            Self::Logs => "monitor-logs",
         }
     }
 
@@ -61,6 +71,10 @@ impl Section {
             self,
             Self::Overview | Self::Cpu | Self::Memory | Self::Network
         )
+    }
+
+    pub(super) fn samples_metrics(self) -> bool {
+        self.shows_samples() || self == Self::Disks
     }
 
     fn summary(self, usage: &ResourceUsage) -> Option<String> {
@@ -87,56 +101,78 @@ impl Section {
     }
 }
 
+pub(super) fn active(s: &State) -> Option<Section> {
+    (s.workspace_page == WorkspacePage::Resources && navigation::workspace_visible(s))
+        .then_some(s.metrics.section)
+}
+
+pub(super) fn set_section(s: &mut State, section: Section) {
+    if s.metrics.section == Section::Processes && section != Section::Processes {
+        processes_ui::show_port_details(s, false);
+    }
+    if s.metrics.section.samples_metrics() && !section.samples_metrics() {
+        observability::metrics_leave(s);
+    }
+    s.metrics.section = section;
+}
+
 impl Ui {
     pub(super) fn monitor_detail_enter(&self) {
         match self.state.with(|s| s.metrics.section) {
             Section::Disks => self.disks_enter(),
-            Section::Ports => self.ports_enter(),
+            Section::Processes => processes_ui::enter(self),
+            Section::Services => self.operations_enter(),
+            Section::Logs => self.logs_enter(),
             _ => {}
         }
     }
 
     fn monitor_select(&self, section: Section) {
-        let changed = self.state.revise(|s| {
-            if s.workspace_page != WorkspacePage::Resources
-                || !navigation::workspace_visible(s)
-                || s.dialog.is_some()
-                || s.metrics.section == section
-            {
-                return false;
+        let previous = self.state.revise(|s| {
+            let current = active(s)?;
+            if current == section || s.dialog.is_some() {
+                return None;
             }
-            if s.metrics.section == Section::Ports {
-                resource_ports_ui::dismiss(s);
-            }
-            s.metrics.section = section;
-            true
+            set_section(s, section);
+            Some(current)
         });
-        if changed {
-            self.monitor_detail_enter();
+        if let Some(previous) = previous {
+            if !previous.samples_metrics() && section.samples_metrics() {
+                self.observability_enter();
+            } else {
+                self.monitor_detail_enter();
+            }
         }
     }
 }
 
 pub(super) fn window_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
-    when(
-        state.map(|s| s.metrics.section.shows_samples()),
-        move || {
-            let refresh = ui.clone();
-            row().class("desktop-app-tools monitor-window-tools").fill((
-            text().class("subtle monitor-sampling-interval").content(i18n::bind(
-                state.map(|s| format!("Every {} s", s.config.settings.resource_interval_seconds)),
-            )),
-            help_ui::group("Resource sampling", &[
-                "Read-only samples are collected only while this server's Resources page is open. Leaving the page stops new requests; an in-flight read may finish. No history is collected while the client is closed.",
-                "Pause stops automatic sampling; manual refresh remains available. Connection changes clear the session history. Samples are not written to disk.",
-            ]),
-            icon_action("刷新资源数值", Icon::Refresh)
-                .enabled(state.map(|s| s.connected && !s.system_task_running && s.metrics.pending.is_none()))
-                .on_press(move || refresh.metrics_refresh()),
-        ))
-        },
-    )
+    let logs = ui.clone();
+    fragment((
+        when(
+            state.map(|s| s.metrics.section.shows_samples()),
+            move || {
+                let refresh = ui.clone();
+                row().class("desktop-app-tools monitor-window-tools").fill((
+                    text()
+                        .class("subtle monitor-sampling-interval")
+                        .content(i18n::bind(state.map(|s| {
+                            format!("Every {} s", server_apps_ui::resource_interval(s))
+                        }))),
+                    icon_action("刷新资源数值", Icon::Refresh)
+                        .enabled(state.map(|s| {
+                            s.connected && !s.system_task_running && s.metrics.pending.is_none()
+                        }))
+                        .on_press(move || refresh.metrics_refresh()),
+                ))
+            },
+        ),
+        when(
+            state.map(|s| s.metrics.section == Section::Logs),
+            move || observability::logs_window_tools(logs.clone()),
+        ),
+    ))
 }
 
 fn sidebar(ui: Ui) -> impl Widget {
@@ -184,15 +220,29 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                 let section = item.value.get();
                 let content = match section {
                     Section::Disks => fragment(disks_ui::page(ui.clone())),
-                    Section::Ports => fragment(resource_ports_ui::panel(ui.clone())),
+                    Section::Processes => fragment(processes_ui::page(ui.clone())),
+                    Section::Services => fragment(operations::page(ui.clone())),
+                    Section::Logs => fragment(observability::logs(ui.clone())),
                     _ => fragment(samples(ui.clone(), section)),
                 };
                 col()
                     .class(format!("monitor-content {}", section.class()))
                     .fill((
-                        text()
-                            .class("pane-title monitor-heading")
-                            .content(i18n::bind(section.label())),
+                        row().class("help-heading").fill((
+                            text()
+                                .class("pane-title monitor-heading")
+                                .content(i18n::bind(section.label())),
+                            when(section == Section::Processes, move || {
+                                fragment((
+                                    when(state.map(processes_ui::port_details_visible), || {
+                                        help_ui::tip("Listening ports and processes", "TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions.")
+                                    }),
+                                    when(state.map(|s| !processes_ui::port_details_visible(s)), || {
+                                        help_ui::tip("Process inventory", "CPU is the average over the process lifetime. Memory is the resident set size (RSS). Listening ports are shown when SSH permissions allow the process to be identified.")
+                                    }),
+                                ))
+                            }),
+                        )),
                         content,
                     ))
             }),

@@ -24,6 +24,45 @@ pub(super) struct BrowserState {
     local_icons: bool,
     remote_icons: bool,
     drag: Option<FileDrag>,
+    remote_history: RemoteHistory,
+}
+
+#[derive(Clone, Default)]
+struct RemoteHistory {
+    paths: Vec<String>,
+    cursor: usize,
+    requested: Option<usize>,
+}
+
+impl RemoteHistory {
+    fn current(&self) -> Option<&str> {
+        self.paths.get(self.cursor).map(String::as_str)
+    }
+
+    fn neighbor(&self, backwards: bool) -> Option<usize> {
+        let index = if backwards {
+            self.cursor.checked_sub(1)?
+        } else {
+            self.cursor + 1
+        };
+        (index < self.paths.len()).then_some(index)
+    }
+
+    fn record(&mut self, path: &str) -> bool {
+        let changed = self.current() != Some(path);
+        if let Some(index) = self.requested.take() {
+            self.paths[index] = path.to_owned();
+            self.cursor = index;
+        } else if changed {
+            self.paths.truncate(self.cursor + 1);
+            if self.paths.len() == 64 {
+                self.paths.remove(0);
+            }
+            self.paths.push(path.to_owned());
+            self.cursor = self.paths.len() - 1;
+        }
+        changed
+    }
 }
 
 #[derive(Clone)]
@@ -39,6 +78,14 @@ struct FileDrag {
     entries: Vec<FileEntry>,
 }
 impl BrowserState {
+    pub(super) fn reset_remote_history(&mut self) {
+        self.remote_history = RemoteHistory::default();
+    }
+
+    pub(super) fn cancel_path_edit(&mut self, remote: bool) {
+        self.pane_mut(remote).editing = false;
+    }
+
     pub(super) fn cancel_drag(&mut self) {
         self.drag = None;
     }
@@ -72,6 +119,16 @@ pub(super) fn icons(s: &State, remote: bool) -> bool {
         s.file_browser.local_icons
     }
 }
+pub(super) fn set_icons(s: &mut State, remote: bool, icons: bool) {
+    if remote {
+        s.file_browser.remote_icons = icons;
+    } else {
+        s.file_browser.local_icons = icons;
+    }
+    if icons {
+        prune_selection(s, remote);
+    }
+}
 pub(super) fn prune_selection(s: &mut State, remote: bool) {
     let visible: HashSet<_> = entries(s, remote).into_iter().map(|f| f.path).collect();
     selection(s, remote).retain(|p| visible.contains(p));
@@ -98,15 +155,7 @@ pub(super) fn view_controls(ui: Ui, remote: bool) -> impl Widget {
                 }
                 .to_owned()
             }))
-            .on_press(move || {
-                list.state.revise(|s| {
-                    if remote {
-                        s.file_browser.remote_icons = false;
-                    } else {
-                        s.file_browser.local_icons = false;
-                    }
-                })
-            }),
+            .on_press(move || list.state.revise(|s| set_icons(s, remote, false))),
         icon_action("平铺图标", Icon::Grid)
             .class(state.map(move |s| {
                 if icons(s, remote) {
@@ -116,16 +165,7 @@ pub(super) fn view_controls(ui: Ui, remote: bool) -> impl Widget {
                 }
                 .to_owned()
             }))
-            .on_press(move || {
-                grid.state.revise(|s| {
-                    if remote {
-                        s.file_browser.remote_icons = true;
-                    } else {
-                        s.file_browser.local_icons = true;
-                    }
-                    prune_selection(s, remote);
-                })
-            }),
+            .on_press(move || grid.state.revise(|s| set_icons(s, remote, true))),
     ))
 }
 pub(super) fn file_kind(entry: &FileEntry) -> String {
@@ -251,15 +291,31 @@ fn selection(s: &mut State, remote: bool) -> &mut HashSet<String> {
         &mut s.local_selection
     }
 }
+fn desktop_listing(s: &State, remote: bool) -> bool {
+    remote && s.workbench.active == server_desktop::Tab::Desktop
+}
+
+fn search_is_open(s: &State, remote: bool) -> bool {
+    desktop_listing(s, remote) && explorer_search::current(s).open
+}
+
 fn sorted(s: &State, remote: bool, entries: &[FileEntry]) -> Vec<FileEntry> {
+    let search = search_is_open(s, remote).then(|| explorer_search::current(s));
     let (query, sort, descending) = if remote {
-        (&s.remote_filter, s.remote_sort, s.remote_desc)
+        let query = if desktop_listing(s, remote) {
+            search.map_or("", |search| search.query.trim())
+        } else {
+            s.remote_filter.as_str()
+        };
+        (query, s.remote_sort, s.remote_desc)
     } else {
-        (&s.local_filter, s.local_sort, s.local_desc)
+        (s.local_filter.as_str(), s.local_sort, s.local_desc)
     };
+    let range = search.and_then(explorer_search::Search::date_range);
     visible(entries, query, sort, descending)
         .into_iter()
         .filter(|f| s.config.settings.show_hidden_files || !f.name.starts_with('.'))
+        .filter(|f| search.is_none_or(|search| search.accepts(f, range.as_ref())))
         .collect()
 }
 pub(super) fn rows(s: &State, remote: bool) -> Vec<FileRow> {
@@ -278,7 +334,9 @@ pub(super) fn rows(s: &State, remote: bool) -> Vec<FileRow> {
             if out.len() >= 20_000 {
                 break;
             }
-            let expanded = pane.root == path(s, remote) && pane.expanded.contains(&entry.path);
+            let expanded = !search_is_open(s, remote)
+                && pane.root == path(s, remote)
+                && pane.expanded.contains(&entry.path);
             out.push(FileRow {
                 depth,
                 expanded,
@@ -323,7 +381,7 @@ fn drag_ready(s: &State) -> bool {
     transfer_ready(s)
         && s.dialog.is_none()
         && s.navigation == navigation::Page::Servers
-        && s.workspace_page == WorkspacePage::Files
+        && matches!(s.workspace_page, WorkspacePage::Files | WorkspacePage::Explorer)
 }
 
 fn begin_drag(ui: &Ui, remote: bool, target: &str, id: u64) {
@@ -427,6 +485,7 @@ enum GestureKind {
     DragStart,
     DragEnd,
     TransferDrop,
+    ExplorerDownload,
     Context,
     Rename,
     Delete,
@@ -494,6 +553,7 @@ pub(super) fn select(ui: &Ui, remote: bool, target: &str, toggle: bool, range: b
 pub(super) fn navigate(ui: &Ui, remote: bool, target: String) {
     ui.state.revise(|s| {
         if remote {
+            s.file_browser.remote_history.requested = None;
             s.remote_path = target;
             s.server_apps.explorer_tag = None;
             s.server_apps.explorer_open_pending = None;
@@ -502,6 +562,56 @@ pub(super) fn navigate(ui: &Ui, remote: bool, target: String) {
         }
     });
     ui.refresh(remote);
+}
+
+pub(super) fn remote_listed(s: &mut State, path: &str) {
+    if s.file_browser.remote_history.record(path) {
+        s.server_apps.explorer_search = Default::default();
+    }
+}
+
+pub(super) fn remote_browse_failed(s: &mut State) {
+    let history = &mut s.file_browser.remote_history;
+    history.requested = None;
+    if let Some(path) = history.current() {
+        s.remote_path = path.to_owned();
+        s.remote_ready = true;
+    }
+}
+
+fn history_button(ui: Ui, backwards: bool) -> impl Widget {
+    let state = ui.state;
+    icon_action(
+        if backwards { "Back" } else { "Forward" },
+        Icon::ChevronRight,
+    )
+    .class(if backwards {
+        "icon-button explorer-history-back"
+    } else {
+        "icon-button explorer-history-forward"
+    })
+    .enabled(state.map(move |s| {
+        workspace::ready(s, true) && s.file_browser.remote_history.neighbor(backwards).is_some()
+    }))
+    .on_press(move || {
+        let changed = state.revise(|s| {
+            if !workspace::ready(s, true) {
+                return false;
+            }
+            let history = &mut s.file_browser.remote_history;
+            let Some(index) = history.neighbor(backwards) else {
+                return false;
+            };
+            history.requested = Some(index);
+            s.remote_path = history.paths[index].clone();
+            s.server_apps.explorer_tag = None;
+            s.server_apps.explorer_open_pending = None;
+            true
+        });
+        if changed {
+            ui.refresh(true);
+        }
+    })
 }
 pub(super) fn activate(ui: &Ui, remote: bool, target: &str) {
     let entry = ui.state.with(|s| {
@@ -522,6 +632,9 @@ pub(super) fn activate(ui: &Ui, remote: bool, target: &str) {
 }
 fn toggle_tree(ui: &Ui, remote: bool, target: &str, force: Option<bool>) {
     let request = ui.state.revise(|s| {
+        if search_is_open(s, remote) {
+            return None;
+        }
         let visible = rows(s, remote);
         let row = visible
             .iter()
@@ -620,6 +733,11 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
             }
         }),
         GestureKind::TransferDrop => drop_transfer(ui, remote, event.drag_id),
+        GestureKind::ExplorerDownload => {
+            if remote && ui.state.with(|s| s.workspace_page == WorkspacePage::Explorer) {
+                drop_transfer(ui, false, event.drag_id);
+            }
+        }
         GestureKind::Context => file_context::open(ui, remote, &event.path),
         GestureKind::Delete => file_context::begin_delete(ui, remote),
         GestureKind::Rename => {
@@ -634,7 +752,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
                     .len()
                         == 1
             }) {
-                workspace::begin_file(ui, remote, true);
+                workspace::begin_file(ui, remote, FileAction::Rename);
             }
         }
         GestureKind::CopyPaths => file_context::copy_paths(ui, remote, false),
@@ -672,7 +790,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
     }
 }
 
-pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
+pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
     let state = ui.state;
     let input_ui = ui.clone();
     col()
@@ -762,7 +880,18 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                         toggle_tree(&expand, remote, &entry.get().entry.path, None)
                                     }),
                                 sapid::button()
-                                    .class("file-name")
+                                    .class(state.map(move |s| {
+                                        let file = entry.get();
+                                        if explorer
+                                            && !file.entry.is_symlink
+                                            && let Some(tag) =
+                                                explorer_ui::tag_class(s, &file.entry.path)
+                                        {
+                                            format!("file-name file-tagged {tag}")
+                                        } else {
+                                            "file-name".into()
+                                        }
+                                    }))
                                     .name(entry.map(|r| r.entry.name.clone()))
                                     .label("")
                                     .fill((
@@ -779,19 +908,7 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                         text()
                                             .class("file-label")
                                             .content(entry.map(|r| r.entry.name.clone())),
-                                        text()
-                                            .class(state.map(move |s| {
-                                                let file = entry.get();
-                                                if remote
-                                                    && s.workspace_page == WorkspacePage::Explorer
-                                                    && !file.entry.is_symlink
-                                                {
-                                                    explorer_ui::color_dot(s, &file.entry.path)
-                                                } else {
-                                                    "hidden".into()
-                                                }
-                                            }))
-                                            .content(""),
+                                        text().class("folder-color-dot").content(""),
                                     ))
                                     .on_press(move || {
                                         activate(&open, remote, &entry.get().entry.path)
@@ -903,6 +1020,9 @@ fn breadcrumbs(path: &str, remote: bool) -> Vec<Crumb> {
     result
 }
 fn begin_path_edit(s: &mut State, remote: bool) {
+    if search_is_open(s, remote) {
+        s.server_apps.explorer_search = Default::default();
+    }
     if !s.file_browser.pane(remote).editing {
         let current = path(s, remote).to_owned();
         let pane = s.file_browser.pane_mut(remote);
@@ -925,43 +1045,57 @@ pub(super) fn pathbar(
     let refresh_ui = ui.clone();
     let copy_ui = ui.clone();
     let crumb_ui = ui.clone();
+    let history_ui = ui.clone();
+    let search_ui = ui.clone();
+    let options_ui = ui.clone();
     let enabled = state.map(move |s| !remote || s.connected && s.sftp_available);
     row().class("pathbar").fill((
-        icon_action(
-            if remote {
-                "远程上级目录"
-            } else {
-                "本地上级目录"
-            },
-            Icon::Up,
-        )
-        .enabled(enabled)
-        .on_press(move || {
-            let target = up_ui.state.with(|s| {
+        when(explorer, move || {
+            row().class("explorer-history").fill((
+                history_button(history_ui.clone(), true),
+                history_button(history_ui.clone(), false),
+            ))
+        }),
+        when(!explorer, move || {
+            let up_ui = up_ui.clone();
+            icon_action(
                 if remote {
-                    let p = s.remote_path.trim_end_matches('/');
-                    p.rsplit_once('/')
-                        .map(|(parent, _)| {
-                            if parent.is_empty() {
-                                "/".into()
-                            } else {
-                                parent.to_owned()
-                            }
-                        })
-                        .unwrap_or_else(|| ".".into())
+                    "远程上级目录"
                 } else {
-                    Path::new(&s.local_path)
-                        .parent()
-                        .map(local_display)
-                        .unwrap_or_else(|| s.local_path.clone())
-                }
-            });
-            navigate(&up_ui, remote, target);
+                    "本地上级目录"
+                },
+                Icon::Up,
+            )
+            .enabled(enabled)
+            .on_press(move || {
+                let target = up_ui.state.with(|s| {
+                    if remote {
+                        let p = s.remote_path.trim_end_matches('/');
+                        p.rsplit_once('/')
+                            .map(|(parent, _)| {
+                                if parent.is_empty() {
+                                    "/".into()
+                                } else {
+                                    parent.to_owned()
+                                }
+                            })
+                            .unwrap_or_else(|| ".".into())
+                    } else {
+                        Path::new(&s.local_path)
+                            .parent()
+                            .map(local_display)
+                            .unwrap_or_else(|| s.local_path.clone())
+                    }
+                });
+                navigate(&up_ui, remote, target);
+            })
         }),
         col().class("path-location").fill((
             row()
                 .class(state.map(move |s| {
-                    if s.file_browser.pane(remote).editing {
+                    if s.file_browser.pane(remote).editing
+                        || (explorer && explorer_search::current(s).open)
+                    {
                         "breadcrumbs hidden"
                     } else {
                         "breadcrumbs"
@@ -979,19 +1113,24 @@ pub(super) fn pathbar(
                         .children(move |item| {
                             let crumb = item.value;
                             let click = crumb_ui.clone();
-                            sapid::button()
-                                .class(state.map(move |s| {
-                                    if path(s, remote) == crumb.get().path {
-                                        "breadcrumb current"
-                                    } else {
-                                        "breadcrumb"
-                                    }
-                                    .to_owned()
-                                }))
-                                .label(crumb.map(|c| c.label.clone()))
-                                .name(crumb.map(|c| c.path.clone()))
-                                .enabled(enabled)
-                                .on_press(move || navigate(&click, remote, crumb.get().path))
+                            fragment((
+                                when(item.index.map(|index| *index != 0), || {
+                                    icons::glyph(Icon::ChevronRight)
+                                }),
+                                sapid::button()
+                                    .class(state.map(move |s| {
+                                        if path(s, remote) == crumb.get().path {
+                                            "breadcrumb current"
+                                        } else {
+                                            "breadcrumb"
+                                        }
+                                        .to_owned()
+                                    }))
+                                    .label(crumb.map(|c| c.label.clone()))
+                                    .name(crumb.map(|c| c.path.clone()))
+                                    .enabled(enabled)
+                                    .on_press(move || navigate(&click, remote, crumb.get().path)),
+                            ))
                         }),
                 ),
             input()
@@ -1031,6 +1170,10 @@ pub(super) fn pathbar(
                             .revise(|s| s.file_browser.pane_mut(remote).editing = false);
                     }
                 }),
+            when(
+                state.map(move |s| explorer && explorer_search::current(s).open),
+                move || explorer_search::field(search_ui.clone()),
+            ),
         )),
         when(explorer, move || explorer_ui::favorite_button(ui.clone())),
         when(!explorer, move || {
@@ -1086,9 +1229,13 @@ pub(super) fn pathbar(
             },
             Icon::Refresh,
         )
+        .class("icon-button path-refresh")
         .enabled(state.map(move |s| !remote || s.connected && s.sftp_available))
         .on_press(move || refresh_ui.refresh(remote)),
         fragment(trailing),
+        when(explorer, move || {
+            explorer_search::options(options_ui.clone())
+        }),
     ))
 }
 

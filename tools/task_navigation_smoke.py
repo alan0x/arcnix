@@ -43,10 +43,6 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
             identifier=history(app)[0]['id']
 
             if n%3==0:
-                navigate(p,'configurations')
-                expect(p.get_by_role('textbox',name='Candidate configuration (UTF-8)',exact=True)).to_be_visible()
-                p.get_by_role('textbox',name='Candidate configuration (UTF-8)',exact=True).fill('worker_processes '+str(n+1)+';\n')
-                active(p,'configurations')
                 navigate(p,'backups');expect(p.locator('.backup-page')).to_be_visible()
                 navigate(p,'diagnostics')
                 p.get_by_role('textbox',name='PEM certificate path (optional)',exact=True).fill('/tmp/navigation-'+str(n)+'.pem')
@@ -113,7 +109,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
     routes=[e for e in native if e['source']=='rail']
     assert len(routes)==len(clicks),(len(routes),len(clicks))
     assert sum(e['source']=='prepare-script' for e in native)==args.rounds
-    names={'Servers':'Servers','Scripts':'Scripts','Tasks':'Tasks','Backups':'Backups','Diagnostics':'Diagnostics','Configurations':'Configurations','Settings':'Settings'}
+    names={'Servers':'Servers','Scripts':'Scripts','Tasks':'Tasks','Backups':'Backups','Diagnostics':'Diagnostics','Settings':'Settings'}
     assert [e['to'] for e in routes]==[names[e['name']] for e in clicks]
     assert all(b['sequence']==a['sequence']+1 for a,b in zip(native,native[1:]))
     result=dict(passed=True,rounds=args.rounds,targets_per_round=2,retained_batches=10,

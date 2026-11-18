@@ -316,6 +316,7 @@ SFTP · {count} 个项目	SFTP · {count} items
 筛选本地文件	Filter local files
 远程文件操作	Remote file actions
 本地文件操作	Local file actions
+新建文件	New file
 新建文件夹	New folder
 重命名	Rename
 按文件名筛选	Filter by name
@@ -333,9 +334,16 @@ SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问�
 远程目录：{}	Remote directory: {}
 本地目录：{}	Local directory: {}
 新名称	New name
+文件名	File name
 文件夹名称	Folder name
 正在处理…	Working…
+创建文件	Create file
 创建文件夹	Create folder
+本地文件已创建	Local file created
+远程文件已创建	Remote file created
+无法创建本地文件	Cannot create local file
+无法创建远程文件	Cannot create remote file
+无法关闭新建的远程文件	Cannot close the new remote file
 继续队列	Resume queue
 暂停队列	Pause queue
 收起活动面板	Collapse activity panel
@@ -768,6 +776,10 @@ SSH 保活	SSH keepalive
 修改将保存在此服务器上并用于后续传输，正在进行的传输保持原有选择。	Changes are saved for this server and affect future transfers. Active transfers keep their current choices.
 该服务器的文件冲突处理已恢复为全局默认设置	File conflict handling for this server now inherits the application defaults
 关于	About
+GitHub 项目	Project on GitHub
+官方网站 · arcnix.org	Official website · arcnix.org
+许可证 {license}	License {license}
+无法打开链接	Could not open the link
 应用程序	Application
 版本 {version}	Version {version}
 日志文件	Log files
@@ -893,7 +905,6 @@ MySQL 需要对该数据库或全局直接授予 SELECT，避免仅能看到部�
 安装发行版提供的 PostgreSQL 客户端。pg_dump 主版本应与源数据库匹配；仅支持 Debian / Ubuntu APT。	Install distribution PostgreSQL clients. Match the pg_dump major version to the source database. Debian / Ubuntu APT.
 安装发行版提供的 MySQL 兼容客户端，仅支持 Debian / Ubuntu APT。	Install distribution MySQL-compatible clients. Debian / Ubuntu APT.
 诊断	Diagnostics
-配置发布	Configurations
 配置目标文件	Configuration destination
 完整 Nginx 配置	Full Nginx configuration
 自定义应用配置	Custom application configuration
@@ -1743,7 +1754,6 @@ journal 查询时间范围无效	Invalid bounded journal time window
 配置快照响应无效：{0}	Invalid configuration snapshot response: {0}
 
 会话趋势	Session trends
-资源采样	Resource sampling
 资源采样已暂停	Resource sampling paused
 暂停采样	Pause sampling
 继续采样	Resume sampling
@@ -1760,7 +1770,6 @@ journal 查询时间范围无效	Invalid bounded journal time window
 秒	s
 分钟	min
 只在此服务器的资源页打开时读取只读样本。离开后不再发送新请求，已发出的读取可能完成；客户端关闭期间不采集历史。	Read-only samples are collected only while this server's Resources page is open. Leaving the page stops new requests; an in-flight read may finish. No history is collected while the client is closed.
-暂停只停止自动采样，仍可手动刷新；连接变化会清空会话历史，样本不会写入磁盘。	Pause stops automatic sampling; manual refresh remains available. Connection changes clear the session history. Samples are not written to disk.
 显示本次连接最近 1、5 或 15 分钟的读取，以最后接收的读取为终点。时间轴使用客户端单调时钟，CPU 与网络速率使用服务器计数。缺失、失败、暂停及页面切换会断开曲线，不填充为零。	Show the last 1, 5 or 15 minutes of reads in this connection, ending at the latest received read. Times use this client's monotonic clock; CPU and network rates use server counters. Missing values, failed reads, pauses and page changes break the lines instead of filling them with zero.
 移动鼠标到图中，或聚焦后使用左右方向键、Home、End 查看样本。CPU 与内存固定为 0–100%；网络排除回环，接收与发送在所选范围共用刻度。	Move over a chart or focus it and use Left, Right, Home or End to inspect a sample. CPU and memory use a fixed 0–100% scale. Network shows receive and transmit rates excluding loopback, with a shared scale for the selected range.
 历史只保存在本次连接的内存中，最多 15 分钟、1,024 次读取。清除历史不会修改服务器；连接变化或关闭客户端后丢弃，不在其他页面或后台继续采集。	History is kept only in memory for this connection, up to 15 minutes and 1,024 reads. Clearing history does not change the server. Connection changes or closing the client discard it; collection does not run on another page or in the background.
@@ -1797,11 +1806,9 @@ journal 查询时间范围无效	Invalid bounded journal time window
 丢弃配置草稿	Discard configuration draft
 丢弃配置正文和参数默认值？	Discard configuration text and parameter defaults?
 只清除内存中的草稿；已提交服务器任务、已保存版本及恢复记录保留。关闭此确认会保留草稿。	This clears only the in-memory draft. Submitted server tasks, saved versions and recovery records are retained. Closing this confirmation keeps the draft.
-重启前请处理配置草稿	Configuration draft needs review before restarting
 等待连接及正在进行的操作结束	Waiting for connections and pending work to finish
 重启条件	Restart readiness
 重启须等待 SSH 断开、操作结束、对话框关闭，并先处理内存中的配置草稿。可返回继续编辑或明确丢弃，不会自动保存或清除。	Restart waits for disconnected SSH, completed work, closed dialogs and no in-memory configuration draft. Return to the draft to keep editing or explicitly discard it; nothing is saved or discarded automatically.
-查看配置草稿	Review configuration draft
 草稿正文和默认值保存在编辑器内存中。成功开始预检查后按服务器冻结候选并清除运行表单值，校验未通过时保留输入。取消表单会清除运行值，取消选择会移除该服务器覆盖值，筛选保留已选值。	Draft text and defaults stay in editor memory. Starting preflight freezes per-server candidates and clears run-form values; invalid forms stay editable. Cancelling discards run values, deselection removes that server's overrides, and filtering preserves selected values.
 排查已删除文件占用…	Inspect deleted open files…
 已删除文件占用	Deleted open files
@@ -1856,7 +1863,6 @@ UID {} · 采样 {} · 进程 {} · 描述符 {} · 无权限 {} · 已变化 {}
 打开工作区	Open workspace
 查看诊断任务	View diagnostic task
 打开备份策略	Open backup policies
-服务器总览	Server overview
 读取本地最近十批任务和已保存的备份确认记录。刷新仅更新本地汇总；可打开任务查询服务器结果，或审核新诊断。	Uses the ten most recent local task batches and saved backup confirmations. Refreshing reads local records only. Open a task to query its server result, or review a new diagnostic run.
 记录需匹配当前 SSH 身份和已保存的检查范围。缺失、不完整、过期或时间异常的记录需要核验。问题对应采样时刻，不能证明服务器当前健康。	Records must match the current SSH identity and saved check selection. Missing, incomplete, old or clock-mismatched records need verification. Recorded findings describe the sample time; they do not prove current health.
 备份覆盖率按所有已分配策略的当前版本和仓库计算。备份、完整性检查和恢复演练分别展示；日期使用成功任务的开始时间。记录时限仅用于本地核验，不代表备份计划。	Backup coverage includes every assigned policy at its current revision and repository. Backup, integrity check and recovery drill results are separate. Dates use successful task start times. Record age is a local review threshold, not a backup schedule.
@@ -2111,7 +2117,6 @@ SIGKILL 会立即结束此进程，未保存的数据可能丢失。此进程的
 资源管理器	File explorer
 全屏桌面	Fullscreen desktop
 退出桌面全屏	Exit desktop fullscreen
-下载保存位置	Download destination
 Docker	Docker
 桌面设置	Desktop settings
 跟随应用	Follow application
@@ -2124,6 +2129,23 @@ Docker	Docker
 容器	Containers
 卷	Volumes
 端口	Ports
+进程	Processes
+程序	Program
+刷新进程	Refresh processes
+按程序名、PID、UID 或端口筛选	Filter by program, PID, UID or port
+筛选进程	Filter processes
+进程列表	Process inventory
+CPU 为进程启动以来的平均占用，内存为常驻集大小（RSS）。监听端口仅在当前 SSH 权限可识别进程时显示。	CPU is the average over the process lifetime. Memory is the resident set size (RSS). Listening ports are shown when SSH permissions allow the process to be identified.
+端口详情	Port details
+返回进程列表	Back to processes
+监听端口不可用	Listening ports unavailable
+正在读取进程…	Reading processes…
+显示上一次的进程快照	Showing the previous process snapshot
+没有匹配的进程	No matching processes
+上一页	Previous page
+下一页	Next page
+无法读取进程列表：{}	Could not list processes: {}
+进程列表响应无效	Invalid process inventory response
 筛选 Docker 资源	Filter Docker resources
 刷新 Docker	Refresh Docker
 配置	Configure
@@ -2137,6 +2159,20 @@ Docker	Docker
 端口绑定	Port bindings
 挂载	Mounts
 网络	Network
+在终端配置…	Configure in Terminal…
+配置网络	Configure network
+继续并打开终端	Continue to Terminal
+修改 IP 地址、路由或防火墙规则可能中断 SSH 并导致无法重新连接。请先确认可以从服务器控制台恢复访问。	Changing IP addresses, routes, or firewall rules may interrupt SSH and prevent reconnection. Make sure you have access to the server console before continuing.
+默认路由	Default routes
+无默认路由	No default route
+无 IP 地址	No IP addresses
+DNS 服务器（/etc/resolv.conf）	DNS servers (/etc/resolv.conf)
+解析器配置不可读	Resolver configuration unavailable
+未列出 DNS 服务器	No DNS servers listed
+无法读取网络设置：{}	Could not read network settings: {}
+网络设置响应无效	Invalid network settings response
+网络设置响应不完整	Incomplete network settings response
+网络接口响应无效	Invalid network interface inventory
 已发布	Published
 已配置	Configured
 仅暴露	Exposed only
@@ -2285,7 +2321,29 @@ SSH 防护 · 日志规则 · 临时封禁	SSH protection · Log rules · Tempor
 OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 内置应用介绍可以离线浏览。安装使用服务器已启用的软件仓库，或所选发布者的 Snap／镜像；可用版本和包名因环境而异，系统包可能还需要初始化服务。不会自动添加第三方软件源。	Built-in application descriptions are available offline. Installation uses the server's enabled repositories or the selected publisher's Snap/image. Versions and package availability vary; package installation may require additional service initialization. No third-party repository is added automatically.
 系统软件包使用已启用的发行版仓库，包名与版本会有差异。Snap 和 Compose 属于独立安装，更新、服务和数据继续按原来源管理。	System packages use enabled distribution repositories; package names and versions differ. Snap and Compose are separate installations. Updates, services and data remain with their original source.
-主目录	Home folder
+主目录	Home
+后退	Back
+前进	Forward
+搜索文件	Search files
+搜索当前文件夹	Search current folder
+按文件名搜索	Search by filename
+清空搜索	Clear search
+搜索筛选条件	Search filters
+文件类型	File types
+重置筛选	Reset filters
+文件夹	Folders
+文本文件	Text files
+电子表格	Spreadsheets
+图像	Images
+音频	Audio
+视频	Videos
+压缩包	Archives
+不限日期	Any date
+昨天	Yesterday
+最近一周	Past week
+最近一个月	Past month
+最近一年	Past year
+修改日期	Date modified
 位置	Locations
 文件系统	Filesystem
 收藏文件夹	Favorite folders
@@ -2330,6 +2388,18 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 程序坞设置	Dock settings
 关闭菜单	Close menu
 程序坞图标大小	Dock icon size
+程序坞样式	Dock style
+程序坞行为	Dock behavior
+桌面布局	Desktop layout
+内置壁纸	Built-in wallpapers
+悬浮程序坞	Floating Dock
+面板模式	Panel mode
+应用图标对齐	App icon alignment
+靠左	Align left
+居中	Center icons
+本地时间	Local time
+服务器时间	Server time
+显示程序坞状态栏	Show Dock status bar
 小	Small
 中	Medium
 大	Large
@@ -2337,7 +2407,8 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 自动隐藏程序坞	Automatically hide Dock
 重置程序坞	Reset Dock
 极光	Aurora
-沙丘	Dunes
+峡湾	Fjord
+赤陶	Terracotta
 自定义壁纸	Custom wallpaper
 服务器图片路径	Server image path
 本机图片路径	Local image path
@@ -2356,3 +2427,96 @@ Markdown 预览过大，可切换到源码查看。	Markdown preview is too larg
 监控分类	Monitor sections
 {} 个逻辑处理器	{} logical processors
 支持不超过 8 MiB 的 PNG、JPEG、WebP、GIF、BMP、AVIF 或 SVG。本机图片会上传到 ~/.arcnix/wallpapers。	PNG, JPEG, WebP, GIF, BMP, AVIF or SVG, up to 8 MiB. Local images are uploaded to ~/.arcnix/wallpapers.
+服务器桌面设置	Server desktop settings
+服务器桌面	Server desktop
+设置分类	Settings sections
+键盘快捷键	Keyboard shortcuts
+移动焦点	Move focus
+激活当前控件	Activate focused control
+打开终端标签	Open tab
+下一个／上一个标签	Next / previous tab
+复制选区／发送中断	Copy selection / interrupt
+右键菜单	Context menu
+编辑路径	Edit path
+浏览文件和文件夹	Browse entries
+选择当前项目	Select focused entry
+服务日志需要当前账号能够读取 systemd journal。	Service logs require a readable systemd journal.
+服务器桌面的默认资源刷新间隔。	Default resource refresh interval for server desktops.
+此服务器默认沿用客户端的刷新间隔，也可在此单独设置。打开监控的资源页面时才会采样。	This server uses the application default until you select an interval here. Sampling runs while the resource views in Monitor are open.
+可在窗口标题栏或 Dock 使用桌面快捷键。终端保留自己的快捷键。切换到终端后，按 Enter 聚焦输入区。	Use desktop shortcuts from the window title bar or Dock. Terminal keeps its own shortcuts. After switching to Terminal, press Enter to focus its input.
+桌面快捷键	Desktop shortcuts
+切换到下一个应用	Switch to next app
+切换到上一个应用	Switch to previous app
+切换桌面全屏	Toggle desktop fullscreen
+修改快捷键	Change shortcut
+修改快捷键：{label}	Change shortcut: {label}
+禁用快捷键：{label}	Disable shortcut: {label}
+按下快捷键…	Press shortcut…
+未设置	Unassigned
+恢复默认快捷键	Restore shortcut defaults
+此快捷键已被使用。	This shortcut is already in use.
+不支持此快捷键。	Unsupported shortcut.
+请用 Ctrl、Alt 或 Meta 搭配字母、数字、功能键或导航键。	Use Ctrl, Alt or Meta with a letter, number, function key or navigation key.
+点击快捷键并按下新的组合键，按 Esc 取消。请用 Ctrl、Alt 或 Meta 搭配字母、数字、功能键或导航键。	Click a shortcut and press the new keys. Esc cancels. Use Ctrl, Alt or Meta with a letter, number, function key or navigation key.
+Docker 显示发布和暴露的端口。使用主机网络的容器直接使用服务器监听端口，可在「监控 → 进程 → 端口详情」查看。	Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details.
+上传详情	Upload details
+下载详情	Download details
+暂停传输	Pause transfer
+继续传输	Resume transfer
+已暂停	Paused
+拖到此处下载	Drop here to download
+处理文件冲突	Resolve file conflict
+浏览器	Web browser
+网页地址	Web address
+输入网页地址	Enter web address
+打开网页地址	Open web address
+停止加载	Stop loading
+刷新网页	Reload page
+添加或移除书签	Toggle bookmark
+书签	Bookmarks
+暂无书签	No bookmarks
+移除书签	Remove bookmark
+新建网页标签	New web tab
+关闭网页标签	Close web tab
+请输入 HTTP 或 HTTPS 网页地址	Enter an HTTP or HTTPS address
+浏览器隧道不可用	Browser tunnel unavailable
+无法验证网站证书	The website certificate could not be verified
+网页响应超时	The website took too long to respond
+服务器无法访问此网页，或 SSH 转发被拒绝	The server could not reach this page or SSH forwarding was refused
+等待同步	Pending sync
+桌面设置同步冲突	Desktop sync conflict
+桌面设置同步冲突，请打开设置处理。	Desktop sync conflict. Open Settings to resolve.
+保留本地改动	Keep local changes
+保留服务器改动	Keep server changes
+浏览器 Cookie 同步冲突	Browser cookie sync conflict
+无法打开浏览器加密同步记录	Could not open the encrypted browser sync journal
+浏览器 Cookie 等待同步	Encrypted browser cookies are pending sync
+无法保存或恢复加密的浏览器 Cookie	Could not save or restore encrypted browser cookies
+诊断连接	Diagnose connection
+正在检查 SSH 转发…	Checking SSH forwarding…
+SSH 拒绝转发到这个地址。请管理员检查 AllowTcpForwarding、PermitOpen 和密钥限制。	SSH denied forwarding to this destination. Ask the server administrator to check AllowTcpForwarding, PermitOpen, and key restrictions.
+SSH 服务器无法连接目标。请检查服务器的 DNS、网络出口和目标端口。	The SSH server could not connect to this destination. Check its DNS, outbound network access, and the destination port.
+转发检查超时。请检查服务器网络出口后重试。	The forwarding check timed out. Check the server’s outbound network and try again.
+无法建立新的 SSH 隧道。请重新连接服务器后重试。	A new SSH tunnel could not be opened. Reconnect to the server and try again.
+SSH 无法打开转发通道。请管理员检查 SSH 日志。	The SSH server rejected or could not open this channel. Ask the server administrator to check the SSH logs.
+SSH 可以连接目标。请检查网站证书和本机时间。	SSH can reach this destination. Check the website certificate and your computer’s clock.
+SSH 可以连接目标。请重试页面。如果仍失败，请检查网站跳转和 HTTPS 配置。	SSH can reach this destination. Retry the page. If it still fails, check redirects and the website’s HTTPS configuration.
+重试网页	Retry page
+此地址的 SSH 转发被拒绝	SSH forwarding was denied for this address
+服务器无法连接此地址	The server cannot connect to this address
+SSH 转发检查超时	The SSH forwarding check timed out
+请检查网站证书和本机时间。	Check the website certificate and your computer’s clock.
+请检查服务器的 DNS、网络出口和目标端口。	Check the server’s DNS, outbound network access, and the destination port.
+启用 SSH 转发…	Enable SSH forwarding…
+配置 SSH 转发	Configure SSH forwarding
+允许 SSH 账号 {user} 转发到服务器可访问的任意主机和端口。Arcnix 会校验并重载 OpenSSH，然后重连浏览器。	Allow SSH account {user} to forward TCP connections to any host and port the server can reach. Arcnix will validate and reload OpenSSH, then reconnect the browser.
+root 或免密码 sudo 可留空。	Leave blank for root or passwordless sudo.
+应用并重连	Apply and reconnect
+正在更新 SSH 转发配置…	Updating SSH forwarding…
+服务器拒绝了 TCP 转发。为当前 SSH 账号启用一次即可。	The server denied TCP forwarding. Enable it once for the current SSH account.
+OpenSSH 配置已更新，但转发仍被拒绝。请检查 SSH 密钥或证书的限制。	OpenSSH settings were updated. Forwarding is still denied. Check key or SSH certificate restrictions.
+修改 SSH 转发需要管理员权限。	Administrator access is required to change SSH forwarding.
+当前账号受 DisableForwarding 限制，请管理员核对该策略。	DisableForwarding blocks this account. Ask the server administrator to review that policy.
+OpenSSH 已允许转发到任意目标，请检查 authorized_keys、SSH 证书或服务器策略。	OpenSSH already allows forwarding to any destination. Check authorized_keys, SSH certificates, or server policy.
+更早的 SSH Match 规则覆盖了此改动，请管理员修改对应规则。	An earlier SSH Match rule overrides this change. Ask the administrator to update that rule.
+SSH 阻止了部分网页资源	SSH blocked some page resources

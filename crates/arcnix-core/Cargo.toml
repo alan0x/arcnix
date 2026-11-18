@@ -20,6 +20,7 @@ directories = "6"
 # so the shipped client needs neither system OpenSSL nor the ssh executable.
 ssh2 = { version = "0.9.7", features = ["openssl-on-win32", "vendored-openssl"] }
 sha2 = "0.10"
+getrandom = "0.3"
 similar = "3.2.1"
 zeroize = "1.8"
 base64 = "0.22"

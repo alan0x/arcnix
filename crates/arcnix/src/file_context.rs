@@ -118,7 +118,7 @@ fn terminal_action(ui: Ui) -> impl Widget {
     action(
         &ui,
         true,
-        "Terminal here",
+        "在此处打开终端",
         |s, _| terminal_directory(s).is_some(),
         {
             let ui = ui.clone();
@@ -337,6 +337,24 @@ pub(super) fn deleted(
     }
     ui.schedule();
 }
+pub(super) fn desktop_menu_open(s: &State) -> bool {
+    server_desktop::visible(s)
+        && s.workspace_page == WorkspacePage::Explorer
+        && s.file_menu == Some(true)
+        && s.dialog.is_none()
+}
+
+pub(super) fn desktop_menu_dismiss(ui: Ui) -> impl Widget {
+    when(ui.state.map(desktop_menu_open), move || {
+        let state = ui.state;
+        button()
+            .class("menu-dismiss")
+            .label(i18n::bind("关闭操作菜单"))
+            .focus(FocusMode::Programmatic)
+            .on(activate, move |_| state.revise(|s| s.file_menu = None))
+    })
+}
+
 pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
     let state = ui.state;
     col()
@@ -411,7 +429,7 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                             },
                         ),
                         action(&ui, remote, "重命名", one, move || {
-                            workspace::begin_file(&rename, remote, true)
+                            workspace::begin_file(&rename, remote, FileAction::Rename)
                         }),
                         when(
                             state.map(move |s| {
@@ -457,10 +475,16 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                 let terminal = ui.clone();
                 move || terminal_action(terminal.clone())
             }),
-            action(&ui, remote, "新建文件夹", available, {
-                let ui = ui.clone();
-                move || workspace::begin_file(&ui, remote, false)
-            }),
+            fragment((
+                action(&ui, remote, "新建文件", available, {
+                    let ui = ui.clone();
+                    move || workspace::begin_file(&ui, remote, FileAction::CreateFile)
+                }),
+                action(&ui, remote, "新建文件夹", available, {
+                    let ui = ui.clone();
+                    move || workspace::begin_file(&ui, remote, FileAction::CreateFolder)
+                }),
+            )),
             when(
                 state.map(move |s| remote && explorer_ui::item_target(s).is_some()),
                 {
@@ -517,6 +541,30 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                     })
                                     .collect::<Vec<_>>(),
                             ),
+                        ))
+                    }
+                },
+            ),
+            when(
+                state.map(move |s| {
+                    remote
+                        && s.workspace_page == WorkspacePage::Explorer
+                        && s.file_context.is_none()
+                }),
+                {
+                    let ui = ui.clone();
+                    move || {
+                        let list = ui.clone();
+                        let grid = ui.clone();
+                        fragment((
+                            action(&ui, remote, "详细列表", workspace::ready, move || {
+                                list.state
+                                    .revise(|s| file_browser::set_icons(s, remote, false));
+                            }),
+                            action(&ui, remote, "平铺图标", workspace::ready, move || {
+                                grid.state
+                                    .revise(|s| file_browser::set_icons(s, remote, true));
+                            }),
                         ))
                     }
                 },

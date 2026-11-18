@@ -67,8 +67,7 @@ def main():
         page = browser.contexts[0].pages[0]
         page.set_default_timeout(10000)
         page.set_viewport_size(dict(width=1440, height=980))
-        has_servers = json.loads(config.read_text(encoding="utf-8"))["config"].get("servers", [])
-        expect(page.locator(".server-inventory" if has_servers else ".server-landing")).to_be_visible()
+        expect(page.locator(".server-landing")).to_be_visible()
         return browser, page
 
     def stop(browser):
@@ -93,15 +92,17 @@ def main():
             browser, page = launch(playwright, config)
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
-            expect(page.locator(".navigation-rail button")).to_have_count(7)
+            expect(page.locator(".navigation-rail button")).to_have_count(6)
+            expect(page.locator(".rail-configurations, .configurations-page")).to_have_count(0)
+            expect(page.get_by_role("button", name="Server overview", exact=True)).to_have_count(0)
             expect(page.locator(".rail-notifications")).to_have_count(0)
             expect(page.locator(".home-page")).to_have_count(0)
             page.locator(".rail-logo").click()
-            expect(page.locator(".server-inventory")).to_be_visible()
+            expect(page.locator(".server-landing")).to_be_visible()
             expect(page.locator(".module-nav")).to_have_count(0)
             expect(page.locator(".files-module")).to_have_count(0)
             page.locator(".rail-servers").click()
-            expect(page.locator(".inventory-row")).to_have_count(2)
+            expect(page.locator(".host-select")).to_have_count(2)
             expect(page.locator(".module-nav")).to_have_count(0)
             page.screenshot(path=str(output / "servers-unselected-dark.png"))
             page.locator(".host-select").first.click()

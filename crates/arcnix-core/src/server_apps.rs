@@ -7,6 +7,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
+use crate::desktop_shortcuts::Shortcuts;
 use crate::remote::{CommandStream, RemoteSession};
 use crate::{CommandOutput, Theme};
 
@@ -23,12 +24,18 @@ pub struct Applications {
 pub struct DesktopPreferences {
     pub version: u8,
     pub theme: Theme,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_interval_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Shortcuts::is_default")]
+    pub shortcuts: Shortcuts,
     #[serde(default, skip_serializing_if = "TerminalLayout::is_empty")]
     pub terminal: TerminalLayout,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub windows: BTreeMap<DesktopApp, DesktopWindow>,
     #[serde(default, skip_serializing_if = "ExplorerPreferences::is_default")]
     pub explorer: ExplorerPreferences,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_bookmarks: Vec<crate::browser::Bookmark>,
     #[serde(
         default,
         skip_serializing_if = "crate::desktop_customization::Appearance::is_default"
@@ -42,16 +49,19 @@ pub enum DesktopApp {
     Terminal,
     Monitor,
     Store,
+    // Retained so existing desktop and Dock preferences still deserialize.
     Services,
     Logs,
     Explorer,
     Disks,
     Docker,
     Editor,
+    Browser,
+    Settings,
 }
 
 impl DesktopApp {
-    pub const COUNT: usize = 9;
+    pub const COUNT: usize = 11;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,19 +206,29 @@ impl Default for DesktopPreferences {
         Self {
             version: 1,
             theme: Theme::System,
+            resource_interval_seconds: None,
+            shortcuts: Shortcuts::default(),
             terminal: Default::default(),
             windows: Default::default(),
             explorer: Default::default(),
+            browser_bookmarks: Vec::new(),
             appearance: Default::default(),
         }
     }
 }
 
 impl DesktopPreferences {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         ensure!(self.version == 1, "Unsupported desktop preferences version");
+        ensure!(
+            self.resource_interval_seconds
+                .is_none_or(|seconds| crate::AppSettings::RESOURCE_INTERVALS.contains(&seconds)),
+            "Invalid desktop resource refresh interval"
+        );
         self.terminal.validate()?;
+        self.shortcuts.validate()?;
         self.explorer.validate()?;
+        crate::browser::validate_bookmarks(&self.browser_bookmarks)?;
         self.appearance.validate()?;
         for bounds in self.windows.values().filter_map(|window| window.bounds) {
             bounds.validate()?;
@@ -246,6 +266,47 @@ pub(crate) fn execute(
         stdout: String::from_utf8(stdout)?,
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
         exit_code: output.exit_code,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockSample {
+    pub unix_seconds: i64,
+    pub offset_minutes: i16,
+}
+
+pub fn clock(session: &RemoteSession) -> Result<ClockSample> {
+    let output = execute(
+        session,
+        "# arcnix:desktop:clock\nLC_ALL=C date '+%s %z'",
+        256,
+    )?;
+    ensure!(output.exit_code == 0, "Cannot read the server clock");
+    let mut fields = output.stdout.split_ascii_whitespace();
+    let seconds = fields
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Missing server time"))?;
+    let offset = fields
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Missing server time zone"))?;
+    ensure!(fields.next().is_none(), "Invalid server clock response");
+    let [
+        sign @ (b'+' | b'-'),
+        hours_tens @ b'0'..=b'9',
+        hours_units @ b'0'..=b'9',
+        minutes_tens @ b'0'..=b'9',
+        minutes_units @ b'0'..=b'9',
+    ] = *offset.as_bytes()
+    else {
+        anyhow::bail!("Invalid server UTC offset");
+    };
+    let hours = i16::from(hours_tens - b'0') * 10 + i16::from(hours_units - b'0');
+    let minutes = i16::from(minutes_tens - b'0') * 10 + i16::from(minutes_units - b'0');
+    ensure!(hours < 24 && minutes < 60, "Invalid server UTC offset");
+    let multiplier = if sign == b'-' { -1 } else { 1 };
+    Ok(ClockSample {
+        unix_seconds: seconds.parse()?,
+        offset_minutes: multiplier * (hours * 60 + minutes),
     })
 }
 

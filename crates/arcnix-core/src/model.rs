@@ -175,6 +175,9 @@ pub struct AppSettings {
     #[serde(default = "default_transfer_concurrency")]
     pub transfer_concurrency: u8,
 }
+impl AppSettings {
+    pub const RESOURCE_INTERVALS: [u64; 4] = [3, 5, 10, 30];
+}
 fn default_transfer_concurrency() -> u8 {
     5
 }

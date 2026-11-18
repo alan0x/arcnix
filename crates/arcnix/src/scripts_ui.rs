@@ -17,7 +17,6 @@ pub(super) struct ScriptsState {
     pub library: u8,
     pub search: String,
     pub template: Option<Template>,
-    pub configuration_parameters: Option<crate::configuration_template_ui::Session>,
     pub values: BTreeMap<String, String>,
     pub targets: HashSet<String>,
     pub target_filter: arcnix_core::target_selection::Filter,
@@ -156,7 +155,6 @@ impl Ui {
         };
         self.state.revise(|s| {
             s.scripts.template = Some(template);
-            s.scripts.configuration_parameters = None;
             s.scripts.preset_selected.clear();
             s.scripts.preset_name.clear();
             s.scripts.values = values;
@@ -179,11 +177,6 @@ impl Ui {
                 let mut template = s.scripts.template.clone().ok_or_else(|| anyhow::anyhow!("Choose a script"))?;
                 anyhow::ensure!(task_target_picker::hidden(s)==0,"Review hidden selected servers before checking targets");
                 arcnix_core::target_selection::validate(&s.config,&template,&s.scripts.targets)?;
-                if let Some(parameters)=&s.scripts.configuration_parameters {
-                    let base=template.configuration.as_ref().ok_or_else(||anyhow::anyhow!("Choose a configuration publication"))?;
-                    let jobs=parameters.source.jobs(base,&parameters.defaults,&parameters.overrides,&s.scripts.targets.iter().cloned().collect())?;
-                    template=template.with_configuration_targets(jobs)?;
-                }
                 template.snippet = template.render(&s.scripts.values)?;
                 if let Some(job)=&template.backup
                     && matches!(job.action,arcnix_core::backups::Action::Initialize)
@@ -231,7 +224,6 @@ impl Ui {
                     s.scripts.submitted = false;
                     s.scripts.credentials.clear();
                     s.scripts.values.clear();
-                    s.scripts.configuration_parameters = None;
                     s.scripts.preset_selected.clear();
                     s.scripts.preset_name.clear();
                     s.dialog = None;
@@ -299,11 +291,6 @@ impl Ui {
 }
 pub(super) fn event(ui: &Ui, event: batch_worker::Event) {
     let event = match event {
-        event @ (batch_worker::Event::ConfigurationCompared { .. }
-        | batch_worker::Event::ConfigurationComparisonComplete(_)) => {
-            configuration_compare_ui::event(ui, event);
-            return;
-        }
         batch_worker::Event::DiagnosticLogs { serial, result } => {
             diagnostics_ui::log_event(ui, serial, result);
             return;
@@ -323,11 +310,6 @@ pub(super) fn event(ui: &Ui, event: batch_worker::Event) {
         }
         event @ batch_worker::Event::RecordStorage { .. } => {
             record_maintenance_ui::event(ui, event);
-            return;
-        }
-        event @ (batch_worker::Event::ConfigurationRecordPage { .. }
-        | batch_worker::Event::ConfigurationRecordDetail { .. }) => {
-            configuration_records_ui::event(ui, event);
             return;
         }
         event @ (batch_worker::Event::TaskStop { .. }
@@ -360,8 +342,6 @@ pub(super) fn event(ui: &Ui, event: batch_worker::Event) {
         batch_worker::Event::RecordPage { .. } | batch_worker::Event::RecordDetail { .. } => {
             unreachable!()
         }
-        batch_worker::Event::ConfigurationRecordPage { .. }
-        | batch_worker::Event::ConfigurationRecordDetail { .. } => unreachable!(),
         batch_worker::Event::RecordStorage { .. } => unreachable!(),
         batch_worker::Event::CleanupRecords { .. } => unreachable!(),
         batch_worker::Event::ExportDownload { .. } => unreachable!(),
@@ -369,8 +349,6 @@ pub(super) fn event(ui: &Ui, event: batch_worker::Event) {
         batch_worker::Event::DiagnosticLogs { .. } => unreachable!(),
         batch_worker::Event::DeletedFiles { .. } => unreachable!(),
         batch_worker::Event::TcpListeners { .. } => unreachable!(),
-        batch_worker::Event::ConfigurationCompared { .. }
-        | batch_worker::Event::ConfigurationComparisonComplete(_) => unreachable!(),
         batch_worker::Event::Refreshed { task, id, result } => {
             s.scripts.refreshing.remove(&(task.clone(), id.clone()));
             if let Some(record) = s.scripts.tasks.iter_mut().find(|record| record.id == task) {
@@ -787,7 +765,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.service.is_some())),||text().class("hint").content(i18n::bind("Service changes may interrupt connections. Check the unit on every target before running."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.is_cross_server_recovery())),||text().class("hint cross-server-recovery-scope").content(i18n::bind("Cross-server recovery: trusted restore targets may be outside the original backup policy. Each target must access the same repository and prepared credential files. The source server is not contacted; backup and retention target scopes are unchanged."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.cleanup.is_some()||t.audit_cleanup.is_some()||t.recovery.as_ref().is_some_and(|j|j.targets.iter().any(|target|target.plan.action==arcnix_core::record_recovery::Action::Release)))),||text().class("hint").content(i18n::bind("Deletion cannot be undone. Review the exact file plan before execution."))),
-            col().class("form-stack").fill((crate::script_parameters_ui::run_form(ui.clone()),crate::configuration_template_ui::run(ui.clone()))),
+            col().class("form-stack").fill(crate::script_parameters_ui::run_form(ui.clone())),
             row().class("script-actions").fill((text().class("field-label").content(i18n::bind("Parallel submissions")),row().class("script-actions").fill(each(state.map(|s|if s.scripts.template.as_ref().and_then(|t|t.backup.as_ref()).is_some_and(|j|!matches!(j.action,arcnix_core::backups::Action::Backup)){vec![1usize]}else{vec![1usize,3,5,8]})).key(|n|*n).children(move|item|{let n=item.value.get();btn(format!("{n}"),move||state.revise(|s|s.scripts.concurrency=n)).class(state.map(move|s|if s.scripts.concurrency==n {"choice active"}else{"choice"}.to_owned()))})),crate::help_ui::group("Parallel submissions",&["Maximum parallel submissions; accepted jobs run independently on all servers","Each server runs one global Arcnix operation at a time; diagnostics may run alongside it. Server locks survive client closure."]))),
             task_target_picker::picker(ui.clone()),
             text().class("hint").content(i18n::bind("Parameters and script text must not contain passwords or tokens. Credentials are used only for this submission.")),

@@ -204,7 +204,6 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
     let add = ui.clone();
     let group = ui.clone();
     let menu = ui.clone();
-    let inventory = ui.clone();
     col().class("sidebar server-explorer").fill((
         row()
             .class(state.map(|s| {
@@ -242,18 +241,13 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
                     move || root_menu(ui.clone())
                 }),
             )),
-        btn("Server overview", move || inventory.open_server_inventory())
-            .class("button server-inventory-open"),
         row().class("server-search").fill((
             input()
                 .name(i18n::bind("搜索"))
                 .value(state.map(|s| s.search.clone()))
                 .on(value_changed, move |event| {
                     if let Event::ValueChanged { value, .. } = event {
-                        state.revise(|s| {
-                            s.search = value;
-                            s.inventory.page = 0;
-                        });
+                        state.revise(|s| s.search = value);
                     }
                 }),
             text()
@@ -827,9 +821,6 @@ fn server_dialog(ui: Ui) -> impl Widget {
                             // Creating another site must not interrupt an active SSH
                             // session; disconnected workspaces can select the saved site.
                             if (same && !labels_only) || (!s.connected && !s.connecting) {
-                                if !labels_only {
-                                    s.inventory.visible = false;
-                                }
                                 s.file_split =
                                     profile.file_pane_ratio.unwrap_or(500) as f64 / 1000.0;
                                 s.selected = Some(profile.id);

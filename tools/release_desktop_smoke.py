@@ -11,7 +11,7 @@ def main():
         config=peer.config([peer.profile('Release fixture')],out,updates=dict(automatic_checks=False,automatic_install=False))
         config['config']['settings']['theme']='Dark'
         with Desktop(out,config,binary=binary,extra_env={'ARCNIX_TEST_UPDATE_URL':'not-a-valid-url'}) as app:
-            app.settings('About'); panel=app.page.locator('.update-panel')
+            app.settings('Updates'); panel=app.page.locator('.update-panel')
             expect(panel).not_to_contain_text('Development build')
             panel.get_by_role('button',name='Check now',exact=True).click()
             expect(panel.locator('.update-status')).not_to_have_text('Checking for updates…',timeout=40000)

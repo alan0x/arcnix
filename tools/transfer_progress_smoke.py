@@ -39,7 +39,7 @@ def main():
             page.set_viewport_size(dict(width=1440,height=980))
             try:
                 page.locator('.host-select').first.click()
-                page.locator('.overview-connect').click()
+                page.locator('.overview-transfer').click()
                 page.get_by_role('dialog').get_by_role('button',name='Connect',exact=True).click()
                 expect(page.locator('.connection-state')).to_have_text('SSH connected')
                 local_pane=page.locator('.local-slot');remote_pane=page.locator('.remote-slot')
@@ -89,7 +89,7 @@ def main():
                 row=page.locator('.queue-row').last
                 expect(row.locator('.job-transfer-details')).to_contain_text(re.compile(r'[1-9][0-9.]* (?:B|KiB|MiB)/s'))
                 row.get_by_role('button',name='Cancel transfer',exact=True).click()
-                expect(row.locator('.job-status')).to_have_text('Canceled')
+                expect(row.locator('.job-status')).to_have_text(re.compile(r'^Cancel(l)?ed$'))
                 assert float(row.get_by_role('progressbar').get_attribute('aria-valuenow'))<100
                 snapshot=row.locator('.job-transfer-details').inner_text()
                 page.wait_for_timeout(1100)

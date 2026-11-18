@@ -7,8 +7,8 @@ version = "0.2.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.99"
-repository = "https://github.com/taidge/arcnix"
-homepage = "https://github.com/taidge/arcnix"
+repository = "https://github.com/arcnix-org/arcnix"
+homepage = "https://arcnix.org"
 
 [workspace.dependencies]
 anyhow = "1"

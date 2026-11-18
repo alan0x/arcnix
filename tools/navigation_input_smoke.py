@@ -21,7 +21,7 @@ with Desktop(out/'desktop',config) as app:
         p.locator('.rail-tasks').click();active(p,'rail-tasks')
         expect(p.get_by_role('button',name='清理报告' if locale and n%2==0 else 'Cleanup reports',exact=True)).to_be_visible()
         p.locator('.rail-backups').click();active(p,'rail-backups')
-        p.locator('.rail-configurations').click();active(p,'rail-configurations')
+        p.locator('.rail-diagnostics').click();active(p,'rail-diagnostics')
         assert p.evaluate("()=>window.__arcnixStableShell.every(e=>e.isConnected)"),'Locale or navigation retired the live application shell'
         rounds.append(dict(round=n+1,language='Chinese' if locale and n%2==0 else 'English',width=p.viewport_size['width']))
         (out/'rounds.json').write_text(json.dumps(rounds),encoding='utf-8')
@@ -33,7 +33,7 @@ actions=[json.loads(line) for path in (out/'desktop').glob('actions-*.jsonl') fo
 clicks=[event for event in events if event['kind']=='click' and 'rail-item' in event['classes']]
 routes=[event for event in native if event['source']=='rail']
 assert len(routes)==len(clicks)==args.rounds*4,(len(routes),len(clicks),args.rounds)
-names={'settings-link':'Settings','rail-tasks':'Tasks','rail-backups':'Backups','rail-configurations':'Configurations'}
+names={'settings-link':'Settings','rail-tasks':'Tasks','rail-backups':'Backups','rail-diagnostics':'Diagnostics'}
 assert [event['to'] for event in routes]==[next(name for key,name in names.items() if key in event['classes'].split()) for event in clicks]
 assert len([event for event in events if event['kind']=='ipc-activate'])>=len(clicks)
 starts={event['sequence']:event['at'] for event in actions if event['phase']=='start'}

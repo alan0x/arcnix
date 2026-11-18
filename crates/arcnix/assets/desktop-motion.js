@@ -10,7 +10,14 @@
         catch (_) { return null; }
     }
     function signature(value) {
-        return JSON.stringify(value && [value.shown,value.epoch,value.app,value.maximized,value.fullscreen]);
+        return JSON.stringify(value && [value.shown,value.epoch,value.app,value.fullscreen,
+            value.windows.map(window=>[window.id,window.maximized])]);
+    }
+    function windowFor(app) {
+        return app && document.querySelector(`.desktop-window.${app}:not(.hidden)`);
+    }
+    function appClass(element) {
+        return element && [...element.classList].find(name=>name.startsWith('app-'));
     }
     function animate(element,frames,duration) {
         if(!element || reduced.matches || !element.animate)return;
@@ -29,8 +36,9 @@
             return;
         }
         // Links inside apps and hosts without view transitions use the live entrance.
-        if(transition || reduced.matches || !current.app || current.app===old.app)return;
-        const window=document.querySelector('.desktop-window:not(.hidden)');
+        if(transition || reduced.matches || !current.app
+            || old.windows.some(window=>window.class===current.app))return;
+        const window=windowFor(current.app);
         const switching=Boolean(old.app);
         animate(switching ? window?.querySelector('.desktop-window-content') : window,
             [{opacity:switching ? .35 : 0,transform:switching ? 'translateX(18px)' : 'translateY(30px) scale(.91)'},
@@ -57,17 +65,19 @@
     }
     function kind(button,before) {
         if(button.matches('.desktop-shortcut,.desktop-dock-app')){
-            const app=[...button.classList].find(name=>name.startsWith('app-'));
-            return app && app!==before.app ? (before.app?'switch':'open') : null;
+            const app=appClass(button);
+            return app && !before.windows.some(window=>window.class===app)
+                ? { motion:before.app?'switch':'open', app } : null;
         }
-        if(!before.app)return null;
-        if(button.matches('.window-close'))return 'close';
-        if(button.matches('.window-minimize,.desktop-dock-home'))return 'minimize';
-        if(button.matches('.window-maximize'))return 'resize';
+        const app=appClass(button.closest('.desktop-window')) || before.app;
+        if(!app)return null;
+        if(button.matches('.window-close'))return {motion:'close',app};
+        if(button.matches('.window-minimize,.desktop-dock-home'))return {motion:'minimize',app};
+        if(button.matches('.window-maximize'))return {motion:'resize',app};
         return null;
     }
-    function windowOffset(anchor) {
-        const window=document.querySelector('.desktop-window:not(.hidden)')?.getBoundingClientRect();
+    function windowOffset(app,anchor) {
+        const window=windowFor(app)?.getBoundingClientRect();
         if(!anchor || !window?.width)return;
         const shift=(from,to,limit)=>`${Math.max(-limit,Math.min(limit,(from-to)*.22))}px`;
         const root=document.documentElement;
@@ -100,26 +110,39 @@
             check();
         });
     }
-    function start(button,motion,before) {
+    function start(button,{motion,app},before) {
         let delivered=false,active;
         const root=document.documentElement;
+        const named=new Set();
+        const mark=()=>{
+            const element=windowFor(app);
+            if(element){
+                element.style.viewTransitionName='arcnix-desktop-window';
+                named.add(element);
+            }
+        };
         const deliver=()=>{if(!delivered){delivered=true;if(pendingDeliver===deliver)pendingDeliver=null;forward(button);}};
-        const launchRect=motion==='open' ? button.querySelector('.desktop-app-icon')?.getBoundingClientRect() : null;
+        const launchRect=button.querySelector('.desktop-app-icon')?.getBoundingClientRect();
         if(motion==='minimize') {
-            const dock=document.querySelector('.desktop-dock-app.active .desktop-app-icon');
-            windowOffset(dock?.getBoundingClientRect());
+            const dock=document.querySelector(`.desktop-dock-app.${app} .desktop-app-icon`);
+            windowOffset(app,dock?.getBoundingClientRect());
         }
         const clear=()=>{
+            for(const element of named)element.style.removeProperty('view-transition-name');
             root.classList.remove('desktop-motion',`desktop-motion-${motion}`);
             root.style.removeProperty('--desktop-motion-x');
             root.style.removeProperty('--desktop-motion-y');
         };
         pendingDeliver=deliver;
         root.classList.add('desktop-motion',`desktop-motion-${motion}`);
+        mark();
         try {
             active=document.startViewTransition(async()=>{
                 deliver();
-                await settle(before,launchRect ? ()=>windowOffset(launchRect) : null);
+                await settle(before,()=>{
+                    mark();
+                    if(launchRect)windowOffset(app,launchRect);
+                });
             });
             transition=active;
             active.ready.catch(()=>{});
@@ -166,7 +189,7 @@
     document.addEventListener('dblclick', event => {
         const target = event.target;
         if (event.button !== 0 || !(target instanceof Element) || desktopGeometry.movedRecently()) return;
-        if (target.closest('button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"]')) return;
+        if (target.closest('button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .explorer-search-options')) return;
         const titlebar = target.closest('.desktop-window-titlebar');
         if (!titlebar?.closest('.desktop-window:not(.hidden)') || !state()?.shown) return;
         const maximize = titlebar.querySelector('.window-maximize:not(:disabled)');

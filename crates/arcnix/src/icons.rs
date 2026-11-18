@@ -7,6 +7,7 @@ use crate::i18n;
 #[derive(Clone, Copy)]
 pub enum Icon {
     Search,
+    Browser,
     ChevronRight,
     Server,
     Bell,
@@ -15,9 +16,11 @@ pub enum Icon {
     File,
     Grid,
     List,
+    Sidebar,
     Copy,
     Edit,
     Settings,
+    Info,
     Close,
     More,
     Up,
@@ -52,6 +55,7 @@ impl Icon {
     fn name(self) -> &'static str {
         match self {
             Self::Search => "search",
+            Self::Browser => "browser",
             Self::ChevronRight => "chevron-right",
             Self::Server => "server",
             Self::Bell => "bell",
@@ -60,9 +64,11 @@ impl Icon {
             Self::File => "file",
             Self::Grid => "grid",
             Self::List => "list",
+            Self::Sidebar => "sidebar",
             Self::Copy => "copy",
             Self::Edit => "edit",
             Self::Settings => "settings",
+            Self::Info => "info",
             Self::Close => "close",
             Self::More => "more",
             Self::Up => "up",
@@ -96,6 +102,7 @@ impl Icon {
     fn svg(self) -> &'static str {
         match self {
             Self::Search => include_str!("../assets/icons/search.svg"),
+            Self::Browser => include_str!("../assets/icons/browser.svg"),
             Self::ChevronRight => include_str!("../assets/icons/chevron-right.svg"),
             Self::Server => include_str!("../assets/icons/server.svg"),
             Self::Bell => include_str!("../assets/icons/bell.svg"),
@@ -104,9 +111,11 @@ impl Icon {
             Self::File => include_str!("../assets/icons/file.svg"),
             Self::Grid => include_str!("../assets/icons/grid.svg"),
             Self::List => include_str!("../assets/icons/list.svg"),
+            Self::Sidebar => include_str!("../assets/icons/sidebar.svg"),
             Self::Copy => include_str!("../assets/icons/copy.svg"),
             Self::Edit => include_str!("../assets/icons/edit.svg"),
             Self::Settings => include_str!("../assets/icons/settings.svg"),
+            Self::Info => include_str!("../assets/icons/info.svg"),
             Self::Close => include_str!("../assets/icons/close.svg"),
             Self::More => include_str!("../assets/icons/more.svg"),
             Self::Up => include_str!("../assets/icons/arrow-up.svg"),
@@ -234,6 +243,7 @@ pub fn css() -> String {
     }
     for icon in [
         Icon::Search,
+        Icon::Browser,
         Icon::ChevronRight,
         Icon::Server,
         Icon::Bell,
@@ -242,9 +252,11 @@ pub fn css() -> String {
         Icon::File,
         Icon::Grid,
         Icon::List,
+        Icon::Sidebar,
         Icon::Copy,
         Icon::Edit,
         Icon::Settings,
+        Icon::Info,
         Icon::Close,
         Icon::More,
         Icon::Up,
@@ -287,12 +299,12 @@ pub fn css() -> String {
             Icon::Folder => Some("explorer"),
             Icon::File => Some("document"),
             Icon::Edit => Some("editor"),
+            Icon::Browser => Some("browser"),
             Icon::Docker => Some("docker"),
             Icon::Monitor => Some("resources"),
             Icon::Store => Some("software"),
             Icon::Terminal => Some("terminal"),
-            Icon::Services => Some("operations"),
-            Icon::Logs => Some("logs"),
+            Icon::Settings => Some("settings"),
             _ => None,
         } {
             css.push_str(&format!(

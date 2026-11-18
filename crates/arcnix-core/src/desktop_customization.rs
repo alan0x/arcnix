@@ -24,9 +24,11 @@ pub enum Shortcut {
 #[serde(rename_all = "snake_case")]
 pub enum Wallpaper {
     #[default]
-    Arcnix,
+    #[serde(alias = "arcnix")]
+    Terracotta,
     Aurora,
-    Dunes,
+    #[serde(alias = "dunes")]
+    Fjord,
     Remote(String),
 }
 
@@ -39,12 +41,30 @@ pub enum DockSize {
     Large,
 }
 
+impl DockSize {
+    pub const fn pixels(self) -> u8 {
+        match self {
+            Self::Small => 32,
+            Self::Medium => 44,
+            Self::Large => 54,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Dock {
     pub order: Vec<DesktopApp>,
     pub unpinned: Vec<DesktopApp>,
     pub size: DockSize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_size: Option<u8>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub panel_mode: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub panel_centered: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub floating_status: bool,
     pub magnify: bool,
     pub auto_hide: bool,
 }
@@ -55,8 +75,33 @@ impl Default for Dock {
             order: vec![],
             unpinned: vec![],
             size: DockSize::Medium,
+            icon_size: None,
+            panel_mode: false,
+            panel_centered: false,
+            floating_status: false,
             magnify: true,
             auto_hide: false,
+        }
+    }
+}
+
+impl Dock {
+    pub const MIN_ICON_SIZE: u8 = 24;
+    pub const MAX_ICON_SIZE: u8 = 64;
+
+    pub fn icon_pixels(&self) -> u8 {
+        self.icon_size.unwrap_or(self.size.pixels())
+    }
+
+    pub fn set_icon_pixels(&mut self, pixels: u8) {
+        if let Some(preset) = [DockSize::Small, DockSize::Medium, DockSize::Large]
+            .into_iter()
+            .find(|size| size.pixels() == pixels)
+        {
+            self.size = preset;
+            self.icon_size = None;
+        } else {
+            self.icon_size = Some(pixels);
         }
     }
 }
@@ -79,7 +124,7 @@ impl Default for Appearance {
             show_apps: true,
             order: vec![],
             hidden: vec![],
-            wallpaper: Wallpaper::Arcnix,
+            wallpaper: Wallpaper::default(),
             dock: Dock::default(),
         }
     }
@@ -106,6 +151,10 @@ impl Appearance {
                 "Invalid application list"
             );
         }
+        ensure!(
+            (Dock::MIN_ICON_SIZE..=Dock::MAX_ICON_SIZE).contains(&self.dock.icon_pixels()),
+            "Invalid Dock icon size"
+        );
         if let Wallpaper::Remote(path) = &self.wallpaper {
             validate_image_path(path)?;
         }
@@ -125,17 +174,6 @@ fn valid_name(name: &str) -> bool {
         && !name.chars().any(char::is_control)
 }
 
-fn home(session: &RemoteSession) -> Result<String> {
-    let output = execute(
-        session,
-        "# arcnix:desktop:home\nprintf '%s' \"${HOME:-}\"",
-        8192,
-    )?;
-    ensure!(output.exit_code == 0, "Cannot resolve remote login home");
-    crate::terminal::validate_directory(&output.stdout)?;
-    Ok(output.stdout)
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct DesktopItems {
     pub path: String,
@@ -144,7 +182,7 @@ pub struct DesktopItems {
 }
 
 pub fn items(session: &RemoteSession) -> Result<DesktopItems> {
-    let path = format!("{}/Desktop", home(session)?.trim_end_matches('/'));
+    let path = format!("{}/Desktop", session.login_home()?.trim_end_matches('/'));
     if !session.directory_exists(&path)? {
         return Ok(DesktopItems {
             path,
@@ -241,7 +279,7 @@ pub struct WallpaperImage {
 
 pub fn read_wallpaper(session: &RemoteSession, path: &str) -> Result<WallpaperImage> {
     let path = if let Some(relative) = path.strip_prefix("~/") {
-        format!("{}/{relative}", home(session)?.trim_end_matches('/'))
+        format!("{}/{relative}", session.login_home()?.trim_end_matches('/'))
     } else {
         path.to_owned()
     };

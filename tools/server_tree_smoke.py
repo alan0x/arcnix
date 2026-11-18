@@ -119,7 +119,7 @@ def main():
             before=config.read_bytes();page.keyboard.press('Escape');expect(dialog).to_have_count(0);assert config.read_bytes()==before
             renamed.locator('.group-button').click(button='right');menu.get_by_role('button',name='Delete group & servers',exact=True).click();dialog.locator('.modal-footer button').last.click();expect(dialog).to_have_count(0)
             saved=json.loads(config.read_text())['config'];assert len(saved['servers'])==3 and all(g['id']!='a' for g in saved['groups'])
-            expect(page.locator('.server-inventory')).to_be_visible();expect(page.locator('.inventory-row')).to_have_count(3)
+            expect(page.locator('.server-landing')).to_be_visible();expect(page.locator('.host-select')).to_have_count(3)
             empty_folder.locator('.group-button').click(button='right');menu.get_by_role('button',name='Delete group & servers',exact=True).click();expect(dialog).to_contain_text('0 saved server profiles');dialog.locator('.modal-footer button').last.click();expect(dialog).to_have_count(0)
             assert len(json.loads(config.read_text())['config']['servers'])==3
             assert not errors,errors

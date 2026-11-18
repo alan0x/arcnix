@@ -40,11 +40,17 @@ def main():
                 expect(page.locator('.docker-page')).to_be_visible()
                 expect(page.locator('.docker-page').get_by_role('button', name='Refresh Docker', exact=True)).to_be_enabled()
 
-            def settings():
-                page.locator('.desktop-settings-button').click()
-                dialog = page.get_by_role('dialog', name='Desktop settings', exact=True)
-                expect(dialog.get_by_role('button', name='Dark', exact=True)).to_be_enabled()
-                return dialog
+            def settings(section='Desktop'):
+                app.application('Settings')
+                panel = page.locator('.desktop-settings-page')
+                panel.get_by_role('button', name=section, exact=True).click()
+                if section == 'Desktop':
+                    expect(panel.get_by_role('button', name='Dark', exact=True)).to_be_enabled()
+                return panel
+
+            def close_settings():
+                page.locator('.desktop-window.active .window-close').click()
+                expect(page.locator('.desktop-settings-page')).to_have_count(0)
 
             def close(dialog):
                 dialog.get_by_role('button', name='Close dialog', exact=True).click()
@@ -75,7 +81,9 @@ def main():
             expect(page.locator('.docker-port-row')).to_have_count(2)
             expect(page.locator('.docker-ports').get_by_role('button', name='worker', exact=True)).to_contain_text('Host network')
             page.locator('.docker-ports').get_by_role('button', name='Server listeners', exact=True).click()
-            expect(page.locator('.desktop-window-title')).to_have_text('Monitor')
+            expect(page.locator('.desktop-window.active .desktop-window-title')).to_have_text('Monitor')
+            expect(page.locator('.monitor-content .monitor-heading')).to_have_text('Processes')
+            expect(page.locator('.monitor-port-details .resource-ports')).to_be_visible()
             docker()
             page.locator('.docker-ports').get_by_role('button', name='web', exact=True).click()
             expect(page.locator('.docker-detail-name')).to_have_text('web')
@@ -128,8 +136,9 @@ def main():
             expect(dialog).to_contain_text('Saved on server')
             preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
             assert json.loads(preferences.read_text())['theme'] == 'Dark'
-            close(dialog)
+            close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-dark desktop-dark')
+            app.application('Terminal')
             expect(reader).to_contain_text('THEME_SESSION_PRESERVED')
             docker()
             for width in (1100, 900):
@@ -163,20 +172,24 @@ def main():
             dialog.get_by_role('button', name='Light', exact=True).click()
             expect(dialog.get_by_role('button', name='Light', exact=True)).to_have_attribute('aria-pressed', 'true')
             expect(dialog).to_contain_text('Saved on server')
-            close(dialog)
+            close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
             app.screenshot('docker-light-restored.png')
             original = preferences.read_text()
             preferences.write_text('{invalid JSON')
-            dialog = settings()
+            dialog = settings('General')
             dialog.get_by_role('button', name='Reload settings', exact=True).click()
+            expect(dialog.locator('.desktop-preferences > .error')).not_to_be_empty()
+            dialog.get_by_role('button', name='Desktop', exact=True).click()
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_be_disabled()
-            expect(dialog.locator('.error').first).not_to_be_empty()
             assert preferences.read_text() == '{invalid JSON'
             preferences.write_text(original)
+            dialog.get_by_role('button', name='General', exact=True).click()
             dialog.get_by_role('button', name='Reload settings', exact=True).click()
+            dialog.get_by_role('button', name='Desktop', exact=True).click()
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_be_enabled()
-            close(dialog)
+            close_settings()
+            docker()
             checks.append('A new client process restores the server theme; failed writes retain the previous file/theme and can be retried')
 
             denied = peer.root / 'docker-denied'
@@ -212,7 +225,7 @@ def main():
             dialog.get_by_role('button', name='Dark', exact=True).click()
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_have_attribute('aria-pressed', 'true')
             expect(dialog).to_contain_text('Saved on server')
-            close(dialog)
+            close_settings()
             second = peer.root / 'home/arcnix-nosftp/.arcnix/desktop.json'
             assert json.loads(second.read_text())['theme'] == 'Dark'
             assert json.loads(preferences.read_text())['theme'] == 'Light'
@@ -226,16 +239,16 @@ def main():
 
             hidden_seed = docker_file.with_suffix('.disabled')
             docker_file.rename(hidden_seed)
-            dialog = settings()
+            dialog = settings('General')
             dialog.get_by_role('button', name='Detect applications', exact=True).click()
             expect(dialog).to_contain_text('Docker not detected')
-            close(dialog)
+            close_settings()
             expect(page.locator('.desktop-dock .app-docker')).to_have_count(0)
             hidden_seed.rename(docker_file)
-            dialog = settings()
+            dialog = settings('General')
             dialog.get_by_role('button', name='Detect applications', exact=True).click()
             expect(dialog).to_contain_text('Docker detected')
-            close(dialog)
+            close_settings()
             docker()
             # A late log response from the previous connection must not populate another server.
             (peer.root / 'docker-slow').touch()
@@ -244,7 +257,10 @@ def main():
             page.locator('.overview-connect').click()
             page.get_by_role('dialog').get_by_role('button', name='Connect', exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
-            expect(page.locator('.desktop-shortcuts button')).to_have_count(7)
+            expect(page.locator('.desktop-shortcuts .app-docker')).to_have_count(0)
+            expect(page.locator('.desktop-shortcuts').get_by_role(
+                'button', name='Web browser', exact=True,
+            )).to_be_visible()
             expect(page.locator('.docker-page')).to_have_count(0)
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
             assert not (other.root / 'home/arcnix/.arcnix/desktop.json').exists()
@@ -259,7 +275,7 @@ def main():
             page.get_by_role('button', name='简体中文', exact=True).click()
             app.servers()
             expect(page.locator('.docker-tabs')).to_contain_text('容器')
-            expect(page.locator('.desktop-settings-button')).to_have_accessible_name('桌面设置')
+            expect(page.locator('.desktop-dock .app-settings')).to_have_accessible_name('设置')
             app.screenshot('docker-chinese-light.png')
             commands = [json.loads(line)['command'] for line in trace.read_text().splitlines()]
             assert all('--follow' not in cmd and 'docker run ' not in cmd for cmd in commands)

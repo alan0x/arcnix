@@ -103,13 +103,14 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         expect(alpha_group.locator('.storage-preview-summary')).to_contain_text('100 selected · 94 candidates',timeout=30000)
         assert not app.config.with_suffix('.tasks.json').exists()
         saved=app.config.read_text();assert all(text not in saved for text in ['store-0000','store-0104','arcnix-test','fixture-admin-secret'])
-        p.locator('.rail-configurations').click();p.get_by_role('button',name='Server recovery records',exact=True).click()
-        p.get_by_role('dialog',name='Connect to recovery records',exact=True).get_by_role('button',name='Cancel',exact=True).click()
-        p.get_by_role('button',name='Inspect storage and cleanup…',exact=True).click()
+        p.get_by_role('button',name='Connect to record storage…',exact=True).click()
         d=p.get_by_role('dialog',name='Inspect record storage',exact=True)
+        d.get_by_role('button',name='Configuration recovery storage',exact=True).click()
         expect(d.get_by_role('button',name='Configuration recovery storage',exact=True)).to_have_class(re.compile(r'.*\bactive\b.*'))
         d.get_by_role('textbox',name='Minimum record age (days)',exact=True).fill('0');d.get_by_role('textbox',name='Keep latest records (per path for configuration originals)',exact=True).fill('1')
         expect(d.get_by_role('textbox',name='Administrator password (optional)',exact=True).first).to_have_value('')
+        if not d.locator('.record-target').first.evaluate("el=>el.classList.contains('active')"):
+            d.locator('.record-target').first.click()
         d.get_by_role('textbox',name='SSH password or key passphrase',exact=True).first.fill('arcnix-test');d.get_by_role('textbox',name='Administrator password (optional)',exact=True).first.fill('fixture-admin-secret')
         d.get_by_role('button',name='Inspect storage',exact=True).click();expect(alpha_group.locator('.storage-state')).to_have_text('Storage query completed',timeout=30000)
         expect(alpha_group.locator('.storage-record')).to_have_count(3)
@@ -135,6 +136,6 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth');app.screenshot('storage-chinese.png')
         p.get_by_role('button',name='最近批次',exact=True).click();expect(p.locator('.task-entry')).to_have_count(0)
 
-checks=['global entry without workspace connection','one active Tasks subview','negative age validation','configuration retention cannot be zero','scope defaults are explicit','multi-server SSH and sudo stdin without SFTP','allocated versus logical bytes','incomplete measurement is explicit','active uncertain referenced legacy and linked records are protected','exact selected-object preview','selection changes invalidate preview','escaped objects are rejected','mismatched preview identity is rejected','failed refresh preserves prior snapshot','account and root changes are rejected','independent server queries','page candidates and cross-page selection','100-record selection limit','credential title redaction','preview writes no local history or credentials','configuration entry opens global storage scope','newest originals and references remain protected','unverified registry protects every candidate','forgetting drops credentials and previews','reconnect fields are empty','navigation prevents new queries','Chinese narrow layout']
+checks=['global entry without workspace connection','one active Tasks subview','negative age validation','configuration retention cannot be zero','scope defaults are explicit','multi-server SSH and sudo stdin without SFTP','allocated versus logical bytes','incomplete measurement is explicit','active uncertain referenced legacy and linked records are protected','exact selected-object preview','selection changes invalidate preview','escaped objects are rejected','mismatched preview identity is rejected','failed refresh preserves prior snapshot','account and root changes are rejected','independent server queries','page candidates and cross-page selection','100-record selection limit','credential title redaction','preview writes no local history or credentials','Tasks storage can switch to the configuration scope','newest originals and references remain protected','unverified registry protects every candidate','forgetting drops credentials and previews','reconnect fields are empty','navigation prevents new queries','Chinese narrow layout']
 (out/'results.json').write_text(json.dumps(dict(passed=True,checks=checks),indent=2))
 print(f'{len(checks)} record storage UI checks passed')

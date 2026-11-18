@@ -17,6 +17,8 @@ def main():
         folder = peer.root / 'terminal-folder'
         folder.mkdir()
         (folder / 'nested.txt').write_bytes(b'nested context fixture')
+        desktop_folder = peer.root / 'home/arcnix/Desktop/desktop-terminal'
+        desktop_folder.mkdir(parents=True, exist_ok=True)
         (peer.root / 'other.txt').write_bytes(b'root context fixture')
         literal_name = "literal ' 中文;$(touch PWNED)"
         (peer.root / literal_name).mkdir()
@@ -163,6 +165,26 @@ def main():
             command('pwd')
             expect(reader).to_contain_text('/' + literal_name)
             checks.append('Without tmux, reconnecting restores the saved tabs and starting directory with a fresh shell and no stale output')
+
+            app.application('File explorer')
+            explorer = page.locator('.desktop-window.app-explorer.active')
+            explorer.locator('.explorer-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
+            explorer.get_by_role('button', name='terminal-folder', exact=True).click(button='right')
+            app.action('Terminal here')
+            terminal_running()
+            expect(tabs).to_have_count(6)
+            command('pwd')
+            expect(reader).to_contain_text('/terminal-folder')
+            checks.append('The Explorer folder menu starts the remote terminal in the selected directory')
+
+            page.locator('.desktop-dock').get_by_role('button', name='Show desktop', exact=True).click()
+            page.locator('.desktop-shortcuts').get_by_role('button', name='desktop-terminal', exact=True).click(button='right')
+            page.locator('.desktop-context-menu').get_by_role('button', name='Terminal here', exact=True).click()
+            terminal_running()
+            expect(tabs).to_have_count(7)
+            command('pwd')
+            expect(reader).to_contain_text('/home/arcnix/Desktop/desktop-terminal')
+            checks.append('A folder shortcut on the desktop opens its own remote directory in Terminal')
 
     result = dict(passed=len(checks), checks=checks, output=str(output))
     (output / 'results.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

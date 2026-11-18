@@ -70,6 +70,22 @@ def archive_permissions(info):
     return info
 
 
+def windows_installer(staging, output, stem, version):
+    compiler = shutil.which("ISCC.exe")
+    if not compiler:
+        raise SystemExit("Windows packaging requires Inno Setup (ISCC.exe on PATH).")
+    file_version = version.split("+", 1)[0].split("-", 1)[0]
+    subprocess.run([
+        compiler,
+        f"/DStage={staging}",
+        f"/DAppVersion={version}",
+        f"/DFileVersion={file_version}",
+        f"/O{output}",
+        f"/F{stem}-setup",
+        str(ROOT / "packaging/windows/arcnix.iss"),
+    ], check=True)
+
+
 def package(binary, target, tag, output, version):
     platform = TARGETS[target]
     stem = f"arcnix-{tag}-{platform}"
@@ -94,6 +110,7 @@ def package(binary, target, tag, output, version):
             shutil.copy2(vendor / name / "LICENSE", licenses / "LICENSE")
         shutil.copy2(vendor / "README.md", staging / "LICENSES/README.md")
         if platform == "windows-amd64":
+            windows_installer(staging, output, stem, version)
             # Raw executable used by the in-app updater; GitHub records its digest.
             shutil.copy2(binary, output / f"{stem}.exe")
             archive = output / f"{stem}.zip"

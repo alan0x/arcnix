@@ -15,6 +15,7 @@ pub(super) fn explorer(ui: Ui) -> impl Widget {
     let state = ui.state;
     col().class("remote-explorer").fill((
         explorer_ui::drag_bridge(ui.clone()),
+        explorer_transfer::bridge(ui.clone()),
         file_context::task_status(ui.clone()),
         row().class("explorer-body").fill((
             explorer_ui::sidebar(ui.clone()),
@@ -35,14 +36,25 @@ pub(super) fn explorer(ui: Ui) -> impl Widget {
 
 pub(super) fn explorer_window_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
+    let browse = ui.clone();
     row()
         .class("desktop-app-tools explorer-window-tools")
         .fill((
             explorer_ui::sidebar_toggle(ui.clone()),
-            crate::help_ui::tip_raw("Download destination", state.map(|s| s.local_path.clone())),
-            text_action("Transfer files", Icon::Upload)
-                .class("button with-icon compact")
-                .on_press(move || ui.open_workbench(server_desktop::Tab::Files)),
+            when(
+                state.map(|s| s.server_apps.explorer_tag.is_none()),
+                move || {
+                    file_browser::pathbar(
+                        browse.clone(),
+                        true,
+                        true,
+                        row().class("explorer-path-actions").fill((
+                            file_browser::view_controls(browse.clone(), true),
+                            pane_actions(browse.clone(), true, true),
+                        )),
+                    )
+                },
+            ),
         ))
 }
 
@@ -67,12 +79,12 @@ fn selection(s: &mut State, remote: bool) -> &mut HashSet<String> {
         &mut s.local_selection
     }
 }
-pub(super) fn begin_file(ui: &Ui, remote: bool, rename: bool) {
+pub(super) fn begin_file(ui: &Ui, remote: bool, action: FileAction) {
     if ui.state.with(|s| s.file_pending.is_some()) {
         return;
     }
     ui.state.revise(|s| {
-        s.name = if rename {
+        s.name = if action == FileAction::Rename {
             let entries = file_browser::entries(s, remote);
             entries
                 .iter()
@@ -83,7 +95,7 @@ pub(super) fn begin_file(ui: &Ui, remote: bool, rename: bool) {
             String::new()
         };
     });
-    ui.open_dialog(Dialog::File { remote, rename });
+    ui.open_dialog(Dialog::File { remote, action });
 }
 fn sort_button(
     ui: Ui,
@@ -124,19 +136,15 @@ fn sort_button(
             })
         })
 }
-fn transfer_button(ui: Ui, remote: bool, compact: bool) -> impl Widget {
+fn transfer_button(ui: Ui, remote: bool) -> impl Widget {
     let state = ui.state;
     let label = if remote { "下载" } else { "上传" };
     sapid::button()
-        .class(if compact {
-            "icon-button explorer-download"
-        } else {
-            "button with-icon primary"
-        })
+        .class("button with-icon primary")
         .name(i18n::bind(label))
         .fill((
             icons::glyph(if remote { Icon::Download } else { Icon::Upload }),
-            when(!compact, move || text().content(i18n::bind(label))),
+            text().content(i18n::bind(label)),
         ))
         .enabled(state.map(move |s| {
             file_browser::transfer_ready(s) && !file_browser::selected_entries(s, remote).is_empty()
@@ -150,40 +158,47 @@ fn transfer_button(ui: Ui, remote: bool, compact: bool) -> impl Widget {
         })
 }
 
-fn pane_actions(ui: Ui, remote: bool) -> impl Widget {
+fn pane_actions(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
     let state = ui.state;
     let filter = ui.clone();
     let menu = ui.clone();
-    fragment((
-        icon_action(
-            if remote {
-                "筛选远程文件"
-            } else {
-                "筛选本地文件"
-            },
-            Icon::Filter,
-        )
-        .class(state.map(move |s| {
-            if if remote {
-                s.remote_filter_open
-            } else {
-                s.local_filter_open
-            } {
-                "icon-button active"
-            } else {
-                "icon-button"
-            }
-            .to_string()
-        }))
-        .on_press(move || {
-            filter.state.revise(|s| {
+    let filter = if explorer {
+        fragment(explorer_search::toggle(filter))
+    } else {
+        fragment(
+            icon_action(
                 if remote {
-                    s.remote_filter_open = !s.remote_filter_open
+                    "筛选远程文件"
                 } else {
-                    s.local_filter_open = !s.local_filter_open
+                    "筛选本地文件"
+                },
+                Icon::Filter,
+            )
+            .class(state.map(move |s| {
+                if if remote {
+                    s.remote_filter_open
+                } else {
+                    s.local_filter_open
+                } {
+                    "icon-button active"
+                } else {
+                    "icon-button"
                 }
-            })
-        }),
+                .to_string()
+            }))
+            .on_press(move || {
+                filter.state.revise(|s| {
+                    if remote {
+                        s.remote_filter_open = !s.remote_filter_open
+                    } else {
+                        s.local_filter_open = !s.local_filter_open
+                    }
+                })
+            }),
+        )
+    };
+    fragment((
+        filter,
         col().class("pane-menu-anchor").fill((
             icon_action(
                 if remote {
@@ -193,6 +208,7 @@ fn pane_actions(ui: Ui, remote: bool) -> impl Widget {
                 },
                 Icon::More,
             )
+            .class("icon-button")
             .on_press(move || {
                 menu.state.revise(|s| {
                     s.host_menu = None;
@@ -205,7 +221,7 @@ fn pane_actions(ui: Ui, remote: bool) -> impl Widget {
                     }
                 })
             }),
-            file_context::menu(ui.clone(), remote),
+            when(!explorer, move || file_context::menu(ui.clone(), remote)),
         )),
     ))
 }
@@ -218,6 +234,9 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
         let mut class = if file_browser::icons(s, remote) { "file-pane icons-view" } else { "file-pane details-view" }.to_owned();
         if compact {
             class.push_str(" explorer-pane");
+            if explorer_transfer::upload_ready(s) {
+                class.push_str(" explorer-upload-ready");
+            }
         }
         if file_browser::transfer_ready(s) {
             class.push_str(" file-transfer-ready");
@@ -262,18 +281,18 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
                     }
                 }))),
             )),
-            transfer_button(ui.clone(), remote, false),
+            transfer_button(ui.clone(), remote),
             file_browser::view_controls(ui.clone(), remote),
           ))
         }),
-        file_browser::pathbar(ui.clone(), remote, compact, when(compact, {
+        when(!compact, {
             let ui = ui.clone();
-            move || row().class("explorer-path-actions").fill((
-                transfer_button(ui.clone(), remote, true),
-                file_browser::view_controls(ui.clone(), remote),
-                pane_actions(ui.clone(), remote),
-            ))
-        })),
+            move || file_browser::pathbar(ui.clone(), remote, false, ())
+        }),
+        when(compact, {
+            let ui = ui.clone();
+            move || file_context::menu(ui.clone(), remote)
+        }),
         when(!compact, {
           let ui = ui.clone();
           move || {
@@ -295,11 +314,11 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
             btn("清空", move || {
                 clear.state.revise(|s| selection(s, remote).clear())
             }),
-            pane_actions(ui.clone(), remote),
+            pane_actions(ui.clone(), remote, false),
             ))
           }
         }),
-        row()
+        when(!compact, move || row()
             .class(state.map(move |s| {
                 if if remote {
                     s.remote_filter_open
@@ -339,8 +358,8 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
                             });
                         }
                     }),
-                when(!compact, || text().class("subtle").content(i18n::bind("按文件名筛选"))),
-            )),
+                text().class("subtle").content(i18n::bind("按文件名筛选")),
+            ))),
         row().class("file-header").fill((
             sort_button(ui.clone(), remote, Sort::Name, "名称", "column-name"),
             when(state.map(move |s| file_columns::visible(s, remote).size), { let ui = ui.clone(); move || sort_button(ui.clone(), remote, Sort::Size, "大小", "column-size") }),
@@ -354,7 +373,7 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
             ) }),
             when(state.map(move |s| file_columns::visible(s, remote).permissions), move || text().class("column-permissions").content(i18n::bind("权限"))),
         )),
-        file_browser::listing(ui.clone(), remote),
+        file_browser::listing(ui.clone(), remote, compact),
         text()
             .class(state.map(move |s| {
                 if pane_entries(s, remote).is_empty() {
@@ -371,13 +390,13 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
                     "SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问权限）。系统软件、资源概览和系统日志仍可使用。".into()
                 } else if !ready(s, remote) {
                     "输入路径后按 Enter".into()
-                } else if !(if remote {
-                    &s.remote_filter
+                } else if if compact {
+                    explorer_search::current(s).has_filter()
+                } else if remote {
+                    !s.remote_filter.is_empty()
                 } else {
-                    &s.local_filter
-                })
-                .is_empty()
-                {
+                    !s.local_filter.is_empty()
+                } {
                     "没有匹配的项目".into()
                 } else {
                     "此文件夹为空".into()
@@ -392,26 +411,27 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
     when(
         state.map(|s| matches!(s.dialog, Some(Dialog::File { .. }))),
         move || {
-            let (remote, rename) = ui.state.with(|s| match s.dialog {
-                Some(Dialog::File { remote, rename }) => (remote, rename),
-                _ => (false, false),
+            let (remote, action) = ui.state.with(|s| match s.dialog {
+                Some(Dialog::File { remote, action }) => (remote, action),
+                _ => (false, FileAction::CreateFolder),
             });
+            let (title, field, button) = match action {
+                FileAction::Rename => ("重命名", "新名称", "重命名"),
+                FileAction::CreateFolder => ("新建文件夹", "文件夹名称", "创建文件夹"),
+                FileAction::CreateFile => ("新建文件", "文件名", "创建文件"),
+            };
             let submit = ui.clone();
             let enter = ui.clone();
             let cancel = ui.clone();
             modal(
                 ui.clone(),
-                if rename {
-                    "重命名"
-                } else {
-                    "新建文件夹"
-                },
+                title,
                 (
                     text()
                         .class("dialog-description")
                         .content(i18n::bind(state.map(move |s| {
                             let chosen = selected(s, remote).iter().next();
-                            let directory = if rename {
+                            let directory = if action == FileAction::Rename {
                                 chosen.map(|from| {
                                     if remote {
                                         from.rsplit_once('/')
@@ -445,17 +465,9 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
                             }
                         }))),
                     col().class("field").fill((
-                        text().class("field-label").content(i18n::bind(if rename {
-                            "新名称"
-                        } else {
-                            "文件夹名称"
-                        })),
+                        text().class("field-label").content(i18n::bind(field)),
                         input()
-                            .name(i18n::bind(if rename {
-                                "新名称"
-                            } else {
-                                "文件夹名称"
-                            }))
+                            .name(i18n::bind(field))
                             .value(state.map(|s| s.name.clone()))
                             .on(value_changed, move |e| {
                                 if let Event::ValueChanged { value, .. } = e {
@@ -467,7 +479,7 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
                             })
                             .on(commit, move |_| {
                                 if enter.state.with(|s| s.file_pending.is_none()) {
-                                    enter.mutate_file(remote, rename)
+                                    enter.mutate_file(remote, action)
                                 }
                             }),
                     )),
@@ -483,15 +495,13 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
                         .label(i18n::bind(state.map(move |s| {
                             if s.file_pending.is_some() {
                                 "正在处理…"
-                            } else if rename {
-                                "重命名"
                             } else {
-                                "创建文件夹"
+                                button
                             }
                             .to_string()
                         })))
                         .enabled(state.map(|s| s.file_pending.is_none()))
-                        .on_press(move || submit.mutate_file(remote, rename)),
+                        .on_press(move || submit.mutate_file(remote, action)),
                 ),
             )
         },
@@ -523,52 +533,122 @@ fn dock_toggle(ui: Ui, open: bool) -> sapid::ActionIcon {
     )
     .on_press(move || ui.state.revise(|s| s.activity_open = !s.activity_open))
 }
-fn queue(ui: Ui) -> impl Widget {
+pub(super) fn transfer_paused(s: &State, id: &str) -> bool {
+    s.transfer_pauses
+        .get(id)
+        .is_some_and(|flag| flag.load(Ordering::Acquire))
+}
+
+fn active_job(job: &TransferJob) -> bool {
+    matches!(job.status, TransferStatus::Queued | TransferStatus::Running)
+}
+
+fn pause_button(ui: Ui, job: Cage<TransferJob>, paused: bool) -> impl Widget {
+    icon_action(
+        if paused {
+            "继续传输"
+        } else {
+            "暂停传输"
+        },
+        if paused { Icon::Play } else { Icon::Pause },
+    )
+    .class("icon-button job-pause")
+    .enabled(ui.state.map(move |s| {
+        let job = job.get();
+        active_job(&job)
+            && !s
+                .cancels
+                .get(&job.id)
+                .is_some_and(|c| c.load(Ordering::Relaxed))
+    }))
+    .on_press(move || {
+        ui.state.revise(|s| {
+            let id = job.get().id;
+            if !s.jobs.iter().any(|job| job.id == id && active_job(job)) {
+                return;
+            }
+            s.transfer_pauses
+                .entry(id.clone())
+                .or_default()
+                .store(!paused, Ordering::Release);
+            s.transfer_now = std::time::Instant::now();
+            let waiting = transfer_details::waiting(s, &id);
+            if let Some(meter) = s.transfer_meters.get_mut(&id) {
+                if paused && !waiting {
+                    meter.resume(s.transfer_now);
+                } else {
+                    meter.pause(s.transfer_now);
+                }
+            }
+        });
+        ui.schedule();
+    })
+}
+
+fn queue_job_visible(s: &State, job: &TransferJob, direction: Option<TransferDirection>) -> bool {
+    match direction {
+        Some(direction) => {
+            job.direction == direction && Some(&job.server_id) == s.selected.as_ref()
+        }
+        None => browser::queue_visible(&job.status, s.queue_filter),
+    }
+}
+
+fn queue(ui: Ui, direction: Option<TransferDirection>) -> impl Widget {
     let state = ui.state;
     let pause = ui.clone();
     let retry = ui.clone();
     let clear = ui.clone();
     col().class("queue-content").fill((
-        row().class("queue-toolbar").fill((
-            row().class("queue-filters").fill((
-                queue_filter(ui.clone(), 0, "全部"),
-                queue_filter(ui.clone(), 1, "进行中"),
-                queue_filter(ui.clone(), 2, "失败 / 取消"),
-                queue_filter(ui.clone(), 3, "已完成"),
-            )),
-            when(state.map(|s| s.queue_paused), {
+        when(direction.is_none(), {
+            let ui = ui.clone();
+            move || {
                 let pause = pause.clone();
-                move || queue_toggle(pause.clone(), true)
-            })
-            .otherwise(move || queue_toggle(pause.clone(), false)),
-            icon_action("重试失败项", Icon::Refresh)
-                .enabled(state.map(|s| {
-                    s.connected
-                        && s.jobs.iter().any(|j| {
-                            matches!(
-                                j.status,
-                                TransferStatus::Failed(_) | TransferStatus::Cancelled
-                            )
+                let retry = retry.clone();
+                let clear = clear.clone();
+                row().class("queue-toolbar").fill((
+                    row().class("queue-filters").fill((
+                        queue_filter(ui.clone(), 0, "全部"),
+                        queue_filter(ui.clone(), 1, "进行中"),
+                        queue_filter(ui.clone(), 2, "失败 / 取消"),
+                        queue_filter(ui.clone(), 3, "已完成"),
+                    )),
+                    when(state.map(|s| s.queue_paused), {
+                        let pause = pause.clone();
+                        move || queue_toggle(pause.clone(), true)
+                    })
+                    .otherwise(move || queue_toggle(pause.clone(), false)),
+                    icon_action("重试失败项", Icon::Refresh)
+                        .enabled(state.map(|s| {
+                            s.connected
+                                && s.jobs.iter().any(|j| {
+                                    matches!(
+                                        j.status,
+                                        TransferStatus::Failed(_) | TransferStatus::Cancelled
+                                    )
+                                })
+                        }))
+                        .on_press(move || retry.retry(None)),
+                    icon_action("清除已结束的传输", Icon::Clear).on_press(move || {
+                        clear.state.revise(|s| {
+                            s.jobs.retain(|j| {
+                                matches!(j.status, TransferStatus::Running | TransferStatus::Queued)
+                            });
+                            s.explorer_uploads.retain(&s.jobs);
+                            s.transfer_meters
+                                .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
+                            s.transfer_details
+                                .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
                         })
-                }))
-                .on_press(move || retry.retry(None)),
-            icon_action("清除已结束的传输", Icon::Clear).on_press(move || {
-                clear.state.revise(|s| {
-                    s.jobs.retain(|j| {
-                        matches!(j.status, TransferStatus::Running | TransferStatus::Queued)
-                    });
-                    s.transfer_meters
-                        .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
-                    s.transfer_details
-                        .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
-                })
-            }),
-        )),
+                    }),
+                ))
+            }
+        }),
         col().class("queue-list").fill(
-            each(state.map(|s| {
+            each(state.map(move |s| {
                 s.jobs
                     .iter()
-                    .filter(|j| browser::queue_visible(&j.status, s.queue_filter))
+                    .filter(|j| queue_job_visible(s, j, direction))
                     .cloned()
                     .collect::<Vec<_>>()
             }))
@@ -602,6 +682,11 @@ fn queue(ui: Ui) -> impl Widget {
                                         move |s| {
                                             let j = job.get();
                                             match &j.status {
+                                                _ if active_job(&j)
+                                                    && transfer_paused(s, &j.id) =>
+                                                {
+                                                    "已暂停".into()
+                                                }
                                                 TransferStatus::Queued => "等待中".into(),
                                                 TransferStatus::Running
                                                     if transfer_details::waiting(s, &j.id) =>
@@ -691,13 +776,17 @@ fn queue(ui: Ui) -> impl Widget {
                                     job.map(|j| format!("{:.1}%", transfer_progress::percent(j))),
                                 ),
                             )),
+                            when(state.map(move |s| transfer_paused(s, &job.get().id)), {
+                                let ui = ui.clone();
+                                move || pause_button(ui.clone(), job, true)
+                            })
+                            .otherwise({
+                                let ui = ui.clone();
+                                move || pause_button(ui.clone(), job, false)
+                            }),
                             close_action("取消传输")
-                                .enabled(job.map(|j| {
-                                    matches!(
-                                        j.status,
-                                        TransferStatus::Running | TransferStatus::Queued
-                                    )
-                                }))
+                                .class("icon-button job-cancel")
+                                .enabled(job.map(|j| active_job(j)))
                                 .on_press(move || {
                                     cancel.state.revise(|s| {
                                         let id = job.get().id;
@@ -708,11 +797,13 @@ fn queue(ui: Ui) -> impl Widget {
                                             && j.status == TransferStatus::Queued
                                         {
                                             j.status = TransferStatus::Cancelled;
+                                            s.transfer_pauses.remove(&id);
                                         }
                                     });
                                     cancel.schedule();
                                 }),
                             icon_action("重试传输", Icon::Refresh)
+                                .class("icon-button job-retry")
                                 .enabled(state.map(move |s| {
                                     let j = job.get();
                                     s.connected
@@ -731,11 +822,8 @@ fn queue(ui: Ui) -> impl Widget {
             }),
         ),
         text()
-            .class(state.map(|s| {
-                if s.jobs
-                    .iter()
-                    .any(|j| browser::queue_visible(&j.status, s.queue_filter))
-                {
+            .class(state.map(move |s| {
+                if s.jobs.iter().any(|j| queue_job_visible(s, j, direction)) {
                     "hidden"
                 } else {
                     "queue-empty"
@@ -745,6 +833,149 @@ fn queue(ui: Ui) -> impl Widget {
             .content(i18n::bind("暂无传输任务")),
     ))
 }
+fn direction_label(direction: TransferDirection) -> &'static str {
+    match direction {
+        TransferDirection::Upload => "上传详情",
+        TransferDirection::Download => "下载详情",
+    }
+}
+
+fn direction_progress(s: &State, direction: TransferDirection) -> (usize, f32) {
+    let jobs = s
+        .jobs
+        .iter()
+        .filter(|job| queue_job_visible(s, job, Some(direction)));
+    let mut active_jobs = jobs.clone().filter(|job| active_job(job)).peekable();
+    let active = active_jobs.peek().is_some();
+    let active_batches: HashSet<_> = active_jobs
+        .filter_map(|job| s.batch_ids.get(&job.id))
+        .collect();
+    let latest_batch = jobs
+        .clone()
+        .next_back()
+        .and_then(|job| s.batch_ids.get(&job.id));
+    let mut count = 0;
+    let mut total = 0u128;
+    let mut done = 0u128;
+    let mut completed = true;
+    for job in jobs.filter(|job| {
+        if active {
+            active_job(job)
+                || (job.status == TransferStatus::Completed
+                    && s.batch_ids
+                        .get(&job.id)
+                        .is_some_and(|batch| active_batches.contains(batch)))
+        } else {
+            s.batch_ids.get(&job.id) == latest_batch
+        }
+    }) {
+        count += 1;
+        total += u128::from(job.total_bytes);
+        let bytes = if job.status == TransferStatus::Completed {
+            job.total_bytes
+        } else {
+            job.transferred_bytes.min(job.total_bytes)
+        };
+        done += u128::from(bytes);
+        completed &= job.status == TransferStatus::Completed;
+    }
+    let percent = if total > 0 {
+        100. * done as f32 / total as f32
+    } else if completed && count > 0 {
+        100.
+    } else {
+        0.
+    };
+    (count, if active { percent.min(99.) } else { percent })
+}
+
+pub(super) fn transfer_progress_buttons(ui: Ui) -> impl Widget {
+    fn button(ui: Ui, direction: TransferDirection) -> impl Widget {
+        let state = ui.state;
+        when(
+            state.map(move |s| direction_progress(s, direction).0 > 0),
+            move || {
+                let open = ui.clone();
+                sapid::button()
+                    .class("transfer-progress-button")
+                    .name(i18n::bind(direction_label(direction)))
+                    .fill((
+                        icons::glyph(match direction {
+                            TransferDirection::Upload => Icon::Upload,
+                            TransferDirection::Download => Icon::Download,
+                        }),
+                        text().class("transfer-summary-track").content(""),
+                        text()
+                            .class("transfer-summary-fill")
+                            .style(state.map(move |s| {
+                                glory::style::Style::new().width(glory::style::Length::Percent(
+                                    direction_progress(s, direction).1 as f64,
+                                ))
+                            }))
+                            .content(""),
+                        text().class("transfer-summary-percent").content(
+                            state.map(move |s| {
+                                format!("{:.0}%", direction_progress(s, direction).1)
+                            }),
+                        ),
+                    ))
+                    .on_press(move || open.open_dialog(Dialog::TransferProgress(direction)))
+            },
+        )
+    }
+
+    row().class("desktop-transfers").fill((
+        row().class("explorer-download-drop").fill((
+            icons::glyph(Icon::Download),
+            text().content(i18n::bind("拖到此处下载")),
+        )),
+        button(ui.clone(), TransferDirection::Upload),
+        button(ui, TransferDirection::Download),
+    ))
+}
+
+pub(super) fn transfer_progress_dialog(ui: Ui) -> impl Widget {
+    fn details(ui: Ui, direction: TransferDirection) -> impl Widget {
+        let state = ui.state;
+        when(
+            state.map(move |s| s.dialog == Some(Dialog::TransferProgress(direction))),
+            move || {
+                let close = ui.clone();
+                let conflict = ui.clone();
+                modal(
+                    ui.clone(),
+                    direction_label(direction),
+                    queue(ui.clone(), Some(direction)),
+                    (
+                        when(
+                            state.map(move |s| {
+                                s.transfer_conflict
+                                    .as_ref()
+                                    .is_some_and(|pending| pending.info.direction == direction)
+                            }),
+                            move || {
+                                let conflict = conflict.clone();
+                                sapid::button()
+                                    .class("button primary")
+                                    .label(i18n::bind("处理文件冲突"))
+                                    .on_press(move || conflict.close_dialog())
+                            },
+                        ),
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind("关闭"))
+                            .on_press(move || close.close_dialog()),
+                    ),
+                )
+            },
+        )
+    }
+    fragment((
+        details(ui.clone(), TransferDirection::Upload),
+        details(ui, TransferDirection::Download),
+    ))
+}
+
 fn queue_filter(ui: Ui, index: u8, label: &'static str) -> impl Widget {
     let state = ui.state;
     sapid::button()
@@ -820,7 +1051,7 @@ pub(super) fn activity(ui: Ui) -> impl Widget {
                 }))
                 .fill((
                     when(state.map(|s| s.activity_tab == 0), move || {
-                        queue(queue_ui.clone())
+                        queue(queue_ui.clone(), None)
                     }),
                     when(state.map(|s| s.activity_tab == 1), move || {
                         text()

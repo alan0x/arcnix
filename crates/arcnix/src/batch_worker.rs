@@ -9,13 +9,10 @@ use arcnix_core::scripts::Template;
 use arcnix_core::tasks::Status;
 use arcnix_core::{ServerProfile, operations, packages};
 use zeroize::Zeroizing;
-#[path = "configuration_compare_worker.rs"]
-mod configuration_compare;
 #[path = "deleted_files_worker.rs"]
 mod deleted_files;
 #[path = "diagnostic_log_worker.rs"]
 mod diagnostic_logs;
-pub use configuration_compare::{ComparedConfiguration, compare_configurations};
 #[path = "export_download_worker.rs"]
 mod export_download;
 #[path = "task_stop_worker.rs"]
@@ -51,12 +48,6 @@ impl Snapshot {
     }
 }
 pub enum Event {
-    ConfigurationCompared {
-        serial: u64,
-        id: String,
-        result: Result<Box<ComparedConfiguration>, String>,
-    },
-    ConfigurationComparisonComplete(u64),
     DiagnosticLogs {
         serial: u64,
         result: Result<Box<LogObservation>, String>,
@@ -89,16 +80,6 @@ pub enum Event {
         serial: u64,
         id: String,
         result: Result<StorageResponse, String>,
-    },
-    ConfigurationRecordPage {
-        serial: u64,
-        id: String,
-        result: Result<arcnix_core::configuration_records::Page, String>,
-    },
-    ConfigurationRecordDetail {
-        serial: u64,
-        id: String,
-        result: Result<Box<arcnix_core::configuration_records::Detail>, String>,
     },
     RecordPage {
         serial: u64,
@@ -331,85 +312,11 @@ fn record_response(
     );
     Ok(String::from_utf8_lossy(&output).into_owned())
 }
-fn configuration_record_text(
-    target: &Target,
-    query: &arcnix_core::configuration_records::Query,
-) -> Result<String> {
-    let remote = PendingConnection::open_for_known_host(&target.profile, &target.fingerprint)?
-        .authenticate(&target.secret, &target.fingerprint)?;
-    let (root, sudo) = operations::identity(&remote)?;
-    let execution =
-        arcnix_core::configuration_records::execution(query, root, sudo, !target.sudo.is_empty())?;
-    let input = Zeroizing::new(format!("{}\n", target.sudo.as_str()));
-    record_text_with_input(
-        &remote,
-        &execution.command,
-        execution.use_stdin_password.then_some(input.as_bytes()),
-        Duration::from_secs(45),
-    )
-}
 fn configuration_record_error(error: anyhow::Error, target: &Target) -> String {
     arcnix_core::diagnostics::redact_log(
         &format!("{error:#}"),
         &[target.secret.as_str(), target.sudo.as_str()],
     )
-}
-pub fn configuration_record_page(
-    serial: u64,
-    target: Target,
-    offset: u32,
-    events: async_channel::Sender<Event>,
-) {
-    std::thread::spawn(move || {
-        let result = (|| -> Result<_> {
-            let text = configuration_record_text(
-                &target,
-                &arcnix_core::configuration_records::Query::List(offset),
-            )?;
-            arcnix_core::configuration_records::parse_page(&text, offset)
-        })()
-        .map_err(|error| configuration_record_error(error, &target));
-        let _ = events.send_blocking(Event::ConfigurationRecordPage {
-            serial,
-            id: target.profile.id.clone(),
-            result,
-        });
-    });
-}
-pub fn configuration_record_detail(
-    serial: u64,
-    target: Target,
-    id: String,
-    events: async_channel::Sender<Event>,
-) {
-    std::thread::spawn(move || {
-        let result = (|| -> Result<_> {
-            let text = configuration_record_text(
-                &target,
-                &arcnix_core::configuration_records::Query::Detail(id.clone()),
-            )?;
-            let mut detail = arcnix_core::configuration_records::parse_detail(&text, &id)?;
-            let secrets = [target.secret.as_str(), target.sudo.as_str()];
-            detail.diff = arcnix_core::diagnostics::redact_log(&detail.diff, &secrets);
-            for output in detail.logs.values_mut() {
-                *output = arcnix_core::diagnostics::redact_log(output, &secrets);
-            }
-            let reviewed =
-                arcnix_core::configurations::Job::restore(&detail.request, &detail.record.id)
-                    .unwrap_or_else(|_| arcnix_core::configurations::Job {
-                        record: detail.request.clone(),
-                        content: None,
-                    });
-            detail.review = arcnix_core::diagnostics::redact_log(&reviewed.review(), &secrets);
-            Ok(Box::new(detail))
-        })()
-        .map_err(|error| configuration_record_error(error, &target));
-        let _ = events.send_blocking(Event::ConfigurationRecordDetail {
-            serial,
-            id: target.profile.id.clone(),
-            result,
-        });
-    });
 }
 fn record_error(error: anyhow::Error, target: &Target) -> String {
     let value = format!("{error:#}");

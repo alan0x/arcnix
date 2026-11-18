@@ -9,7 +9,6 @@ pub(super) enum Page {
     Tasks,
     Backups,
     Diagnostics,
-    Configurations,
     Notifications,
     Settings,
 }
@@ -23,6 +22,7 @@ pub(super) enum SettingsSection {
     Transfers,
     Monitoring,
     Logging,
+    Updates,
     About,
 }
 
@@ -35,6 +35,7 @@ impl SettingsSection {
             Self::Transfers => "Transfers",
             Self::Monitoring => "Monitoring",
             Self::Logging => "Logging",
+            Self::Updates => "Updates",
             Self::About => "About",
         }
     }
@@ -93,10 +94,6 @@ pub(super) fn change_page(s: &mut State, page: Page, _source: &'static str) {
         record_maintenance_ui::forget(s);
         cleanup_records_ui::forget(s);
     }
-    if page != Page::Configurations {
-        configuration_records_ui::forget(s);
-        configuration_compare_ui::forget(s);
-    }
     #[cfg(debug_assertions)]
     if std::env::var_os("ARCNIX_TEST_TRACE_INPUT").as_deref() == Some(std::ffi::OsStr::new("1")) {
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -115,7 +112,6 @@ pub(super) fn change_page(s: &mut State, page: Page, _source: &'static str) {
 
 pub(super) fn workspace_visible(s: &State) -> bool {
     s.navigation == Page::Servers
-        && !server_inventory_ui::shown(s)
         && s.connected
         && s.workbench.active != server_desktop::Tab::Home
         && s.workspace_page != WorkspacePage::Desktop
@@ -172,13 +168,6 @@ fn rail(ui: Ui) -> impl Widget {
                 Icon::Search,
                 "rail-diagnostics",
             ),
-            rail_button(
-                &ui,
-                Page::Configurations,
-                "Configurations",
-                Icon::Edit,
-                "rail-configurations",
-            ),
             col().class("rail-bottom").fill(rail_button(
                 &ui,
                 Page::Settings,
@@ -215,7 +204,6 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                     Page::Tasks => "Tasks",
                     Page::Backups => "Backups",
                     Page::Diagnostics => "Diagnostics",
-                    Page::Configurations => "Configurations",
                 }
                 .to_owned()
             }))),
@@ -242,6 +230,7 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                         SettingsSection::Transfers,
                         SettingsSection::Monitoring,
                         SettingsSection::Logging,
+                        SettingsSection::Updates,
                         SettingsSection::About,
                     ])
                     .key(|section| *section as u8)
@@ -465,16 +454,7 @@ fn global_sidebar(ui: Ui) -> impl Widget {
                     })
                     .otherwise({
                         let ui = ui.clone();
-                        move || {
-                            when(state.map(|s| s.navigation == Page::Configurations), {
-                                let ui = ui.clone();
-                                move || configurations_ui::sidebar(ui.clone())
-                            })
-                            .otherwise({
-                                let ui = ui.clone();
-                                move || context_sidebar(ui.clone())
-                            })
-                        }
+                        move || context_sidebar(ui.clone())
                     })
                 }
             })
@@ -485,7 +465,7 @@ fn global_sidebar(ui: Ui) -> impl Widget {
 pub(super) fn shell(ui: Ui) -> impl Widget {
     let state = ui.state;
     let workbench = state.map(|s| {
-        s.navigation == Page::Servers && s.selected.is_some() && !server_inventory_ui::shown(s)
+        s.navigation == Page::Servers && s.selected.is_some()
     });
     let view_log = ui.clone();
     let dismiss = ui.clone();
@@ -521,9 +501,6 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                     .fill((
                         text().class("page-header-title").content(state.map(|s| {
                             match s.navigation {
-                                Page::Servers if server_inventory_ui::shown(s) => {
-                                    i18n::translate("Server overview")
-                                }
                                 Page::Servers => s
                                     .config
                                     .servers
@@ -535,7 +512,6 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                                 Page::Tasks => i18n::translate("Tasks"),
                                 Page::Backups => i18n::translate("Backups"),
                                 Page::Diagnostics => i18n::translate("Diagnostics"),
-                                Page::Configurations => i18n::translate("Configurations"),
                                 Page::Notifications => i18n::translate("所有活动"),
                                 Page::Settings => i18n::translate(s.settings_section.label()),
                             }
@@ -544,15 +520,10 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                             let ui = ui.clone();
                             move || server_desktop::tabs(ui.clone())
                         }),
-                        when(
-                            state.map(|s| {
-                                server_desktop::visible(s) && !server_desktop::fullscreen(s)
-                            }),
-                            {
-                                let ui = ui.clone();
-                                move || server_desktop::settings_action(ui.clone())
-                            },
-                        ),
+                        when(state.map(server_desktop::visible), {
+                            let ui = ui.clone();
+                            move || workspace::transfer_progress_buttons(ui.clone())
+                        }),
                         when(workbench, {
                             let ui = ui.clone();
                             move || connection_controls(ui.clone())
@@ -597,10 +568,6 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                         let ui = ui.clone();
                         move || diagnostics_ui::page(ui.clone())
                     }),
-                    when(state.map(|s| s.navigation == Page::Configurations), {
-                        let ui = ui.clone();
-                        move || configurations_ui::page(ui.clone())
-                    }),
                     when(state.map(|s| s.navigation == Page::Settings), {
                         let ui = ui.clone();
                         move || settings::page(ui.clone())
@@ -614,22 +581,16 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                             s.navigation == Page::Servers
                                 && (s.selected.is_none()
                                     || s.workbench.active == server_desktop::Tab::Home)
-                                && !server_inventory_ui::shown(s)
                         }),
                         {
                             let ui = ui.clone();
                             move || server_landing(ui.clone())
                         },
                     ),
-                    when(state.map(server_inventory_ui::shown), {
-                        let ui = ui.clone();
-                        move || server_inventory_ui::page(ui.clone())
-                    }),
                     fragment((
                         when(
                             state.map(|s| {
                                 s.navigation == Page::Servers
-                                    && !server_inventory_ui::shown(s)
                                     && s.workbench.active != server_desktop::Tab::Home
                                     && !s.connected
                             }),

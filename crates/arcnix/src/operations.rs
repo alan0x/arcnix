@@ -23,8 +23,7 @@ fn ready(s: &State) -> bool {
 impl Ui {
     pub(super) fn operations_enter(&self) {
         if self.state.with(|s| {
-            navigation::workspace_visible(s)
-                && s.workspace_page == WorkspacePage::Operations
+            monitor_ui::active(s) == Some(monitor_ui::Section::Services)
                 && !s.operations.loaded
                 && ready(s)
         }) {
@@ -98,13 +97,8 @@ impl Ui {
             return;
         }
         self.state.revise(|s| {
-            server_desktop::select_app(s, WorkspacePage::SystemLogs);
-            s.system_logs.query = arcnix_core::system_logs::LogQuery {
-                unit,
-                ..Default::default()
-            };
-            s.system_logs.snapshot = None;
-            s.system_logs.filter.clear();
+            monitor_ui::set_section(s, monitor_ui::Section::Logs);
+            s.system_logs.select_service(unit);
         });
         self.observability_enter();
     }

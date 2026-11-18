@@ -813,7 +813,7 @@ pub(super) fn page(ui: Ui) -> impl Widget {
     let menu_ui = ui.clone();
     col()
         .class(state.map(|s| {
-            if navigation::workspace_visible(s) && s.workspace_page == WorkspacePage::Terminal {
+            if server_desktop::visible(s) && s.workbench.window_visible(WorkspacePage::Terminal) {
                 "terminal-module"
             } else {
                 "terminal-module hidden"

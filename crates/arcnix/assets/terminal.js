@@ -58,6 +58,7 @@
         engine.resize.disconnect();
         engine.wrapper.remove();
         engine.visible=false;
+        engine.active=false;
         // A consumption acknowledgement may still have been queued when the
         // tab changed. Repeating it on return is safe; dropping it is not.
         engine.sentAckPacket=0;
@@ -139,6 +140,7 @@
             surface.appendChild(engine.wrapper);
             engine.resize.observe(surface);
             engine.visible=false;
+            engine.active=false;
         }
     }
     function copy() {
@@ -211,6 +213,13 @@
         if(event.type!=='keydown' || event.isComposing || !(event.target instanceof Element))return false;
         if(terminalMenu && event.key==='Escape' && document.querySelector('.terminal-context-menu')){
             dismissContext(true);
+            handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
+        }
+        // Glory's capture listener also handles Dismiss. Deliver Escape before
+        // it reaches that listener when the remote terminal owns the focus.
+        if(event.key==='Escape' && !event.ctrlKey && !event.metaKey && !event.altKey
+            && !event.shiftKey && engine?.wrapper.contains(event.target)){
+            engine.term.input('\x1b');
             handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
         }
         // Fullscreen Escape also works when hiding its entry button moves focus
@@ -334,8 +343,14 @@
             term.options.disableStdin=metadata.status!=="running";
             if(metadata.status==="running"){fit();emit({kind:"resize",id:metadata.id,columns:term.cols,rows:term.rows});}
         }
-        if(visible&&!engine.visible){fit();term.focus();}
+        const active=visible && Boolean(surface.closest('.desktop-window.active'));
+        const focused=document.activeElement;
+        if(visible&&!engine.visible)fit();
+        if(active&&!engine.active
+            && (!engine.visible && !focused?.matches('.desktop-canvas')
+                || focused?.closest('.desktop-dock-app.app-terminal,.desktop-shortcut.app-terminal')))term.focus();
         engine.visible=visible;
+        engine.active=active;
         if(engine.clear!==metadata.clear){engine.clear=metadata.clear;term.clear();}
         if(metadata.paste_revision>engine.paste){
             engine.paste=metadata.paste_revision;

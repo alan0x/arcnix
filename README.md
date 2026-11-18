@@ -1,18 +1,17 @@
 # Arcnix
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md) · [Official website](https://arcnix.org)
 
 A friendly desktop workspace for managing servers over SSH, built with Rust, Glory and Sapid. No remote agent required. Windows is the currently validated desktop platform.
 
-- Organize servers in sortable groups, annotate environments and tags, and import SSH configurations. Searches include labels; batch target and configuration comparison forms also offer exact label filters.
-- Servers overview combines time-labelled local diagnostics and current-policy backup confirmations, filters findings and records needing verification, and reviews up to 32 selected servers for a new diagnostic run. It preserves the current workspace and makes no background probes.
+- Organize servers in sortable groups, annotate environments and tags, and import SSH configurations. Searches include labels; batch target forms also offer exact label filters.
 - Dual-pane SFTP browsing, drag-and-drop file/folder uploads and downloads, expandable per-file progress, configurable parallel transfers (default 5), and file conflict handling.
 - Context menus for file and folder actions, with keyboard navigation, properties, and confirmed multi-item or recursive deletion.
 - Cancellable deletion with live progress, remote POSIX permissions, and per-server file column preferences.
 - Interactive SSH terminals, software management, resource metrics and system logs.
 - An application store with 18 built-in server apps, categories, search, product details and a merged installed list. Choose native packages (APT, DNF, YUM, Zypper, APK or Pacman), Snap or Docker Compose after clicking Install; only supported providers are offered. Updates and removals keep the original source and use reviewed server-owned tasks.
 - Automatically discovered Docker desktop app: containers, volumes, ports, logs, lifecycle controls and Compose projects. Nginx, Redis and Caddy templates store definitions in the SSH user's `~/.arcnix/apps/<name>/`; Docker manages named-volume data.
-- Desktop-only light/dark themes, Monitor, Disks and Services with separate running/boot states and reviewed startup jobs. Preferences and terminal layouts live in the SSH user's `~/.arcnix/desktop.json`.
+- Monitor brings resource usage, disks, ports, services, and logs together. Desktop Settings includes appearance, wallpaper, Dock, the resource sampling interval, and configurable desktop shortcuts. Server desktop preferences and terminal layouts live in the SSH user's `~/.arcnix/desktop.json`.
 - Terminal tabs restore their existing tmux sessions when tmux is available; otherwise only the saved layout is restored. A reusable library of saved shell commands remains in Scripts.
 - On-demand name resolution from selected servers, with optional required IP addresses, saved scope and bounded lookups; accepted diagnostic jobs survive desktop closure.
 - TCP listener investigation from diagnostic findings or independent server records, showing addresses, visible processes and observed cgroup service names through a separate connection.
@@ -24,7 +23,6 @@ A friendly desktop workspace for managing servers over SSH, built with Rust, Glo
 - Installation preflight records OS, architecture and existing packages; server-owned checks distinguish package state from template-specific application checks, with reports available after restart in recent tasks and server records. Built-in installation preserves existing packages by default; reviewed upgrades require an explicit choice and the actual dpkg transaction must match the review.
 - Server task records and saved log inspection across SSH accounts, independent of recent local batches; record queries require neither SFTP nor sudo.
 - Disk findings and saved diagnostic records offer a finite deleted-open-file inspection, with deduplicated allocated/logical sizes, observed holders and explicit coverage limits. Reads preserve the current workspace, require Linux/Python, and offer optional administrator access.
-- Private configuration recovery records, current-to-original diffs, record storage summaries, and reviewed restoration after local history has been evicted.
 - Global task and configuration storage inventory, exact previews with retention/reference protection, and separately reviewed server-owned cleanup.
 - Private cleanup reports across servers, with saved phases, live service states and residual file metadata independent of local batch history.
 - Audit and residual export storage capacity, cross-page retention previews, and separately reviewed server-owned retirement of eligible cleanup audits; exported copies and cleanup evidence remain protected.
@@ -37,6 +35,8 @@ A friendly desktop workspace for managing servers over SSH, built with Rust, Glo
 - Passwords, key passphrases and sudo passwords are never saved to configuration.
 
 ## Run
+
+On Windows x64, download `arcnix-vVERSION-windows-amd64-setup.exe` from [GitHub Releases](https://github.com/arcnix-org/arcnix/releases) to install Arcnix for your Windows account. Choose the Windows ZIP for portable use.
 
 Building requires **Rust 1.99+**, Windows MSVC build tools, native Windows Perl (such as Strawberry Perl) and NASM. Running requires WebView2 Runtime. OpenSSL is linked statically; system SSH and OpenSSL are not required.
 
@@ -56,7 +56,7 @@ Restore previews the replacement, retains this computer's current SSH trust, and
 
 **Resources** lists the connected server's TCP listeners and bound UDP ports, with searchable addresses, PIDs, program paths and service units. Refresh on demand, optionally query as administrator, and confirm before force-ending an owning process. Permission and scan limits are shown. Termination rechecks the process and socket identity and uses Linux pidfd to guard against PID reuse.
 
-After connecting, open **Operations**. **Services** lists loaded systemd service units, including stopped and failed units. Select a service to inspect its state or open its journal. Start, stop and restart open the shared server-task form with the current server selected. Add other targets if needed, review each preflight plan, then submit. Refresh the service list to inspect the resulting state.
+After connecting, open **Monitor → Services** to list loaded systemd service units, including stopped and failed units. Select a service to inspect its state or open its journal in **Monitor → Logs**. Start, stop and restart open the shared server-task form with the current server selected. Add other targets if needed, review each preflight plan, then submit. Refresh the service list to inspect the resulting state.
 
 **Commands** lets you create, edit, delete and run saved multiline shell commands. Commands are stored in local configuration and shared across server profiles; do not embed passwords or tokens. Plain and parameterized commands use the same reviewed server-task flow. **Tasks** retains logs, exit results and recent batch history across desktop restarts. Commands use a noninteractive POSIX shell; interactive programs belong in Terminal.
 
@@ -74,7 +74,7 @@ Packaged Windows x64 builds check stable releases daily by default. Verified upd
 
 ## Development and releases
 
-CI checks workflows, Rustfmt, typos, Clippy, tests, documentation and crate packaging. Matching `v*` tags additionally build GitHub Release archives for macOS ARM64, Windows AMD64, Linux ARM64 and AMD64, with SHA-256 checksums. crates.io publication is currently disabled; see the release guide to enable it.
+CI checks workflows, Rustfmt, typos, Clippy, tests, documentation and crate packaging. Matching `v*` tags build the Windows x64 installer and GitHub Release archives for macOS ARM64, Windows AMD64, Linux ARM64 and AMD64, with SHA-256 checksums. See the release guide for crates.io publication settings.
 
 [Development guide](docs/development.md) · [Release setup](docs/releasing.md) · [Changelog](CHANGELOG.md)
 
@@ -119,25 +119,9 @@ Add **TLS endpoints** to check the certificate actually served to each selected 
 
 **Diagnostics** compares selected checks across trusted servers: filesystem space and inodes, failed systemd services, expected local TCP listeners, first-certificate PEM expiry, and Nginx/OpenSSH configuration validation. Add multiple certificate and configuration paths (up to 20 checks in total), choose thresholds, review each target, then submit server-owned tasks. Configuration validation does not reload services. Results retain the selected checks and parameters, show each file separately, distinguish findings from inconclusive checks, and link to directory inspection and the server workspace. Reopen **Tasks** to query an unfinished run after closing Arcnix. This is an on-demand snapshot; local listeners do not establish network reachability or application health.
 
-### Compare current configurations
-
-**Configurations → Compare current files** reads the same absolute path from 2–32 trusted servers over independent SSH connections. Choose a baseline to inspect content differences and ownership/mode differences. Reads need Linux, Python 3.8+ and access to `/proc/self/fd`, without SFTP or systemd; administrator access is optional and explicit. Files are limited to 128 KiB of UTF-8 text. Failed, changed, missing and stopped reads cannot become matching results; an older snapshot stays labelled and excluded from comparison. Details are available through `?`.
-
-Snapshots stay in page memory and are cleared on navigation. Known authentication secrets are hidden, but other file secrets may remain visible. A complete, unhidden baseline can fill an empty publication draft; validation, reload, health checks and per-server review remain required. Reading or copying a draft never publishes it, and no desktop background service is added.
-
-### Configuration publication
-
-**Configurations** prepares changes across trusted servers. Upload a private UTF-8 candidate, review each server's diff and metadata, then publish a full Nginx configuration or use explicit validation, reload and health commands for another application. SFTP, Python 3.8+, root/sudo and systemd are required. Content and diffs stay out of local task history; command settings, hashes and results are retained. Server records under `/var/lib/arcnix/configurations/<task-id>` hold the original, candidate, private logs and a versioned manifest.
-
-Server tasks recheck the reviewed file version, validate again, publish a synced sibling atomically, reload and check health. Failures attempt to restore the previous file and separately confirm service recovery. Explicit restore creates a fresh reviewed change from a recorded original, including recovery of a deleted destination. Cooperating publications use a per-path server lock; observed intervening edits are refused. This is one-file recovery, not a transaction over arbitrary command side effects or referenced configuration files. Accepted jobs continue after the client closes; a failure stops submissions that have not started, while already accepted jobs manage their own recovery.
-
-Enable **Use configuration parameters** in a publication draft to insert `{{name}}` in candidate contents. Set defaults, select servers, then expand **Configuration values…** only where an override is needed. Each candidate and digest is frozen before preflight; review each server’s diff before execution. Values are literal single-line text, expanded once, without escaping application syntax. Destination and validation/reload/health settings remain shared. Parameters stay in session memory; history keeps each target’s recovery settings and digest without storing parameter values. A draft blocks manual and automatic restart installation until you review or explicitly discard it; discarding the draft retains server jobs and versions. Cancelling review returns to the draft, and deselection discards that server’s overrides.
-
-**Configurations → Server recovery records** reads private records across trusted servers without relying on local batches. Inspect saved phases, bounded private logs, current-to-original diffs and record-directory allocation. Reads require Python 3.8+ and root/sudo, without SFTP, and never execute saved validation or health commands. Restoration opens a new authenticated task review for the original server and repeats the server checks; active or unverified sources and unavailable originals are refused. Reading does not create local history or a health confirmation. Credentials are cleared when leaving Configurations or explicitly forgotten; in-flight reads may finish later.
-
 ### Record storage
 
-**Tasks → Record storage** inspects multiple server accounts independently of the workspace, with an entry from configuration recovery records. Compare allocated and logical bytes, retain recent records, and select up to 100 entries across pages for exact file/directory previews. Defaults keep seven days, the newest ten task records, and three verified configuration originals per destination path. Active, uncertain, referenced, incomplete and unsafe records remain protected; unavailable configuration references protect all candidates. Python 3.8+ and root/sudo are required, without SFTP. Queries and previews never delete records, truncate logs or stop services. Credentials and previews stay in page memory; leaving Tasks, changing views or forgetting credentials prevents new queries.
+**Tasks → Record storage** inspects multiple server accounts independently of the workspace. Compare allocated and logical bytes, retain recent records, and select up to 100 entries across pages for exact file/directory previews. Defaults keep seven days, the newest ten task records, and three verified configuration originals per destination path. Active, uncertain, referenced, incomplete and unsafe records remain protected; unavailable configuration references protect all candidates. Python 3.8+ and root/sudo are required, without SFTP. Queries and previews never delete records, truncate logs or stop services. Credentials and previews stay in page memory; leaving Tasks, changing views or forgetting credentials prevents new queries.
 
 **Review cleanup on servers** takes verified candidates into a separate authentication, preflight and exact-file review. Explicitly submit the reviewed plans as server-owned systemd jobs. Execution rechecks file identities, service states and recovery references under operation, registry and configuration-path locks. Records move into a private quarantine and their directories are frozen before individual verified files are unlinked; no recursive deletion runs. Deletion has no undo. Interrupted or partially failed jobs may retain private quarantines and durable reports for manual inspection, without automatic replay. Accepted jobs survive desktop closure. Execution additionally requires Linux `renameat2`; query the original task when its result is unknown.
 

@@ -127,6 +127,7 @@ fn roundtrip_with_limit(
         limit as u64,
         transfer,
         Arc::new(AtomicBool::new(false)),
+        Arc::default(),
         None,
     );
     let mut active = HashSet::new();
@@ -341,7 +342,7 @@ fn directory_file_pool_obeys_default_and_custom_limits_and_cancels_queued_files(
     let transfer = job(&profile, &source, &remote);
     let id = transfer.id.clone();
     let cancel = Arc::new(AtomicBool::new(false));
-    pool.submit(91, 30, transfer, cancel.clone(), None);
+    pool.submit(91, 30, transfer, cancel.clone(), Arc::default(), None);
     let mut prompts = Vec::new();
     loop {
         match receive(&events)?.update {
@@ -394,6 +395,7 @@ fn directory_file_pool_obeys_default_and_custom_limits_and_cancels_queued_files(
         31,
         fresh,
         Arc::new(AtomicBool::new(false)),
+        Arc::default(),
         Some(ConflictAction::Overwrite),
     );
     loop {

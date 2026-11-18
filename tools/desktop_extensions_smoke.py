@@ -17,7 +17,10 @@ def main():
         config['config']['trusted_hosts']+=fedora.config([],local)['config']['trusted_hosts']
         with Desktop(out/'desktop',config) as app:
             p=app.page;errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
-            def enter(label):app.application(label)
+            def enter(label):
+                app.application('Monitor' if label=='Services' else label)
+                if label=='Services':
+                    p.locator('.monitor-sidebar').get_by_role('button',name='Services',exact=True).click()
             def close(dialog):dialog.get_by_role('button',name='Close dialog',exact=True).click();expect(dialog).not_to_be_visible()
             def finish_task():
                 d=p.get_by_role('dialog',name='Run script on servers',exact=True)
@@ -33,7 +36,8 @@ def main():
             app.connect();app.workspace('Desktop')
             expect(p.locator('.desktop-shortcuts button')).to_have_count(8)
             expect(p.locator('.desktop-dock').get_by_role('button',name='Monitor',exact=True)).to_be_visible()
-            expect(p.locator('.desktop-dock').get_by_role('button',name='Services',exact=True)).to_be_visible()
+            expect(p.locator('.desktop-dock').get_by_role('button',name='Services',exact=True)).to_have_count(0)
+            expect(p.locator('.desktop-dock').get_by_role('button',name='Logs',exact=True)).to_have_count(0)
             rail=p.locator('.navigation-rail').evaluate('el=>getComputedStyle(el).backgroundColor')
             def fits_desktop(popup):
                 expect(popup).to_be_visible()
@@ -47,24 +51,40 @@ def main():
                     ))
                 eventually(contained)
 
-            p.locator('.desktop-settings-button').click();d=p.get_by_role('dialog',name='Desktop settings',exact=True)
-            fits_desktop(d)
-            fits_desktop(p.locator('.desktop-modal-backdrop .modal-scrim'))
+            app.application('Settings');d=p.locator('.desktop-settings-page')
+            expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Settings')
+            fits_desktop(p.locator('.desktop-window.active'))
+            expect(p.locator('.desktop-modal-backdrop')).to_have_count(0)
+            d.get_by_role('button',name='Every 10 s',exact=True).click()
+            expect(d).to_contain_text('Saved on server')
+            prefs=ubuntu.root/'home/arcnix/.arcnix/desktop.json'
+            assert json.loads(prefs.read_text())['resource_interval_seconds']==10
+            d.get_by_role('button',name='Keyboard shortcuts',exact=True).click()
+            expect(d).to_contain_text('Ctrl+Shift+T')
+            expect(d).to_contain_text('Ctrl+S')
+            p.set_viewport_size(dict(width=900,height=650))
+            assert d.locator('.desktop-preferences').evaluate('el=>el.scrollWidth <= el.clientWidth + 1')
+            p.set_viewport_size(dict(width=1440,height=980))
+            d.get_by_role('button',name='Desktop',exact=True).click()
             expect(d.get_by_role('button',name='Dark',exact=True)).to_be_enabled();d.get_by_role('button',name='Dark',exact=True).click()
             expect(d).to_contain_text('Saved on server')
             expect(p.locator('.app')).to_have_class('app theme-light')
             expect(p.locator('.server-desktop')).to_have_class(re.compile(r'\btheme-dark\b'))
             assert p.locator('.navigation-rail').evaluate('el=>getComputedStyle(el).backgroundColor')==rail
             assert p.locator('.app').evaluate('el=>getComputedStyle(el).getPropertyValue("--surface").trim()') != p.locator('.server-desktop').evaluate('el=>getComputedStyle(el).getPropertyValue("--surface").trim()')
-            close(d);enter('File explorer')
+            p.locator('.desktop-window.active .window-close').click();enter('File explorer')
             expect(p.locator('.desktop-window-host')).to_have_count(0)
             assert p.locator('.file-pane').evaluate('el=>getComputedStyle(el).backgroundColor') not in ['rgb(255, 255, 255)','rgb(245, 247, 251)']
             app.screenshot('desktop-only-dark.png')
-            checks.append('Desktop theme and dialogs are local; the app rail/header keep their original theme and app windows omit duplicate addresses')
+            checks.append('A desktop Settings window centralizes keyboard reference and remote preferences; desktop theme stays local to the desktop')
 
             enter('Monitor')
             sections=p.locator('.monitor-sidebar')
-            expect(sections.locator('.monitor-section-label')).to_have_text(['Overview','CPU','Memory','Disks','Network','Ports'])
+            expect(sections.locator('.monitor-section-label')).to_have_text(['Overview','CPU','Memory','Disks','Network','Processes','Services','Logs'])
+            expect(p.locator('.monitor-sampling-interval')).to_have_text('Every 10 s')
+            monitor_tools = p.locator('.monitor-window-tools')
+            expect(monitor_tools.locator('.help-tip, .help-copy')).to_have_count(0)
+            expect(monitor_tools.get_by_role('button',name='Refresh resource values',exact=True)).to_be_visible()
             expect(p.locator('.desktop-dock').get_by_role('button',name='Disks',exact=True)).to_have_count(0)
             expect(p.locator('.resource-trend-chart')).to_have_count(3)
             sections.get_by_role('button',name='CPU',exact=True).click()
@@ -77,8 +97,77 @@ def main():
             sections.get_by_role('button',name='Network',exact=True).click()
             expect(p.locator('.resource-trend-network')).to_be_visible()
             expect(p.locator('.resource-table')).to_contain_text('eth0')
-            sections.get_by_role('button',name='Ports',exact=True).click()
-            expect(p.locator('.resource-ports')).to_be_visible()
+            network = sections.get_by_role('button',name='Network',exact=True)
+            expect(network.locator('.monitor-section-summary')).to_contain_text('KiB/s', timeout=15000)
+            for width, height in [(1440, 980), (900, 660)]:
+                p.set_viewport_size(dict(width=width, height=height))
+                assert network.evaluate('''button => {
+                    const icon = button.querySelector('.action-glyph').getBoundingClientRect();
+                    const title = button.querySelector('.monitor-section-label').getBoundingClientRect();
+                    const detail = button.querySelector('.monitor-section-summary');
+                    const line = detail.getBoundingClientRect();
+                    return Math.abs((icon.top + icon.bottom) - (title.top + title.bottom)) < 3
+                        && Math.abs(icon.left - line.left) < 1 && line.top >= icon.bottom
+                        && detail.scrollWidth <= detail.clientWidth && detail.scrollHeight <= detail.clientHeight;
+                }'''), width
+            p.set_viewport_size(dict(width=1440, height=980))
+            sections.get_by_role('button',name='Processes',exact=True).click()
+            processes = p.locator('.monitor-process-inventory')
+            table = processes.locator('.monitor-process-table')
+            header = table.locator('.monitor-process-header')
+            rows = table.locator('.monitor-process-row:not(.monitor-process-header)')
+            expect(rows).to_have_count(50)
+            expect(rows.first).to_contain_text('fixture-batch worker')
+            expect(rows.first).to_contain_text('13.5%')
+            expect(rows.first).to_contain_text('4.0 MiB')
+            expect(rows.first.locator('.monitor-process-ports')).to_have_text('')
+            expect(rows.filter(has_text='fixture-web').locator('.monitor-process-ports')).to_have_text('TCP 8080')
+            query = processes.get_by_role('textbox',name='Filter by program, PID, UID or port')
+            expect(query).to_have_attribute('placeholder', 'Filter processes')
+            toolbar = processes.locator('.monitor-process-toolbar')
+            controls = [query, toolbar.get_by_role('button',name='Port details'), toolbar.get_by_role('button',name='Next page')]
+            centers = [box['y'] + box['height'] / 2 for box in (control.bounding_box() for control in controls)]
+            assert max(centers) - min(centers) < 2, centers
+            expect(processes).not_to_contain_text(re.compile(r'\d+ processes · \d+ matching'))
+            header_y = header.bounding_box()['y']
+            first_row_y = rows.first.bounding_box()['y']
+            table.evaluate('el => { el.scrollTop = 320; }')
+            assert table.evaluate('el => el.scrollTop') > 0
+            assert rows.first.bounding_box()['y'] < first_row_y - 100
+            assert abs(header.bounding_box()['y'] - header_y) < 1
+            assert p.locator('.monitor-content').evaluate('el => el.scrollTop') == 0
+            processes.get_by_role('button',name='Next page',exact=True).click()
+            expect(rows).to_have_count(3)
+            assert table.evaluate('el => el.scrollTop') == 0
+            query.fill('8080')
+            expect(rows).to_have_count(1)
+            expect(rows.first).to_contain_text('fixture-web')
+            query.fill('batch')
+            expect(rows).to_have_count(1)
+            expect(rows.first).to_contain_text('202')
+            unavailable = ubuntu.root / 'processes-unavailable'
+            unavailable.touch()
+            refresh_processes = processes.get_by_role('button',name='Refresh processes',exact=True)
+            refresh_processes.click()
+            expect(processes).to_contain_text('Showing the previous process snapshot')
+            expect(processes).to_contain_text('ps is unavailable')
+            unavailable.unlink()
+            refresh_processes.click()
+            expect(processes.locator('.monitor-process-feedback')).to_have_count(0)
+            p.set_viewport_size(dict(width=900,height=660))
+            assert p.locator('.monitor-content').evaluate('el=>el.scrollWidth <= el.clientWidth + 1')
+            p.set_viewport_size(dict(width=1440,height=980))
+            query.fill('')
+            expect(rows).to_have_count(50)
+            app.screenshot('monitor-processes.png')
+            query.fill('batch')
+            processes.get_by_role('button',name='Port details',exact=True).click()
+            ports = p.locator('.resource-ports')
+            expect(ports.locator('.resource-ports-table')).to_contain_text('fixture-web')
+            expect(ports.locator('.resource-ports-table')).to_contain_text('Process information unavailable')
+            expect(ports).to_have_css('border-top-width', '0px')
+            p.get_by_role('button',name='Back to processes',exact=True).click()
+            expect(query).to_have_value('batch')
             sections.get_by_role('button',name='Disks',exact=True).click()
             expect(p.locator('.disk-device-row')).to_have_count(4)
             expect(p.locator('.disk-mount-list')).to_contain_text('224')
@@ -90,9 +179,17 @@ def main():
             expect(app.file('disk-file.txt')).to_be_visible()
             enter('Monitor')
             expect(sections.get_by_role('button',name='Disks',exact=True)).to_have_attribute('aria-pressed','true')
-            checks.append('Monitor offers separate CPU, memory, disks, network and port panels; disks retain capacity, partition details and Explorer mount links')
+            checks.append('Monitor lists all visible processes, matches listeners to owning processes, and keeps a port detail view for unassigned listeners')
 
             enter('Services');expect(p.locator('.service-row')).to_have_count(4)
+            p.get_by_role('button',name='nginx.service',exact=True).click()
+            p.locator('.operations-toolbar').get_by_role('button',name='Logs',exact=True).click()
+            expect(sections.get_by_role('button',name='Logs',exact=True)).to_have_attribute('aria-pressed','true')
+            expect(p.get_by_role('textbox',name='Log service unit',exact=True)).to_have_value('nginx.service')
+            expect(p.locator('.system-log-output')).to_contain_text('Fixture service warning')
+            expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Monitor')
+            enter('Services')
+            expect(p.get_by_role('button',name='nginx.service',exact=True)).to_have_class(re.compile(r'\bselected\b'))
             p.get_by_role('button',name='Start at boot',exact=True).click();expect(p.locator('.service-row')).to_have_count(1)
             p.get_by_role('button',name='All services',exact=True).click()
             p.get_by_role('button',name='worker.service',exact=True).click()
@@ -121,7 +218,7 @@ def main():
             expect(p.get_by_role('button',name='arcnix-startup-demo-worker.service',exact=True)).to_contain_text('enabled')
             app.screenshot('services.png')
             checks.append('Services separates activity and boot enablement, includes unloaded units, and creates reviewed boot tasks without starting them implicitly')
-            checks.append('Service and settings dialogs and their scrims stay within the resized desktop; long bodies scroll with their footers visible')
+            checks.append('Services link to filtered logs within Monitor and retain the selected unit on return. Task dialogs and scrims stay within the resized desktop')
 
             enter('Docker');p.locator('.docker-toolbar').get_by_role('button',name='Install software',exact=True).click()
             expect(p.locator('.software-store')).to_be_visible()
@@ -149,8 +246,8 @@ def main():
             expect(p.locator('.terminal-status')).to_have_text('Interactive SSH')
             keyboard.focus();p.keyboard.type('cd /work');p.keyboard.press('Enter');p.keyboard.type('echo SESSION_SURVIVES_CLIENT');p.keyboard.press('Enter');expect(reader).to_contain_text('SESSION_SURVIVES_CLIENT')
             p.locator('.terminal-overflow').click();fits_desktop(p.locator('.terminal-context-menu'));p.keyboard.press('Escape');expect(p.locator('.terminal-context-menu')).to_have_count(0)
-            title=p.locator('.desktop-window-titlebar').bounding_box();surface=p.locator('.terminal-surface').bounding_box();assert surface['y']-title['y']<=60,(title,surface)
-            p.locator('.window-maximize').click()
+            title=p.locator('.desktop-window.active .desktop-window-titlebar').bounding_box();surface=p.locator('.terminal-surface').bounding_box();assert surface['y']-title['y']<=60,(title,surface)
+            p.locator('.desktop-window.active .window-maximize').click()
             prefs=ubuntu.root/'home/arcnix/.arcnix/desktop.json'
             eventually(lambda:json.loads(prefs.read_text()).get('terminal',{}).get('maximized') is True)
             app.screenshot('compact-terminal.png')
@@ -158,9 +255,10 @@ def main():
             app.stop();app.launch();p=app.page;p.on('pageerror',lambda e:errors.append(str(e)))
             app.connect();enter('Terminal');reader=p.locator('.terminal-surface .xterm-accessibility-tree');keyboard=p.locator('.terminal-surface .xterm-helper-textarea')
             expect(reader).to_contain_text('SESSION_SURVIVES_CLIENT')
-            expect(p.locator('.desktop-window')).to_have_class('desktop-window maximized')
+            expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             keyboard.focus();p.keyboard.type('pwd');p.keyboard.press('Enter');expect(reader).to_contain_text('/work')
             assert json.loads(prefs.read_text())['terminal']['tabs'][0]['id']==saved['terminal']['tabs'][0]['id']
+            enter('Monitor');expect(p.locator('.monitor-sampling-interval')).to_have_text('Every 10 s')
             checks.append('Terminal uses one window header, persists layout without output transcripts and reconnects to the same tmux session/cwd after client restart')
 
             p.locator('.host-select').nth(1).click();app.connect(1);enter('Software')

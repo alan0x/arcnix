@@ -62,7 +62,7 @@ def main():
             d=install('PostgreSQL');expect(d.locator('.install-package-name')).to_have_text('postgresql-server');expect(d.locator('.install-provider')).to_contain_text('DNF')
             expect(d.get_by_role('button',name='Snap',exact=True)).to_be_disabled();close(d)
             d=install('htop');expect(d.get_by_role('button',name='Snap',exact=True)).to_be_disabled();expect(d).to_contain_text('Requires Snap');close(d)
-            p.locator('.desktop-settings-button').click();d=p.get_by_role('dialog',name='Desktop settings',exact=True);d.get_by_role('button',name='Dark',exact=True).click();expect(d.get_by_role('button',name='Dark',exact=True)).to_have_attribute('aria-pressed','true');close(d)
+            app.application('Settings');settings=p.locator('.desktop-settings-page');settings.get_by_role('button',name='Desktop',exact=True).click();settings.get_by_role('button',name='Dark',exact=True).click();expect(settings.get_by_role('button',name='Dark',exact=True)).to_have_attribute('aria-pressed','true');app.application('Software store')
             expect(p.locator('.app')).to_have_class('app theme-light')
             app.screenshot('store-dark.png')
             for width in [1100,900]:

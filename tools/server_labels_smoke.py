@@ -106,17 +106,6 @@ with Peer(out/'alpha') as a,Peer(out/'beta',io_delay=.025) as b,Peer(out/'gamma'
         expect(d.get_by_role('textbox',name='Environment filter',exact=True)).to_have_value('');d.get_by_role('button',name='Cancel',exact=True).click();assert app.config.with_suffix('.tasks.json').read_bytes()==before
         passed('Backup actions reuse label filters while preserving their policy allowlist; matching labels on Gamma cannot expand the backup scope')
 
-        p.locator('.rail-configurations').click();p.get_by_role('button',name='Compare current files',exact=True).click();p.get_by_role('button',name='Read configuration snapshots…',exact=True).click();d=p.get_by_role('dialog',name='Read configuration snapshots',exact=True)
-        filter(d,'Staging','web');d.get_by_role('button',name='Select visible trusted servers',exact=True).click()
-        filter(d,'Production','中文');d.get_by_role('button',name='Select visible trusted servers',exact=True).click();d.get_by_role('button',name='Read snapshots',exact=True).click();expect(d.locator('.form-error')).to_contain_text('Review hidden selected servers')
-        assert not (a.root/'configuration-compare-queries.jsonl').exists() and not (b.root/'configuration-compare-queries.jsonl').exists()
-        d.get_by_role('button',name='View selected servers',exact=True).click();expect(d.locator('.comparison-server-choice')).to_have_count(2)
-        expect(d.get_by_role('textbox',name='Environment filter',exact=True)).to_have_value('');expect(d.get_by_role('textbox',name='Tag filter',exact=True)).to_have_value('')
-        d.get_by_role('textbox',name='SSH password or key passphrase',exact=True).first.fill('arcnix-test');d.get_by_role('button',name='Read snapshots',exact=True).click()
-        expect(p.get_by_role('button',name='Read configuration snapshots…',exact=True)).to_be_enabled(timeout=15000);expect(p.locator('.configuration-comparison-server')).to_have_count(2)
-        assert app.config.with_suffix('.tasks.json').read_bytes()==before
-        passed('Current configuration comparison uses the same exact label filters; reviewing selected servers resets every facet and reads only the two reviewed targets')
-
         app.stop();app.launch();p=app.page;d=edit(p,'Beta')
         expect(d.get_by_role('textbox',name='Tags (comma-separated)',exact=True)).to_have_value('web, db, 中文, active')
         d.get_by_role('textbox',name='Environment (optional)',exact=True).fill('');d.get_by_role('textbox',name='Tags (comma-separated)',exact=True).fill('');d.get_by_role('button',name='Save server',exact=True).click();expect(d).not_to_be_visible()

@@ -174,6 +174,16 @@ python tools/system_theme_smoke.py
 
 该验证需要 `artifacts/python` 中的 Playwright、Paramiko，以及 CairoSVG、Pillow。它会自行启动和关闭回环测试服务，并在 `artifacts/navigation-redesign` 保存截图与结果。可用 `--exe <path>` 指定其他已构建程序。
 
+Windows 功能测试预览使用以下入口。它会打开 Arcnix、连接本机测试服务器，并在桌面浏览器中打开本地测试页。公网 HTTP/HTTPS 转发默认关闭。
+
+```powershell
+cargo build -p arcnix --locked
+python -m pip install --target artifacts/python playwright paramiko
+python tools/desktop_preview.py
+```
+
+用 `--public-web` 启用公网转发。可用 `--url <网址>` 在第二个标签页打开指定网页。关闭 Arcnix 时会一并退出预览测试服务。每次预览使用独立的客户端配置和临时服务器数据。
+
 真实回环 SSH/SFTP 集成测试需要可选 Python 测试依赖，仅安装在项目忽略的 `artifacts/python` 目录：
 
 ```powershell
@@ -404,7 +414,7 @@ Diagnostics 不依赖所选服务器。可选磁盘空间、inode、失败的 sy
 
 `python tools/multi_diagnostics_smoke.py` 使用隔离回环 SSH／真实桌面，检查多项表单、断开后查询、清单不符、旧历史和中文窄窗口。真实 Linux 验证为显式忽略的 `multi_diagnostics_integration`；设置 `ARCNIX_TEST_SYSTEMD_DISTRIBUTION`、`ARCNIX_TEST_DIAGNOSTIC_NGINX`（解包后二进制绝对路径）及 `ARCNIX_TEST_DIAGNOSTIC_SSH_ROOT`（含 `usr/sbin/sshd` 与 `lib` 的解包目录）后运行该测试的 `--ignored --nocapture`。测试只使用私有证书／配置，OpenSSH 所需账户和 `/run/sshd` 在临时 mount namespace 内提供，结束核对宿主 passwd／group 摘要，并核验自有 unit 停止及目录移除。它不验证线上配置、发行版全矩阵或证书链。
 
-## 跨服务器配置发布与恢复
+## 跨服务器配置发布与恢复（历史设计，桌面页面已移除）
 
 Configurations 为全局入口，支持完整 Nginx 配置和自定义应用配置。发布目标是现有的、无符号链接的真实绝对路径常规文件，且只有一个硬链接；候选为最多 128 KiB 的 UTF-8 文本，CRLF 统一为 LF。自定义校验接收私有候选文件作为 `$1`，重载及健康检查接收生效路径作为 `$1`；这些命令以 root 运行，必须能在服务器独立完成。Nginx 使用 `-t -c` 校验、`systemctl reload` 重载及 HTTP 2xx／可选包含文本检查，不自动启动或重启服务。
 
@@ -591,7 +601,7 @@ recovery_drills.rs 构造类型化 Job 和最大 4 KiB 的 Description，版本�
 
 `tools/native_ssh_fixture.py` 在 WSL Ubuntu 的私有 mount namespace 内运行解包的 OpenSSH；公开账户映射、测试 shadow 与 sudoers、SSH 私有 home、密钥及 sudo 时间戳均为临时副本。不会安装 SSH 服务、修改宿主密码或授予全局免密权限。临时服务有 600 秒上限，退出时只清理本次登记且路径匹配的任务、应用服务和记录，并核对宿主认证文件摘要。包来源和摘要见 `artifacts/ssh-native-tools/provenance.json`。
 
-准备解包工具后运行 `python tools/native_ssh_smoke.py`。它通过实际桌面预检查、SFTP 上传、OpenSSH 公钥认证和 PAM 密码 sudo 发布 root 所有的文件；使用绝对路径的 Nginx 自定义校验／重载及 HTTP 健康检查，不等同于验证内置 Nginx 的所有 PATH、发行版或架构配置。客户端退出后等待原服务器任务完成，再重连查询；不启动客户端后台执行器。
+原验收通过实际桌面预检查、SFTP 上传、OpenSSH 公钥认证和 PAM 密码 sudo 发布 root 所有的文件；使用绝对路径的 Nginx 自定义校验／重载及 HTTP 健康检查，不等同于验证内置 Nginx 的所有 PATH、发行版或架构配置。客户端退出后等待原服务器任务完成，再重连查询；不启动客户端后台执行器。
 
 ## 任务结果观测与停止中状态
 
@@ -612,7 +622,7 @@ recovery_drills.rs 构造类型化 Job 和最大 4 KiB 的 Description，版本�
 
 查询集合未清空时，更新安装的空闲判断不成立；手动重启和自动倒计时等待有限读取结束。查询结束后恢复原更新逻辑，不将结果读取变成后台监视。
 
-回环验证：`python tools/batch_refresh_smoke.py`。夹具的 `trace-task-queries` 标志仅记录任务编号、查询开始／结束和测试时间，用于核对实际并发与未重复提交；不记录凭据。`tools/native_ssh_smoke.py` 另通过真实 SSH 核对查询前后结果文件身份和服务调用身份。
+回环验证：`python tools/batch_refresh_smoke.py`。夹具的 `trace-task-queries` 标志仅记录任务编号、查询开始／结束和测试时间，用于核对实际并发与未重复提交；不记录凭据。原配置发布专项另通过真实 SSH 核对查询前后结果文件身份和服务调用身份。
 
 ## 任务刷新与页面切换跟踪
 
@@ -699,7 +709,7 @@ HTML 分别保留执行状态、保存退出码、采集是否得到核验，以
 回执是服务器保存的执行证据，不是签名、应用健康证明、任意 root／账户写入者的防篡改承诺或通用掉电恢复协议。systemd 运行周期定义见 [systemd.exec 的 INVOCATION_ID](https://www.freedesktop.org/software/systemd/man/256/systemd.exec.html)，失败单元清除及回收行为见 [systemd.unit 的 CollectMode](https://www.freedesktop.org/software/systemd/man/256/systemd.unit.html)。
 
 
-## 多服务器当前配置对比
+## 多服务器当前配置对比（历史设计，桌面页面已移除）
 
 配置中心的只读对比与发布、恢复记录分别使用页面状态。`configuration_compare` 定义同一路径、范围绑定的快照和本地差异；独立 worker 最多并发 4 个短连接，批次上限 32 个可信端点，沿用共享搜索／分组和账户去重规则。普通读取不探测 sudo，只有明确勾选管理员选项才请求提权。停止及离开页面使旧代数失效，停止派发后续目标；实际连接可在有限超时内结束，在原池退出前不创建新池。更新安装也等待该池退出。
 
@@ -721,7 +731,7 @@ Rust 负责数据和范围，`resource_trends` 只将有界 JSON 交给内置 `r
 使用说明集中到 `?`，范围／状态／数值保留在页面，网络接口计算说明也移到帮助中。Tab 可聚焦图表，左右方向键及 Home／End 取样，Esc 关闭图中提示；不修改全局快捷键。图表由应用自带代码绘制，未加入外部图表运行库或在线资源。当前仅绘制连接期间的 CPU、内存和合计网络趋势，不代表关闭客户端期间的历史监控。
 
 
-## 配置正文参数与逐服务器候选
+## 配置正文参数与逐服务器候选（历史设计，桌面页面已移除）
 
 `configuration_templates::Source` 仅解析显式启用参数模式的候选正文，支持 `{{name}}` 和四个花括号的字面转义。最多 32 个 ASCII 参数名、每值 4 KiB 单行文本，保留原样、单次替换，不重新解析替换值；完整渲染逐片段检查 128 KiB 上限，拒绝空文件与控制字符值，不先构造无界字符串。目标路径及校验／重载／健康条件不参与替换。普通配置模式完全保留旧的正文处理。
 
@@ -754,14 +764,14 @@ ServerProfile 增加可缺省且空值不序列化的 environment／tags，保�
 
 服务器树与 target_selection 共享分类搜索辅助函数：多词按 AND 匹配名称、地址、账户、端口、分组名、环境及标签。目标 Filter 新增两个会话字符串，环境／单个标签按完整值及大小写无关匹配，空值表示不限，与分组／搜索／仅已选共同生效。Template::allows_target 仍先约束可见目标，选择及执行前继续核验信任、重复端点与 32 台上限。过滤不清除选择／凭据／逐目标配置参数，统一审核已选会重置所有筛选；有隐藏目标时原执行守卫仍拒绝继续。标签不写进任务请求或执行版本，也不在预检查后重新匹配目标。
 
-共享控件用于脚本／安装／备份／诊断／发布的运行表单，以及独立当前配置对比。备份跨服务器访问端的原搜索也自动包含分类；其他独立记录入口的选择列表未因此新增分类筛选器。控件只有在配置存在分类或筛选非空时显示，说明放进 `?`，目标行展示环境及可展开的完整标签，服务器树只补充短环境标识，避免标签占满侧栏。
+共享控件用于脚本／安装／备份／诊断的运行表单。备份跨服务器访问端的原搜索也自动包含分类；其他独立记录入口的选择列表未因此新增分类筛选器。控件只有在配置存在分类或筛选非空时显示，说明放进 `?`，目标行展示环境及可展开的完整标签，服务器树只补充短环境标识，避免标签占满侧栏。
 
 服务器编辑器保存打开时的原始 profile。若只改 environment／tags，则把分类合并到保存时的当前 profile，保留期间更新的浏览位置等数据；不向 worker 发送断开，不清理传输队列或重置分栏。其他字段变更沿用原完整保存与断开规则，单机系统操作忙碌时仍保护连接设置。仅改分类可在任务期间保存；新服务器仍经过完整验证。筛选和标签编辑不发 SSH、APT 或 systemd 请求，也不增加后台采集与客户端常驻。
 
 目标分类提示使用可响应更新的原文帮助内容，不将用户标签交给界面翻译目录。连接 Probe 请求改为持有 Box<ServerProfile>，worker 进入分支后解包，避免新增资料字段扩大整个请求枚举；连接参数、主机信任和请求顺序不变。
 
 
-## Servers 本地记录总览
+## Servers 本地记录总览（历史设计，桌面页面已移除）
 
 `server_inventory::rows` 是纯本地汇总，不发 SSH 请求。按当前 profile ID、账户／端点和规范化主机的可信指纹索引最近任务，只使用最新已提交、身份匹配的诊断；尚未提交的预检查不会遮盖原记录，较新的未确认任务则阻止回退到旧成功。只有进程成功且完整报告通过原 Plan 核验才展示数字；未知和未选检查显示 `—`。按服务器采样时间计算 1／7／30 天的本地核验时限，未来时间单独标记；客户端读取时间不能刷新旧采样。分类仅为已记录问题／需要核验，不统计“健康服务器”。
 
@@ -771,7 +781,7 @@ ServerProfile 增加可缺省且空值不序列化的 environment／tags，保�
 
 总览保留已选工作区及终端，隐藏单机操作标签和连接控制；返回同一服务器不重新认证。进入总览即打断资源基线，迟到采样同样留下间隔，回来再按原规则读取。视图共享一次派生的本地汇总，筛选、年龄及刷新只重算本地记录。辅助说明和逐策略详情放入可悬停／点击的 `?`，保留 14px 正文、13px 标签及至少 12px 辅助文字。
 
-验证入口：`python tools/server_inventory_smoke.py`，核心纯逻辑测试 `cargo test -p arcnix-core --lib --locked server_inventory`。合成 SSH 对端现在从 v1／v2 诊断脚本提取实际检查清单，生成对应协议，不再把默认四项误装成固定六项；相同协议用于最近查询和独立账户记录。
+核心纯逻辑测试 `cargo test -p arcnix-core --lib --locked server_inventory`。合成 SSH 对端现在从 v1／v2 诊断脚本提取实际检查清单，生成对应协议，不再把默认四项误装成固定六项；相同协议用于最近查询和独立账户记录。
 
 
 ## 从服务器核验实际 TLS 端点

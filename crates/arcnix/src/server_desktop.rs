@@ -34,8 +34,11 @@ impl Tab {
 pub(super) struct Workbench {
     pub active: Tab,
     pub tabs: Vec<Tab>,
-    pub desktop_page: WorkspacePage,
+    desktop_page: WorkspacePage,
     pub apps: Vec<WorkspacePage>,
+    stack: Vec<WorkspacePage>,
+    desktop_restore: Vec<WorkspacePage>,
+    slots: BTreeMap<DesktopApp, usize>,
     pub windows: BTreeMap<DesktopApp, DesktopWindow>,
     pub fullscreen: bool,
 }
@@ -47,6 +50,9 @@ impl Default for Workbench {
             tabs: vec![Tab::Home],
             desktop_page: WorkspacePage::Desktop,
             apps: Vec::new(),
+            stack: Vec::new(),
+            desktop_restore: Vec::new(),
+            slots: BTreeMap::new(),
             windows: BTreeMap::new(),
             fullscreen: false,
         }
@@ -58,11 +64,11 @@ pub(super) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Terminal => DesktopApp::Terminal,
         WorkspacePage::Resources => DesktopApp::Monitor,
         WorkspacePage::Software => DesktopApp::Store,
-        WorkspacePage::Operations => DesktopApp::Services,
-        WorkspacePage::SystemLogs => DesktopApp::Logs,
         WorkspacePage::Explorer => DesktopApp::Explorer,
         WorkspacePage::Docker => DesktopApp::Docker,
         WorkspacePage::Editor => DesktopApp::Editor,
+        WorkspacePage::Browser => DesktopApp::Browser,
+        WorkspacePage::Settings => DesktopApp::Settings,
         _ => return None,
     })
 }
@@ -70,13 +76,15 @@ pub(super) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
 pub(super) fn app_page(app: DesktopApp) -> WorkspacePage {
     match app {
         DesktopApp::Terminal => WorkspacePage::Terminal,
-        DesktopApp::Monitor | DesktopApp::Disks => WorkspacePage::Resources,
+        DesktopApp::Monitor | DesktopApp::Disks | DesktopApp::Services | DesktopApp::Logs => {
+            WorkspacePage::Resources
+        }
         DesktopApp::Store => WorkspacePage::Software,
-        DesktopApp::Services => WorkspacePage::Operations,
-        DesktopApp::Logs => WorkspacePage::SystemLogs,
         DesktopApp::Explorer => WorkspacePage::Explorer,
         DesktopApp::Docker => WorkspacePage::Docker,
         DesktopApp::Editor => WorkspacePage::Editor,
+        DesktopApp::Browser => WorkspacePage::Browser,
+        DesktopApp::Settings => WorkspacePage::Settings,
     }
 }
 
@@ -85,6 +93,31 @@ impl Workbench {
         app_id(page)
             .and_then(|app| self.windows.get(&app).copied())
             .unwrap_or_default()
+    }
+
+    fn open_window(&mut self, page: WorkspacePage, app: DesktopApp) {
+        if !self.apps.contains(&page) {
+            self.apps.push(page);
+            let slot = (0..)
+                .find(|slot| !self.slots.values().any(|saved| saved == slot))
+                .unwrap();
+            self.slots.insert(app, slot);
+        }
+        self.desktop_restore.clear();
+        self.stack.retain(|&open| open != page);
+        self.stack.push(page);
+    }
+
+    pub(super) fn window_visible(&self, page: WorkspacePage) -> bool {
+        self.stack.contains(&page)
+    }
+
+    pub(super) fn reset_open_windows(&mut self) {
+        self.apps.clear();
+        self.stack.clear();
+        self.desktop_restore.clear();
+        self.slots.clear();
+        self.desktop_page = WorkspacePage::Desktop;
     }
 }
 
@@ -107,7 +140,8 @@ fn save_bounds(ui: &Ui, input: &str) {
         if !visible(s)
             || s.dialog.is_some()
             || s.epoch != event.epoch
-            || app_id(s.workspace_page) != Some(event.app)
+            || !s.workbench.window_visible(app_page(event.app))
+            || app_id(app_page(event.app)) != Some(event.app)
         {
             return false;
         }
@@ -123,18 +157,44 @@ fn save_bounds(ui: &Ui, input: &str) {
     }
 }
 
-const APPS: [WorkspacePage; 7] = [
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FocusEvent {
+    epoch: u64,
+    app: DesktopApp,
+}
+
+fn focus_window(ui: &Ui, input: &str) {
+    let Ok(event) = serde_json::from_str::<FocusEvent>(input) else {
+        return;
+    };
+    let page = app_page(event.app);
+    if ui.state.with(|s| {
+        visible(s)
+            && s.epoch == event.epoch
+            && s.dialog.is_none()
+            && s.fingerprint.is_none()
+            && page != s.workspace_page
+            && s.workbench.window_visible(page)
+            && app_id(page) == Some(event.app)
+    }) {
+        ui.open_desktop_app(page);
+    }
+}
+
+const APPS: [WorkspacePage; 6] = [
     WorkspacePage::Terminal,
     WorkspacePage::Resources,
     WorkspacePage::Software,
-    WorkspacePage::Operations,
-    WorkspacePage::SystemLogs,
     WorkspacePage::Explorer,
     WorkspacePage::Editor,
+    WorkspacePage::Settings,
 ];
 
 pub(super) fn available_apps(s: &State) -> Vec<WorkspacePage> {
     let mut apps = APPS.to_vec();
+    #[cfg(windows)]
+    apps.insert(APPS.len() - 1, WorkspacePage::Browser);
     if s.server_apps.applications.docker {
         apps.push(WorkspacePage::Docker);
     }
@@ -145,11 +205,11 @@ fn app_label(page: WorkspacePage) -> &'static str {
         WorkspacePage::Docker => "Docker",
         WorkspacePage::Explorer => "File explorer",
         WorkspacePage::Editor => "Editor",
+        WorkspacePage::Browser => "Web browser",
         WorkspacePage::Terminal => "终端",
         WorkspacePage::Resources => "Monitor",
         WorkspacePage::Software => "Software store",
-        WorkspacePage::Operations => "Services",
-        WorkspacePage::SystemLogs => "系统日志",
+        WorkspacePage::Settings => "Settings",
         _ => "Desktop",
     }
 }
@@ -159,11 +219,11 @@ fn app_class(page: WorkspacePage) -> &'static str {
         WorkspacePage::Docker => "app-docker",
         WorkspacePage::Explorer => "app-explorer",
         WorkspacePage::Editor => "app-editor",
+        WorkspacePage::Browser => "app-browser",
         WorkspacePage::Terminal => "app-terminal",
         WorkspacePage::Resources => "app-resources",
         WorkspacePage::Software => "app-software",
-        WorkspacePage::Operations => "app-operations",
-        WorkspacePage::SystemLogs => "app-logs",
+        WorkspacePage::Settings => "app-settings",
         _ => "app-desktop",
     }
 }
@@ -173,10 +233,10 @@ fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Terminal => Icon::Terminal,
         WorkspacePage::Resources => Icon::Monitor,
         WorkspacePage::Software => Icon::Store,
-        WorkspacePage::Operations => Icon::Services,
-        WorkspacePage::SystemLogs => Icon::Logs,
+        WorkspacePage::Settings => Icon::Settings,
         WorkspacePage::Explorer => Icon::Folder,
         WorkspacePage::Editor => Icon::Edit,
+        WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         _ => Icon::Grid,
     }
@@ -207,7 +267,6 @@ pub(super) fn select_tab(s: &mut State, tab: Tab) {
 
 pub(super) fn visible(s: &State) -> bool {
     s.navigation == navigation::Page::Servers
-        && !server_inventory_ui::shown(s)
         && s.connected
         && s.workbench.active == Tab::Desktop
 }
@@ -221,8 +280,9 @@ pub(super) fn owns_dialog(s: &State) -> bool {
         && matches!(
             s.dialog,
             Some(
-                Dialog::DesktopSettings
-                    | Dialog::SoftwareInstall
+                Dialog::SoftwareInstall
+                    | Dialog::ConfigureNetwork
+                    | Dialog::BrowserForwardingRepair
                     | Dialog::StartupService
                     | Dialog::ScriptRun
                     | Dialog::DockerAction
@@ -234,6 +294,7 @@ pub(super) fn owns_dialog(s: &State) -> bool {
                     | Dialog::FileProperties
                     | Dialog::FileColumns { remote: true }
                     | Dialog::DeleteFiles { remote: true, .. }
+                    | Dialog::TransferProgress(_)
                     | Dialog::TransferDefaults
                     | Dialog::TransferConflict
             )
@@ -242,20 +303,64 @@ pub(super) fn owns_dialog(s: &State) -> bool {
 
 /// Also used by Terminal here and service-log links so they open the right tab.
 pub(super) fn select_app(s: &mut State, page: WorkspacePage) {
+    let Some(app) = app_id(page) else {
+        return;
+    };
     select_tab(s, Tab::Desktop);
+    s.workbench.open_window(page, app);
     s.workspace_page = page;
     s.workbench.desktop_page = page;
-    if !s.workbench.apps.contains(&page) {
-        s.workbench.apps.push(page);
+}
+
+fn front_window(s: &mut State) {
+    let page = s.workbench.stack.last().copied().unwrap_or_default();
+    if page == s.workbench.desktop_page {
+        return;
+    }
+    s.workbench.desktop_page = page;
+    if s.workbench.active == Tab::Desktop {
+        observability::metrics_leave(s);
+        s.terminal.menu = None;
+        s.file_context = None;
+        s.file_menu = None;
+        s.file_browser.cancel_drag();
+        s.workspace_page = page;
     }
 }
 
+pub(super) fn remove_window(s: &mut State, page: WorkspacePage) {
+    s.workbench.apps.retain(|&open| open != page);
+    s.workbench.stack.retain(|&open| open != page);
+    s.workbench.desktop_restore.retain(|&open| open != page);
+    if let Some(app) = app_id(page) {
+        s.workbench.slots.remove(&app);
+    }
+    front_window(s);
+}
+
 impl Ui {
-    fn toggle_desktop_fullscreen(&self) {
+    fn toggle_show_desktop(&self) {
+        let hiding = self.state.revise(|s| {
+            let workbench = &mut s.workbench;
+            let hiding = !workbench.stack.is_empty();
+            if hiding {
+                workbench.desktop_restore = std::mem::take(&mut workbench.stack);
+            } else {
+                workbench.stack = std::mem::take(&mut workbench.desktop_restore);
+            }
+            front_window(s);
+            hiding
+        });
+        self.desktop_enter();
+        if hiding {
+            self.refresh_desktop_items(true);
+        }
+    }
+
+    pub(super) fn toggle_desktop_fullscreen(&self) {
         let changed_tab = self.state.with(|s| s.workbench.active != Tab::Desktop);
         self.state.revise(|s| {
             if s.navigation != navigation::Page::Servers
-                || server_inventory_ui::shown(s)
                 || !s.connected
             {
                 return;
@@ -293,9 +398,9 @@ impl Ui {
         self.docker_enter();
         self.terminal_enter();
         self.observability_enter();
-        self.operations_enter();
         self.store_enter();
         self.explorer_enter();
+        network_ui::enter(self);
         if self.state.with(|s| {
             navigation::workspace_visible(s)
                 && s.workspace_page == WorkspacePage::Software
@@ -308,11 +413,71 @@ impl Ui {
 
     pub(super) fn open_desktop_app(&self, page: WorkspacePage) {
         self.state.revise(|s| select_app(s, page));
+        #[cfg(windows)]
+        if page == WorkspacePage::Browser {
+            self.open_web_browser();
+        }
         self.desktop_enter();
     }
 
-    fn close_desktop_app(&self) {
-        let page = self.state.with(|s| s.workspace_page);
+    pub(super) fn cycle_desktop_apps(&self, backwards: bool) {
+        let next = self.state.with(|s| {
+            let apps = &s.workbench.apps;
+            if apps.is_empty() {
+                return None;
+            }
+            let current = apps.iter().position(|&app| app == s.workspace_page);
+            let index = match (current, backwards) {
+                (Some(index), true) => (index + apps.len() - 1) % apps.len(),
+                (Some(index), false) => (index + 1) % apps.len(),
+                (None, true) => apps.len() - 1,
+                (None, false) => 0,
+            };
+            (apps[index] != s.workspace_page).then_some(apps[index])
+        });
+        if let Some(page) = next {
+            self.open_desktop_app(page);
+        }
+    }
+
+    pub(super) fn minimize_desktop_window(&self) {
+        self.minimize_window(self.state.with(|s| s.workspace_page));
+    }
+
+    fn minimize_window(&self, page: WorkspacePage) {
+        let changed = self.state.revise(|s| {
+            let previous = s.workspace_page;
+            s.workbench.stack.retain(|&open| open != page);
+            front_window(s);
+            s.workspace_page != previous
+        });
+        if changed {
+            self.desktop_enter();
+        }
+    }
+
+    pub(super) fn toggle_desktop_maximize(&self) {
+        self.toggle_window_maximize(self.state.with(|s| s.workspace_page));
+    }
+
+    fn toggle_window_maximize(&self, page: WorkspacePage) {
+        let Some(app) = app_id(page) else {
+            return;
+        };
+        let changed = self.state.revise(|s| {
+            if !s.workbench.window_visible(page) {
+                return false;
+            }
+            let window = s.workbench.windows.entry(app).or_default();
+            window.maximized = !window.maximized;
+            true
+        });
+        if changed {
+            self.remember_desktop_layout();
+        }
+    }
+
+    fn close_desktop_app(&self, page: WorkspacePage) {
         if page == WorkspacePage::Editor && !remote_editor::close_desktop(self) {
             return;
         }
@@ -320,16 +485,21 @@ impl Ui {
     }
 
     pub(super) fn finish_desktop_close(&self, page: WorkspacePage) {
+        #[cfg(windows)]
+        if page == WorkspacePage::Browser {
+            self.close_web_browser();
+        }
         if page == WorkspacePage::Terminal {
             self.terminal_close_all();
         }
-        self.state.revise(|s| {
-            observability::metrics_leave(s);
-            s.terminal.menu = None;
-            s.workbench.apps.retain(|app| *app != page);
-            s.workspace_page = WorkspacePage::Desktop;
-            s.workbench.desktop_page = WorkspacePage::Desktop;
+        let changed = self.state.revise(|s| {
+            let previous = s.workspace_page;
+            remove_window(s, page);
+            previous != s.workspace_page
         });
+        if changed {
+            self.desktop_enter();
+        }
     }
 }
 
@@ -469,148 +639,88 @@ pub(super) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
         .on_press(move || ui.open_desktop_app(page))
 }
 
-fn app_window(ui: Ui) -> impl Widget {
+fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let state = ui.state;
     let minimize = ui.clone();
     let maximize = ui.clone();
     let close = ui.clone();
+    let tools = match page {
+        WorkspacePage::Terminal => fragment(terminal::header(ui.clone())),
+        WorkspacePage::Explorer => fragment(workspace::explorer_window_tools(ui.clone())),
+        WorkspacePage::Resources => fragment(monitor_ui::window_tools(ui.clone())),
+        #[cfg(windows)]
+        WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone())),
+        _ => fragment(()),
+    };
+    let content = match page {
+        WorkspacePage::Terminal => fragment(terminal::page(ui)),
+        WorkspacePage::Explorer => fragment((
+            file_context::desktop_menu_dismiss(ui.clone()),
+            workspace::explorer(ui),
+        )),
+        WorkspacePage::Resources => fragment(monitor_ui::page(ui)),
+        WorkspacePage::Software => fragment(software::page(ui)),
+        WorkspacePage::Settings => fragment(server_apps_ui::settings(ui)),
+        WorkspacePage::Docker => fragment(docker_ui::page(ui)),
+        WorkspacePage::Editor => fragment(remote_editor::page(ui)),
+        #[cfg(windows)]
+        WorkspacePage::Browser => fragment(web_browser::page(ui)),
+        _ => fragment(()),
+    };
     col()
-        .class(state.map(|s| {
-            if s.workspace_page == WorkspacePage::Desktop
-                || !s.connected
-                || s.workbench.active != Tab::Desktop
-            {
-                "desktop-window hidden"
-            } else if s.workbench.window(s.workspace_page).maximized {
-                "desktop-window maximized"
+        .class(state.map(move |s| {
+            let mut class = format!("desktop-window {}", app_class(page));
+            if !s.workbench.window_visible(page) {
+                class.push_str(" hidden");
             } else {
-                "desktop-window"
+                if s.workbench.desktop_page == page {
+                    class.push_str(" active");
+                }
+                if s.workbench.window(page).maximized {
+                    class.push_str(" maximized");
+                }
             }
-            .to_owned()
+            class
         }))
         .fill((
-            row().class("desktop-window-titlebar").fill((
-                row().class("desktop-window-mark").fill(
-                    each(state.map(|s| vec![s.workspace_page]))
-                        .key(|page| *page as u8)
-                        .children(|item| icons::glyph(app_icon(item.value.get()))),
-                ),
-                text().class("desktop-window-title").content(i18n::bind(
-                    state.map(|s| app_label(s.workspace_page).to_owned()),
+            row()
+                .class(if page == WorkspacePage::Explorer {
+                    "desktop-window-titlebar explorer-titlebar"
+                } else {
+                    "desktop-window-titlebar"
+                })
+                .fill((
+                    row()
+                        .class("desktop-window-mark")
+                        .fill(icons::glyph(app_icon(page))),
+                    text()
+                        .class("desktop-window-title")
+                        .content(i18n::bind(app_label(page))),
+                    tools,
+                    row().class("desktop-window-actions").fill((
+                        icon_action("Minimize window", Icon::WindowMinimize)
+                            .class("icon-button window-minimize")
+                            .on_press(move || minimize.minimize_window(page)),
+                        sapid::button()
+                            .name(i18n::bind("Toggle maximize"))
+                            .class("icon-button window-maximize")
+                            .pressed(state.map(move |s| s.workbench.window(page).maximized))
+                            .fill((
+                                icons::glyph(Icon::WindowMaximize),
+                                icons::glyph(Icon::WindowRestore),
+                            ))
+                            .on_press(move || maximize.toggle_window_maximize(page)),
+                        close_action("Close application")
+                            .class("icon-button window-close")
+                            .enabled(state.map(move |s| {
+                                !s.system_task_running
+                                    && (page != WorkspacePage::Editor
+                                        || !remote_editor::desktop_busy(s))
+                            }))
+                            .on_press(move || close.close_desktop_app(page)),
+                    )),
                 )),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Terminal),
-                    {
-                        let ui = ui.clone();
-                        move || terminal::header(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Explorer),
-                    {
-                        let ui = ui.clone();
-                        move || workspace::explorer_window_tools(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Resources),
-                    {
-                        let ui = ui.clone();
-                        move || monitor_ui::window_tools(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::SystemLogs),
-                    {
-                        let ui = ui.clone();
-                        move || observability::logs_window_tools(ui.clone())
-                    },
-                ),
-                row().class("desktop-window-actions").fill((
-                    icon_action("Minimize window", Icon::WindowMinimize)
-                        .class("icon-button window-minimize")
-                        .on_press(move || {
-                            minimize.state.revise(|s| {
-                                observability::metrics_leave(s);
-                                s.terminal.menu = None;
-                                s.workspace_page = WorkspacePage::Desktop;
-                                s.workbench.desktop_page = WorkspacePage::Desktop;
-                            });
-                        }),
-                    sapid::button()
-                        .name(i18n::bind("Toggle maximize"))
-                        .class("icon-button window-maximize")
-                        .pressed(state.map(|s| s.workbench.window(s.workspace_page).maximized))
-                        .fill((
-                            icons::glyph(Icon::WindowMaximize),
-                            icons::glyph(Icon::WindowRestore),
-                        ))
-                        .on_press(move || {
-                            maximize.state.revise(|s| {
-                                if let Some(app) = app_id(s.workspace_page) {
-                                    let window = s.workbench.windows.entry(app).or_default();
-                                    window.maximized = !window.maximized;
-                                }
-                            });
-                            maximize.remember_desktop_layout();
-                        }),
-                    close_action("Close application")
-                        .class("icon-button window-close")
-                        .enabled(state.map(|s| {
-                            !s.system_task_running
-                                && (s.workspace_page != WorkspacePage::Editor
-                                    || !remote_editor::desktop_busy(s))
-                        }))
-                        .on_press(move || close.close_desktop_app()),
-                )),
-            )),
-            col().class("desktop-window-content").fill((
-                when(state.map(|s| s.workspace_page == WorkspacePage::Editor), {
-                    let ui = ui.clone();
-                    move || remote_editor::page(ui.clone())
-                }),
-                when(state.map(|s| s.workspace_page == WorkspacePage::Docker), {
-                    let ui = ui.clone();
-                    move || docker_ui::page(ui.clone())
-                }),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Explorer),
-                    {
-                        let ui = ui.clone();
-                        move || workspace::explorer(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Software),
-                    {
-                        let ui = ui.clone();
-                        move || software::page(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Operations),
-                    {
-                        let ui = ui.clone();
-                        move || operations::page(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::Resources),
-                    {
-                        let ui = ui.clone();
-                        move || monitor_ui::page(ui.clone())
-                    },
-                ),
-                when(
-                    state.map(|s| s.workspace_page == WorkspacePage::SystemLogs),
-                    {
-                        let ui = ui.clone();
-                        move || observability::logs(ui.clone())
-                    },
-                ),
-                // Mount once for the app lifetime: switching tabs never destroys xterm.
-                terminal::page(ui),
-            )),
+            col().class("desktop-window-content").fill(content),
             fragment(
                 ["n", "s", "e", "w", "ne", "nw", "se", "sw"]
                     .into_iter()
@@ -618,6 +728,26 @@ fn app_window(ui: Ui) -> impl Widget {
                     .collect::<Vec<_>>(),
             ),
         ))
+}
+
+fn app_windows(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    col().class("desktop-window-layer").fill(
+        each(state.map(|s| {
+            // The terminal bridge stays mounted until its session metadata is cleared.
+            std::iter::once(WorkspacePage::Terminal)
+                .chain(
+                    s.workbench
+                        .apps
+                        .iter()
+                        .copied()
+                        .filter(|&page| page != WorkspacePage::Terminal),
+                )
+                .collect::<Vec<_>>()
+        }))
+        .key(|page| *page as u8)
+        .children(move |item| app_window(ui.clone(), item.value.get())),
+    )
 }
 
 fn selected_name(s: &State) -> String {
@@ -634,19 +764,6 @@ fn selected_name(s: &State) -> String {
         })
         .cloned()
         .unwrap_or_default()
-}
-
-pub(super) fn settings_action(ui: Ui) -> impl Widget {
-    sapid::button()
-        .name(i18n::bind("Desktop settings"))
-        .fill(icons::glyph(Icon::Settings))
-        .class("icon-button desktop-settings-button")
-        .on_press(move || {
-            desktop_customization_ui::open_settings(
-                &ui,
-                desktop_customization_ui::SettingsPage::Desktop,
-            )
-        })
 }
 
 fn desktop_address(s: &State) -> String {
@@ -667,12 +784,30 @@ fn desktop_address(s: &State) -> String {
     }
 }
 
+fn dock_clock(state: Cage<State>) -> impl Widget {
+    col()
+        .class("desktop-panel-clock")
+        .name(i18n::bind("Server time"))
+        .fill((
+            text()
+                .class(state.map(|s| match s.config.settings.language {
+                    arcnix_core::Language::English => "desktop-panel-locale hidden".to_owned(),
+                    arcnix_core::Language::SimplifiedChinese => {
+                        "desktop-panel-locale clock-zh hidden".to_owned()
+                    }
+                }))
+                .content(""),
+            text().class("desktop-panel-time").content(""),
+            text().class("desktop-panel-date").content(""),
+        ))
+}
+
 pub(super) fn desktop(ui: Ui) -> impl Widget {
     let state = ui.state;
     let show_desktop = ui.clone();
     let exit_fullscreen = ui.clone();
-    let preferences = ui.clone();
     let geometry = ui.clone();
+    let focus = ui.clone();
     col()
         .class(state.map(|s| {
             if visible(s) {
@@ -684,6 +819,16 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
         }))
         .fill((
             desktop_customization_ui::gesture_input(ui.clone()),
+            desktop_shortcuts_ui::bridge(ui.clone()),
+            text()
+                .class("desktop-clock-sample hidden")
+                .content(state.map(|s| {
+                    s.server_apps
+                        .clock
+                        .map_or_else(String::new, |(serial, clock)| {
+                            format!("{serial},{},{}", clock.unix_seconds, clock.offset_minutes)
+                        })
+                })),
             input().class("desktop-bounds-input hidden").value("").on(
                 value_changed,
                 move |event| {
@@ -692,85 +837,136 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
                     }
                 },
             ),
+            input()
+                .class("desktop-focus-input hidden")
+                .value("")
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event {
+                        focus_window(&focus, &value);
+                    }
+                }),
             text().class("desktop-motion-state").content(state.map(|s| {
                 let shown = visible(s);
-                let window = s.workbench.window(s.workspace_page);
+                let windows: Vec<_> = s
+                    .workbench
+                    .stack
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, &page)| {
+                        let app = app_id(page)?;
+                        let layout = s.workbench.window(page);
+                        Some(serde_json::json!({
+                            "id": app,
+                            "class": app_class(page),
+                            "order": index + 1,
+                            "slot": s.workbench.slots.get(&app).copied().unwrap_or_default(),
+                            "bounds": layout.bounds,
+                            "maximized": layout.maximized,
+                        }))
+                    })
+                    .collect();
                 serde_json::json!({
                     "shown": shown,
                     "epoch": s.epoch,
                     "app": if shown && s.workspace_page != WorkspacePage::Desktop {
                         app_class(s.workspace_page)
                     } else { "" },
-                    "windowApp": app_id(s.workspace_page),
-                    "maximized": window.maximized,
-                    "bounds": window.bounds,
                     "fullscreen": fullscreen(s),
+                    "windows": windows,
                 })
                 .to_string()
             })),
-            when(state.map(fullscreen), move || {
-                row().class("desktop-menubar").fill((
-                    text()
-                        .class("desktop-menubar-title")
-                        .content(state.map(selected_name)),
-                    text()
-                        .class("desktop-secure")
-                        .content(i18n::bind("SSH 已连接")),
-                    settings_action(preferences.clone()),
-                    fullscreen_action(exit_fullscreen.clone(), true),
-                ))
+            when(state.map(fullscreen), {
+                let ui = ui.clone();
+                move || {
+                    row().class("desktop-menubar").fill((
+                        text()
+                            .class("desktop-menubar-title")
+                            .content(state.map(selected_name)),
+                        workspace::transfer_progress_buttons(ui.clone()),
+                        connection_target(state),
+                        text()
+                            .class("desktop-secure")
+                            .content(i18n::bind("SSH 已连接")),
+                        fullscreen_action(exit_fullscreen.clone(), true),
+                    ))
+                }
             }),
-            col().class("desktop-canvas").fill((
-                desktop_customization_ui::wallpaper(ui.clone()),
-                when(
-                    state.map(|s| desktop_customization_ui::appearance(s).show_server),
-                    move || {
-                        col().class("desktop-wallpaper-copy").fill((
-                            text()
-                                .class("desktop-wallpaper-name")
-                                .content(state.map(selected_name)),
-                            text()
-                                .class("desktop-wallpaper-address")
-                                .content(state.map(|s| {
-                                    let address = desktop_address(s);
-                                    if address == selected_name(s) {
-                                        String::new()
-                                    } else {
-                                        address
-                                    }
-                                })),
-                        ))
-                    },
-                ),
-                col()
-                    .class("desktop-shortcuts")
-                    .fill(desktop_customization_ui::launchers(ui.clone(), false)),
-                app_window(ui.clone()),
-                col().class("desktop-dock-zone").fill(
-                    row()
-                        .class(state.map(desktop_customization_ui::dock_class))
-                        .fill((
-                            sapid::button()
-                                .class("desktop-dock-home")
-                                .name(i18n::bind("Show desktop"))
-                                .fill(icons::glyph(Icon::Grid))
-                                .on_press(move || {
-                                    show_desktop.state.revise(|s| {
-                                        observability::metrics_leave(s);
-                                        s.terminal.menu = None;
-                                        s.workspace_page = WorkspacePage::Desktop;
-                                        s.workbench.desktop_page = WorkspacePage::Desktop;
-                                    });
-                                    show_desktop.refresh_desktop_items(true);
-                                }),
-                            text().class("desktop-dock-divider").content(""),
+            col()
+                .class("desktop-canvas")
+                .name(i18n::bind("Desktop"))
+                .focus(FocusMode::Programmatic)
+                .fill((
+                    desktop_customization_ui::wallpaper(ui.clone()),
+                    when(
+                        state.map(|s| desktop_customization_ui::appearance(s).show_server),
+                        move || {
+                            col().class("desktop-wallpaper-copy").fill((
+                                text()
+                                    .class("desktop-wallpaper-name")
+                                    .content(state.map(selected_name)),
+                                text()
+                                    .class("desktop-wallpaper-address")
+                                    .content(state.map(|s| {
+                                        let address = desktop_address(s);
+                                        if address == selected_name(s) {
+                                            String::new()
+                                        } else {
+                                            address
+                                        }
+                                    })),
+                            ))
+                        },
+                    ),
+                    col()
+                        .class("desktop-shortcuts")
+                        .fill(desktop_customization_ui::launchers(ui.clone(), false)),
+                    app_windows(ui.clone()),
+                    col()
+                        .class(state.map(|s| {
+                            if desktop_customization_ui::panel_mode(s) {
+                                "desktop-dock-zone dock-panel-zone"
+                            } else {
+                                "desktop-dock-zone"
+                            }
+                            .to_owned()
+                        }))
+                        .fill(
                             row()
-                                .class("desktop-dock-apps")
-                                .fill(desktop_customization_ui::launchers(ui.clone(), true)),
-                        )),
-                ),
-                desktop_customization_ui::context_menu(ui),
-            )),
+                                .class(state.map(desktop_customization_ui::dock_class))
+                                .fill((
+                                    row().class("desktop-dock-leading").fill((
+                                        sapid::button()
+                                            .class("desktop-dock-home")
+                                            .name(i18n::bind("Show desktop"))
+                                            .pressed(
+                                                state.map(|s| {
+                                                    !s.workbench.desktop_restore.is_empty()
+                                                }),
+                                            )
+                                            .fill(icons::glyph(Icon::Grid))
+                                            .on_press(move || show_desktop.toggle_show_desktop()),
+                                        text().class("desktop-dock-divider").content(""),
+                                    )),
+                                    row().class("desktop-dock-apps").fill(
+                                        desktop_customization_ui::launchers(ui.clone(), true),
+                                    ),
+                                    when(
+                                        state.map(desktop_customization_ui::panel_mode),
+                                        move || dock_clock(state),
+                                    ),
+                                    when(
+                                        state.map(desktop_customization_ui::floating_dock_status),
+                                        move || {
+                                            row()
+                                                .class("desktop-dock-status")
+                                                .fill(dock_clock(state))
+                                        },
+                                    ),
+                                )),
+                        ),
+                    desktop_customization_ui::context_menu(ui),
+                )),
         ))
 }
 

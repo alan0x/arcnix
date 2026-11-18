@@ -51,7 +51,8 @@ def main():
                 target = target if target is not None else surface
                 box = target.bounding_box()
                 assert box and box['width'] > 0 and box['height'] > 0
-                position = dict(x=box['width'] - 5, y=box['height'] - 5) if bottom else dict(
+                # Keep the point inside the terminal, clear of the window resize handle.
+                position = dict(x=box['width'] - 14, y=box['height'] - 14) if bottom else dict(
                     x=min(180, box['width'] / 2), y=min(120, box['height'] / 2),
                 )
                 target.click(button='right', position=position)
@@ -263,6 +264,7 @@ def main():
             expect(menu.get_by_role('button', name='Copy', exact=True)).to_be_enabled()
             page.keyboard.press('Escape')
             expect(menu).not_to_be_visible()
+            expect(keyboard).to_be_focused()
             page.keyboard.press('Control+Shift+l')
             expect(reader).not_to_contain_text('FIRST_SESSION_STILL_ALIVE')
             command('echo AFTER_SHORTCUT_CLEAR')

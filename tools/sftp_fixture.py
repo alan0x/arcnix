@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -636,6 +637,19 @@ class Authentication(paramiko.ServerInterface):
             return False
         return super().check_channel_subsystem_request(channel, name)
 
+    def check_channel_direct_tcpip_request(self, channel_id, origin, destination):
+        host, port = destination
+        asset = host in {"assets.browser-fixture.test", "scripts.browser-fixture.test"}
+        local = bool(self.browser_port and port == self.browser_port
+                     and (asset or host in {"browser-fixture.test", "127.0.0.1", "localhost", "::1"}))
+        repaired = self.browser_forwarding_repaired.get(self.username) is True
+        if not repaired and (asset or self.browser_forwarding_denied or (not local and not (self.browser_web and port in (80, 443)))):
+            return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+        if local and (self.fixture_root / 'browser-destination-unreachable').exists():
+            return paramiko.OPEN_FAILED_CONNECT_FAILED
+        self.browser_channels[channel_id] = (destination, local)
+        return paramiko.OPEN_SUCCEEDED
+
     def check_channel_request(self, kind, channel_id):
         return paramiko.OPEN_SUCCEEDED if kind == "session" else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
@@ -782,7 +796,7 @@ class Authentication(paramiko.ServerInterface):
         def reply():
             # Deliberately does not execute arbitrary commands on the developer's machine.
             text = command.decode()
-            if text.startswith(('# arcnix:apps:', '# arcnix:desktop:', '# arcnix:docker:', '# arcnix:disks:', '# arcnix:compose:', '# arcnix:software:')):
+            if text.startswith(('# arcnix:browser:repair ', '# arcnix:sync:', '# arcnix:apps:', '# arcnix:desktop:', '# arcnix:docker:', '# arcnix:disks:', '# arcnix:compose:', '# arcnix:software:', '# arcnix:network:', '# arcnix:processes:')):
                 from server_apps_fixture import reply as application_reply
                 if application_reply(self, channel, text):
                     return
@@ -1587,9 +1601,66 @@ class Files(paramiko.SFTPServerInterface):
             return self.error(exc)
 
 
+_DNS_PROXY_ADDRESSES = ipaddress.ip_network('198.18.0.0/15')
+
+
+def connect_browser_destination(host, port, local):
+    if local:
+        return socket.create_connection(
+            ('127.0.0.1' if host in ('browser-fixture.test', 'assets.browser-fixture.test', 'scripts.browser-fixture.test') else host, port), timeout=5)
+
+    try:
+        ipaddress.ip_address(host)
+        from_dns = False
+    except ValueError:
+        from_dns = True
+    failure = OSError('Public web preview requires a public IP address')
+    for _, _, _, _, address in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        ip = ipaddress.ip_address(address[0])
+        # Some local network proxies return a synthetic DNS address in this
+        # range and route it to the public hostname. Reject direct literals.
+        dns_proxy_address = from_dns and ip in _DNS_PROXY_ADDRESSES
+        if not dns_proxy_address and (not ip.is_global or ip.is_multicast):
+            continue
+        try:
+            return socket.create_connection((str(ip), port), timeout=5)
+        except OSError as error:
+            failure = error
+    raise failure
+
+
+def forward_browser_channel(channel, destination, local, root):
+    host, port = destination
+    try:
+        with connect_browser_destination(host, port, local) as upstream:
+            with (root / "browser-forwarding.jsonl").open("a", encoding="utf-8") as trace:
+                trace.write(json.dumps({"host": host, "port": port}) + "\n")
+            upstream.settimeout(None)
+
+            def upload():
+                try:
+                    while data := channel.recv(16384):
+                        upstream.sendall(data)
+                    upstream.shutdown(socket.SHUT_WR)
+                except (EOFError, OSError):
+                    pass
+
+            threading.Thread(target=upload, daemon=True).start()
+            while data := upstream.recv(16384):
+                channel.sendall(data)
+            channel.shutdown_write()
+    except (EOFError, OSError):
+        pass
+    finally:
+        channel.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--browser-port", type=int, default=0)
+    parser.add_argument("--browser-web", action="store_true",
+                        help="Allow forwarding to public HTTP/HTTPS destinations in the loopback preview")
     parser.add_argument("--ready", type=Path, required=True)
     parser.add_argument("--io-delay", type=float, default=0, help="Test-only delay per SFTP read/write (0–0.1 seconds)")
     args = parser.parse_args()
@@ -1662,9 +1733,25 @@ def main():
                         try:
                             authentication = Authentication(accepted_keys, transport, audit_auth)
                             authentication.fixture_root = root
+                            authentication.browser_port = args.browser_port
+                            authentication.browser_web = args.browser_web
+                            authentication.browser_forwarding_denied = (root / 'browser-forwarding-denied').exists()
+                            repaired = root / 'browser-forwarding-repaired.json'
+                            authentication.browser_forwarding_repaired = json.loads(repaired.read_text()) if repaired.exists() else {}
+                            authentication.browser_channels = {}
                             transport.start_server(server=authentication)
                             while transport.is_active():
-                                time.sleep(0.1)
+                                if not (args.browser_port or args.browser_web):
+                                    time.sleep(0.1)
+                                    continue
+                                channel = transport.accept(timeout=0.1)
+                                if channel is not None:
+                                    destination = authentication.browser_channels.pop(channel.get_id(), None)
+                                    if destination is not None:
+                                        target, local = destination
+                                        threading.Thread(target=forward_browser_channel,
+                                                         args=(channel, target, local, root),
+                                                         daemon=True).start()
                         except (EOFError, paramiko.SSHException):
                             pass
                         finally:

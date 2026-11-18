@@ -90,7 +90,7 @@ def main():
             if query:config['config']['snippets']=[dict(id='update-query',name='Read before update',description='',command='fixture-command',administrator=False)]
             return Desktop(case, config, binary=binary, extra_env={'ARCNIX_TEST_UPDATE_URL':server.base+'/latest'})
         def settings(app):
-            app.settings('About'); return app.page.locator('.update-panel')
+            app.settings('Updates'); return app.page.locator('.update-panel')
         def check(panel): panel.get_by_role('button', name='Check now', exact=True).click()
         def download(panel):
             panel.get_by_role('button', name='Download update', exact=True).click()
@@ -145,28 +145,6 @@ def main():
                     assert app.process.poll() is None and sha(app.binary)==original
                 finally:delay.unlink(missing_ok=True)
                 checks.append('Both manual restart and the automatic countdown wait for finite server-result queries to complete')
-            with desktop('configuration-draft',automatic=True) as app:
-                p=app.page;p.locator('.rail-configurations').click()
-                p.get_by_role('textbox',name='Candidate configuration (UTF-8)',exact=True).fill('name={{name}}\n')
-                p.get_by_role('button',name='Use configuration parameters',exact=True).click()
-                p.get_by_role('textbox',name='Default value: name',exact=True).fill('unsaved-update-template-value')
-                panel=settings(app);check(panel);expect(panel.locator('.update-status')).to_have_text('Update verified and ready to install',timeout=25000)
-                expect(panel.get_by_role('button',name='Restart and install',exact=True)).to_be_disabled()
-                expect(p.get_by_role('button',name='Review configuration draft',exact=True)).to_be_visible();app.screenshot('configuration-draft-update-waiting.png')
-                p.wait_for_timeout(1200);expect(p.locator('.update-banner')).not_to_be_visible()
-                p.get_by_role('button',name='Review configuration draft',exact=True).click()
-                expect(p.get_by_role('textbox',name='Default value: name',exact=True)).to_have_value('unsaved-update-template-value')
-                p.get_by_role('button',name='Discard draft…',exact=True).click();d=p.get_by_role('dialog',name='Discard configuration draft',exact=True);app.screenshot('configuration-draft-discard.png')
-                d.get_by_role('button',name='Cancel',exact=True).click()
-                expect(p.get_by_role('textbox',name='Candidate configuration (UTF-8)',exact=True)).to_have_value('name={{name}}\n')
-                panel=settings(app);expect(panel.get_by_role('button',name='Restart and install',exact=True)).to_be_disabled()
-                p.get_by_role('button',name='Review configuration draft',exact=True).click();p.get_by_role('button',name='Discard draft…',exact=True).click()
-                p.get_by_role('dialog',name='Discard configuration draft',exact=True).get_by_role('button',name='Discard draft',exact=True).click()
-                expect(p.get_by_role('textbox',name='Candidate configuration (UTF-8)',exact=True)).to_have_value('')
-                panel=settings(app);expect(panel.get_by_role('button',name='Restart and install',exact=True)).to_be_enabled()
-                expect(p.locator('.update-banner')).to_contain_text('Restarting in');p.locator('.update-banner').get_by_role('button',name='Later',exact=True).click()
-                assert app.process.poll() is None and sha(app.binary)==original and 'unsaved-update-template-value' not in app.config.read_text()
-                checks.append('Automatic and manual restarts preserve an in-memory configuration template until explicit discard; cancelling discard preserves values and draft contents never enter configuration storage')
             with desktop('manual', automatic=True) as app:
                 app.connect(); panel=settings(app); check(panel)
                 expect(panel.locator('.update-status')).to_have_text('Update verified and ready to install',timeout=20000)
@@ -175,7 +153,7 @@ def main():
                 app.servers(); app.page.get_by_role('button', name='Disconnect', exact=True).click(); expect(app.page.locator('.connection-state')).to_have_text('SSH disconnected')
                 expect(app.page.locator('.update-banner')).to_contain_text('Restarting in')
                 app.page.locator('.update-banner').get_by_role('button',name='View updates',exact=True).click()
-                expect(app.page.locator('.page-header-title')).to_have_text('About')
+                expect(app.page.locator('.page-header-title')).to_have_text('Updates')
                 expect(app.page.locator('.update-panel')).to_be_visible()
                 app.page.locator('.update-banner').get_by_role('button',name='Later',exact=True).click()
                 expect(app.page.locator('.update-banner')).not_to_be_visible()

@@ -27,7 +27,6 @@ fn available(s: &State) -> bool {
         && !s.system_task_running
         && !scripts_ui::busy(s)
         && s.scripts.refreshing.is_empty()
-        && !configuration_compare_ui::pending(s)
         && s.file_pending.is_none()
         && s.import_pending.is_none()
         && s.inflight_transfers.is_empty()
@@ -216,7 +215,6 @@ impl Ui {
                     s.group = None;
                     s.search.clear();
                     s.collapsed_groups.clear();
-                    s.inventory = Default::default();
                     s.editor = ServerProfile::default();
                     s.server_editor_original = None;
                     s.server_tags.clear();

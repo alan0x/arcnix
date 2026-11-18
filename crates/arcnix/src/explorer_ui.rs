@@ -58,10 +58,14 @@ fn color_class(color: FolderColor) -> &'static str {
     }
 }
 
-pub(super) fn color_dot(s: &State, path: &str) -> String {
-    preferences(s).colors.get(path).map_or_else(
+pub(super) fn tag_class(s: &State, path: &str) -> Option<&'static str> {
+    preferences(s).colors.get(path).copied().map(color_class)
+}
+
+fn color_dot(s: &State, path: &str) -> String {
+    tag_class(s, path).map_or_else(
         || "hidden".into(),
-        |color| format!("folder-color-dot {}", color_class(*color)),
+        |class| format!("folder-color-dot {class}"),
     )
 }
 
@@ -70,10 +74,8 @@ fn preferences(s: &State) -> &ExplorerPreferences {
 }
 
 fn editable(s: &State) -> bool {
-    s.connected
-        && s.sftp_available
-        && s.server_apps.preferences_loaded
-        && s.server_apps.preferences_pending.is_none()
+    // The desktop outbox queues edits while a preferences read is in flight.
+    s.sftp_available && server_apps_ui::preferences_ready(s)
 }
 
 fn active(s: &State) -> bool {
@@ -260,7 +262,7 @@ pub(super) fn sidebar_toggle(ui: Ui) -> impl Widget {
         .name(i18n::bind("Toggle Explorer sidebar"))
         .pressed(state.map(|s| !preferences(s).sidebar_hidden))
         .enabled(state.map(editable))
-        .fill(icons::glyph(Icon::List))
+        .fill(icons::glyph(Icon::Sidebar))
         .on_press(move || ui.change_explorer(|prefs| prefs.sidebar_hidden = !prefs.sidebar_hidden))
 }
 
@@ -293,9 +295,10 @@ pub(super) fn favorite_button(ui: Ui) -> impl Widget {
 fn place(ui: Ui, label: &'static str, path: String) -> impl Widget {
     let state = ui.state;
     let current_path = path.clone();
+    let name = i18n::bind(if label == "Home" { "主目录" } else { label });
     sapid::button()
         .class("explorer-place")
-        .name(i18n::bind(label))
+        .name(name.clone())
         .pressed(
             state.map(move |s| {
                 s.server_apps.explorer_tag.is_none() && s.remote_path == current_path
@@ -309,7 +312,7 @@ fn place(ui: Ui, label: &'static str, path: String) -> impl Widget {
                 "Filesystem" => Icon::Disks,
                 _ => Icon::Folder,
             }),
-            text().content(i18n::bind(label)),
+            text().content(name),
         ))
         .on_press(move || file_browser::navigate(&ui, true, path.clone()))
 }

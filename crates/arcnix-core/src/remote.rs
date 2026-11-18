@@ -380,6 +380,21 @@ impl PendingConnection {
         &self.fingerprint
     }
     pub fn authenticate(self, secret: &str, expected_fingerprint: &str) -> Result<RemoteSession> {
+        let session = self.authenticate_transport(secret, expected_fingerprint)?;
+        let sftp = match session.sftp() {
+            Ok(sftp) => Some(sftp),
+            Err(error) => {
+                let error = anyhow::Error::new(error).context("Cannot start SFTP subsystem");
+                if crate::transport_error::is_connection_error(&error) {
+                    return Err(error);
+                }
+                None
+            }
+        };
+        Ok(RemoteSession { session, sftp })
+    }
+
+    pub(crate) fn authenticate_transport(self, secret: &str, expected_fingerprint: &str) -> Result<Session> {
         ensure!(
             self.fingerprint == expected_fingerprint,
             "SSH host key mismatch; authentication was not attempted"
@@ -433,20 +448,7 @@ impl PendingConnection {
             }
         }
         ensure!(self.session.authenticated(), "SSH authentication failed");
-        let sftp = match self.session.sftp() {
-            Ok(sftp) => Some(sftp),
-            Err(error) => {
-                let error = anyhow::Error::new(error).context("Cannot start SFTP subsystem");
-                if crate::transport_error::is_connection_error(&error) {
-                    return Err(error);
-                }
-                None
-            }
-        };
-        Ok(RemoteSession {
-            session: self.session,
-            sftp,
-        })
+        Ok(self.session)
     }
 }
 
@@ -1190,14 +1192,32 @@ impl RemoteSession {
         Ok(())
     }
 
+    pub(crate) fn login_home(&self) -> Result<String> {
+        let output = crate::server_apps::execute(
+            self,
+            "# arcnix:desktop:home\nprintf '%s' \"${HOME:-}\"",
+            8192,
+        )?;
+        ensure!(output.exit_code == 0, "Cannot resolve remote login home");
+        crate::terminal::validate_directory(&output.stdout)?;
+        Ok(output.stdout)
+    }
+
     pub fn explorer_locations(&self) -> Result<Vec<ExplorerLocation>> {
         let sftp = self.sftp()?;
-        let home = path_string(&sftp.realpath(Path::new("."))?)?;
+        let home = match self.login_home() {
+            Ok(home) if sftp.stat(Path::new(&home)).is_ok_and(|stat| stat.is_dir()) => home,
+            // An SFTP-only account or chroot can expose a different path namespace.
+            _ => path_string(&sftp.realpath(Path::new("."))?)?,
+        };
         crate::terminal::validate_directory(&home)?;
-        let mut locations = vec![ExplorerLocation {
-            name: "Home folder",
-            path: home.clone(),
-        }];
+        let mut locations = Vec::new();
+        if home != "/" {
+            locations.push(ExplorerLocation {
+                name: "Home",
+                path: home.clone(),
+            });
+        }
         for (directory, name) in [
             ("Desktop", "Desktop"),
             ("Documents", "Documents"),
@@ -1264,6 +1284,20 @@ impl RemoteSession {
         crate::local::sort_entries(&mut entries);
         Ok((canonical, entries))
     }
+    pub fn create_file(&self, path: &str) -> Result<()> {
+        validate_path(path)?;
+        let mut file = self
+            .sftp()?
+            .open_mode(
+                Path::new(path),
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
+                0o644,
+                OpenType::File,
+            )
+            .context("Cannot create remote file")?;
+        file.close().context("Cannot close the new remote file")
+    }
+
     pub fn mkdir(&self, path: &str) -> Result<()> {
         validate_path(path)?;
         self.sftp()?
@@ -1941,7 +1975,7 @@ impl RemoteSession {
         )
     }
     #[allow(clippy::too_many_arguments)]
-    fn exec_stream_controlled(
+    pub(crate) fn exec_stream_controlled(
         &self,
         command: &str,
         stdin: &[u8],

@@ -3,6 +3,8 @@ use std::sync::Mutex;
 use arcnix_core::desktop_customization::{
     self as desktop, Appearance, DesktopItems, Dock, DockSize, Shortcut, Wallpaper, WallpaperImage,
 };
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use glory::wry::shell::{AssetProvider, AssetSource};
 use serde::Deserialize;
 
@@ -25,9 +27,13 @@ pub(super) struct Runtime {
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum SettingsPage {
     #[default]
+    General,
+    Network,
     Desktop,
     Wallpaper,
     Dock,
+    Shortcuts,
+    About,
 }
 
 pub(super) fn settings_page(s: &State) -> SettingsPage {
@@ -239,7 +245,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         Err(error) => {
             ui.state
                 .revise(|s| s.server_apps.customization.wallpaper_error = error.clone());
-            if apply && !ui.state.with(|s| s.dialog == Some(Dialog::DesktopSettings)) {
+            if apply && !ui.state.with(server_apps_ui::settings_visible) {
                 ui.error(error);
             }
         }
@@ -356,16 +362,40 @@ pub(super) fn launchers(ui: Ui, dock: bool) -> impl Widget {
     })
 }
 
+const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 3] = [
+    (Wallpaper::Terracotta, "Terracotta", "wallpaper-terracotta"),
+    (Wallpaper::Aurora, "Aurora", "wallpaper-aurora"),
+    (Wallpaper::Fjord, "Fjord", "wallpaper-fjord"),
+];
+
+pub(super) fn customization_css() -> String {
+    use std::fmt::Write;
+
+    let mut css = format!(
+        ".wallpaper-fjord {{ background-image: url(\"data:image/webp;base64,{}\"); }}",
+        STANDARD.encode(include_bytes!("../assets/fjord.webp"))
+    );
+    for size in Dock::MIN_ICON_SIZE..=Dock::MAX_ICON_SIZE {
+        writeln!(
+            css,
+            ".desktop-dock.dock-size-{size} {{ --dock-ideal: {size}px; }}"
+        )
+        .unwrap();
+    }
+    css
+}
+
 pub(super) fn wallpaper(ui: Ui) -> impl Widget {
     let state = ui.state;
     fragment((
         col().class(state.map(|s| {
-            match &appearance(s).wallpaper {
-                Wallpaper::Aurora => "desktop-wallpaper-art wallpaper-aurora",
-                Wallpaper::Dunes => "desktop-wallpaper-art wallpaper-dunes",
-                _ => "desktop-wallpaper-art",
-            }
-            .to_owned()
+            BUILT_IN_WALLPAPERS
+                .iter()
+                .find(|(wallpaper, ..)| wallpaper == &appearance(s).wallpaper)
+                .map_or_else(
+                    || "desktop-wallpaper-art".to_owned(),
+                    |(_, _, class)| format!("desktop-wallpaper-art {class}"),
+                )
         })),
         when(state.map(|s| wallpaper_asset(s).is_some()), move || {
             image()
@@ -382,20 +412,40 @@ pub(super) fn wallpaper(ui: Ui) -> impl Widget {
 
 pub(super) fn dock_class(s: &State) -> String {
     let dock = &appearance(s).dock;
+    let size = match dock.icon_pixels() {
+        pixels if pixels == DockSize::Small.pixels() => "dock-small".to_owned(),
+        pixels if pixels == DockSize::Medium.pixels() => "dock-medium".to_owned(),
+        pixels if pixels == DockSize::Large.pixels() => "dock-large".to_owned(),
+        pixels => format!("dock-size-{pixels}"),
+    };
     format!(
-        "desktop-dock {}{}{}",
-        match dock.size {
-            DockSize::Small => "dock-small",
-            DockSize::Medium => "dock-medium",
-            DockSize::Large => "dock-large",
-        },
+        "desktop-dock {size}{}{}{}{}",
         if dock.magnify { " dock-magnify" } else { "" },
         if dock.auto_hide {
             " dock-auto-hide"
         } else {
             ""
+        },
+        if dock.panel_mode && dock.panel_centered {
+            " dock-centered"
+        } else {
+            ""
+        },
+        if floating_dock_status(s) {
+            " dock-show-status"
+        } else {
+            ""
         }
     )
+}
+
+pub(super) fn panel_mode(s: &State) -> bool {
+    appearance(s).dock.panel_mode
+}
+
+pub(super) fn floating_dock_status(s: &State) -> bool {
+    let dock = &appearance(s).dock;
+    !dock.panel_mode && dock.floating_status
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -545,7 +595,7 @@ pub(super) fn open_settings(ui: &Ui, page: SettingsPage) {
         s.server_apps.customization.settings_page = page;
         s.server_apps.customization.menu = None;
     });
-    ui.open_dialog(Dialog::DesktopSettings);
+    ui.open_desktop_app(WorkspacePage::Settings);
 }
 
 pub(super) fn context_menu(ui: Ui) -> impl Widget {
@@ -586,13 +636,23 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                         Some(Shortcut::File(name)) => Some(name),
                         _ => None,
                     };
-                    let wallpaper = file.as_ref().and_then(|name| {
-                        state.with(|s| {
-                            find_file(s, name)
-                                .filter(|entry| !entry.is_dir && desktop::is_wallpaper(&entry.path))
-                                .map(|entry| entry.path.clone())
+                    let (directory, wallpaper) = file
+                        .as_ref()
+                        .and_then(|name| {
+                            state.with(|s| {
+                                find_file(s, name).map(|entry| {
+                                    (
+                                        (entry.is_dir
+                                            && !entry.is_symlink
+                                            && terminal::directory_supported(&entry.path))
+                                        .then(|| entry.path.clone()),
+                                        (!entry.is_dir && desktop::is_wallpaper(&entry.path))
+                                            .then(|| entry.path.clone()),
+                                    )
+                                })
+                            })
                         })
-                    });
+                        .unwrap_or_default();
                     let unpinned = app.is_some_and(|app| {
                         state.with(|s| appearance(s).dock.unpinned.contains(&app))
                     });
@@ -633,6 +693,17 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                                         }
                                     },
                                 )
+                            }
+                        }),
+                        when(directory.is_some(), {
+                            let ui = ui.clone();
+                            move || {
+                                let path = directory.clone();
+                                menu_action(&ui, "在此处打开终端", move |ui| {
+                                    if let Some(path) = &path {
+                                        ui.terminal_here(path.clone());
+                                    }
+                                })
                             }
                         }),
                         when(wallpaper.is_some(), {
@@ -711,25 +782,39 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
 }
 
 pub(super) fn settings_tabs(ui: Ui) -> impl Widget {
-    row().class("desktop-settings-tabs").fill(fragment(
-        [
-            (SettingsPage::Desktop, "Desktop"),
-            (SettingsPage::Wallpaper, "Wallpaper"),
-            (SettingsPage::Dock, "Dock"),
-        ]
-        .into_iter()
-        .map(|(page, label)| {
-            let state = ui.state;
-            sapid::button()
-                .class("button")
-                .label(i18n::bind(label))
-                .pressed(state.map(move |s| settings_page(s) == page))
-                .on_press(move || {
-                    state.revise(|s| s.server_apps.customization.settings_page = page)
-                })
-        })
-        .collect::<Vec<_>>(),
-    ))
+    col()
+        .class("desktop-settings-tabs")
+        .name(i18n::bind("Settings sections"))
+        .fill(fragment(
+            [
+                (SettingsPage::General, "General", Icon::Settings),
+                (SettingsPage::Network, "Network", Icon::Server),
+                (SettingsPage::Desktop, "Desktop", Icon::Grid),
+                (SettingsPage::Wallpaper, "Wallpaper", Icon::File),
+                (SettingsPage::Dock, "Dock", Icon::List),
+                (
+                    SettingsPage::Shortcuts,
+                    "Keyboard shortcuts",
+                    Icon::Terminal,
+                ),
+                (SettingsPage::About, "About", Icon::Info),
+            ]
+            .into_iter()
+            .map(|(page, label, icon)| {
+                let choose = ui.clone();
+                let state = ui.state;
+                sapid::button()
+                    .class("desktop-settings-section")
+                    .name(i18n::bind(label))
+                    .fill((icons::glyph(icon), text().content(i18n::bind(label))))
+                    .pressed(state.map(move |s| settings_page(s) == page))
+                    .on_press(move || {
+                        state.revise(|s| s.server_apps.customization.settings_page = page);
+                        network_ui::enter(&choose);
+                    })
+            })
+            .collect::<Vec<_>>(),
+        ))
 }
 
 fn toggle(
@@ -774,46 +859,143 @@ pub(super) fn desktop_controls(ui: Ui) -> impl Widget {
 }
 
 pub(super) fn dock_controls(ui: Ui) -> impl Widget {
+    let alignment = ui.clone();
+    let status = ui.clone();
     let reset = ui.clone();
+    let resize_dock = ui.clone();
     let state = ui.state;
     col().class("desktop-settings-pane").fill((
-        text()
-            .class("field-label")
-            .content(i18n::bind("Dock icon size")),
-        row().class("desktop-theme-choices").fill(fragment(
-            [
-                (DockSize::Small, "Small"),
-                (DockSize::Medium, "Medium"),
-                (DockSize::Large, "Large"),
-            ]
-            .into_iter()
-            .map(|(size, label)| {
-                let choose = ui.clone();
-                sapid::button()
-                    .class("button")
-                    .label(i18n::bind(label))
-                    .pressed(state.map(move |s| appearance(s).dock.size == size))
-                    .enabled(state.map(server_apps_ui::preferences_ready))
-                    .on_press(move || update(&choose, |prefs| prefs.dock.size = size))
-            })
-            .collect::<Vec<_>>(),
+        col().class("desktop-settings-card").fill((
+            text()
+                .class("section-title")
+                .content(i18n::bind("Dock style")),
+            row().class("choice-list").fill(fragment(
+                [(false, "Floating Dock"), (true, "Panel mode")]
+                    .into_iter()
+                    .map(|(panel, label)| {
+                        let choose = ui.clone();
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind(label))
+                            .pressed(state.map(move |s| panel_mode(s) == panel))
+                            .enabled(state.map(server_apps_ui::preferences_ready))
+                            .on_press(move || {
+                                update(&choose, |prefs| prefs.dock.panel_mode = panel)
+                            })
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            when(state.map(panel_mode), move || {
+                fragment((
+                    text()
+                        .class("field-label")
+                        .content(i18n::bind("App icon alignment")),
+                    row()
+                        .class("choice-list")
+                        .name(i18n::bind("App icon alignment"))
+                        .fill(fragment(
+                            [(false, "Align left"), (true, "Center icons")]
+                                .into_iter()
+                                .map(|(centered, label)| {
+                                    let choose = alignment.clone();
+                                    sapid::button()
+                                        .class("button")
+                                        .label(i18n::bind(label))
+                                        .pressed(state.map(move |s| {
+                                            appearance(s).dock.panel_centered == centered
+                                        }))
+                                        .enabled(state.map(server_apps_ui::preferences_ready))
+                                        .on_press(move || {
+                                            update(&choose, |prefs| {
+                                                prefs.dock.panel_centered = centered
+                                            })
+                                        })
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                ))
+            }),
+            when(state.map(|s| !panel_mode(s)), move || {
+                row().class("choice-list").fill(toggle(
+                    &status,
+                    "Show Dock status bar",
+                    |p| p.dock.floating_status,
+                    |p| p.dock.floating_status = !p.dock.floating_status,
+                ))
+            }),
         )),
-        row().class("choice-list").fill((
-            toggle(
-                &ui,
-                "Magnify Dock icons",
-                |p| p.dock.magnify,
-                |p| p.dock.magnify = !p.dock.magnify,
-            ),
-            toggle(
-                &ui,
-                "Automatically hide Dock",
-                |p| p.dock.auto_hide,
-                |p| p.dock.auto_hide = !p.dock.auto_hide,
-            ),
-            text_action("Reset Dock", Icon::Refresh)
-                .enabled(state.map(server_apps_ui::preferences_ready))
-                .on_press(move || update(&reset, |prefs| prefs.dock = Dock::default())),
+        col().class("desktop-settings-card").fill((
+            text()
+                .class("section-title")
+                .content(i18n::bind("Dock icon size")),
+            row().class("dock-size-control").fill((
+                input()
+                    .class("dock-size-bridge hidden")
+                    .name(i18n::bind("Dock icon size"))
+                    .enabled(state.map(server_apps_ui::preferences_ready))
+                    .on(value_changed, move |event| {
+                        if let Event::ValueChanged { value, .. } = event
+                            && let Ok(pixels) = value.parse::<u8>()
+                            && (Dock::MIN_ICON_SIZE..=Dock::MAX_ICON_SIZE).contains(&pixels)
+                        {
+                            update(&resize_dock, |prefs| prefs.dock.set_icon_pixels(pixels));
+                        }
+                    }),
+                text()
+                    .class("dock-size-state hidden")
+                    .content(state.map(|s| {
+                        format!(
+                            "{},{},{}",
+                            Dock::MIN_ICON_SIZE,
+                            Dock::MAX_ICON_SIZE,
+                            appearance(s).dock.icon_pixels()
+                        )
+                    })),
+            )),
+            row().class("choice-list").fill(fragment(
+                [
+                    (DockSize::Small, "Small"),
+                    (DockSize::Medium, "Medium"),
+                    (DockSize::Large, "Large"),
+                ]
+                .into_iter()
+                .map(|(size, label)| {
+                    let choose = ui.clone();
+                    sapid::button()
+                        .class("button")
+                        .label(i18n::bind(label))
+                        .pressed(
+                            state.map(move |s| appearance(s).dock.icon_pixels() == size.pixels()),
+                        )
+                        .enabled(state.map(server_apps_ui::preferences_ready))
+                        .on_press(move || {
+                            update(&choose, |prefs| prefs.dock.set_icon_pixels(size.pixels()))
+                        })
+                })
+                .collect::<Vec<_>>(),
+            )),
+        )),
+        col().class("desktop-settings-card").fill((
+            text()
+                .class("section-title")
+                .content(i18n::bind("Dock behavior")),
+            row().class("choice-list").fill((
+                toggle(
+                    &ui,
+                    "Magnify Dock icons",
+                    |p| p.dock.magnify,
+                    |p| p.dock.magnify = !p.dock.magnify,
+                ),
+                toggle(
+                    &ui,
+                    "Automatically hide Dock",
+                    |p| p.dock.auto_hide,
+                    |p| p.dock.auto_hide = !p.dock.auto_hide,
+                ),
+                text_action("Reset Dock", Icon::Refresh)
+                    .enabled(state.map(server_apps_ui::preferences_ready))
+                    .on_press(move || update(&reset, |prefs| prefs.dock = Dock::default())),
+            )),
         )),
     ))
 }
@@ -831,11 +1013,9 @@ pub(super) fn wallpaper_controls(ui: Ui) -> impl Widget {
             && runtime(s).wallpaper_pending.is_none()
     });
     col().class("desktop-settings-pane").fill((
-        row().class("wallpaper-choices").fill(fragment([
-            (Wallpaper::Arcnix, "Arcnix", "wallpaper-arcnix"),
-            (Wallpaper::Aurora, "Aurora", "wallpaper-aurora"),
-            (Wallpaper::Dunes, "Dunes", "wallpaper-dunes"),
-        ].into_iter().map(|(wallpaper, label, class)| {
+      col().class("desktop-settings-card").fill((
+        text().class("section-title").content(i18n::bind("Built-in wallpapers")),
+        row().class("wallpaper-choices").fill(fragment(BUILT_IN_WALLPAPERS.into_iter().map(|(wallpaper, label, class)| {
             let choose = ui.clone();
             let selected = wallpaper.clone();
             sapid::button().class("button wallpaper-choice").name(i18n::bind(label))
@@ -846,8 +1026,10 @@ pub(super) fn wallpaper_controls(ui: Ui) -> impl Widget {
                     update(&choose, |prefs| prefs.wallpaper = wallpaper.clone());
                 })
         }).collect::<Vec<_>>())),
+      )),
+      col().class("desktop-settings-card").fill((
         row().class("section-heading").fill((
-            text().class("field-label").content(i18n::bind("Custom wallpaper")),
+            text().class("section-title").content(i18n::bind("Custom wallpaper")),
             help_ui::tip("Custom wallpaper", "PNG, JPEG, WebP, GIF, BMP, AVIF or SVG, up to 8 MiB. Local images are uploaded to ~/.arcnix/wallpapers."),
         )),
         row().class("wallpaper-input-row").fill((
@@ -855,17 +1037,20 @@ pub(super) fn wallpaper_controls(ui: Ui) -> impl Widget {
             input().name(i18n::bind("Server image path"))
                 .value(state.map(|s| runtime(s).server_image.clone())).enabled(transfer)
                 .on(value_changed, move |event| { if let Event::ValueChanged { value, .. } = event { state.revise(|s| s.server_apps.customization.server_image = value); } }),
-            btn("Apply", move || {
-                let path = state.with(|s| runtime(s).server_image.trim().to_owned());
-                server.request_wallpaper(AppAction::ReadWallpaper(path), true);
-            }).enabled(state.map(move |s| transfer.get() && !runtime(s).server_image.trim().is_empty())),
+            row().class("wallpaper-input-actions").fill(
+                btn("Apply", move || {
+                    let path = state.with(|s| runtime(s).server_image.trim().to_owned());
+                    server.request_wallpaper(AppAction::ReadWallpaper(path), true);
+                }).enabled(state.map(move |s| transfer.get() && !runtime(s).server_image.trim().is_empty())),
+            ),
         )),
         row().class("wallpaper-input-row").fill((
             text().class("wallpaper-input-label").content(i18n::bind("Local image path")),
             input().name(i18n::bind("Local image path"))
                 .value(state.map(|s| runtime(s).local_image.clone())).enabled(transfer)
                 .on(value_changed, move |event| { if let Event::ValueChanged { value, .. } = event { state.revise(|s| s.server_apps.customization.local_image = value); } }),
-            btn("Upload & apply", move || {
+            row().class("wallpaper-input-actions").fill((
+              btn("Upload & apply", move || {
                 let path = state.with(|s| PathBuf::from(runtime(s).local_image.trim()));
                 upload.request_wallpaper(AppAction::ImportWallpaper(path), true);
             }).enabled(state.map(move |s| transfer.get() && !runtime(s).local_image.trim().is_empty())),
@@ -882,9 +1067,11 @@ pub(super) fn wallpaper_controls(ui: Ui) -> impl Widget {
                         Err(error) => state.revise(|s| s.server_apps.customization.wallpaper_error = error.to_string()),
                     }
                 }
-            }).enabled(transfer)),
+              }).enabled(transfer)),
+            )),
         )),
         when(state.map(|s| runtime(s).wallpaper_pending.is_some()), || text().class("subtle").content(i18n::bind("Loading wallpaper…"))),
         when(state.map(|s| !runtime(s).wallpaper_error.is_empty()), move || text().class("error").content(i18n::bind(state.map(|s| runtime(s).wallpaper_error.clone())))),
+      )),
     ))
 }

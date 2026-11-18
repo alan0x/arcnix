@@ -66,6 +66,24 @@ jobs:
         run: cargo test --workspace --locked --target ${{ matrix.target }}
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }} -p arcnix --bin arcnix
+      - name: Prepare Windows installer compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bootstrap = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.4.exe'
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe'
+          Invoke-WebRequest -Uri $url -OutFile $bootstrap
+          $expected = 'a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c'
+          if ((Get-FileHash -LiteralPath $bootstrap -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Inno Setup download did not match its pinned SHA-256.'
+          }
+          $compiler = Join-Path $env:RUNNER_TEMP 'inno-6.7.4'
+          $arguments = @('/PORTABLE=1', '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/DIR="{0}"' -f $compiler))
+          $process = Start-Process -FilePath $bootstrap -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $compiler 'ISCC.exe'))) {
+            throw "Inno Setup compiler installation failed ($($process.ExitCode))."
+          }
+          $compiler >> $env:GITHUB_PATH
       - name: Package application
         shell: bash
         run: |
@@ -74,6 +92,10 @@ jobs:
           else
             python3 tools/package_release.py --target '${{ matrix.target }}' --tag "$GITHUB_REF_NAME"
           fi
+      - name: Test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/windows_installer_smoke.ps1 -Tag $env:GITHUB_REF_NAME
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: arcnix-${{ matrix.platform }}
@@ -100,19 +122,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           cd dist
-          archives=(arcnix-*.zip arcnix-*.tar.gz)
-          test "${#archives[@]}" -eq 4
-          executables=(arcnix-*-windows-amd64.exe)
-          test "${#executables[@]}" -eq 1
-          sha256sum "${archives[@]}" "${executables[@]}" > SHA256SUMS
           tag="$GITHUB_REF_NAME"
+          archives=(arcnix-"$tag"-*.tar.gz)
+          test "${#archives[@]}" -eq 3
+          stem="arcnix-$tag-windows-amd64"
+          setup="$stem-setup.exe"
+          portable="$stem.zip"
+          updater="$stem.exe"
+          sha256sum "$setup" "$portable" "$updater" "${archives[@]}" > SHA256SUMS
+          assets=("$setup#Windows x64 installer ($tag)" "$portable#Windows x64 portable ZIP ($tag)"
+                  "$updater#Windows x64 executable for updates ($tag)" "${archives[@]}" SHA256SUMS)
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${archives[@]}" "${executables[@]}" SHA256SUMS --clobber
+            gh release upload "$tag" "${assets[@]}" --clobber
           else
             flags=()
             if [[ "$tag" == *-* ]]; then flags+=(--prerelease); fi
-            gh release create "$tag" "${archives[@]}" "${executables[@]}" SHA256SUMS \
+            gh release create "$tag" "${assets[@]}" \
               --verify-tag --title "Arcnix $tag" --generate-notes "${flags[@]}"
           fi
 

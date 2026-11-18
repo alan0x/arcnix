@@ -15,22 +15,26 @@ def main():
                 'General':['Language','Theme','Configuration backup'],
                 'Connection':['Timeout and keepalive'],
                 'Files':['Hidden files','File sizes','Dates and times'],
-                'Transfers':['Existing files'], 'Monitoring':['Resource refresh interval'],
-                'Logging':['Operation log','Log files'], 'About':['Application','Updates'],
+                'Transfers':['Concurrent transfers','Existing files'], 'Monitoring':['Resource refresh interval'],
+                'Logging':['Operation log','Log files'], 'Updates':['Updates'], 'About':['Application'],
             }
             for category,titles in expected.items():
                 app.settings(category)
                 expect(page.locator('.page-header-title')).to_have_text(category)
                 expect(page.locator('.settings-section:visible .settings-section-title')).to_have_text(titles)
                 expect(page.locator('.settings-page .software-error:visible')).to_have_count(0)
-                if category!='About': expect(page.locator('.update-panel')).not_to_be_visible()
+                if category!='Updates': expect(page.locator('.update-panel')).not_to_be_visible()
             expect(page.locator('.context-links').get_by_role('button',name='Appearance',exact=True)).to_have_count(0)
-            checks.append('All seven categories own their intended sections; General includes language and theme, Appearance is absent and updates are exclusive to About')
+            expect(page.locator('.context-links').get_by_role('button').last).to_have_text('About')
+            checks.append('Each settings category owns its intended sections, with update controls under Updates')
             app.settings('About'); expect(page.locator('.about-identity .subtle')).to_have_text(re.compile(r'Version \d+\.\d+\.\d+'))
             expect(page.get_by_role('button',name='Download update',exact=True)).not_to_be_visible()
             expect(page.get_by_role('button',name='Restart and install',exact=True)).not_to_be_visible()
             app.screenshot('about-light.png')
-            checks.append('About shows the installed version and update controls without irrelevant unavailable actions or empty alerts')
+            expect(page.get_by_role('button',name='Project on GitHub',exact=True)).to_be_visible()
+            expect(page.get_by_role('button',name='Official website · arcnix.org',exact=True)).to_be_visible()
+            expect(page.get_by_role('button',name='Check now',exact=True)).not_to_be_visible()
+            checks.append('About displays the installed version and repository link, and is the last settings category')
             app.settings('Logging')
             export=page.get_by_role('button',name='Export current log…',exact=True)
             assert export.bounding_box()['width']<300

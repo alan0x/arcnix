@@ -85,36 +85,6 @@ pub(super) fn start() -> anyhow::Result<(Arc<Controller>, async_channel::Receive
 fn supported() -> bool {
     cfg!(all(windows, target_arch = "x86_64"))
 }
-fn open_releases() -> anyhow::Result<()> {
-    let url = "https://github.com/taidge/arcnix/releases";
-    #[cfg(windows)]
-    {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-        use windows::core::{HSTRING, w};
-        let result = unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                &HSTRING::from(url),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            )
-        };
-        anyhow::ensure!(result.0 as isize > 32, "Could not open the release page");
-    }
-    #[cfg(not(windows))]
-    {
-        let command = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        std::process::Command::new(command).arg(url).spawn()?;
-    }
-    Ok(())
-}
 pub(super) fn applying(s: &State) -> bool {
     s.updates.phase == Phase::Applying
 }
@@ -127,11 +97,9 @@ fn idle(s: &State) -> bool {
         && !s.system_task_running
         && !scripts_ui::busy(s)
         && s.scripts.refreshing.is_empty()
-        && !configuration_compare_ui::pending(s)
         && s.file_pending.is_none()
         && s.dialog.is_none()
         && s.remote_editor.is_none()
-        && !configurations_ui::has_draft(&s.configurations)
         && s.cancels.is_empty()
         && !s
             .jobs
@@ -435,8 +403,7 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
     let apply = ui.clone();
     let cancel = ui.clone();
     let page = ui.clone();
-    let draft = ui.clone();
-    settings::panel(&ui,navigation::SettingsSection::About,"Updates",col().class("preferences-stack update-panel").fill((
+    settings::panel(&ui,navigation::SettingsSection::Updates,"Updates",col().class("preferences-stack update-panel").fill((
         sapid::checkbox().class("preference-check").label(i18n::bind("Check for updates automatically")).checked(state.map(|s|s.config.settings.updates.automatic_checks)).on_checked_change(move|v|automatic.update_preferences(|s|s.updates.automatic_checks=v)),
         row().class("choice-list").fill(each(vec![(1,"Daily"),(7,"Weekly"),(30,"Monthly")]).key(|(n,_)|*n).children({let ui=ui.clone();move|item|{let(n,label)=item.value.get();let set=ui.clone();sapid::button().class(state.map(move|s|if s.config.settings.updates.interval_days==n{"choice active"}else{"choice"}.to_owned())).label(i18n::bind(label)).on_press(move||set.update_preferences(|s|s.updates.interval_days=n))}})),
         sapid::checkbox().class("preference-check").label(i18n::bind("Download and install verified updates when idle")).checked(state.map(|s|s.config.settings.updates.automatic_install)).on_checked_change(move|v|install.update_preferences(|s|s.updates.automatic_install=v)),
@@ -454,11 +421,15 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
             text().class("subtle").content(state.map(|s|s.updates.release.as_ref().map(|r|r.reason.clone()).unwrap_or_default())),
         ))),
         settings::feedback(&ui, |s|s.updates.error.clone(), "software-error update-error"),
-        fragment((when(state.map(|s|s.updates.phase==Phase::Ready&&!idle(s)),move||row().class("help-heading").fill((text().class("subtle").content(i18n::bind(state.map(|s|if configurations_ui::has_draft(&s.configurations){"Configuration draft needs review before restarting"}else{"Waiting for connections and pending work to finish"}.to_owned()))),crate::help_ui::tip("Restart readiness","Restart waits for disconnected SSH, completed work, closed dialogs and no in-memory configuration draft. Return to the draft to keep editing or explicitly discard it; nothing is saved or discarded automatically.")))),
-        when(state.map(|s|s.updates.phase==Phase::Ready&&configurations_ui::has_draft(&s.configurations)),move||{let ui=draft.clone();btn("Review configuration draft",move||ui.review_configuration_draft())}),
+        fragment((when(state.map(|s| s.updates.phase == Phase::Ready && !idle(s)), || {
+            row().class("help-heading").fill((
+                text().class("subtle").content(i18n::bind("Waiting for connections and pending work to finish")),
+                crate::help_ui::tip("Restart readiness", "Restart waits for disconnected SSH, completed work and closed dialogs."),
+            ))
+        }),
         row().class("choice-list").fill((
             sapid::button().class("button").label(i18n::bind("Check now")).enabled(state.map(|s|!matches!(s.updates.phase,Phase::Checking|Phase::Downloading|Phase::Applying))).on_press(move||check(&check_ui)),
-            sapid::button().class("button").label(i18n::bind("Open releases")).on_press(move||if let Err(error)=open_releases(){page.state.revise(|s|s.updates.error=error.to_string());}),
+            sapid::button().class("button").label(i18n::bind("Open releases")).on_press(move||if let Err(error)=open_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/releases")){page.state.revise(|s|s.updates.error=error.to_string());}),
             when(state.map(|s|supported()&&s.updates.phase==Phase::Available&&s.updates.release.as_ref().is_some_and(|r|r.asset.is_some())),move||{let ui=download_ui.clone();sapid::button().class("button").label(i18n::bind("Download update")).on_press(move||download(&ui))}),
             when(state.map(|s|supported()&&s.updates.phase==Phase::Ready),move||{let ui=apply.clone();sapid::button().class("button primary").label(i18n::bind("Restart and install")).enabled(state.map(idle)).on_press(move||install_update(&ui))}),
         )))),
@@ -505,7 +476,7 @@ pub(super) fn banner(ui: Ui) -> impl Widget {
                     .on_press(move || {
                         show.state.revise(|s| {
                             navigation::change_page(s, navigation::Page::Settings, "update-banner");
-                            s.settings_section = navigation::SettingsSection::About;
+                            s.settings_section = navigation::SettingsSection::Updates;
                         })
                     }),
                 sapid::button()

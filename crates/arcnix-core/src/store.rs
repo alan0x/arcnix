@@ -64,35 +64,7 @@ impl ConfigStore {
     /// over the destination. A failed write never truncates the old config.
     pub fn save(&self, config: &AppConfig) -> Result<()> {
         let bytes = encoded(config)?;
-        let parent = self
-            .path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).context("创建配置目录失败")?;
-        let temporary = parent.join(format!(".arcnix-config-{}.tmp", new_id()));
-        let result = (|| -> Result<()> {
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary).context("创建临时配置文件失败")?;
-            file.write_all(&bytes).context("写入配置失败")?;
-            file.write_all(b"\n")?;
-            file.sync_all().context("刷新配置文件失败")?;
-            drop(file);
-            fs::rename(&temporary, &self.path).context("替换配置文件失败，原配置已保留")?;
-            #[cfg(unix)]
-            fs::File::open(parent)?.sync_all()?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result
+        replace_document(&self.path, &bytes)
     }
 
     /// Check the same schema and serialized limit used by save, without I/O.
@@ -101,18 +73,49 @@ impl ConfigStore {
     }
 }
 
+pub(crate) fn replace_document(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).context("创建配置目录失败")?;
+    let temporary = parent.join(format!(".arcnix-config-{}.tmp", new_id()));
+    let result = (|| -> Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).context("创建临时配置文件失败")?;
+        file.write_all(bytes).context("写入配置失败")?;
+        file.write_all(b"\n")?;
+        file.sync_all().context("刷新配置文件失败")?;
+        drop(file);
+        fs::rename(&temporary, path).context("替换配置文件失败，原配置已保留")?;
+        #[cfg(unix)]
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 pub(crate) fn decoded(bytes: &[u8]) -> Result<AppConfig> {
-    ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
-    let document: Document =
-        serde_json::from_slice(bytes).context("配置文件格式错误，原文件已保留")?;
-    ensure!(
-        document.version == SCHEMA_VERSION,
-        "不支持的配置版本 {}，需要版本 {}；原文件已保留",
-        document.version,
-        SCHEMA_VERSION
-    );
-    document.config.validate().context("配置内容无效")?;
-    Ok(document.config)
+ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
+let document: Document =
+    serde_json::from_slice(bytes).context("配置文件格式错误，原文件已保留")?;
+ensure!(
+    document.version == SCHEMA_VERSION,
+    "不支持的配置版本 {}，需要版本 {}；原文件已保留",
+    document.version,
+    SCHEMA_VERSION
+);
+document.config.validate().context("配置内容无效")?;
+Ok(document.config)
 }
 pub(crate) fn encoded(config: &AppConfig) -> Result<Vec<u8>> {
     config.validate()?;
@@ -251,7 +254,8 @@ impl AppConfig {
             "Update interval must be 1, 7 or 30 days"
         );
         ensure!(
-            [3, 5, 10, 30].contains(&self.settings.resource_interval_seconds),
+            crate::AppSettings::RESOURCE_INTERVALS
+                .contains(&self.settings.resource_interval_seconds),
             "资源采样间隔应为 3、5、10 或 30 秒"
         );
         ensure!(

@@ -36,7 +36,11 @@ def main():
             page.on('pageerror', lambda error: errors.append(str(error)))
             def ports():
                 app.application('Monitor')
-                page.locator('.monitor-sidebar').get_by_role('button', name='Ports', exact=True).click()
+                page.locator('.monitor-sidebar').get_by_role('button', name='Processes', exact=True).click()
+                details = page.get_by_role('button', name='Port details', exact=True)
+                expect(details.or_(page.locator('.monitor-port-details'))).to_be_visible()
+                if details.is_visible():
+                    details.click()
 
             app.connect()
             ports()
@@ -204,8 +208,14 @@ def main():
             page.get_by_role('button', name='简体中文', exact=True).click()
             app.servers()
             page.locator('.desktop-dock').get_by_role('button', name='监控', exact=True).click()
-            page.locator('.monitor-sidebar').get_by_role('button', name='端口', exact=True).click()
-            expect(panel).to_contain_text('监听端口及进程')
+            page.locator('.monitor-sidebar').get_by_role('button', name='进程', exact=True).click()
+            details = page.get_by_role('button', name='端口详情', exact=True)
+            expect(details.or_(page.locator('.monitor-port-details'))).to_be_visible()
+            if details.is_visible():
+                details.click()
+            heading = page.locator('.monitor-content.monitor-processes > .help-heading')
+            expect(heading.locator('.monitor-heading')).to_have_text('进程')
+            expect(heading.locator('.help-trigger')).to_be_visible()
             expect(refresh_button).to_have_text('刷新端口')
             web().locator('.resource-port-kill').click()
             dialog = page.get_by_role('dialog', name='强制结束进程', exact=True)

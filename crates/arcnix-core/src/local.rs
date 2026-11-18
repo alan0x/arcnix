@@ -160,6 +160,12 @@ pub(crate) fn sort_entries(entries: &mut [FileEntry]) {
     });
 }
 
+pub fn create_file(path: &Path) -> Result<()> {
+    fs::File::create_new(path)
+        .map(drop)
+        .context("Cannot create local file")
+}
+
 pub fn mkdir(path: &Path) -> Result<()> {
     fs::create_dir(path).context("Cannot create local directory")
 }

@@ -124,6 +124,7 @@ struct Run {
     serial: u64,
     job: TransferJob,
     cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     stop: AtomicBool,
     generation: Arc<AtomicU64>,
     events: async_channel::Sender<Response>,
@@ -154,6 +155,14 @@ impl Run {
         }
         Ok(())
     }
+    fn wait_if_paused(&self) -> Result<()> {
+        while self.paused.load(Ordering::Acquire) {
+            self.check()?;
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        self.check()
+    }
+
     fn send(&self, update: Update) {
         let _ = self.events.send_blocking(Response {
             epoch: self.access.epoch,
@@ -311,6 +320,7 @@ impl Pool {
                             }
                             _ => None,
                         };
+                        run.wait_if_paused()?;
                         let permit = limiter.acquire(run, destination)?;
                         if connection
                             .as_ref()
@@ -389,7 +399,9 @@ impl Pool {
                                         actual,
                                         FileStatus::Running,
                                         false,
-                                    )
+                                    );
+                                    // The copy checks the stop flag before writing the next block.
+                                    let _ = run.wait_if_paused();
                                 },
                                 |conflict| run.resolve(index, conflict),
                             );
@@ -465,6 +477,7 @@ impl Pool {
         serial: u64,
         job: TransferJob,
         cancel: Arc<AtomicBool>,
+        paused: Arc<AtomicBool>,
         policy: Option<ConflictAction>,
     ) {
         let access = self.access.as_ref().filter(|access| {
@@ -494,6 +507,7 @@ impl Pool {
             serial,
             job,
             cancel,
+            paused,
             stop: AtomicBool::new(false),
             generation: self.generation.clone(),
             events: self.events.clone(),
@@ -541,7 +555,7 @@ fn run_job(tx: &mpsc::SyncSender<Task>, run: &Arc<Run>) -> Result<()> {
             Err(mpsc::RecvTimeoutError::Disconnected) => anyhow::bail!("Transfer planner stopped"),
         }
     };
-    run.check()?;
+    run.wait_if_paused()?;
     run.progress.lock().unwrap().files = plan
         .files
         .iter()

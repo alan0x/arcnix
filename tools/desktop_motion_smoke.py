@@ -60,27 +60,33 @@ def main():
             keyboard.focus();p.keyboard.type('echo MOTION_SESSION_RETAINED');p.keyboard.press('Enter');expect(reader).to_contain_text('MOTION_SESSION_RETAINED')
             surface=p.locator('.terminal-owned-surface').element_handle()
             launch('Software store');motion('switch',1);expect(p.locator('.store-app-card')).to_have_count(18)
-            expect(p.locator('.desktop-window-mark .glyph-store')).to_be_visible()
+            expect(p.locator('.desktop-window.active .desktop-window-mark .glyph-store')).to_be_visible()
             expect(p.locator('.desktop-shortcuts')).to_be_visible()
-            titlebar=p.locator('.desktop-window-titlebar').bounding_box()
-            actions=p.locator('.desktop-window-actions').bounding_box()
+            titlebar=p.locator('.desktop-window.active .desktop-window-titlebar').bounding_box()
+            actions=p.locator('.desktop-window.active .desktop-window-actions').bounding_box()
             assert 0<=titlebar['x']+titlebar['width']-actions['x']-actions['width']<=16
             app.screenshot('store-window.png')
-            launch('Terminal');motion('switch',2);expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
-            p.locator('.window-minimize').click();motion('minimize',3);expect(p.locator('.desktop-window')).to_be_hidden()
-            launch('Terminal');motion('open',4);expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
+            launch('Terminal')
+            expect(p.locator('.desktop-window.app-terminal.active')).to_be_visible()
+            assert p.evaluate('motionRecords.length') == 2
+            expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
+            p.locator('.desktop-window.active .window-minimize').click();motion('minimize',2)
+            expect(p.locator('.desktop-window.app-terminal')).to_be_hidden()
+            launch('Terminal');motion('switch',3);expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
             p.locator('.terminal-tab.active').dblclick()
-            expect(p.locator('.desktop-window')).to_have_class('desktop-window')
-            assert p.evaluate('motionRecords.length')==5
+            expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
+            assert p.evaluate('motionRecords.length')==4
             def double_click_titlebar():
-                titlebar=p.locator('.desktop-window-titlebar')
+                titlebar=p.locator('.desktop-window.active .desktop-window-titlebar')
                 box=titlebar.bounding_box()
                 titlebar.dblclick(position=dict(x=box['width']/2,y=box['height']/2))
-            double_click_titlebar();motion('resize',5);expect(p.locator('.desktop-window')).to_have_class('desktop-window maximized')
-            expect(p.locator('.window-maximize .glyph-window-restore')).to_be_visible()
-            double_click_titlebar();motion('resize',6);expect(p.locator('.desktop-window')).to_have_class('desktop-window')
+            double_click_titlebar();motion('resize',4);expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
+            expect(p.locator('.desktop-window.active .window-maximize .glyph-window-restore')).to_be_visible()
+            double_click_titlebar();motion('resize',5);expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
             expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
-            p.locator('.window-close').click();motion('close',7);expect(p.locator('.desktop-window')).to_be_hidden()
+            p.locator('.desktop-window.active .window-close').click();motion('close',6)
+            expect(p.locator('.desktop-window.app-terminal')).to_be_hidden()
+            expect(p.locator('.desktop-window.app-software.active')).to_be_visible()
             checks.append('Open, switch, minimize, maximize and close use finite compositor animations; switching/minimizing preserve the terminal DOM and live shell')
             checks.append('Double-clicking blank titlebar space toggles maximize and restore through the same animation, while terminal tabs retain their own action')
 
@@ -89,11 +95,12 @@ def main():
                 const dock=document.querySelector('.desktop-dock');
                 dock.querySelector('.app-software').click();
                 dock.querySelector('.app-terminal').click();
-                dock.querySelector('.app-operations').click();
-                document.querySelector('.window-close').click();
+                dock.querySelector('.app-settings').click();
             }''')
-            expect(p.locator('.desktop-window')).to_be_hidden();settled()
-            expect(p.locator('.desktop-dock .app-operations')).not_to_have_class(re.compile(r'\brunning\b'))
+            expect(p.locator('.desktop-window.app-settings.active')).to_be_visible();settled()
+            p.locator('.desktop-window.app-settings .window-close').click()
+            expect(p.locator('.desktop-window.app-settings')).to_have_count(0);settled()
+            expect(p.locator('.desktop-dock .app-settings')).not_to_have_class(re.compile(r'\brunning\b'))
             launch('Terminal');settled();expect(reader).to_contain_text('Arcnix terminal fixture')
             p.evaluate('''() => {
                 document.querySelector('.desktop-dock .app-software').click();
@@ -101,12 +108,12 @@ def main():
             }''')
             expect(p.locator('.server-overview')).to_be_visible();settled();expect(p.locator('.server-desktop')).to_be_hidden()
             app.workspace('Desktop');settled()
-            checks.append('Rapid launcher/close clicks preserve native order; an immediate Home click wins over pending motion without reopening Desktop')
+            checks.append('Rapid launcher clicks preserve native order; an immediate Home click wins over pending motion without reopening Desktop')
 
             p.emulate_media(reduced_motion='reduce');before=p.evaluate('motionRecords.length')
-            launch('Monitor');expect(p.locator('.desktop-window-title')).to_have_text('Monitor')
-            p.locator('.desktop-window-title').dblclick();expect(p.locator('.desktop-window')).to_have_class('desktop-window maximized')
-            p.locator('.desktop-window-title').dblclick();expect(p.locator('.desktop-window')).to_have_class('desktop-window')
+            launch('Monitor');expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Monitor')
+            p.locator('.desktop-window.active .desktop-window-title').dblclick();expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
+            p.locator('.desktop-window.active .desktop-window-title').dblclick();expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
             assert p.evaluate('motionRecords.length')==before
             assert p.evaluate('document.getAnimations().filter(a=>a.animationName?.startsWith("desktop-window")).length')==0
             assert not p.locator('html').evaluate('el=>el.classList.contains("desktop-motion")')
@@ -120,11 +127,15 @@ def main():
                     return animate.call(this,frames,options);
                 };
             }''')
-            launch('Services');expect(p.locator('.desktop-window-title')).to_have_text('Services');expect(p.locator('.service-row')).to_have_count(4)
+            launch('Settings')
+            expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Settings')
+            expect(p.locator('.desktop-settings-tabs').get_by_role('button', name='General', exact=True)).to_be_visible()
             assert p.evaluate('motionRecords.length')==before
             assert p.evaluate('fallbackMotion')==[200]
+            p.locator('.desktop-window.active .window-close').click()
+            expect(p.locator('.desktop-window.app-settings')).to_have_count(0)
             p.evaluate('() => {document.startViewTransition=()=>{throw new Error("unavailable test capture")};}')
-            launch('Monitor');expect(p.locator('.desktop-window-title')).to_have_text('Monitor')
+            launch('Settings');expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Settings')
             assert not p.locator('html').evaluate('el=>el.classList.contains("desktop-motion")')
             assert not errors,errors
             checks.append('Reduced motion skips effects; missing/failed browser transition support preserves native app actions without page errors')

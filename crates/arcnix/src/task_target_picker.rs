@@ -29,10 +29,6 @@ pub(super) fn hidden(s: &State) -> usize {
         .unwrap_or(0)
 }
 fn commit(s: &mut State, next: HashSet<String>) {
-    if let Some(parameters) = &mut s.scripts.configuration_parameters {
-        parameters.overrides.retain(|id, _| next.contains(id));
-        parameters.expanded.retain(|id| next.contains(id));
-    }
     s.scripts.credentials.retain(|id, _| next.contains(id));
     s.scripts.targets = next;
     s.dialog_error.clear();
@@ -97,7 +93,17 @@ pub(super) fn picker(ui: Ui) -> impl Widget {
         text().class(state.map(|s|if hidden(s)>0{"target-selection-warning hint"}else{"hidden"}.to_owned())).content(i18n::bind("Some selected servers are hidden. Review selected servers before checking targets.")),
         text().class(state.map(|s|if visible(s).is_empty(){"hint"}else{"hidden"}.to_owned())).content(i18n::bind("No servers match the current filters within this operation's scope.")),
         col().class("task-target-list").fill(each(state.map(visible)).key(|p|p.id.clone()).children(move|item|{
-            let p=item.value.get();let id=p.id.clone();let selected=id.clone();let credential_id=id.clone();let read_secret=id.clone();let sudo_id=id.clone();let read_sudo=id.clone();let visibility=id.clone();let trusted_host=p.host.clone();let port=p.port;let row_ui=ui.clone();let parameters_ui=ui.clone();let parameters_id=id.clone();
+            let p = item.value.get();
+            let id = p.id.clone();
+            let selected = id.clone();
+            let credential_id = id.clone();
+            let read_secret = id.clone();
+            let sudo_id = id.clone();
+            let read_sudo = id.clone();
+            let visibility = id.clone();
+            let trusted_host = p.host.clone();
+            let port = p.port;
+            let row_ui = ui.clone();
             let trusted=state.with(|s|s.config.trusted_fingerprint(&p.host,p.port).is_some());
             col().class("script-target-picker").fill((
                 btn(format!("{} · {}@{}:{}",p.name,p.username,p.host,p.port),move||toggle(&row_ui,&id)).enabled(state.map(move|s|s.config.trusted_fingerprint(&trusted_host,port).is_some())).class(state.map(move|s|if s.scripts.targets.contains(&selected){"target-choice active"}else{"target-choice"}.to_owned())),
@@ -111,7 +117,6 @@ pub(super) fn picker(ui: Ui) -> impl Widget {
                         input().purpose(Purpose::Password).name(i18n::bind("SSH password or key passphrase")).value(state.map(move|s|s.scripts.credentials.get(&read_secret).map(|p|p.0.clone()).unwrap_or_default())).on(value_changed,move|e|{if let Event::ValueChanged{value,..}=e{state.revise(|s|s.scripts.credentials.entry(credential_id.clone()).or_default().0=value.clone());}}),
                         text().class("field-label").content(i18n::bind("Administrator password (optional)")),
                         input().purpose(Purpose::Password).name(i18n::bind("Administrator password (optional)")).value(state.map(move|s|s.scripts.credentials.get(&read_sudo).map(|p|p.1.clone()).unwrap_or_default())).on(value_changed,move|e|{if let Event::ValueChanged{value,..}=e{state.revise(|s|s.scripts.credentials.entry(sudo_id.clone()).or_default().1=value.clone());}}),
-                        crate::configuration_template_ui::target(parameters_ui.clone(),parameters_id.clone()),
                     ))
                 }),
             ))

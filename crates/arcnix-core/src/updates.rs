@@ -12,7 +12,8 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const API: &str = "https://api.github.com/repos/taidge/arcnix/releases/latest";
+const API: &str = "https://api.github.com/repos/arcnix-org/arcnix/releases/latest";
+const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 pub const MAX_ASSET: u64 = 200 * 1024 * 1024;
 #[derive(Clone)]
 pub struct Source {
@@ -218,8 +219,7 @@ fn parse(source: &Source, current: &str, bytes: &[u8]) -> Result<Check> {
     ensure!(
         source.allowed(&page)
             && (source.loopback
-                || page.as_str()
-                    == format!("https://github.com/taidge/arcnix/releases/tag/v{version}")),
+                || page.as_str() == format!("{REPOSITORY}/releases/tag/v{version}")),
         "Release page is not trusted"
     );
     let expected = format!("arcnix-v{version}-windows-amd64.exe");
@@ -234,9 +234,7 @@ fn parse(source: &Source, current: &str, bytes: &[u8]) -> Result<Check> {
             source.allowed(&url)
                 && (source.loopback
                     || url.as_str()
-                        == format!(
-                            "https://github.com/taidge/arcnix/releases/download/v{version}/{expected}"
-                        )),
+                        == format!("{REPOSITORY}/releases/download/v{version}/{expected}")),
             "Update asset is not from the expected release"
         );
         ensure!(
@@ -427,7 +425,7 @@ pub fn prepare(
 mod tests {
     use super::*;
     fn response(tag: &str) -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({"tag_name":tag,"html_url":format!("https://github.com/taidge/arcnix/releases/tag/{tag}"),"assets":[]})).unwrap()
+        serde_json::to_vec(&serde_json::json!({"tag_name":tag,"html_url":format!("{REPOSITORY}/releases/tag/{tag}"),"assets":[]})).unwrap()
     }
     #[test]
     fn refuses_downgrades_and_prereleases_and_cross_repository_assets() {

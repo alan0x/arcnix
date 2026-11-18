@@ -1,4 +1,9 @@
-use arcnix_core::server_apps::{Applications, DesktopApp, DesktopPreferences, DesktopWindow};
+use std::time::{Duration, Instant};
+
+use arcnix_core::server_apps::{
+    Applications, ClockSample, DesktopApp, DesktopPreferences, DesktopWindow,
+};
+use arcnix_core::sync::{self, DesktopResult, Pending};
 
 use super::*;
 use crate::server_apps_worker::{Action as AppAction, Reply};
@@ -6,6 +11,11 @@ use crate::server_apps_worker::{Action as AppAction, Reply};
 #[derive(Clone, Default)]
 pub(super) struct DesktopState {
     pub applications: Applications,
+    #[cfg(windows)]
+    pub cookies: browser_cookies::Runtime,
+    pub clock: Option<(u64, ClockSample)>,
+    clock_pending: Option<u64>,
+    clock_checked_at: Option<Instant>,
     pub discover_pending: Option<u64>,
     pub discover_error: String,
     pub preferences: DesktopPreferences,
@@ -14,28 +24,26 @@ pub(super) struct DesktopState {
     pub save_pending: Option<u64>,
     pub preferences_error: String,
     pub saved: bool,
-    pub writing: Option<DesktopPreferences>,
-    pub queued: Option<DesktopPreferences>,
+    writing: Option<DesktopPreferences>,
+    pending: Option<Pending<DesktopPreferences>>,
+    conflict: Option<(DesktopPreferences, Vec<String>)>,
+    sync_after: Option<Instant>,
+    journal_error: bool,
     pub explorer_locations: Option<Vec<arcnix_core::remote::ExplorerLocation>>,
     pub explorer_locations_pending: Option<u64>,
     pub explorer_tag: Option<explorer_ui::TagFilter>,
     pub explorer_open_pending: Option<explorer_ui::ItemRequest>,
+    pub explorer_search: explorer_search::Search,
     pub customization: desktop_customization_ui::Runtime,
+    pub network: network_ui::Runtime,
+    pub processes: processes_ui::Runtime,
+    pub shortcut_error: String,
 }
 
-pub(super) fn dark(s: &State) -> bool {
-    let application = s.config.settings.theme.is_dark(s.system_dark);
-    if s.connected
-        && s.navigation == navigation::Page::Servers
-        && s.workbench.active == server_desktop::Tab::Desktop
-        && !server_inventory_ui::shown(s)
-    {
-        match s.server_apps.preferences.theme {
-            Theme::System => application,
-            theme => theme.is_dark(s.system_dark),
-        }
-    } else {
-        application
+pub(super) fn desktop_dark(s: &State) -> bool {
+    match current(s).theme {
+        Theme::System => s.config.settings.theme.is_dark(s.system_dark),
+        theme => theme.is_dark(s.system_dark),
     }
 }
 
@@ -43,11 +51,10 @@ pub(super) fn themed(s: &State, base: &str) -> String {
     if s.connected
         && s.navigation == navigation::Page::Servers
         && s.workbench.active == server_desktop::Tab::Desktop
-        && !server_inventory_ui::shown(s)
     {
         format!(
             "{base} {}",
-            if dark(s) {
+            if desktop_dark(s) {
                 "theme-dark desktop-dark"
             } else {
                 "theme-light desktop-light"
@@ -61,9 +68,36 @@ pub(super) fn themed(s: &State, base: &str) -> String {
 impl Ui {
     pub(super) fn server_apps_connected(&self) {
         self.discover_server_apps();
+        #[cfg(windows)]
+        browser_cookies::tick(self);
+        if let Some(path) = self.desktop_sync_path() {
+            match sync::load(&path) {
+                Ok(pending) => self.state.revise(|s| s.server_apps.pending = pending),
+                Err(error) => self.state.revise(|s| {
+                    s.server_apps.journal_error = true;
+                    s.server_apps.preferences_error = error.to_string();
+                }),
+            }
+        }
         self.read_desktop_preferences();
         if self.state.with(server_desktop::visible) {
             self.refresh_desktop_items(false);
+        }
+    }
+    pub(super) fn tick_desktop_clock(&self) {
+        let due = self.state.with(|s| {
+            server_desktop::visible(s)
+                && (desktop_customization_ui::panel_mode(s)
+                    || desktop_customization_ui::floating_dock_status(s))
+                && s.server_apps.clock_pending.is_none()
+                && s.server_apps
+                    .clock_checked_at
+                    .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(60))
+        });
+        if due {
+            let serial = self.send(Action::ServerApps(AppAction::Clock));
+            self.state
+                .revise(|s| s.server_apps.clock_pending = Some(serial));
         }
     }
     pub(super) fn discover_server_apps(&self) {
@@ -84,14 +118,17 @@ impl Ui {
             s.connected
                 && s.server_apps.preferences_pending.is_none()
                 && s.server_apps.save_pending.is_none()
+                && s.server_apps.conflict.is_none()
         }) {
             return;
         }
         let serial = self.send(Action::ServerApps(AppAction::ReadPreferences));
         self.state.revise(|s| {
             s.server_apps.preferences_pending = Some(serial);
-            s.server_apps.preferences_error.clear();
-            s.server_apps.saved = false;
+            if !s.server_apps.journal_error {
+                s.server_apps.preferences_error.clear();
+            }
+            s.server_apps.sync_after = Some(Instant::now() + Duration::from_secs(15));
         });
     }
     fn save_desktop_theme(&self, theme: Theme) {
@@ -102,28 +139,167 @@ impl Ui {
         prefs.theme = theme;
         self.queue_desktop_preferences(prefs);
     }
-    pub(super) fn queue_desktop_preferences(&self, prefs: DesktopPreferences) {
+    fn save_desktop_interval(&self, seconds: Option<u64>) {
+        if self.state.with(preferences_ready) {
+            let mut prefs = self.state.with(desired);
+            prefs.resource_interval_seconds = seconds;
+            self.queue_desktop_preferences(prefs);
+        }
+    }
+    fn desktop_sync_path(&self) -> Option<PathBuf> {
+        self.state.with(|s| {
+            s.sync_scope.as_ref().map(|scope| {
+                self.store
+                    .path()
+                    .with_file_name("sync-outbox")
+                    .join(scope)
+                    .join("desktop.json")
+            })
+        })
+    }
+    fn persist_desktop_sync(
+        &self,
+        pending: Option<&Pending<DesktopPreferences>>,
+    ) -> anyhow::Result<()> {
+        let path = self
+            .desktop_sync_path()
+            .ok_or_else(|| anyhow::anyhow!("Missing SSH sync identity"))?;
+        if let Some(pending) = pending {
+            sync::save(&path, pending)
+        } else {
+            match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                _ => Ok(()),
+            }
+        }
+    }
+    pub(super) fn tick_desktop_sync(&self) {
         if !self.state.with(|s| {
+            let desktop = &s.server_apps;
             s.connected
-                && s.server_apps.preferences_loaded
-                && s.server_apps.preferences_pending.is_none()
+                && desktop.preferences_pending.is_none()
+                && desktop.save_pending.is_none()
+                && desktop.conflict.is_none()
+                && desktop.sync_after.is_none_or(|due| Instant::now() >= due)
         }) {
             return;
         }
-        if self.state.with(|s| s.server_apps.save_pending.is_some()) {
-            self.state.revise(|s| s.server_apps.queued = Some(prefs));
+        if self
+            .state
+            .with(|s| s.server_apps.preferences_loaded && s.server_apps.pending.is_some())
+        {
+            self.send_desktop_sync();
+        } else {
+            self.read_desktop_preferences();
+        }
+    }
+    fn send_desktop_sync(&self) {
+        let pending = self.state.with(|s| {
+            let desktop = &s.server_apps;
+            if preferences_ready(s)
+                && desktop.preferences_pending.is_none()
+                && desktop.save_pending.is_none()
+                && desktop.conflict.is_none()
+            {
+                desktop.pending.clone()
+            } else {
+                None
+            }
+        });
+        if let Some(pending) = pending {
+            let desired = pending.desired.clone();
+            let mut journal = pending.clone();
+            if journal.attempted.is_none() {
+                journal.attempted = Some(desired.clone());
+                if let Err(error) = self.persist_desktop_sync(Some(&journal)) {
+                    self.state
+                        .revise(|s| s.server_apps.preferences_error = error.to_string());
+                    return;
+                }
+            }
+            let serial = self.send(Action::ServerApps(AppAction::WritePreferences(Box::new(
+                pending,
+            ))));
+            self.state.revise(|s| {
+                s.server_apps.save_pending = Some(serial);
+                s.server_apps.writing = Some(desired);
+                s.server_apps.pending = Some(journal);
+                s.server_apps.saved = false;
+            });
+        }
+    }
+    pub(super) fn queue_desktop_preferences(&self, prefs: DesktopPreferences) {
+        if !self.state.with(preferences_ready) {
             return;
         }
-        let serial = self.send(Action::ServerApps(AppAction::WritePreferences(Box::new(
-            prefs.clone(),
-        ))));
+        let pending = self.state.with(|s| {
+            let desktop = &s.server_apps;
+            let base = desktop.pending.as_ref().map_or_else(
+                || desktop.preferences.clone(),
+                |pending| pending.base.clone(),
+            );
+            let attempted = desktop.writing.clone().or_else(|| {
+                desktop
+                    .pending
+                    .as_ref()
+                    .and_then(|pending| pending.attempted.clone())
+            });
+            Pending {
+                base,
+                desired: prefs,
+                attempted,
+            }
+        });
+        self.stage_desktop_sync(pending);
+    }
+    fn stage_desktop_sync(&self, pending: Pending<DesktopPreferences>) {
+        if let Err(error) = self.persist_desktop_sync(Some(&pending)) {
+            self.state
+                .revise(|s| s.server_apps.preferences_error = error.to_string());
+            return;
+        }
         self.state.revise(|s| {
-            s.server_apps.save_pending = Some(serial);
+            s.server_apps.pending = Some(pending);
             s.server_apps.preferences_error.clear();
             s.server_apps.saved = false;
-            s.server_apps.writing = Some(prefs);
-            s.server_apps.queued = None;
+            s.server_apps.sync_after = None;
         });
+        self.send_desktop_sync();
+    }
+    fn resolve_desktop_sync(&self, keep_local: bool) {
+        let input = self.state.with(|s| {
+            Some((
+                s.server_apps.pending.clone()?,
+                s.server_apps.conflict.clone()?.0,
+            ))
+        });
+        if let Some((pending, remote)) = input {
+            match sync::resolve_desktop(&pending, &remote, keep_local) {
+                Ok((desired, _)) => {
+                    let pending = Pending {
+                        base: remote,
+                        desired,
+                        attempted: None,
+                    };
+                    match self.persist_desktop_sync(Some(&pending)) {
+                        Ok(()) => {
+                            self.state.revise(|s| {
+                                s.server_apps.conflict = None;
+                                s.server_apps.pending = Some(pending);
+                                s.server_apps.preferences_error.clear();
+                            });
+                            self.send_desktop_sync();
+                        }
+                        Err(error) => self
+                            .state
+                            .revise(|s| s.server_apps.preferences_error = error.to_string()),
+                    }
+                }
+                Err(error) => self
+                    .state
+                    .revise(|s| s.server_apps.preferences_error = error.to_string()),
+            }
+        }
     }
     pub(super) fn remember_desktop_layout(&self) {
         let prefs = self.state.with(|s| {
@@ -142,18 +318,43 @@ pub(super) fn desired(s: &State) -> DesktopPreferences {
 }
 pub(super) fn current(s: &State) -> &DesktopPreferences {
     s.server_apps
-        .queued
+        .pending
         .as_ref()
-        .or(s.server_apps.writing.as_ref())
+        .map(|pending| &pending.desired)
         .unwrap_or(&s.server_apps.preferences)
 }
 pub(super) fn preferences_ready(s: &State) -> bool {
-    s.connected
-        && s.server_apps.preferences_loaded
-        && s.server_apps.preferences_pending.is_none()
-        && s.server_apps.save_pending.is_none()
+    s.connected && s.server_apps.preferences_loaded && !s.server_apps.journal_error
+}
+pub(super) fn resource_interval(s: &State) -> u64 {
+    s.server_apps
+        .preferences
+        .resource_interval_seconds
+        .unwrap_or(s.config.settings.resource_interval_seconds)
+}
+
+pub(super) fn settings_visible(s: &State) -> bool {
+    server_desktop::visible(s) && s.workspace_page == WorkspacePage::Settings
 }
 pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, String>) {
+    #[cfg(windows)]
+    if ui.state.with(|s| browser_cookies::pending(s, serial)) {
+        browser_cookies::event(ui, result);
+        return;
+    }
+    if ui
+        .state
+        .with(|s| s.server_apps.clock_pending == Some(serial))
+    {
+        ui.state.revise(|s| {
+            s.server_apps.clock_pending = None;
+            s.server_apps.clock_checked_at = Some(Instant::now());
+            if let Ok(Reply::Clock(sample)) = result {
+                s.server_apps.clock = Some((serial, sample));
+            }
+        });
+        return;
+    }
     if desktop_customization_ui::pending(ui, serial) {
         desktop_customization_ui::event(ui, serial, result);
         return;
@@ -184,15 +385,20 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         if let Some(result) = software::server_reply(ui, serial, result)
             && let Some(result) = compose_ui::event(ui, serial, result)
             && let Some(result) = disks_ui::event(ui, serial, result)
+            && let Some(result) = network_ui::event(ui, serial, result)
+            && let Some(result) = processes_ui::event(ui, serial, result)
         {
             docker_ui::event(ui, serial, result);
         }
         return;
     }
-    let mut queued = None;
     let mut restore = None;
     let mut save_local_geometry = false;
-    let mut save_error = None;
+    if kind == 2 {
+        finish_desktop_sync(ui, result);
+        ui.load_desktop_wallpaper();
+        return;
+    }
     ui.state.revise(|s| match (kind, result) {
         (0, reply) => {
             s.server_apps.discover_pending = None;
@@ -200,13 +406,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
                 Ok(Reply::Applications(apps)) => {
                     s.server_apps.applications = apps;
                     if !s.server_apps.applications.docker {
-                        s.workbench.apps.retain(|p| *p != WorkspacePage::Docker);
-                        if s.workbench.desktop_page == WorkspacePage::Docker {
-                            s.workbench.desktop_page = WorkspacePage::Desktop;
-                            if s.workbench.active == server_desktop::Tab::Desktop {
-                                s.workspace_page = WorkspacePage::Desktop;
-                            }
-                        }
+                        server_desktop::remove_window(s, WorkspacePage::Docker);
                         s.docker = Default::default();
                     }
                 }
@@ -218,14 +418,21 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
             s.server_apps.preferences_pending = None;
             match reply {
                 Ok(Reply::Preferences(prefs)) => {
+                    let prefs_for_layout = s
+                        .server_apps
+                        .pending
+                        .as_ref()
+                        .map_or(&prefs, |pending| &pending.desired);
                     if !s.server_apps.preferences_loaded {
-                        restore = Some(prefs.terminal.clone());
+                        restore = Some(prefs_for_layout.terminal.clone());
                     }
-                    let mut windows = prefs.windows.clone();
-                    if let Some(disk_window) = windows.remove(&DesktopApp::Disks) {
-                        windows.entry(DesktopApp::Monitor).or_insert(disk_window);
+                    let mut windows = prefs_for_layout.windows.clone();
+                    for app in [DesktopApp::Disks, DesktopApp::Services, DesktopApp::Logs] {
+                        if let Some(window) = windows.remove(&app) {
+                            windows.entry(DesktopApp::Monitor).or_insert(window);
+                        }
                     }
-                    if prefs.terminal.maximized {
+                    if prefs_for_layout.terminal.maximized {
                         windows
                             .entry(DesktopApp::Terminal)
                             .or_insert(DesktopWindow {
@@ -237,32 +444,25 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
                         windows.append(&mut s.workbench.windows);
                         save_local_geometry = true;
                     }
+                    if s.server_apps.preferences_loaded {
+                        for app in s
+                            .workbench
+                            .apps
+                            .iter()
+                            .filter_map(|page| server_desktop::app_id(*page))
+                        {
+                            if let Some(window) = s.workbench.windows.get(&app) {
+                                windows.insert(app, window.clone());
+                            }
+                        }
+                    }
                     s.workbench.windows = windows;
                     s.server_apps.preferences = prefs;
                     s.server_apps.preferences_loaded = true;
                 }
                 Err(error) => {
-                    s.server_apps.preferences_loaded = false;
-                    s.server_apps.preferences_error = error;
-                }
-                _ => {
-                    s.server_apps.preferences_error = "Invalid desktop preferences response".into()
-                }
-            }
-        }
-        (2, reply) => {
-            s.server_apps.save_pending = None;
-            s.server_apps.writing = None;
-            match reply {
-                Ok(Reply::SavedPreferences(prefs)) => {
-                    s.server_apps.preferences = prefs;
-                    s.server_apps.saved = true;
-                    queued = s.server_apps.queued.take();
-                }
-                Err(error) => {
-                    s.server_apps.queued = None;
-                    if s.dialog != Some(Dialog::DesktopSettings) {
-                        save_error = Some(error.clone());
+                    if error.starts_with("Invalid desktop preferences") {
+                        s.server_apps.preferences_loaded = false;
                     }
                     s.server_apps.preferences_error = error;
                 }
@@ -285,11 +485,6 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
             terminal::restore(s, &layout);
         });
     }
-    if let Some(prefs) = queued
-        && ui.state.with(|s| prefs != s.server_apps.preferences)
-    {
-        ui.queue_desktop_preferences(prefs);
-    }
     if kind == 0 {
         ui.docker_enter();
     }
@@ -302,61 +497,297 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
     if save_local_geometry {
         ui.remember_desktop_layout();
     }
-    if let Some(error) = save_error {
-        ui.error(error);
+    if kind == 1 {
+        ui.send_desktop_sync();
     }
 }
-pub(super) fn dialogs(ui: Ui) -> impl Widget {
+
+fn finish_desktop_sync(ui: &Ui, result: std::result::Result<Reply, String>) {
+    let data = ui.state.revise(|s| {
+        s.server_apps.save_pending = None;
+        s.server_apps.sync_after = Some(Instant::now() + Duration::from_secs(5));
+        Some((
+            s.server_apps.writing.take()?,
+            s.server_apps.pending.clone()?,
+        ))
+    });
+    let Some((sent, pending)) = data else { return };
+    match result {
+        Ok(Reply::SavedPreferences(DesktopResult::Saved(saved))) => {
+            let outcome = (|| -> anyhow::Result<_> {
+                let newer = if pending.desired != sent {
+                    let (desired, _) = sync::merge_desktop(&sent, &pending.desired, &saved, true)?;
+                    (desired != saved).then(|| Pending {
+                        base: saved.clone(),
+                        desired,
+                        attempted: None,
+                    })
+                } else {
+                    None
+                };
+                ui.persist_desktop_sync(newer.as_ref())?;
+                Ok(newer)
+            })();
+            match outcome {
+                Ok(newer) => {
+                    ui.state.revise(|s| {
+                        s.server_apps.preferences = saved;
+                        s.server_apps.pending = newer;
+                        s.server_apps.saved = s.server_apps.pending.is_none();
+                        s.server_apps.preferences_error.clear();
+                    });
+                    ui.send_desktop_sync();
+                }
+                Err(error) => ui
+                    .state
+                    .revise(|s| s.server_apps.preferences_error = error.to_string()),
+            }
+        }
+        Ok(Reply::SavedPreferences(DesktopResult::Conflict { remote, paths })) => {
+            ui.state
+                .revise(|s| s.server_apps.conflict = Some((remote, paths)));
+            if !ui.state.with(settings_visible) {
+                ui.error(i18n::translate(
+                    "Desktop sync conflict. Open Settings to resolve.",
+                ));
+            }
+        }
+        Err(error) => ui.state.revise(|s| s.server_apps.preferences_error = error),
+        _ => ui
+            .state
+            .revise(|s| s.server_apps.preferences_error = "Invalid desktop sync response".into()),
+    }
+}
+
+pub(super) fn settings(ui: Ui) -> impl Widget {
     use desktop_customization_ui::{SettingsPage, settings_page};
+
     let state = ui.state;
-    when(
-        state.map(|s| s.dialog == Some(Dialog::DesktopSettings)),
-        move || {
-            let reload = ui.clone();
-            let detect = ui.clone();
-            let desktop = ui.clone();
-            let wallpaper = ui.clone();
-            let dock = ui.clone();
-            modal(ui.clone(), "Desktop settings", col().class("desktop-preferences").fill((
-            desktop_customization_ui::settings_tabs(ui.clone()),
-            when(state.map(|s| settings_page(s) == SettingsPage::Desktop), move || {
-            let reload = reload.clone();
-            let detect = detect.clone();
-            let ui = desktop.clone();
-            col().class("desktop-settings-pane").fill((
-            row().class("section-heading").fill((
-                text().content(i18n::bind("Appearance")),
-                help_ui::tip("Desktop settings", "Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
-            )),
-            row().class("desktop-theme-choices").fill(
-                [(Theme::System, "Follow application"), (Theme::Light, "Light"), (Theme::Dark, "Dark")].into_iter().map({
+    row().class("desktop-settings-page").fill((
+        desktop_customization_ui::settings_tabs(ui.clone()),
+        each(state.map(|s| vec![settings_page(s)]))
+            .key(|page| *page as u8)
+            .children(move |item| {
+                let page = item.value.get();
+                let content = match page {
+                    SettingsPage::General => fragment(general_settings(ui.clone())),
+                    SettingsPage::Network => fragment(network_ui::page(ui.clone())),
+                    SettingsPage::Desktop => fragment(appearance_settings(ui.clone())),
+                    SettingsPage::Wallpaper => {
+                        fragment(desktop_customization_ui::wallpaper_controls(ui.clone()))
+                    }
+                    SettingsPage::Dock => {
+                        fragment(desktop_customization_ui::dock_controls(ui.clone()))
+                    }
+                    SettingsPage::Shortcuts => fragment(shortcut_reference(ui.clone())),
+                    SettingsPage::About => fragment(settings::about(ui.clone())),
+                };
+                let keep_local = ui.clone();
+                let keep_remote = ui.clone();
+                col().class("desktop-preferences").fill((
+                    content,
+                    when(
+                        !matches!(page, SettingsPage::Network | SettingsPage::About),
+                        move || {
+                            let keep_local = keep_local.clone();
+                            let keep_remote = keep_remote.clone();
+                            fragment((
+                                when(state.map(|s| s.server_apps.conflict.is_some()), move || {
+                                    let local = keep_local.clone();
+                                    let remote = keep_remote.clone();
+                                    col()
+                                        .class("desktop-settings-pane desktop-settings-card")
+                                        .fill((
+                                            text()
+                                                .class("section-title")
+                                                .content(i18n::bind("Desktop sync conflict")),
+                                            text().class("subtle").content(state.map(|s| {
+                                                s.server_apps
+                                                    .conflict
+                                                    .as_ref()
+                                                    .map(|(_, paths)| paths.join(", "))
+                                                    .unwrap_or_default()
+                                            })),
+                                            row().fill((
+                                                sapid::button()
+                                                    .class("button")
+                                                    .label(i18n::bind("Keep local changes"))
+                                                    .on_press(move || {
+                                                        local.resolve_desktop_sync(true)
+                                                    }),
+                                                sapid::button()
+                                                    .class("button")
+                                                    .label(i18n::bind("Keep server changes"))
+                                                    .on_press(move || {
+                                                        remote.resolve_desktop_sync(false)
+                                                    }),
+                                            )),
+                                        ))
+                                }),
+                                text()
+                                    .class("subtle desktop-settings-status")
+                                    .content(i18n::bind(state.map(|s| {
+                                        if s.server_apps.save_pending.is_some() {
+                                            "Saving…"
+                                        } else if s.server_apps.pending.is_some()
+                                            && s.server_apps.conflict.is_none()
+                                        {
+                                            "Pending sync"
+                                        } else if s.server_apps.preferences_pending.is_some()
+                                            && !s.server_apps.preferences_loaded
+                                        {
+                                            "Loading…"
+                                        } else if s.server_apps.saved {
+                                            "Saved on server"
+                                        } else {
+                                            ""
+                                        }
+                                        .to_owned()
+                                    }))),
+                                text().class("error").content(
+                                    state.map(|s| s.server_apps.preferences_error.clone()),
+                                ),
+                            ))
+                        },
+                    ),
+                ))
+            }),
+    ))
+}
+
+fn general_settings(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let reload = ui.clone();
+    let detect = ui.clone();
+    col().class("desktop-settings-pane").fill((
+      col().class("desktop-settings-card").fill((
+        row().class("section-heading").fill((
+            text().class("section-title").content(i18n::bind("Resource refresh interval")),
+            help_ui::tip("Resource refresh interval", "This server uses the application default until you select an interval here. Sampling runs while the resource views in Monitor are open."),
+        )),
+        row().class("choice-list").fill(fragment(
+            std::iter::once(None)
+                .chain(AppSettings::RESOURCE_INTERVALS.into_iter().map(Some))
+                .map(move |seconds| {
+                    let choose = ui.clone();
+                    let label = seconds.map_or_else(
+                        || "Follow application".to_owned(),
+                        |seconds| format!("Every {seconds} s"),
+                    );
+                    sapid::button()
+                        .class("button")
+                        .label(i18n::bind(label))
+                        .pressed(state.map(move |s| current(s).resource_interval_seconds == seconds))
+                        .enabled(state.map(preferences_ready))
+                        .on_press(move || choose.save_desktop_interval(seconds))
+                })
+                .collect::<Vec<_>>(),
+        )),
+      )),
+      col().class("desktop-settings-card").fill((
+        row().class("section-heading").fill((
+            text().class("section-title").content(i18n::bind("Server desktop")),
+            help_ui::tip("Server desktop settings", "Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
+        )),
+        row().class("choice-list").fill((
+            text_action("Reload settings", Icon::Refresh)
+                .enabled(state.map(|s| s.connected && s.server_apps.preferences_pending.is_none() && s.server_apps.save_pending.is_none()))
+                .on_press(move || reload.read_desktop_preferences()),
+            text_action("Detect applications", Icon::Search)
+                .enabled(state.map(|s| s.connected && s.server_apps.discover_pending.is_none()))
+                .on_press(move || detect.discover_server_apps()),
+        )),
+        text().class("subtle").content(i18n::bind(state.map(|s| {
+            if s.server_apps.applications.docker { "Docker detected" } else { "Docker not detected" }.to_owned()
+        }))),
+        text().class("error").content(i18n::bind(state.map(|s| s.server_apps.discover_error.clone()))),
+        #[cfg(windows)]
+        text().class("error").content(i18n::bind(state.map(|s| s.server_apps.cookies.error.clone()))),
+      )),
+    ))
+}
+
+fn appearance_settings(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    col().class("desktop-settings-pane").fill((
+      col().class("desktop-settings-card").fill((
+        row().class("section-heading").fill((
+            text().class("section-title").content(i18n::bind("Appearance")),
+            help_ui::tip("Desktop settings", "Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
+        )),
+        row().class("choice-list").fill(fragment(
+            [(Theme::System, "Follow application"), (Theme::Light, "Light"), (Theme::Dark, "Dark")]
+                .into_iter()
+                .map({
                     let ui = ui.clone();
                     move |(theme, label)| {
                         let choose = ui.clone();
-                        sapid::button().class("button desktop-theme-choice").label(i18n::bind(label))
-                            .pressed(state.map(move |s| s.server_apps.preferences.theme == theme))
-                            .enabled(state.map(preferences_ready)).on_press(move || choose.save_desktop_theme(theme))
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind(label))
+                            .pressed(state.map(move |s| current(s).theme == theme))
+                            .enabled(state.map(preferences_ready))
+                            .on_press(move || choose.save_desktop_theme(theme))
                     }
-                }).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+        )),
+      )),
+      col().class("desktop-settings-card").fill((
+          text().class("section-title").content(i18n::bind("Desktop layout")),
+          desktop_customization_ui::desktop_controls(ui),
+      )),
+    ))
+}
+
+fn shortcut_group(title: &'static str, bindings: &[(&'static str, &'static str)]) -> impl Widget {
+    col()
+        .class("desktop-settings-card desktop-shortcut-group")
+        .fill((
+            text().class("section-title").content(i18n::bind(title)),
+            fragment(
+                bindings
+                    .iter()
+                    .map(|&(label, keys)| {
+                        row().class("desktop-key-binding").fill((
+                            text().content(i18n::bind(label)),
+                            text().class("desktop-key").content(keys),
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
             ),
-            desktop_customization_ui::desktop_controls(ui.clone()),
-            row().class("choice-list").fill((
-                text_action("Reload settings", Icon::Refresh).enabled(state.map(|s| s.connected && s.server_apps.preferences_pending.is_none() && s.server_apps.save_pending.is_none())).on_press(move || reload.read_desktop_preferences()),
-                text_action("Detect applications", Icon::Search).enabled(state.map(|s| s.connected && s.server_apps.discover_pending.is_none())).on_press(move || detect.discover_server_apps()),
-            )),
-            text().class("subtle").content(i18n::bind(state.map(|s| if s.server_apps.applications.docker { "Docker detected" } else { "Docker not detected" }.to_owned()))),
-            text().class("error").content(state.map(|s| s.server_apps.discover_error.clone())),
-            ))
-            }),
-            when(state.map(|s| settings_page(s) == SettingsPage::Wallpaper), move || desktop_customization_ui::wallpaper_controls(wallpaper.clone())),
-            when(state.map(|s| settings_page(s) == SettingsPage::Dock), move || desktop_customization_ui::dock_controls(dock.clone())),
-            text().class("subtle").content(i18n::bind(state.map(|s| {
-                if s.server_apps.save_pending.is_some() { "Saving…" }
-                else if s.server_apps.preferences_pending.is_some() { "Loading…" }
-                else if s.server_apps.saved { "Saved on server" } else { "" }.to_owned()
-            }))),
-            text().class("error").content(state.map(|s| s.server_apps.preferences_error.clone())),
-        )), ())
-        },
-    )
+        ))
+}
+
+fn shortcut_reference(ui: Ui) -> impl Widget {
+    col().class("desktop-settings-pane").fill((
+        row().class("section-heading").fill((
+            text().class("section-title").content(i18n::bind("Keyboard shortcuts")),
+            help_ui::tip("Keyboard shortcuts", "Use desktop shortcuts from the window title bar or Dock. Terminal keeps its own shortcuts. After switching to Terminal, press Enter to focus its input."),
+        )),
+        desktop_shortcuts_ui::controls(ui),
+        shortcut_group("Desktop", &[
+            ("Move focus", "Tab / Shift+Tab"),
+            ("Activate focused control", "Enter / Space"),
+            ("Exit desktop fullscreen", "Esc"),
+        ]),
+        shortcut_group("Terminal", &[
+            ("Open tab", "Ctrl+Shift+T"),
+            ("Close tab", "Ctrl+Shift+W"),
+            ("Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"),
+            ("Copy", "Ctrl+Shift+C"),
+            ("Copy selection / interrupt", "Ctrl+C"),
+            ("Paste", "Ctrl+Shift+V"),
+            ("Select all", "Ctrl+Shift+A"),
+            ("Clear display", "Ctrl+Shift+L"),
+            ("Context menu", "Shift+F10"),
+        ]),
+        shortcut_group("File explorer", &[
+            ("Edit path", "Ctrl+L"),
+            ("Select all", "Ctrl+A"),
+            ("Browse entries", "↑ ↓ ← → / Home / End"),
+            ("Select focused entry", "Space"),
+        ]),
+        shortcut_group("Editor", &[("Save to server", "Ctrl+S")]),
+    ))
 }

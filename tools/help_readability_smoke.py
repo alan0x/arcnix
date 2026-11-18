@@ -77,11 +77,11 @@ with Peer(out/'peer') as peer:
         app.screenshot('installation-narrow.png')
         p.keyboard.press('Escape'); d.get_by_role('button',name='Cancel',exact=True).click()
         passed('Installation help fits the modal and narrow viewport; Escape preserves the form and the failure warning stays visible')
-        for rail in ['tasks','backups','diagnostics','configurations']:
+        for rail in ['tasks','backups','diagnostics']:
             p.locator('.rail-'+rail).click(); readable(p)
             assert p.locator('.context-sidebar .context-hint').count() == 0
             app.screenshot(rail+'-narrow.png')
-        passed('Scripts, Tasks, Backups, Diagnostics and Configurations have no tiny text or horizontal overflow at 900 × 700')
+        passed('Scripts, Tasks, Backups and Diagnostics have no tiny text or horizontal overflow at 900 × 700')
         p.set_viewport_size(dict(width=1440,height=980))
         app.settings('General')
         language = p.get_by_role('button',name='Help: Language',exact=True)
@@ -106,7 +106,6 @@ with Peer(out/'peer') as peer:
         d.get_by_role('button',name='帮助：参数说明',exact=True).click()
         expect(p.get_by_role('tooltip')).to_contain_text('Tasks')
         p.keyboard.press('Escape'); d.get_by_role('button',name='取消',exact=True).click()
-        p.locator('.rail-configurations').click(); readable(p); app.screenshot('configurations-chinese-dark.png')
         app.servers(); p.locator('.host-select').first.click(); p.locator('.overview-connect').click()
         p.get_by_role('dialog',name='连接服务器',exact=True).get_by_role('button',name='连接',exact=True).click()
         expect(p.locator('.connection-state')).to_have_text('SSH 已连接')

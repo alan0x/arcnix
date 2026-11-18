@@ -1,14 +1,19 @@
 //! Current-server listening ports and explicitly confirmed process termination.
+use std::collections::{BTreeSet, HashMap};
+
 use arcnix_core::resource_ports::{Holder, Listener, Snapshot, Target};
 use zeroize::Zeroizing;
 
 use super::*;
+
+type ProcessKey = (u32, u32, String);
 
 #[derive(Clone, Default)]
 pub(super) struct PortState {
     pub pending: Option<u64>,
     terminating: Option<u64>,
     snapshot: Option<Snapshot>,
+    process_ports: Arc<HashMap<ProcessKey, String>>,
     revision: u64,
     filter: String,
     administrator: bool,
@@ -73,23 +78,27 @@ fn current(s: &State, c: &Confirmation) -> bool {
 
 impl Ui {
     pub(super) fn ports_enter(&self) {
-        if self.state.with(|s| {
-            navigation::workspace_visible(s)
-                && s.workspace_page == WorkspacePage::Resources
-                && s.metrics.section == monitor_ui::Section::Ports
-                && s.ports.snapshot.is_none()
-                && ready(s)
-        }) {
-            self.ports_refresh();
+        if self.state.with(|s| s.ports.snapshot.is_none() && s.ports.error.is_empty()) {
+            self.ports_refresh_as_user();
         }
     }
 
-    pub(super) fn ports_refresh(&self) {
+    pub(super) fn ports_refresh_as_user(&self) {
+        self.query_ports(false);
+    }
+
+    fn ports_refresh(&self) {
+        self.query_ports(true);
+    }
+
+    fn query_ports(&self, allow_admin: bool) {
         let request = self.state.revise(|s| {
             if !ready(s) {
                 return None;
             }
-            if !password_valid(&s.ports.password) {
+            let administrator = allow_admin && s.ports.administrator;
+            let password = std::mem::take(&mut s.ports.password);
+            if administrator && !password_valid(&password) {
                 s.ports.error = i18n::translate("Invalid credential");
                 return None;
             }
@@ -97,8 +106,12 @@ impl Ui {
             s.ports.cancel = Arc::new(AtomicBool::new(false));
             s.ports.error.clear();
             Some((
-                s.ports.administrator,
-                std::mem::take(&mut s.ports.password),
+                administrator,
+                if administrator {
+                    password
+                } else {
+                    Zeroizing::default()
+                },
                 s.ports.cancel.clone(),
             ))
         });
@@ -211,6 +224,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Snapshot, 
         s.ports.pending = None;
         match result {
             Ok(snapshot) => {
+                s.ports.process_ports = Arc::new(index_by_process(&snapshot));
                 s.ports.snapshot = Some(snapshot);
                 // Request serials are global across reconnects, unlike this state.
                 s.ports.revision = serial;
@@ -235,6 +249,7 @@ pub(super) fn terminated(ui: &Ui, serial: u64, result: std::result::Result<(), S
                 }
                 s.ports.confirmation = None;
                 s.ports.snapshot = None;
+                s.ports.process_ports = Arc::default();
                 s.ports.revision += 1;
                 // Administrator credentials are never kept for a later query.
                 s.ports.administrator = false;
@@ -253,6 +268,50 @@ pub(super) fn terminated(ui: &Ui, serial: u64, result: std::result::Result<(), S
     });
     if refresh {
         ui.ports_refresh();
+    }
+}
+
+fn index_by_process(snapshot: &Snapshot) -> HashMap<ProcessKey, String> {
+    let mut ports = HashMap::<_, BTreeSet<_>>::new();
+    for row in &snapshot.rows {
+        for holder in &row.holders {
+            let name = holder
+                .command
+                .split_ascii_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            ports.entry((holder.pid, holder.uid, name))
+                .or_default()
+                .insert((row.protocol.as_str(), row.port));
+        }
+    }
+    ports.into_iter()
+        .map(|(process, bindings)| {
+            let label = bindings.into_iter()
+                .map(|(protocol, port)| format!("{} {port}", protocol.to_ascii_uppercase()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (process, label)
+        })
+        .collect()
+}
+
+pub(super) fn process_ports<'a>(s: &'a State, process: &arcnix_core::processes::Process) -> &'a str {
+    let key = (process.pid, process.uid, process.program.clone());
+    s.ports.process_ports.get(&key).map_or("", String::as_str)
+}
+
+pub(super) fn process_port_status(s: &State) -> &'static str {
+    if s.ports.pending.is_some() {
+        "Reading listening ports…"
+    } else if !s.ports.error.is_empty() {
+        if s.ports.snapshot.is_some() {
+            "Showing the previous port snapshot"
+        } else {
+            "Listening ports unavailable"
+        }
+    } else {
+        ""
     }
 }
 
@@ -343,15 +402,6 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let refresh = ui.clone();
     col().class("resource-ports").fill((
-        row().class("resource-ports-heading").fill((
-            row().class("help-heading").fill((
-                text().class("section-title").content(i18n::bind("Listening ports and processes")),
-                help_ui::tip("Listening ports and processes", "TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions."),
-            )),
-            btn("Refresh ports", move || refresh.ports_refresh())
-                .class("button resource-ports-refresh")
-                .enabled(state.map(ready)),
-        )),
         row().class("resource-ports-toolbar").fill((
             col().class("field resource-ports-filter-field").fill((
             text().class("field-label").content(i18n::bind("Filter ports, PID or program")),
@@ -393,6 +443,9 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
                     }),
                 ))
             }),
+            btn("Refresh ports", move || refresh.ports_refresh())
+                .class("button resource-ports-refresh")
+                .enabled(state.map(ready)),
         )),
         text().class("subtle resource-ports-status").content(i18n::bind(state.map(|s| {
             if s.ports.terminating.is_some() {

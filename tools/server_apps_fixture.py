@@ -6,6 +6,7 @@ import time
 import base64
 import re
 import hashlib
+import threading
 from pathlib import Path
 
 def apply_task(server,record):
@@ -47,9 +48,12 @@ def apply_task(server,record):
         state.write_text(json.dumps(values))
 
 
+_sync_lock = threading.Lock()
+
+
 def reply(server, channel, command):
     marker = command.splitlines()[0]
-    if not marker.startswith(('# arcnix:apps:', '# arcnix:desktop:', '# arcnix:docker:', '# arcnix:disks:', '# arcnix:compose:', '# arcnix:software:')):
+    if not marker.startswith(('# arcnix:browser:repair ', '# arcnix:sync:', '# arcnix:apps:', '# arcnix:desktop:', '# arcnix:docker:', '# arcnix:disks:', '# arcnix:compose:', '# arcnix:software:', '# arcnix:network:', '# arcnix:processes:')):
         return False
     root = server.fixture_root
     with (root / 'server-app-queries.jsonl').open('a', encoding='utf-8') as log:
@@ -57,17 +61,101 @@ def reply(server, channel, command):
 
     def send(value='', status=0, error=''):
         if value:
-            channel.sendall(value.encode())
+            channel.sendall(value.encode() if isinstance(value, str) else value)
         if error:
             channel.sendall_stderr(error.encode())
         channel.send_exit_status(status)
         channel.close()
         return True
 
+    if marker.startswith('# arcnix:browser:repair '):
+        if (root / 'browser-forwarding-admin-required').exists():
+            if "exec /usr/bin/sudo -S -p '' --" not in command:
+                return send(status=1, error='Administrator access is required to change SSH forwarding.')
+            supplied = bytearray()
+            while not supplied.endswith(b'\n') and len(supplied) <= 4096:
+                fragment = channel.recv(4096)
+                if not fragment:
+                    break
+                supplied.extend(fragment)
+            if supplied != b'fixture-admin-secret\n':
+                return send(status=1, error='Administrator authentication failed.')
+            assert 'fixture-admin-secret' not in command
+        assert marker == '# arcnix:browser:repair account'
+        allowed = root / 'browser-forwarding-repaired.json'
+        with _sync_lock:
+            accounts = json.loads(allowed.read_text()) if allowed.exists() else {}
+            accounts[server.username] = True
+            temporary = allowed.with_suffix('.stage')
+            temporary.write_text(json.dumps(accounts))
+            os.replace(temporary, allowed)
+        return send('ARCNIX_BROWSER_FORWARDING_READY_V1\n')
+
     seed = root / 'docker-fixture.json'
+    if marker == '# arcnix:processes:read':
+        if (root / 'processes-unavailable').exists():
+            return send(status=127, error='ps is unavailable')
+        workers = ''.join(f'{pid} 1000 0.0 512 fixture-idle-{pid}\n' for pid in range(300, 350))
+        return send('1 0 0.0 1024 systemd\n200 1000 1.2 6144 fixture-web\n'
+                    '202 1000 13.5 4096 fixture-batch worker\n' + workers)
+    if marker == '# arcnix:network:read':
+        if (root / 'network-unavailable').exists():
+            return send(status=127, error='iproute2 is required.')
+        interfaces = [
+            dict(ifindex=2, ifname='eth0', operstate='UP', addr_info=[
+                dict(local='192.0.2.42', prefixlen=24),
+                dict(local='2001:db8::42', prefixlen=64),
+            ]),
+            dict(ifindex=3, ifname='eth1', operstate='DOWN'),
+        ]
+        return send(
+            'ARCNIX_NETWORK_V1\n' + json.dumps(interfaces) + '\nARCNIX_IPV4_ROUTES\n'
+            'default via 192.0.2.1 dev eth0 proto dhcp metric 100\nARCNIX_IPV6_ROUTES\n'
+            'default via fe80::1 dev eth0 proto ra metric 256\nARCNIX_DNS\n'
+            'OK\n# Resolver configuration\nnameserver 192.0.2.53\n'
+            'nameserver fe80::53%eth0\n\nARCNIX_NETWORK_END\n'
+        )
     if marker == '# arcnix:apps:discover':
         return send('ARCNIX_APPS_V1\n' + ('docker\ncompose\n' if seed.exists() else '') + ('snap\n' if (root/'software-snap-enabled').exists() else '') + ('tmux\n' if (root/'tmux-enabled').exists() else ''))
     preferences = root / 'home' / server.username / '.arcnix' / 'desktop.json'
+    if marker.startswith('# arcnix:sync:'):
+        client = re.search(r'^child ([0-9a-f]{32})$', command, re.M)
+        target = (preferences.parent / 'browser' / 'profiles' / client[1] / 'cookies.enc'
+                  if client else preferences)
+        if (root / 'sync-offline').exists():
+            return send(status=1, error='Fixture sync interrupted')
+        if marker == '# arcnix:sync:read':
+            with _sync_lock:
+                value = b'F\n' + target.read_bytes() if target.exists() else b'M\n'
+            return send(value)
+        data = bytearray()
+        while chunk := channel.recv(65536):
+            data.extend(chunk)
+        if target == preferences and (root / 'desktop-write-denied').exists():
+            return send(status=1, error='Permission denied writing desktop preferences')
+        expected = re.findall(r"\[ \"\$current\" = '([a-f0-9]{64}|missing)' \]", command)
+        digest = hashlib.sha256(data).hexdigest()
+        assert len(expected) == 2 and expected[0] == digest
+        with _sync_lock:
+            current = hashlib.sha256(target.read_bytes()).hexdigest() if target.exists() else 'missing'
+            if current == digest:
+                result = 'OK\n'
+            elif current != expected[1]:
+                result = 'STALE\n'
+            else:
+                if target == preferences and (root / 'trace-task-queries').exists():
+                    with (root/'desktop-writes.jsonl').open('a') as out:
+                        out.write(json.dumps(json.loads(data))+'\n')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix('.stage')
+                temporary.write_bytes(data)
+                os.replace(temporary, target)
+                result = 'OK\n'
+        return send(result)
+    if marker == '# arcnix:desktop:clock':
+        state = root / 'desktop-clock.json'
+        clock = json.loads(state.read_text(encoding='utf-8')) if state.exists() else {}
+        return send(f"{clock.get('unix_seconds', int(time.time()))} {clock.get('offset', '+0000')}\n")
     if marker == '# arcnix:desktop:home':
         return send(f'/home/{server.username}')
     if marker == '# arcnix:desktop:wallpapers':

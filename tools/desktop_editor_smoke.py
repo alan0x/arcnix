@@ -56,10 +56,10 @@ def main():
             app.file('plain.txt').dblclick()
             contents = editor.get_by_role('textbox', name='File contents', exact=True)
             expect(contents).to_have_value('plain text from SSH')
-            p.locator('.window-minimize').click()
-
+            p.locator('.desktop-window.active .window-minimize').click()
+            p.locator('.desktop-dock-home').click()
             p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).click()
-            expect(p.locator('.desktop-window-title')).to_have_text('Editor')
+            expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Editor')
             preview = editor.locator('.markdown-preview')
             strip = editor.locator('.editor-tab-strip')
             plain_tab = strip.get_by_role('button', name='/plain.txt', exact=True)
@@ -84,7 +84,7 @@ def main():
             contents.fill('unsaved plain draft')
             notes_tab.click()
             expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
-            p.locator('.window-minimize').click()
+            p.locator('.desktop-window.active .window-minimize').click()
             app.application('Editor')
             expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
             editor.get_by_role('button', name='Edit source', exact=True).click()
@@ -112,13 +112,13 @@ def main():
             assert (peer.root / 'plain.txt').read_text(encoding='utf-8') == 'plain text from SSH'
 
             contents.fill('# Unsaved draft\n')
-            p.locator('.window-close').click()
+            p.locator('.desktop-window.active .window-close').click()
             expect(editor.get_by_text('Discard unsaved changes in all open files?')).to_be_visible()
             editor.get_by_role('button', name='Keep editing', exact=True).click()
             expect(contents).to_have_value('# Unsaved draft\n')
-            p.locator('.window-close').click()
+            p.locator('.desktop-window.active .window-close').click()
             editor.get_by_role('button', name='Discard changes', exact=True).click()
-            expect(p.locator('.desktop-window')).to_be_hidden()
+            expect(p.locator('.desktop-window.app-editor')).to_have_count(0)
             assert b'Unsaved draft' not in notes.read_bytes()
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[

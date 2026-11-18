@@ -524,8 +524,14 @@ fn ports(ui: Ui) -> impl Widget {
     col().class("docker-ports").fill((
         row().class("section-heading").fill((
             text_action("Server listeners", Icon::Server).class("button with-icon compact")
-                .on_press(move || listeners.open_desktop_app(WorkspacePage::Resources)),
-            help_ui::tip("Docker ports", "Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Resources."),
+                .on_press(move || {
+                    listeners.state.revise(|s| {
+                        monitor_ui::set_section(s, monitor_ui::Section::Processes);
+                        processes_ui::show_port_details(s, true);
+                    });
+                    listeners.open_desktop_app(WorkspacePage::Resources);
+                }),
+            help_ui::tip("Docker ports", "Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details."),
         )),
         each(state.map(|s| {
             s.docker

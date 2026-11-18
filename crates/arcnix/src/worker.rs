@@ -39,6 +39,8 @@ pub enum Action {
         remote: bool,
         path: String,
     },
+    LocalCreateFile(PathBuf),
+    RemoteCreateFile(String),
     LocalMkdir(PathBuf),
     RemoteMkdir(String),
     LocalRename(PathBuf, PathBuf),
@@ -67,9 +69,18 @@ pub enum Action {
     TransferInteractive {
         job: TransferJob,
         cancel: Arc<AtomicBool>,
+        paused: Arc<AtomicBool>,
         policy: Option<arcnix_core::transfer::ConflictAction>,
     },
     TransferConcurrency(u8),
+    #[cfg(windows)]
+    StartBrowserProxy(Arc<BrowserProxyControl>),
+    #[cfg(windows)]
+    DiagnoseBrowser(String),
+    #[cfg(windows)]
+    RepairBrowserForwarding {
+        sudo: zeroize::Zeroizing<String>,
+    },
     PackageDetect,
     PackageSearch(String),
     PackageInstalled,
@@ -99,11 +110,47 @@ impl Action {
         Self::TransferInteractive {
             job,
             cancel,
+            paused: Arc::default(),
             policy: None,
         }
     }
 }
+#[cfg(windows)]
+#[derive(Default)]
+pub struct BrowserProxyControl {
+    pub stop: AtomicBool,
+    pub reconnect: AtomicBool,
+    refused: std::sync::Mutex<Vec<String>>,
+}
+
+#[cfg(windows)]
+impl BrowserProxyControl {
+    fn remember_refusal(&self, host: &str, port: u16) {
+        let target = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        if let Ok(mut refused) = self.refused.lock() && !refused.contains(&target) {
+            if refused.len() == 64 {
+                refused.remove(0);
+            }
+            refused.push(target);
+        }
+    }
+
+    pub fn was_refused(&self, target: &str) -> bool {
+        self.refused.lock().is_ok_and(|refused| refused.iter().any(|item| item == target))
+    }
+}
+
 pub enum Update {
+    #[cfg(windows)]
+    BrowserProxy(Result<(u16, String), String>),
+    #[cfg(windows)]
+    BrowserDiagnosis(arcnix_core::browser_proxy::Diagnosis),
+    #[cfg(windows)]
+    BrowserForwardingRepaired(Result<(), String>),
     ServerApps(Result<crate::server_apps_worker::Reply, String>),
     TextFile(Result<arcnix_core::text_files::Document, String>),
     Alive,
@@ -218,6 +265,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 }
                 Action::Local(_)
                 | Action::Children { remote: false, .. }
+                | Action::LocalCreateFile(_)
                 | Action::LocalMkdir(_)
                 | Action::LocalRename(..)
                 | Action::Delete { remote: false, .. }
@@ -261,6 +309,9 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         .map(|(_, entries)| entries)
                         .map_err(|e| format!("{e:#}")),
                 }),
+                Action::LocalCreateFile(path) => {
+                    local::create_file(&path).map(|_| Update::Log("本地文件已创建".into()))
+                }
                 Action::LocalMkdir(path) => {
                     local::mkdir(&path).map(|_| Update::Log("本地目录已创建".into()))
                 }
@@ -317,6 +368,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
         let mut active_epoch = 0;
         let mut active_server = String::new();
         let mut active_profile: Option<ServerProfile> = None;
+        #[cfg(windows)]
+        let mut browser_access: Option<(String, zeroize::Zeroizing<String>)> = None;
+        #[cfg(windows)]
+        let mut browser_listeners = std::collections::HashMap::new();
         let mut package_environment: Option<SystemEnvironment> = None;
         for Request {
             epoch,
@@ -331,6 +386,114 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     update,
                 });
             };
+            #[cfg(windows)]
+            let browser_connection = || {
+                active_profile.as_ref().zip(browser_access.as_ref()).filter(|_| {
+                    session.is_some()
+                        && epoch == active_epoch
+                        && epoch == generation.load(Ordering::Acquire)
+                })
+            };
+            #[cfg(windows)]
+            if let Action::RepairBrowserForwarding { sudo } = action {
+                let result = match session.as_ref().filter(|_| {
+                    epoch == active_epoch && epoch == generation.load(Ordering::Acquire)
+                }) {
+                    Some(remote) => arcnix_core::browser_proxy::repair_forwarding(remote, &sudo)
+                        .map_err(|error| arcnix_core::diagnostics::redact_log(&format!("{error:#}"), &[sudo.as_str()])),
+                    None => Err("Connect a server first".into()),
+                };
+                send(Update::BrowserForwardingRepaired(result));
+                continue;
+            }
+            #[cfg(windows)]
+            if let Action::DiagnoseBrowser(address) = action {
+                if let Some((profile, access)) = browser_connection() {
+                    let profile = profile.clone();
+                    let (fingerprint, secret) = access.clone();
+                    let events = events.clone();
+                    thread::spawn(move || {
+                        let diagnosis = arcnix_core::browser_proxy::diagnose(
+                            &profile, &fingerprint, secret, &address,
+                        );
+                        let _ = events.send_blocking(Response {
+                            epoch,
+                            serial,
+                            update: Update::BrowserDiagnosis(diagnosis),
+                        });
+                    });
+                } else {
+                    send(Update::BrowserDiagnosis(arcnix_core::browser_proxy::Diagnosis::TunnelUnavailable));
+                }
+                continue;
+            }
+            #[cfg(windows)]
+            if let Action::StartBrowserProxy(control) = action {
+                if let Some((profile, access)) = browser_connection() {
+                    let profile = profile.clone();
+                    let (fingerprint, secret) = access.clone();
+                    let key = arcnix_core::browser::profile_key(&profile, &fingerprint);
+                    let listener = match browser_listeners.entry(key.clone()) {
+                        std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            arcnix_core::browser_proxy::listener()
+                                .map(|listener| entry.insert(Arc::new(listener)))
+                        }
+                    }
+                    .map(|listener| Arc::clone(listener));
+                    let listener = match listener {
+                        Ok(listener) => listener,
+                        Err(error) => {
+                            send(Update::BrowserProxy(Err(format!("{error:#}"))));
+                            continue;
+                        }
+                    };
+                    let events = events.clone();
+                    let generation = generation.clone();
+                    thread::spawn(move || {
+                        let stopped = || {
+                            control.stop.load(Ordering::Acquire)
+                                || generation.load(Ordering::Acquire) != epoch
+                        };
+                        let publish = |result| {
+                            let _ = events.send_blocking(Response {
+                                epoch,
+                                serial,
+                                update: Update::BrowserProxy(result),
+                            });
+                        };
+                        while !stopped() {
+                            let result = arcnix_core::browser_proxy::run(
+                                &listener,
+                                &profile,
+                                &fingerprint,
+                                secret.clone(),
+                                || stopped() || control.reconnect.load(Ordering::Acquire),
+                                |port| {
+                                    if let Ok(mut refused) = control.refused.lock() {
+                                        refused.clear();
+                                    }
+                                    publish(Ok((port, key.clone())));
+                                },
+                                |host, port| control.remember_refusal(host, port),
+                            );
+                            if stopped() {
+                                break;
+                            }
+                            if control.reconnect.swap(false, Ordering::AcqRel) {
+                                continue;
+                            }
+                            if let Err(error) = result {
+                                publish(Err(format!("{error:#}")));
+                            }
+                            break;
+                        }
+                    });
+                } else {
+                    send(Update::BrowserProxy(Err("Connect a server first".into())));
+                }
+                continue;
+            }
             if let Action::TransferConcurrency(limit) = action {
                 transfers.set_limit(limit);
                 continue;
@@ -546,10 +709,11 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             if let Action::TransferInteractive {
                 job,
                 cancel,
+                paused,
                 policy,
             } = action
             {
-                transfers.submit(epoch, serial, job, cancel, policy);
+                transfers.submit(epoch, serial, job, cancel, paused, policy);
                 continue;
             }
             let browsing = matches!(action, Action::Remote(_));
@@ -574,6 +738,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 );
                 match action {
                     Action::Probe(profile, expected) => {
+                        #[cfg(windows)]
+                        {
+                            browser_access = None;
+                        }
                         let profile = *profile;
                         package_environment = None;
                         active_epoch = epoch;
@@ -604,6 +772,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                             .take()
                             .ok_or_else(|| anyhow::anyhow!("连接已失效，请重新连接"))?;
                         session = Some(connection.authenticate(&secret, &fingerprint)?);
+                        #[cfg(windows)]
+                        {
+                            browser_access = Some((fingerprint.clone(), secret.clone()));
+                        }
                         if let Some(profile) = active_profile.clone() {
                             transfers.attach(
                                 epoch,
@@ -623,6 +795,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         ));
                     }
                     Action::Disconnect => {
+                        #[cfg(windows)]
+                        {
+                            browser_access = None;
+                        }
                         transfers.reset();
                         package_environment = None;
                         active_epoch = epoch;
@@ -691,6 +867,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                                         result: Err(format!("{error:#}")),
                                     }),
                                 }
+                            }
+                            Action::RemoteCreateFile(path) => {
+                                remote.create_file(&path)?;
+                                send(Update::Log("远程文件已创建".into()));
                             }
                             Action::RemoteMkdir(path) => {
                                 remote.mkdir(&path)?;

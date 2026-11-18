@@ -59,6 +59,25 @@ def main():
                     page.mouse.click(box['x']+box['width']-20,bottom-8,button='right')
                     expect(menu).to_be_visible()
                 def action(name):menu.get_by_role('button',name=name,exact=True).click()
+                new_file=page.get_by_role('dialog',name='New file',exact=True)
+                for pane,root,existing in [(left,local,'alpha.txt'),(right,remote_root,'welcome.txt')]:
+                    blank(pane);action('New file')
+                    name=new_file.get_by_role('textbox',name='File name',exact=True)
+                    name.fill('新文件 empty.txt');name.press('Enter')
+                    expect(new_file).not_to_be_visible();expect(file(pane,'新文件 empty.txt')).to_be_visible()
+                    assert (root/'新文件 empty.txt').read_bytes()==b''
+                    blank(pane);action('New file')
+                    name.fill('bad/name.txt');name.press('Enter')
+                    expect(new_file.locator('.form-error')).to_be_visible()
+                    new_file.get_by_role('button',name='Cancel',exact=True).click()
+                    duplicate=root/existing
+                    expected=duplicate.read_bytes()
+                    blank(pane);action('New file')
+                    name.fill(duplicate.name);name.press('Enter')
+                    expect(new_file.locator('.form-error')).to_be_visible()
+                    assert duplicate.read_bytes()==expected
+                    new_file.get_by_role('button',name='Cancel',exact=True).click()
+                checks.append('New file creates zero-byte files in the local and SFTP directories and rejects paths and duplicates')
                 file(left,'alpha.txt').click();file(left,'beta-中文.txt').click(modifiers=['Control']);file(left,'alpha.txt').click(button='right');expect(menu).to_be_visible();expect(left.locator('.row-selected')).to_have_count(2)
                 expect(menu.get_by_role('button',name='Rename',exact=True)).to_be_disabled();action('Copy selected paths');expect(menu).to_have_count(0);copied(str(local/'alpha.txt')+'\n'+str(local/'beta-中文.txt'))
                 file(left,'alpha.txt').click(button='right');action('Properties');dialog=page.get_by_role('dialog',name='Properties',exact=True);expect(dialog).to_contain_text('2 selected');expect(dialog).to_contain_text(str(local/'beta-中文.txt'));dialog.get_by_role('button',name='Close dialog',exact=True).click()
@@ -66,7 +85,7 @@ def main():
                 checks.append('Right-click keeps existing multiple selection, replaces it for a different item, copies exact Unicode-capable paths and opens folders')
                 blank(left);expect(left.locator('.row-selected')).to_have_count(0);expect(menu.get_by_role('button',name='Rename',exact=True)).to_have_count(0);action('Copy directory path');expect(menu).to_have_count(0);copied(str(local))
                 blank(left);action('New folder');create=page.get_by_role('dialog',name='New folder',exact=True);create.get_by_role('textbox',name='Folder name',exact=True).fill('created');create.get_by_role('button',name='Create folder',exact=True).click();expect(file(left,'created')).to_be_visible();assert (local/'created').is_dir()
-                blank(left);action('Select all');expect(left.locator('.row-selected')).to_have_count(4)
+                blank(left);action('Select all');expect(left.locator('.row-selected')).to_have_count(5)
                 checks.append('Blank-space menus clear selection and provide working directory-copy, create-folder and select-all actions')
                 file(left,'beta-中文.txt').click();file(left,'beta-中文.txt').click(button='right');action('Rename');rename=page.get_by_role('dialog',name='Rename',exact=True);rename.get_by_role('textbox',name='New name',exact=True).fill('renamed.txt');rename.get_by_role('button',name='Rename',exact=True).click();expect(file(left,'renamed.txt')).to_be_visible();assert (local/'renamed.txt').read_bytes()==b'beta contents'
                 file(left,'renamed.txt').click();page.keyboard.press('Shift+F10');expect(menu).to_be_visible();expect(menu.get_by_role('button',name='Upload',exact=True)).to_be_focused();page.keyboard.press('ArrowDown');expect(menu.get_by_role('button',name='Rename',exact=True)).to_be_focused();page.keyboard.press('End');expect(menu.get_by_role('button',name='Clear selection',exact=True)).to_be_focused();page.keyboard.press('Home');expect(menu.get_by_role('button',name='Upload',exact=True)).to_be_focused();page.keyboard.press('Escape');expect(menu).to_have_count(0);expect(file(left,'renamed.txt')).to_be_focused()
@@ -96,7 +115,7 @@ def main():
                 checks.append('Icon grids and existing More buttons share the same actions; outside click dismisses and narrow-window menus stay inside the viewport')
                 page.locator('.host-select').nth(1).click();page.locator('.overview-transfer').click();page.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click();expect(page.locator('.connection-state')).to_have_text('SSH connected')
                 expect(right.locator('.pane-summary').first).to_contain_text('Unavailable')
-                blank(right);expect(menu.get_by_role('button',name='New folder',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='Refresh',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='Visible columns',exact=True)).to_be_focused();page.keyboard.press('Escape');expect(menu).to_have_count(0)
+                blank(right);expect(menu.get_by_role('button',name='New file',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='New folder',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='Refresh',exact=True)).to_be_disabled();expect(menu.get_by_role('button',name='Visible columns',exact=True)).to_be_focused();page.keyboard.press('Escape');expect(menu).to_have_count(0)
                 page.locator('.settings-link').click();page.get_by_role('button',name='简体中文',exact=True).click();expect(page.locator('.context-title')).to_have_text('设置');page.locator('.rail-servers').click();left.get_by_role('button',name='alpha.txt',exact=True).click(button='right');expect(menu.get_by_role('button',name='属性',exact=True)).to_be_visible();expect(menu.get_by_role('button',name='刷新',exact=True)).to_be_visible();page.screenshot(path=str(out/'menu-chinese.png'));page.keyboard.press('Escape')
                 checks.append('Unavailable SFTP actions are disabled without a focus trap, and context labels follow the application language')
                 result=dict(passed=len(checks),checks=checks);(out/'results.json').write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True)

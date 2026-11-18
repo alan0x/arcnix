@@ -1,6 +1,8 @@
 (() => {
     const dragType = 'application/x-arcnix-desktop-icon';
     let drag, marker, focusedMenu;
+    let clock, clockLocale, clockTimer, clockSample, clockAnchor;
+    let sizeControl;
 
     function canvasFor(target) {
         if (!(target instanceof Element) || target.closest('[inert],[hidden],.hidden')) return null;
@@ -121,7 +123,118 @@
         event.stopImmediatePropagation();
     }, true);
 
+    function updateClock() {
+        const panel = document.querySelector('.desktop-panel-clock');
+        const current = canvasFor(panel) && !document.hidden ? panel : null;
+        const locale = current?.querySelector('.clock-zh') ? 'zh-CN' : 'en-US';
+        const sample = document.querySelector('.desktop-clock-sample')?.textContent;
+        const changed = sample !== clockSample;
+        if (changed) {
+            clockSample = sample;
+            const [, seconds, offset] = (sample || '').split(',').map(Number);
+            const wallTime = seconds * 1000 + offset * 60_000;
+            clockAnchor = Number.isFinite(new Date(wallTime).getTime())
+                ? {wallTime, offset, received: performance.now()}
+                : null;
+        }
+        if (!changed && current === clock && locale === clockLocale) return;
+        clock = current;
+        clockLocale = locale;
+        clearTimeout(clockTimer);
+        if (!clock) return;
+
+        const time = clock.querySelector('.desktop-panel-time');
+        const date = clock.querySelector('.desktop-panel-date');
+        if (!time || !date) {
+            clock = null;
+            return;
+        }
+        if (!clockAnchor) {
+            time.textContent = '—';
+            date.textContent = '';
+            clock.removeAttribute('title');
+            return;
+        }
+
+        const {wallTime, offset, received} = clockAnchor;
+        const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+        const minutes = String(Math.abs(offset) % 60).padStart(2, '0');
+        clock.title = `${clock.getAttribute('aria-label')} (UTC${offset < 0 ? '-' : '+'}${hours}:${minutes})`;
+        // The sample is already shifted to the server's civil time.
+        const timeFormat = new Intl.DateTimeFormat(locale, {timeZone: 'UTC', hour: 'numeric', minute: '2-digit', second: '2-digit'});
+        const dateFormat = new Intl.DateTimeFormat(locale, {timeZone: 'UTC', year: 'numeric', month: 'numeric', day: 'numeric'});
+        function tick() {
+            const now = new Date(wallTime + (performance.now() - received));
+            const serverDate = dateFormat.format(now);
+            time.textContent = timeFormat.format(now);
+            if (date.textContent !== serverDate) date.textContent = serverDate;
+            clockTimer = setTimeout(tick, 1000 - now.getUTCMilliseconds());
+        }
+        tick();
+    }
+
+    function mountSizeControl(host, dock, bridge, min, max) {
+        const slider = document.createElement('input');
+        slider.className = 'dock-size-slider';
+        slider.type = 'range';
+        slider.min = min;
+        slider.max = max;
+        slider.step = 1;
+        const value = document.createElement('span');
+        value.className = 'dock-size-value';
+        host.append(slider, value);
+
+        const control = {host, dock, slider, value};
+        slider.addEventListener('input', () => {
+            dock.style.setProperty('--dock-preview', `${slider.value}px`);
+            value.textContent = `${slider.value} px`;
+        });
+        slider.addEventListener('change', () => {
+            if (slider.valueAsNumber === control.saved) {
+                dock.style.removeProperty('--dock-preview');
+                return;
+            }
+            bridge.value = slider.value;
+            bridge.dispatchEvent(new Event('input', {bubbles: true}));
+        });
+        slider.addEventListener('pointercancel', () => {
+            slider.value = control.saved;
+            value.textContent = `${control.saved} px`;
+            dock.style.removeProperty('--dock-preview');
+        });
+        return control;
+    }
+
+    function updateSizeControl() {
+        const host = document.querySelector('.desktop-window.app-settings.active .dock-size-control');
+        if (sizeControl && (sizeControl.host !== host || !canvasFor(host))) {
+            sizeControl.dock.style.removeProperty('--dock-preview');
+            sizeControl.slider.remove();
+            sizeControl.value.remove();
+            sizeControl = null;
+        }
+        const dock = canvasFor(host)?.querySelector('.desktop-dock');
+        if (!dock) return;
+        const bridge = host.querySelector('.dock-size-bridge');
+        const state = host.querySelector('.dock-size-state');
+        if (!bridge || !state) return;
+        const [min, max, size] = state.textContent.split(',').map(Number);
+        if (!sizeControl) sizeControl = mountSizeControl(host, dock, bridge, min, max);
+        const {slider, value} = sizeControl;
+        const label = bridge.getAttribute('aria-label') || '';
+        if (slider.getAttribute('aria-label') !== label) slider.setAttribute('aria-label', label);
+        if (slider.disabled !== bridge.disabled) slider.disabled = bridge.disabled;
+        if (sizeControl.saved !== size) {
+            sizeControl.saved = size;
+            slider.value = size;
+            if (value.textContent !== `${size} px`) value.textContent = `${size} px`;
+            dock.style.removeProperty('--dock-preview');
+        }
+    }
+
     function update() {
+        updateClock();
+        updateSizeControl();
         for (const slot of document.querySelectorAll('.desktop-icon-slot:not([draggable])')) slot.draggable = true;
         const menu = document.querySelector('.desktop-context-menu');
         const canvas = menu && canvasFor(menu);
@@ -135,6 +248,7 @@
         }
     }
 
-    new MutationObserver(update).observe(document, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class']});
+    new MutationObserver(update).observe(document, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'inert', 'disabled', 'aria-label']});
+    document.addEventListener('visibilitychange', updateClock);
     window.addEventListener('resize', update);
 })();

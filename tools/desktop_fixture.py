@@ -43,14 +43,20 @@ def eventually(probe, timeout=15):
 
 
 class Peer:
-    def __init__(self, out, io_delay=0):
+    def __init__(self, out, io_delay=0, browser_port=0, browser_web=False):
         self.out = out
         self.io_delay = io_delay
+        self.browser_port = browser_port
+        self.browser_web = browser_web
     def __enter__(self):
         self.out.mkdir(parents=True, exist_ok=True)
         ready = self.out / f'peer-{time.time_ns()}.json'
         self.log = (self.out / 'peer.log').open('w')
-        self.process = subprocess.Popen([sys.executable, str(ROOT/'tools/sftp_fixture.py'), '--ready', str(ready), '--io-delay', str(self.io_delay)], cwd=ROOT, stdout=self.log, stderr=self.log)
+        command = [sys.executable, str(ROOT / 'tools/sftp_fixture.py'), '--ready', str(ready),
+                   '--io-delay', str(self.io_delay), '--browser-port', str(self.browser_port)]
+        if self.browser_web:
+            command.append('--browser-web')
+        self.process = subprocess.Popen(command, cwd=ROOT, stdout=self.log, stderr=self.log)
         self.data = eventually(lambda: json.loads(ready.read_text()))
         self.root = Path(self.data['root'])
         return self
@@ -66,13 +72,14 @@ class Peer:
 
 
 class Desktop:
-    def __init__(self, out, config, binary=None, extra_env=None, runtime=None):
+    def __init__(self, out, config, binary=None, extra_env=None, runtime=None, *, viewport=(1440, 980)):
         self.out = out; self.out.mkdir(parents=True, exist_ok=True)
         self.config = self.out/'config.json'
         if config is not None:
             self.config.write_text(json.dumps(config), encoding='utf-8')
         self.binary = binary or executable(); self.extra_env = extra_env or {}
         self.shared_runtime = runtime
+        self.viewport = viewport
     def __enter__(self):
         self.runtime = self.shared_runtime or sync_playwright().start()
         self.log = (self.out/'desktop.log').open('a', encoding='utf-8')
@@ -83,13 +90,18 @@ class Desktop:
             sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
         endpoint = f'http://127.0.0.1:{port}'
         env = os.environ.copy(); env.update(self.extra_env)
-        env['WEBVIEW2_USER_DATA_FOLDER'] = str(self.out/f'webview-{time.time_ns()}')
+        if 'WEBVIEW2_USER_DATA_FOLDER' not in self.extra_env:
+            env['WEBVIEW2_USER_DATA_FOLDER'] = str(self.out/f'webview-{time.time_ns()}')
+        elif self.extra_env['WEBVIEW2_USER_DATA_FOLDER'] == '':
+            env.pop('WEBVIEW2_USER_DATA_FOLDER', None)
         env['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = f'--remote-debugging-port={port} --remote-debugging-address=127.0.0.1'
         self.process = subprocess.Popen([str(self.binary), '--config', str(self.config)], cwd=ROOT, env=env, stdout=self.log, stderr=self.log)
         eventually(lambda: urllib.request.urlopen(endpoint+'/json/version', timeout=1).close() or True, timeout=20)
         self.browser = self.runtime.chromium.connect_over_cdp(endpoint)
         self.page = self.browser.contexts[0].pages[0]; self.page.set_default_timeout(10000)
-        self.page.set_viewport_size(dict(width=1440, height=980))
+        if self.viewport is not None:
+            width, height = self.viewport
+            self.page.set_viewport_size(dict(width=width, height=height))
         expect(self.page.locator('.navigation-rail')).to_be_visible()
         if os.environ.get('ARCNIX_TEST_TRACE_INPUT') == '1':
             Locator.click = _traced_locator_click
@@ -163,9 +175,9 @@ class Desktop:
     def servers(self):
         self.page.locator('.rail-servers').click()
     def file(self, name, remote=True):
-        return self.page.locator('.remote-slot' if remote else '.local-slot').get_by_role('button', name=name, exact=True)
+        return self.page.locator('.remote-slot:visible' if remote else '.local-slot:visible').get_by_role('button', name=name, exact=True)
     def action(self, name):
-        self.page.locator('.file-context-menu').get_by_role('button', name=name, exact=True).click()
+        self.page.locator('.file-context-menu:visible').get_by_role('button', name=name, exact=True).click()
     def screenshot(self, name):
         self.page.screenshot(path=str(self.out/name))
     def stop(self):

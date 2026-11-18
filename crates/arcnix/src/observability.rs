@@ -32,6 +32,18 @@ pub(super) struct LogsState {
     completed: Option<Instant>,
     updated: String,
 }
+impl LogsState {
+    pub(super) fn select_service(&mut self, unit: String) {
+        *self = Self {
+            capabilities: self.capabilities.take(),
+            query: LogQuery {
+                unit,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+    }
+}
 fn clock_label() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -74,7 +86,7 @@ impl Ui {
         });
     }
     pub(super) fn logs_refresh(&self) {
-        if !self.state.with(log_ready) {
+        if !self.state.with(log_can_read) {
             return;
         }
         let query = self.state.with(|s| s.system_logs.query.clone());
@@ -86,52 +98,46 @@ impl Ui {
         });
     }
     pub(super) fn observability_enter(&self) {
-        if !self.state.with(navigation::workspace_visible) {
+        let Some(section) = self.state.with(monitor_ui::active) else {
             return;
+        };
+        if section.samples_metrics() && !self.state.with(|s| s.metrics.paused) {
+            self.metrics_refresh();
         }
-        match self.state.with(|s| s.workspace_page) {
-            WorkspacePage::Resources => {
-                if !self.state.with(|s| s.metrics.paused) {
-                    self.metrics_refresh();
-                }
-                self.monitor_detail_enter();
-            }
-            WorkspacePage::SystemLogs => {
-                if self.state.with(|s| s.system_logs.capabilities.is_none()) {
-                    self.logs_discover();
-                } else {
-                    self.logs_refresh();
-                }
-            }
-            _ => {}
+        self.monitor_detail_enter();
+    }
+    pub(super) fn logs_enter(&self) {
+        if self.state.with(|s| {
+            s.system_logs.capabilities.as_ref().is_none_or(|cap| {
+                cap.sources.is_empty() || !cap.sources.contains(&s.system_logs.query.source)
+            })
+        }) {
+            self.logs_discover();
+        } else {
+            self.logs_refresh();
         }
     }
     pub(super) fn observability_tick(&self) {
-        if !self
+        let Some(section) = self
             .state
-            .with(|s| navigation::workspace_visible(s) && !s.system_task_running)
-        {
+            .with(|s| monitor_ui::active(s).filter(|_| !s.system_task_running))
+        else {
             return;
-        }
-        match self.state.with(|s| s.workspace_page) {
-            WorkspacePage::Resources
-                if self.state.with(|s| {
-                    s.metrics.pending.is_none()
-                        && !s.metrics.paused
-                        && due(
-                            s.metrics.completed,
-                            s.config.settings.resource_interval_seconds,
-                        )
-                }) =>
+        };
+        match section {
+            section
+                if section.samples_metrics()
+                    && self.state.with(|s| {
+                        s.metrics.pending.is_none()
+                            && !s.metrics.paused
+                            && due(s.metrics.completed, server_apps_ui::resource_interval(s))
+                    }) =>
             {
                 self.metrics_refresh()
             }
-            WorkspacePage::SystemLogs
+            monitor_ui::Section::Logs
                 if self.state.with(|s| {
-                    s.system_logs.auto_refresh
-                        && s.system_logs.pending.is_none()
-                        && s.system_logs.capabilities.is_some()
-                        && due(s.system_logs.completed, 5)
+                    s.system_logs.auto_refresh && log_can_read(s) && due(s.system_logs.completed, 5)
                 }) =>
             {
                 self.logs_refresh()
@@ -149,18 +155,13 @@ pub(super) fn metrics_event(
         return;
     }
     ui.state.revise(|s| {
-        let workspace_visible = navigation::workspace_visible(s);
+        let sampling = monitor_ui::active(s).is_some_and(monitor_ui::Section::samples_metrics);
+        let interval = server_apps_ui::resource_interval(s);
         let m = &mut s.metrics;
         m.pending = None;
-        if m.completed.is_some_and(|at| {
-            at.elapsed()
-                > Duration::from_secs(
-                    s.config
-                        .settings
-                        .resource_interval_seconds
-                        .saturating_mul(2),
-                )
-        }) {
+        if m.completed
+            .is_some_and(|at| at.elapsed() > Duration::from_secs(interval.saturating_mul(2)))
+        {
             m.history.interrupt();
             m.previous = None;
         }
@@ -184,7 +185,7 @@ pub(super) fn metrics_event(
                 m.previous = None;
             }
         }
-        if !workspace_visible || s.workspace_page != WorkspacePage::Resources {
+        if !sampling {
             m.history.interrupt();
             m.previous = None;
         }
@@ -213,14 +214,16 @@ pub(super) fn logs_capabilities_event(
         l.completed = Some(Instant::now());
         match result {
             Ok(capabilities) => {
-                if !capabilities.sources.contains(&l.query.source)
-                    && let Some(source) = capabilities.sources.first()
-                {
-                    l.query.source = *source;
-                    l.snapshot = None;
-                    l.updated.clear();
+                if !capabilities.sources.contains(&l.query.source) {
+                    if l.query.source == LogSource::Journal && !l.query.unit.is_empty() {
+                        l.error = "Service logs require a readable systemd journal.".into();
+                    } else if let Some(source) = capabilities.sources.first() {
+                        l.query.source = *source;
+                        l.snapshot = None;
+                        l.updated.clear();
+                    }
                 }
-                if capabilities.sources.is_empty() {
+                if capabilities.sources.is_empty() && l.error.is_empty() {
                     l.error =
                         "没有可读取的日志源。请检查服务器日志服务和当前账号的读取权限。".into();
                 }
@@ -232,7 +235,7 @@ pub(super) fn logs_capabilities_event(
     if success
         && ui
             .state
-            .with(|s| s.workspace_page == WorkspacePage::SystemLogs)
+            .with(|s| monitor_ui::active(s) == Some(monitor_ui::Section::Logs))
     {
         ui.logs_refresh();
     }
@@ -260,6 +263,13 @@ pub(super) fn logs_event(ui: &Ui, serial: u64, result: std::result::Result<LogSn
 }
 fn log_ready(s: &State) -> bool {
     s.connected && !s.system_task_running && s.system_logs.pending.is_none()
+}
+fn log_can_read(s: &State) -> bool {
+    log_ready(s)
+        && s.system_logs
+            .capabilities
+            .as_ref()
+            .is_some_and(|cap| cap.sources.contains(&s.system_logs.query.source))
 }
 fn update_query(ui: &Ui, change: impl FnOnce(&mut LogQuery)) {
     if !ui.state.with(log_ready) {
@@ -376,17 +386,14 @@ pub(super) fn logs_window_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     let discover = ui.clone();
     row().class("desktop-app-tools logs-window-tools").fill((
-        crate::help_ui::tip(
-            "System logs",
-            "读取最近 200 条记录；仅使用当前账号的读取权限。",
-        ),
+        crate::help_ui::tip("Logs", "读取最近 200 条记录；仅使用当前账号的读取权限。"),
         icon_action("重新检测日志源", Icon::Search)
             .class("icon-button logs-discover")
             .enabled(state.map(log_ready))
             .on_press(move || discover.logs_discover()),
         icon_action("刷新系统日志", Icon::Refresh)
             .class("icon-button logs-refresh")
-            .enabled(state.map(log_ready))
+            .enabled(state.map(log_can_read))
             .on_press(move || ui.logs_refresh()),
     ))
 }
@@ -494,7 +501,7 @@ pub(super) fn logs(ui: Ui) -> impl Widget {
                             sapid::button()
                                 .class("button")
                                 .label(i18n::bind("查询日志"))
-                                .enabled(state.map(log_ready))
+                                .enabled(state.map(log_can_read))
                                 .on_press(move || query_ui.logs_refresh()),
                         ))
                     },
@@ -531,7 +538,7 @@ pub(super) fn logs(ui: Ui) -> impl Widget {
                             }
                             .to_string()
                         })))
-                        .enabled(state.map(log_ready))
+                        .enabled(state.map(log_can_read))
                         .on_press(move || {
                             auto_ui.state.revise(|s| {
                                 s.system_logs.auto_refresh = !s.system_logs.auto_refresh
