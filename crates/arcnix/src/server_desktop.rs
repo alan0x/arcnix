@@ -266,9 +266,7 @@ pub(super) fn select_tab(s: &mut State, tab: Tab) {
 }
 
 pub(super) fn visible(s: &State) -> bool {
-    s.navigation == navigation::Page::Servers
-        && s.connected
-        && s.workbench.active == Tab::Desktop
+    s.navigation == navigation::Page::Servers && s.connected && s.workbench.active == Tab::Desktop
 }
 
 pub(super) fn fullscreen(s: &State) -> bool {
@@ -360,9 +358,7 @@ impl Ui {
     pub(super) fn toggle_desktop_fullscreen(&self) {
         let changed_tab = self.state.with(|s| s.workbench.active != Tab::Desktop);
         self.state.revise(|s| {
-            if s.navigation != navigation::Page::Servers
-                || !s.connected
-            {
+            if s.navigation != navigation::Page::Servers || !s.connected {
                 return;
             }
             let was_fullscreen = fullscreen(s);

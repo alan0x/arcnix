@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use arcnix_core::sync::{self, COOKIE_LIMIT, Revision, Snapshot};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{

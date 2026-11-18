@@ -452,7 +452,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
                             .filter_map(|page| server_desktop::app_id(*page))
                         {
                             if let Some(window) = s.workbench.windows.get(&app) {
-                                windows.insert(app, window.clone());
+                                windows.insert(app, *window);
                             }
                         }
                     }

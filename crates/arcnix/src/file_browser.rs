@@ -381,7 +381,10 @@ fn drag_ready(s: &State) -> bool {
     transfer_ready(s)
         && s.dialog.is_none()
         && s.navigation == navigation::Page::Servers
-        && matches!(s.workspace_page, WorkspacePage::Files | WorkspacePage::Explorer)
+        && matches!(
+            s.workspace_page,
+            WorkspacePage::Files | WorkspacePage::Explorer
+        )
 }
 
 fn begin_drag(ui: &Ui, remote: bool, target: &str, id: u64) {
@@ -734,7 +737,11 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
         }),
         GestureKind::TransferDrop => drop_transfer(ui, remote, event.drag_id),
         GestureKind::ExplorerDownload => {
-            if remote && ui.state.with(|s| s.workspace_page == WorkspacePage::Explorer) {
+            if remote
+                && ui
+                    .state
+                    .with(|s| s.workspace_page == WorkspacePage::Explorer)
+            {
                 drop_transfer(ui, false, event.drag_id);
             }
         }

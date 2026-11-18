@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -466,7 +467,8 @@ pub fn client_id(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Theme, browser::Bookmark};
+    use crate::Theme;
+    use crate::browser::Bookmark;
 
     fn bookmark(name: &str) -> Bookmark {
         Bookmark {

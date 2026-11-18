@@ -1,8 +1,11 @@
 //! Stages files dropped into the WebView, which supplies bytes without local paths.
+use std::fs;
+use std::io::Write;
+
 use anyhow::{Context, Result, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
-use std::{fs, io::Write};
 
 use super::*;
 

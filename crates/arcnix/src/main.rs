@@ -4,11 +4,7 @@ mod backups_ui;
 mod batch_worker;
 mod browser;
 #[cfg(windows)]
-mod web_browser;
-#[cfg(windows)]
 mod browser_cookies;
-#[cfg(windows)]
-mod web_browser_native;
 mod cleanup_records_ui;
 mod client_logs;
 mod clipboard;
@@ -21,8 +17,8 @@ mod diagnostics_ui;
 mod disks_ui;
 mod docker_ui;
 mod explorer_search;
-mod explorer_ui;
 mod explorer_transfer;
+mod explorer_ui;
 mod file_browser;
 mod file_columns;
 mod file_context;
@@ -76,6 +72,10 @@ mod transfer_worker;
 mod transfer_worker_tests;
 mod update_install;
 mod updates_ui;
+#[cfg(windows)]
+mod web_browser;
+#[cfg(windows)]
+mod web_browser_native;
 mod worker;
 #[cfg(test)]
 mod worker_conflict_tests;
@@ -1010,7 +1010,9 @@ impl Ui {
             }
             Ok(match (action, remote) {
                 (FileAction::CreateFile, true) => Action::RemoteCreateFile(remote_join(base, name)),
-                (FileAction::CreateFile, false) => Action::LocalCreateFile(Path::new(base).join(name)),
+                (FileAction::CreateFile, false) => {
+                    Action::LocalCreateFile(Path::new(base).join(name))
+                }
                 (FileAction::CreateFolder, true) => Action::RemoteMkdir(remote_join(base, name)),
                 (FileAction::CreateFolder, false) => Action::LocalMkdir(Path::new(base).join(name)),
                 (FileAction::Rename, _) => unreachable!(),
@@ -1222,7 +1224,9 @@ fn modal(
                         .class(ui.state.map(|s| {
                             match s.dialog {
                                 Some(Dialog::RemoteEditor) => "modal-card remote-editor-modal",
-                                Some(Dialog::TransferProgress(_)) => "modal-card transfer-progress-modal",
+                                Some(Dialog::TransferProgress(_)) => {
+                                    "modal-card transfer-progress-modal"
+                                }
                                 _ => "modal-card",
                             }
                             .to_owned()

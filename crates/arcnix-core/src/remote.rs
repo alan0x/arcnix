@@ -394,7 +394,11 @@ impl PendingConnection {
         Ok(RemoteSession { session, sftp })
     }
 
-    pub(crate) fn authenticate_transport(self, secret: &str, expected_fingerprint: &str) -> Result<Session> {
+    pub(crate) fn authenticate_transport(
+        self,
+        secret: &str,
+        expected_fingerprint: &str,
+    ) -> Result<Session> {
         ensure!(
             self.fingerprint == expected_fingerprint,
             "SSH host key mismatch; authentication was not attempted"

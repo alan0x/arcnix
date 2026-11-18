@@ -7,12 +7,9 @@ use anyhow::{Context, Result, bail, ensure};
 use ssh2::{Channel, ErrorCode, Session};
 use zeroize::Zeroizing;
 
-use crate::{
-    ServerProfile,
-    remote::{CommandStream, PendingConnection, RemoteSession},
-    remote_tasks::quote,
-    transport_error,
-};
+use crate::remote::{CommandStream, PendingConnection, RemoteSession};
+use crate::remote_tasks::quote;
+use crate::{ServerProfile, transport_error};
 
 const MAX_CLIENTS: usize = 32;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -451,11 +448,7 @@ impl Relay {
     }
 
     fn closed(&mut self) -> bool {
-        self.closing
-            && match self.channel.close() {
-                Err(error) if error.code() == EAGAIN => false,
-                _ => true,
-            }
+        self.closing && !matches!(self.channel.close(), Err(error) if error.code() == EAGAIN)
     }
 }
 

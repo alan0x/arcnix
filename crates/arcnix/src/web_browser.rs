@@ -63,8 +63,7 @@ enum Diagnostic {
 }
 
 pub(super) const CERTIFICATE_ERROR: &str = "The website certificate could not be verified";
-const FORWARDING_STILL_DENIED: &str =
-    "OpenSSH settings were updated. Forwarding is still denied. Check key or SSH certificate restrictions.";
+const FORWARDING_STILL_DENIED: &str = "OpenSSH settings were updated. Forwarding is still denied. Check key or SSH certificate restrictions.";
 
 #[derive(Clone, Default)]
 pub(super) enum Proxy {
@@ -798,7 +797,7 @@ pub(super) fn forwarding_repaired(ui: &Ui, serial: u64, result: std::result::Res
         if !browser
             .forwarding_pending
             .as_ref()
-            .is_some_and(|(id, _, _)| *id == serial)
+            .is_some_and(|(id, ..)| *id == serial)
         {
             return false;
         }
@@ -886,7 +885,9 @@ fn diagnostic_text(s: &State) -> &'static str {
         None => "",
         Some(Diagnostic::Running(_)) => "Checking SSH forwarding…",
         Some(Diagnostic::Complete(diagnosis)) => match diagnosis {
-            Diagnosis::ForwardingDenied if s.web_browser.forwarding_applied => FORWARDING_STILL_DENIED,
+            Diagnosis::ForwardingDenied if s.web_browser.forwarding_applied => {
+                FORWARDING_STILL_DENIED
+            }
             Diagnosis::ForwardingDenied => {
                 "The server denied TCP forwarding. Enable it once for the current SSH account."
             }
@@ -994,16 +995,13 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                                 row().class("choice-list").fill((
                                     when(state.map(can_repair), move || {
                                         let repair = repair.clone();
-                                        text_action(
-                                            "Enable SSH forwarding…",
-                                            Icon::Settings,
-                                        )
-                                        .class("button with-icon primary")
-                                        .enabled(state.map(|s| {
-                                            s.connected
-                                                && s.web_browser.forwarding_pending.is_none()
-                                        }))
-                                        .on_press(move || repair.review_forwarding_repair())
+                                        text_action("Enable SSH forwarding…", Icon::Settings)
+                                            .class("button with-icon primary")
+                                            .enabled(state.map(|s| {
+                                                s.connected
+                                                    && s.web_browser.forwarding_pending.is_none()
+                                            }))
+                                            .on_press(move || repair.review_forwarding_repair())
                                     })
                                     .otherwise(move || {
                                         let retry = retry.clone();

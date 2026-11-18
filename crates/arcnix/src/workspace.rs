@@ -786,7 +786,7 @@ fn queue(ui: Ui, direction: Option<TransferDirection>) -> impl Widget {
                             }),
                             close_action("取消传输")
                                 .class("icon-button job-cancel")
-                                .enabled(job.map(|j| active_job(j)))
+                                .enabled(job.map(active_job))
                                 .on_press(move || {
                                     cancel.state.revise(|s| {
                                         let id = job.get().id;

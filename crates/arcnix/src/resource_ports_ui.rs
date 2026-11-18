@@ -78,7 +78,10 @@ fn current(s: &State, c: &Confirmation) -> bool {
 
 impl Ui {
     pub(super) fn ports_enter(&self) {
-        if self.state.with(|s| s.ports.snapshot.is_none() && s.ports.error.is_empty()) {
+        if self
+            .state
+            .with(|s| s.ports.snapshot.is_none() && s.ports.error.is_empty())
+        {
             self.ports_refresh_as_user();
         }
     }
@@ -280,14 +283,17 @@ fn index_by_process(snapshot: &Snapshot) -> HashMap<ProcessKey, String> {
                 .split_ascii_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ");
-            ports.entry((holder.pid, holder.uid, name))
+            ports
+                .entry((holder.pid, holder.uid, name))
                 .or_default()
                 .insert((row.protocol.as_str(), row.port));
         }
     }
-    ports.into_iter()
+    ports
+        .into_iter()
         .map(|(process, bindings)| {
-            let label = bindings.into_iter()
+            let label = bindings
+                .into_iter()
                 .map(|(protocol, port)| format!("{} {port}", protocol.to_ascii_uppercase()))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -296,7 +302,10 @@ fn index_by_process(snapshot: &Snapshot) -> HashMap<ProcessKey, String> {
         .collect()
 }
 
-pub(super) fn process_ports<'a>(s: &'a State, process: &arcnix_core::processes::Process) -> &'a str {
+pub(super) fn process_ports<'a>(
+    s: &'a State,
+    process: &arcnix_core::processes::Process,
+) -> &'a str {
     let key = (process.pid, process.uid, process.program.clone());
     s.ports.process_ports.get(&key).map_or("", String::as_str)
 }
@@ -404,103 +413,213 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
     col().class("resource-ports").fill((
         row().class("resource-ports-toolbar").fill((
             col().class("field resource-ports-filter-field").fill((
-            text().class("field-label").content(i18n::bind("Filter ports, PID or program")),
-            input().class("resource-ports-search")
-                .name(i18n::bind("Filter ports, PID or program"))
-                .value(state.map(|s| s.ports.filter.clone()))
-                .on(value_changed, move |event| {
-                    if let Event::ValueChanged { value, .. } = event {
-                        state.revise(|s| s.ports.filter = value);
-                    }
-                }),
+                text()
+                    .class("field-label")
+                    .content(i18n::bind("Filter ports, PID or program")),
+                input()
+                    .class("resource-ports-search")
+                    .name(i18n::bind("Filter ports, PID or program"))
+                    .value(state.map(|s| s.ports.filter.clone()))
+                    .on(value_changed, move |event| {
+                        if let Event::ValueChanged { value, .. } = event {
+                            state.revise(|s| s.ports.filter = value);
+                        }
+                    }),
             )),
-            sapid::checkbox().class("resource-ports-admin")
+            sapid::checkbox()
+                .class("resource-ports-admin")
                 .label(i18n::bind("Query as administrator"))
                 .checked(state.map(|s| s.ports.administrator))
                 .enabled(state.map(ready))
-                .on_checked_change(move |checked| state.revise(|s| {
-                    if ready(s) {
-                        s.ports.administrator = checked;
-                        s.ports.password.clear();
-                    }
-                })),
+                .on_checked_change(move |checked| {
+                    state.revise(|s| {
+                        if ready(s) {
+                            s.ports.administrator = checked;
+                            s.ports.password.clear();
+                        }
+                    })
+                }),
             when(state.map(|s| s.ports.administrator), move || {
                 col().class("field resource-ports-password-field").fill((
-                text().class("field-label").content(i18n::bind("Administrator password (optional)")),
-                input().class("resource-ports-password")
-                    .purpose(Purpose::Password)
-                    .name(i18n::bind("Administrator password (optional)"))
-                    .enabled(state.map(ready))
-                    .value(state.map(|s| s.ports.password.to_string()))
-                    .on(value_changed, move |event| {
-                        if let Event::ValueChanged { value, .. } = event {
-                            state.revise(|s| {
-                                if ready(s) {
-                                    s.ports.password = Zeroizing::new(value);
-                                }
-                            });
-                        }
-                    }),
+                    text()
+                        .class("field-label")
+                        .content(i18n::bind("Administrator password (optional)")),
+                    input()
+                        .class("resource-ports-password")
+                        .purpose(Purpose::Password)
+                        .name(i18n::bind("Administrator password (optional)"))
+                        .enabled(state.map(ready))
+                        .value(state.map(|s| s.ports.password.to_string()))
+                        .on(value_changed, move |event| {
+                            if let Event::ValueChanged { value, .. } = event {
+                                state.revise(|s| {
+                                    if ready(s) {
+                                        s.ports.password = Zeroizing::new(value);
+                                    }
+                                });
+                            }
+                        }),
                 ))
             }),
             btn("Refresh ports", move || refresh.ports_refresh())
                 .class("button resource-ports-refresh")
                 .enabled(state.map(ready)),
         )),
-        text().class("subtle resource-ports-status").content(i18n::bind(state.map(|s| {
-            if s.ports.terminating.is_some() {
-                "Ending process…".into()
-            } else if s.ports.pending.is_some() {
-                "Reading listening ports…".into()
-            } else if let Some(snapshot) = &s.ports.snapshot {
-                format!("{} ports · {} shown · Sampled {} · UID {}", snapshot.matched, rows(s).len(), formatting::timestamp(Some(snapshot.sampled)), snapshot.uid)
-            } else {
-                "No listening port snapshot yet".into()
-            }
-        }))),
-        text().class(state.map(|s| if s.ports.error.is_empty() {"hidden"} else {"software-error resource-ports-error"}.to_owned()))
+        text()
+            .class("subtle resource-ports-status")
+            .content(i18n::bind(state.map(|s| {
+                if s.ports.terminating.is_some() {
+                    "Ending process…".into()
+                } else if s.ports.pending.is_some() {
+                    "Reading listening ports…".into()
+                } else if let Some(snapshot) = &s.ports.snapshot {
+                    format!(
+                        "{} ports · {} shown · Sampled {} · UID {}",
+                        snapshot.matched,
+                        rows(s).len(),
+                        formatting::timestamp(Some(snapshot.sampled)),
+                        snapshot.uid
+                    )
+                } else {
+                    "No listening port snapshot yet".into()
+                }
+            }))),
+        text()
+            .class(state.map(|s| {
+                if s.ports.error.is_empty() {
+                    "hidden"
+                } else {
+                    "software-error resource-ports-error"
+                }
+                .to_owned()
+            }))
             .content(i18n::bind(state.map(|s| s.ports.error.clone()))),
-        when(state.map(|s|!s.ports.error.is_empty()&&s.ports.snapshot.is_some()),||text().class("subtle resource-ports-stale").content(i18n::bind("Showing the previous port snapshot"))),
-        text().class("subtle resource-ports-notice").content(i18n::bind(state.map(|s|s.ports.notice.clone()))),
-        text().class("observability-warning resource-ports-warning").content(state.map(|s|s.ports.snapshot.as_ref().map(warning).unwrap_or_default())),
+        when(
+            state.map(|s| !s.ports.error.is_empty() && s.ports.snapshot.is_some()),
+            || {
+                text()
+                    .class("subtle resource-ports-stale")
+                    .content(i18n::bind("Showing the previous port snapshot"))
+            },
+        ),
+        text()
+            .class("subtle resource-ports-notice")
+            .content(i18n::bind(state.map(|s| s.ports.notice.clone()))),
+        text()
+            .class("observability-warning resource-ports-warning")
+            .content(state.map(|s| s.ports.snapshot.as_ref().map(warning).unwrap_or_default())),
         col().class("resource-ports-table").fill((
             row().class("resource-port-header").fill((
-                text().class("resource-port-endpoint").content(i18n::bind("Protocol / address")),
-                text().class("resource-port-program").content(i18n::bind("PID / program")),
-                text().class("resource-port-details").content(i18n::bind("User / service / executable")),
+                text()
+                    .class("resource-port-endpoint")
+                    .content(i18n::bind("Protocol / address")),
+                text()
+                    .class("resource-port-program")
+                    .content(i18n::bind("PID / program")),
+                text()
+                    .class("resource-port-details")
+                    .content(i18n::bind("User / service / executable")),
                 text().class("resource-port-action").content(""),
             )),
-            col().class("resource-port-rows").fill(each(state.map(rows))
-                .key(|(_, row)| format!("{}:{}:{}:{}:{}", row.protocol,row.family,row.address,row.port,row.inode))
-                .children(move |item| {
-                    let value = item.value;
-                    let ui = ui.clone();
-                    col().class("resource-port-row").fill((
-                        when(value.map(|(_, row)| row.holders.is_empty()), move || {
-                            row().class("resource-port-holder").fill((
-                                text().class("resource-port-endpoint").selectable(true).content(value.map(|(_, r)| format!("{} · {}",r.protocol.to_uppercase(),endpoint(r)))),
-                                text().class("resource-port-unavailable").content(i18n::bind("Process information unavailable")),
-                            ))
-                        }),
-                        each(value.map(|(revision, row)| row.holders.iter().map(|h|(*revision,row.clone(),h.clone())).collect::<Vec<_>>()))
-                            .key(|(_,_,h)| format!("{}:{}:{}",h.pid,h.start_ticks,h.fd))
+            col().class("resource-port-rows").fill(
+                each(state.map(rows))
+                    .key(|(_, row)| {
+                        format!(
+                            "{}:{}:{}:{}:{}",
+                            row.protocol, row.family, row.address, row.port, row.inode
+                        )
+                    })
+                    .children(move |item| {
+                        let value = item.value;
+                        let ui = ui.clone();
+                        col().class("resource-port-row").fill((
+                            when(value.map(|(_, row)| row.holders.is_empty()), move || {
+                                row().class("resource-port-holder").fill((
+                                    text()
+                                        .class("resource-port-endpoint")
+                                        .selectable(true)
+                                        .content(value.map(|(_, r)| {
+                                            format!(
+                                                "{} · {}",
+                                                r.protocol.to_uppercase(),
+                                                endpoint(r)
+                                            )
+                                        })),
+                                    text()
+                                        .class("resource-port-unavailable")
+                                        .content(i18n::bind("Process information unavailable")),
+                                ))
+                            }),
+                            each(value.map(|(revision, row)| {
+                                row.holders
+                                    .iter()
+                                    .map(|h| (*revision, row.clone(), h.clone()))
+                                    .collect::<Vec<_>>()
+                            }))
+                            .key(|(_, _, h)| format!("{}:{}:{}", h.pid, h.start_ticks, h.fd))
                             .children(move |holder| {
                                 let h = holder.value;
                                 let kill = ui.clone();
                                 row().class("resource-port-holder").fill((
-                                    text().class("resource-port-endpoint").selectable(true).content(h.map(|(_,r,_)|format!("{} · {}",r.protocol.to_uppercase(),endpoint(r)))),
-                                    text().class("resource-port-program").selectable(true).content(h.map(|(_,_,h)|format!("{} · {}",h.pid,h.command))),
-                                    text().class("resource-port-details").selectable(true).content(h.map(|(_,_,h)|holder_details(h))),
-                                    btn("Force end",move||h.with(|(revision,row,holder)|kill.ports_confirm(*revision,row.clone(),holder.clone())))
-                                        .class("button danger resource-port-kill")
-                                        .enabled(state.map(move|s|ready(s) && s.dialog.is_none() && s.ports.snapshot.as_ref().is_some_and(|snapshot|snapshot.namespace.is_some()) && h.with(|(_,_,h)|h.pid>1))),
+                                    text()
+                                        .class("resource-port-endpoint")
+                                        .selectable(true)
+                                        .content(h.map(|(_, r, _)| {
+                                            format!(
+                                                "{} · {}",
+                                                r.protocol.to_uppercase(),
+                                                endpoint(r)
+                                            )
+                                        })),
+                                    text()
+                                        .class("resource-port-program")
+                                        .selectable(true)
+                                        .content(
+                                            h.map(|(_, _, h)| format!("{} · {}", h.pid, h.command)),
+                                        ),
+                                    text()
+                                        .class("resource-port-details")
+                                        .selectable(true)
+                                        .content(h.map(|(_, _, h)| holder_details(h))),
+                                    btn("Force end", move || {
+                                        h.with(|(revision, row, holder)| {
+                                            kill.ports_confirm(
+                                                *revision,
+                                                row.clone(),
+                                                holder.clone(),
+                                            )
+                                        })
+                                    })
+                                    .class("button danger resource-port-kill")
+                                    .enabled(state.map(
+                                        move |s| {
+                                            ready(s)
+                                                && s.dialog.is_none()
+                                                && s.ports.snapshot.as_ref().is_some_and(
+                                                    |snapshot| snapshot.namespace.is_some(),
+                                                )
+                                                && h.with(|(_, _, h)| h.pid > 1)
+                                        },
+                                    )),
                                 ))
                             }),
-                        when(value.map(|(_,row)|row.holders_limited),||text().class("subtle resource-port-holder-limit").content(i18n::bind("Additional process holders were omitted"))),
-                    ))
-                })),
+                            when(value.map(|(_, row)| row.holders_limited), || {
+                                text()
+                                    .class("subtle resource-port-holder-limit")
+                                    .content(i18n::bind("Additional process holders were omitted"))
+                            }),
+                        ))
+                    }),
+            ),
         )),
-        when(state.map(|s|s.ports.snapshot.is_some()&&rows(s).is_empty()),||text().class("subtle resource-ports-empty").content(i18n::bind("No matching listening ports"))),
+        when(
+            state.map(|s| s.ports.snapshot.is_some() && rows(s).is_empty()),
+            || {
+                text()
+                    .class("subtle resource-ports-empty")
+                    .content(i18n::bind("No matching listening ports"))
+            },
+        ),
     ))
 }
 

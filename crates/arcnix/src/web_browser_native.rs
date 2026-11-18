@@ -284,11 +284,7 @@ impl Host {
     fn drain_events(&mut self) {
         while let Ok((id, event)) = self.rx.try_recv() {
             if let BrowserEvent::CookieCapture(capture, success) = event {
-                if self
-                    .capture
-                    .as_ref()
-                    .is_some_and(|(id, _, _)| *id == capture)
-                {
+                if self.capture.as_ref().is_some_and(|(id, ..)| *id == capture) {
                     self.capture = None;
                     match success {
                         Ok(true) => {
@@ -406,7 +402,11 @@ impl Host {
         if self.applied_dark != Some(dark)
             && page
                 .view
-                .set_theme(if dark { wry::Theme::Dark } else { wry::Theme::Light })
+                .set_theme(if dark {
+                    wry::Theme::Dark
+                } else {
+                    wry::Theme::Light
+                })
                 .is_ok()
         {
             // WebView2 applies the preference to every tab sharing this isolated profile.

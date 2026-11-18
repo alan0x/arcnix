@@ -46,11 +46,7 @@ impl NativeLifecycle for DesktopWindow {
     }
 
     #[cfg(windows)]
-    fn opened(
-        &mut self,
-        window: &NativeWindow,
-        wake: &std::task::Waker,
-    ) -> Result<(), ShellError> {
+    fn opened(&mut self, window: &NativeWindow, wake: &std::task::Waker) -> Result<(), ShellError> {
         self.browser.set_wake(wake.clone());
         use glory::wry::shell::NativeWindowExtWindows;
         use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};

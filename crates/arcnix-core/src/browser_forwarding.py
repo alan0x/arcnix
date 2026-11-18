@@ -51,7 +51,7 @@ def service():
         cmdline = (process / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
         launch = info.get("ExecStart", "")
         require(f"path={SSHD} " in launch and SSHD in cmdline
-                and not re.search(r"\s-[fo]", launch + " " + cmdline)
+                and not re.search(r"\s-[of]", launch + " " + cmdline)
                 and os.path.samestat(CONFIG.stat(), (process / "root/etc/ssh/sshd_config").stat()),
                 "The SSH service uses a custom configuration or launch options.")
         return name

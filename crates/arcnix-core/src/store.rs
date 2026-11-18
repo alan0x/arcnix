@@ -105,17 +105,17 @@ pub(crate) fn replace_document(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 pub(crate) fn decoded(bytes: &[u8]) -> Result<AppConfig> {
-ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
-let document: Document =
-    serde_json::from_slice(bytes).context("配置文件格式错误，原文件已保留")?;
-ensure!(
-    document.version == SCHEMA_VERSION,
-    "不支持的配置版本 {}，需要版本 {}；原文件已保留",
-    document.version,
-    SCHEMA_VERSION
-);
-document.config.validate().context("配置内容无效")?;
-Ok(document.config)
+    ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
+    let document: Document =
+        serde_json::from_slice(bytes).context("配置文件格式错误，原文件已保留")?;
+    ensure!(
+        document.version == SCHEMA_VERSION,
+        "不支持的配置版本 {}，需要版本 {}；原文件已保留",
+        document.version,
+        SCHEMA_VERSION
+    );
+    document.config.validate().context("配置内容无效")?;
+    Ok(document.config)
 }
 pub(crate) fn encoded(config: &AppConfig) -> Result<Vec<u8>> {
     config.validate()?;

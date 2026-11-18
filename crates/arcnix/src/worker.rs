@@ -131,7 +131,9 @@ impl BrowserProxyControl {
         } else {
             format!("{host}:{port}")
         };
-        if let Ok(mut refused) = self.refused.lock() && !refused.contains(&target) {
+        if let Ok(mut refused) = self.refused.lock()
+            && !refused.contains(&target)
+        {
             if refused.len() == 64 {
                 refused.remove(0);
             }
@@ -140,7 +142,9 @@ impl BrowserProxyControl {
     }
 
     pub fn was_refused(&self, target: &str) -> bool {
-        self.refused.lock().is_ok_and(|refused| refused.iter().any(|item| item == target))
+        self.refused
+            .lock()
+            .is_ok_and(|refused| refused.iter().any(|item| item == target))
     }
 }
 
@@ -388,11 +392,14 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             };
             #[cfg(windows)]
             let browser_connection = || {
-                active_profile.as_ref().zip(browser_access.as_ref()).filter(|_| {
-                    session.is_some()
-                        && epoch == active_epoch
-                        && epoch == generation.load(Ordering::Acquire)
-                })
+                active_profile
+                    .as_ref()
+                    .zip(browser_access.as_ref())
+                    .filter(|_| {
+                        session.is_some()
+                            && epoch == active_epoch
+                            && epoch == generation.load(Ordering::Acquire)
+                    })
             };
             #[cfg(windows)]
             if let Action::RepairBrowserForwarding { sudo } = action {
@@ -400,7 +407,12 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     epoch == active_epoch && epoch == generation.load(Ordering::Acquire)
                 }) {
                     Some(remote) => arcnix_core::browser_proxy::repair_forwarding(remote, &sudo)
-                        .map_err(|error| arcnix_core::diagnostics::redact_log(&format!("{error:#}"), &[sudo.as_str()])),
+                        .map_err(|error| {
+                            arcnix_core::diagnostics::redact_log(
+                                &format!("{error:#}"),
+                                &[sudo.as_str()],
+                            )
+                        }),
                     None => Err("Connect a server first".into()),
                 };
                 send(Update::BrowserForwardingRepaired(result));
@@ -414,7 +426,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     let events = events.clone();
                     thread::spawn(move || {
                         let diagnosis = arcnix_core::browser_proxy::diagnose(
-                            &profile, &fingerprint, secret, &address,
+                            &profile,
+                            &fingerprint,
+                            secret,
+                            &address,
                         );
                         let _ = events.send_blocking(Response {
                             epoch,
@@ -423,7 +438,9 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         });
                     });
                 } else {
-                    send(Update::BrowserDiagnosis(arcnix_core::browser_proxy::Diagnosis::TunnelUnavailable));
+                    send(Update::BrowserDiagnosis(
+                        arcnix_core::browser_proxy::Diagnosis::TunnelUnavailable,
+                    ));
                 }
                 continue;
             }

@@ -464,9 +464,7 @@ fn global_sidebar(ui: Ui) -> impl Widget {
 
 pub(super) fn shell(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let workbench = state.map(|s| {
-        s.navigation == Page::Servers && s.selected.is_some()
-    });
+    let workbench = state.map(|s| s.navigation == Page::Servers && s.selected.is_some());
     let view_log = ui.clone();
     let dismiss = ui.clone();
     row()
