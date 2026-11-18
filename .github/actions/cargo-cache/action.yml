@@ -6,8 +6,13 @@ runs:
     - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: |
-          ~/.cargo/registry
+          ~/.cargo/registry/index/index.crates.io-*
+          ~/.cargo/registry/cache/index.crates.io-*
+          ~/.cargo/registry/src/index.crates.io-*
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-${{ hashFiles('Cargo.lock') }}
-        restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-
+          target/debug
+          target/release
+        # Package verification stages unpublished workspace crates in a temporary registry.
+        # Reusing its sources can compile an older commit with the same package version.
+        key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-v2-${{ hashFiles('Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-v2-

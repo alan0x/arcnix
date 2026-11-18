@@ -73,4 +73,4 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - name: Verify publishable packages without uploading
-        run: cargo publish --workspace --locked --dry-run
+        run: cargo package --workspace --locked
