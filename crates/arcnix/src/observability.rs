@@ -7,12 +7,13 @@ use super::*;
 
 #[derive(Clone, Default)]
 pub(super) struct MetricState {
+    pub section: monitor_ui::Section,
     pub pending: Option<u64>,
     previous: Option<ResourceSnapshot>,
     pub usage: Option<ResourceUsage>,
     pub error: String,
     completed: Option<Instant>,
-    updated: String,
+    pub updated: String,
     pub history: arcnix_core::metric_history::History,
     pub origin: Option<Instant>,
     pub paused: bool,
@@ -93,7 +94,7 @@ impl Ui {
                 if !self.state.with(|s| s.metrics.paused) {
                     self.metrics_refresh();
                 }
-                self.ports_enter();
+                self.monitor_detail_enter();
             }
             WorkspacePage::SystemLogs => {
                 if self.state.with(|s| s.system_logs.capabilities.is_none()) {
@@ -260,37 +261,6 @@ pub(super) fn logs_event(ui: &Ui, serial: u64, result: std::result::Result<LogSn
 fn log_ready(s: &State) -> bool {
     s.connected && !s.system_task_running && s.system_logs.pending.is_none()
 }
-fn bytes(value: u64) -> String {
-    if value >= 1024 * 1024 * 1024 {
-        format!("{:.2} GiB", value as f64 / (1024.0 * 1024.0 * 1024.0))
-    } else if value >= 1024 * 1024 {
-        format!("{:.1} MiB", value as f64 / (1024.0 * 1024.0))
-    } else if value >= 1024 {
-        format!("{:.1} KiB", value as f64 / 1024.0)
-    } else {
-        format!("{value} B")
-    }
-}
-fn rate(value: Option<f64>) -> String {
-    value
-        .map(|n| format!("{}/s", bytes(n.max(0.0) as u64)))
-        .unwrap_or_else(|| i18n::translate("等待下一次采样"))
-}
-fn missing() -> String {
-    "—".into()
-}
-fn metric_card(
-    title: &'static str,
-    value: impl Into<Vary<String>> + 'static,
-    detail: impl Into<Vary<String>> + 'static,
-) -> impl Widget {
-    col().class("metric-card").fill((
-        text().class("subtle").content(i18n::bind(title)),
-        text().class("metric-value").content(i18n::bind(value)),
-        text().class("subtle").content(i18n::bind(detail)),
-    ))
-}
-
 fn update_query(ui: &Ui, change: impl FnOnce(&mut LogQuery)) {
     if !ui.state.with(log_ready) {
         return;
@@ -402,10 +372,27 @@ fn filtered_logs(s: &State) -> String {
         lines.join("\n")
     }
 }
+pub(super) fn logs_window_tools(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let discover = ui.clone();
+    row().class("desktop-app-tools logs-window-tools").fill((
+        crate::help_ui::tip(
+            "System logs",
+            "读取最近 200 条记录；仅使用当前账号的读取权限。",
+        ),
+        icon_action("重新检测日志源", Icon::Search)
+            .class("icon-button logs-discover")
+            .enabled(state.map(log_ready))
+            .on_press(move || discover.logs_discover()),
+        icon_action("刷新系统日志", Icon::Refresh)
+            .class("icon-button logs-refresh")
+            .enabled(state.map(log_ready))
+            .on_press(move || ui.logs_refresh()),
+    ))
+}
+
 pub(super) fn logs(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let refresh = ui.clone();
-    let discover = ui.clone();
     let source_ui = ui.clone();
     let query_ui = ui.clone();
     let period_ui = ui.clone();
@@ -413,24 +400,6 @@ pub(super) fn logs(ui: Ui) -> impl Widget {
     let auto_ui = ui.clone();
     let commit_ui = ui.clone();
     col().class("observability-page system-logs-page").fill((
-        row().class("observability-heading").fill((
-            col().fill((
-                text().class("page-title").content(i18n::bind("系统日志")),
-                text().class("subtle").content(i18n::bind(
-                    "读取最近 200 条记录；仅使用当前账号的读取权限。",
-                )),
-            )),
-            row().class("toolbar-actions").fill((
-                icon_action("重新检测日志源", Icon::Search)
-                    .class("icon-button logs-discover")
-                    .enabled(state.map(log_ready))
-                    .on_press(move || discover.logs_discover()),
-                icon_action("刷新系统日志", Icon::Refresh)
-                    .class("icon-button logs-refresh")
-                    .enabled(state.map(log_ready))
-                    .on_press(move || refresh.logs_refresh()),
-            )),
-        )),
         when(state.map(|s| !s.connected), || {
             text()
                 .class("software-empty")
@@ -622,267 +591,6 @@ pub(super) fn logs(ui: Ui) -> impl Widget {
                     .class("system-log-output")
                     .selectable(true)
                     .content(state.map(filtered_logs)),
-            ))
-        }),
-    ))
-}
-pub(super) fn resources(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let refresh = ui.clone();
-    col().class("observability-page resources-page").fill((
-        row().class("observability-heading").fill((
-            row().class("help-heading").fill((
-                text().class("page-title").content(i18n::bind("资源概览")),
-                crate::help_ui::group("Resource sampling", &[
-                    "Read-only samples are collected only while this server's Resources page is open. Leaving the page stops new requests; an in-flight read may finish. No history is collected while the client is closed.",
-                    "Pause stops automatic sampling; manual refresh remains available. Connection changes clear the session history. Samples are not written to disk.",
-                ]),
-                text().class("subtle").content(i18n::bind(state.map(|s|format!("Every {} s",s.config.settings.resource_interval_seconds)))),
-            )),
-            icon_action("刷新资源数值", Icon::Refresh)
-                .enabled(
-                    state.map(|s| {
-                        s.connected && !s.system_task_running && s.metrics.pending.is_none()
-                    }),
-                )
-                .on_press(move || refresh.metrics_refresh()),
-        )),
-        when(state.map(|s| !s.connected), || {
-            text()
-                .class("software-empty")
-                .content(i18n::bind("连接服务器后查看 CPU、内存、磁盘和网络。"))
-        }),
-        when(state.map(|s| s.connected), move || {
-            col().class("observability-content").fill((
-                text()
-                    .class("observability-status")
-                    .content(i18n::bind(state.map(|s| {
-                        if s.metrics.paused {
-                            if s.metrics.updated.is_empty(){"Resource sampling paused".into()}else{format!("Sampling paused · Last success {}",s.metrics.updated)}
-                        } else if s.system_task_running {
-                            "系统任务执行中，自动采样已暂停".into()
-                        } else if s.metrics.pending.is_some() {
-                            "正在采样…".into()
-                        } else if s.metrics.updated.is_empty() {
-                            "等待采样".into()
-                        } else {
-                            format!(
-                                "最近采样 {}{}",
-                                s.metrics.updated,
-                                if s.metrics.error.is_empty() {
-                                    ""
-                                } else {
-                                    " · 显示上次成功数值"
-                                }
-                            )
-                        }
-                    }))),
-                text()
-                    .class(state.map(|s| {
-                        if s.metrics.error.is_empty() {
-                            "hidden"
-                        } else {
-                            "software-error"
-                        }
-                        .to_string()
-                    }))
-                    .content(i18n::bind(state.map(|s| s.metrics.error.clone()))),
-                row().class("metric-grid").fill((
-                    metric_card(
-                        "CPU 使用率",
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.cpu_percent)
-                                .map(|n| format!("{n:.1}%"))
-                                .unwrap_or_else(missing)
-                        }),
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.snapshot.cpu.as_ref())
-                                .map(|c| {
-                                    format!(
-                                        "{} 逻辑处理器 · {}",
-                                        c.logical_cpus,
-                                        if s.metrics
-                                            .usage
-                                            .as_ref()
-                                            .is_some_and(|u| u.cpu_percent.is_some())
-                                        {
-                                            "两次采样计算"
-                                        } else {
-                                            "等待下一次采样"
-                                        }
-                                    )
-                                })
-                                .unwrap_or_else(|| "等待 CPU 采样".into())
-                        }),
-                    ),
-                    metric_card(
-                        "内存使用",
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.snapshot.memory.as_ref())
-                                .map(|m| format!("{:.1}%", m.used_percent))
-                                .unwrap_or_else(missing)
-                        }),
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.snapshot.memory.as_ref())
-                                .map(|m| {
-                                    format!(
-                                        "{} / {} · 可用 {}",
-                                        bytes(m.used_bytes),
-                                        bytes(m.total_bytes),
-                                        bytes(m.available_bytes)
-                                    )
-                                })
-                                .unwrap_or_else(missing)
-                        }),
-                    ),
-                    metric_card(
-                        "交换空间",
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.snapshot.swap.as_ref())
-                                .map(|m| {
-                                    m.used_percent
-                                        .map(|p| format!("{p:.1}%"))
-                                        .unwrap_or_else(|| "未启用".into())
-                                })
-                                .unwrap_or_else(missing)
-                        }),
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.snapshot.swap.as_ref())
-                                .map(|m| {
-                                    format!("{} / {}", bytes(m.used_bytes), bytes(m.total_bytes))
-                                })
-                                .unwrap_or_else(missing)
-                        }),
-                    ),
-                    metric_card(
-                        "系统负载",
-                        state.map(|s| {
-                            s.metrics
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.snapshot.load_average)
-                                .map(|l| format!("{:.2} / {:.2} / {:.2}", l[0], l[1], l[2]))
-                                .unwrap_or_else(missing)
-                        }),
-                        state.map(|_| "1 / 5 / 15 分钟".into()),
-                    ),
-                )),
-                text().class("subtle").content(i18n::bind(state.map(|s| {
-                    s.metrics
-                        .usage
-                        .as_ref()
-                        .and_then(|u| u.snapshot.uptime_seconds)
-                        .map(|n| {
-                            format!(
-                                "运行时间 {} 天 {} 小时 {} 分钟",
-                                n as u64 / 86400,
-                                n as u64 / 3600 % 24,
-                                n as u64 / 60 % 60
-                            )
-                        })
-                        .unwrap_or_else(missing)
-                }))),
-                crate::resource_trends::panel(ui.clone()),
-                crate::resource_ports_ui::panel(ui.clone()),
-                text()
-                    .class("observability-warning")
-                    .content(i18n::bind(state.map(|s| {
-                        s.metrics
-                            .usage
-                            .as_ref()
-                            .map(|u| u.snapshot.warnings.join("\n"))
-                            .unwrap_or_default()
-                    }))),
-                text().class("pane-title").content(i18n::bind("磁盘")),
-                col().class("resource-table").fill(
-                    each(state.map(|s| {
-                        s.metrics
-                            .usage
-                            .as_ref()
-                            .map(|u| u.snapshot.disks.clone())
-                            .unwrap_or_default()
-                    }))
-                    .key(|d| format!("{}:{}", d.filesystem, d.mount))
-                    .children(|item| {
-                        row().class("resource-row").fill((
-                            text()
-                                .class("resource-name")
-                                .content(item.value.map(|d| d.mount.clone())),
-                            text()
-                                .class("resource-detail")
-                                .content(i18n::bind(item.value.map(|d| {
-                                    format!(
-                                        "{} / {} · 可用 {}",
-                                        bytes(d.used_bytes),
-                                        bytes(d.total_bytes),
-                                        bytes(d.available_bytes)
-                                    )
-                                }))),
-                            text().class("resource-value").content(item.value.map(|d| {
-                                d.used_percent
-                                    .map(|p| format!("{p:.1}%"))
-                                    .unwrap_or_else(missing)
-                            })),
-                        ))
-                    }),
-                ),
-                row().class("help-heading").fill((
-                    text().class("pane-title").content(i18n::bind("网络接口")),
-                    crate::help_ui::tip("网络接口","接收 / 发送速率由两次采样计算；累计数值自接口启动起计。"),
-                )),
-                col().class("resource-table").fill(
-                    each(state.map(|s| {
-                        s.metrics
-                            .usage
-                            .as_ref()
-                            .map(|u| u.networks.clone())
-                            .unwrap_or_default()
-                    }))
-                    .key(|n| n.interface.clone())
-                    .children(|item| {
-                        row().class("resource-row").fill((
-                            text()
-                                .class("resource-name")
-                                .content(item.value.map(|n| n.interface.clone())),
-                            text()
-                                .class("resource-detail")
-                                .content(i18n::bind(item.value.map(|n| {
-                                    format!(
-                                        "接收 {} · 发送 {}",
-                                        rate(n.receive_bytes_per_second),
-                                        rate(n.transmit_bytes_per_second)
-                                    )
-                                }))),
-                            text()
-                                .class("subtle")
-                                .content(i18n::bind(item.value.map(|n| {
-                                    format!(
-                                        "累计 ↓ {} / ↑ {}",
-                                        bytes(n.received_bytes),
-                                        bytes(n.transmitted_bytes)
-                                    )
-                                }))),
-                        ))
-                    }),
-                ),
             ))
         }),
     ))

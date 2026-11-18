@@ -4,6 +4,8 @@ use super::*;
 
 #[derive(Clone, Default)]
 pub(super) struct SoftwareState {
+    pub store: software_store_ui::StoreState,
+    pub source: u8,
     pub environment: Option<SystemEnvironment>,
     pub packages: Vec<Package>,
     pub query: String,
@@ -25,10 +27,11 @@ impl Ui {
                 && !s.system_task_running
                 && s.software.pending.is_none()
                 && (!require_manager
+                    || s.software.source == 1
                     || s.software
                         .environment
                         .as_ref()
-                        .is_some_and(|e| e.manager.supported()))
+                        .is_some_and(|e| arcnix_core::software_install::supported(e.manager)))
         })
     }
     pub(super) fn software_detect(&self) {
@@ -52,7 +55,21 @@ impl Ui {
                 .revise(|s| s.software.error = "请输入软件包名称，例如 nginx、git 或 curl".into());
             return;
         }
-        let serial = self.send(Action::PackageSearch(query));
+        let source = self.state.with(software_source);
+        let serial = self.send(
+            if source
+                == arcnix_core::software_install::Source::Native(
+                    arcnix_core::packages::PackageManager::Apt,
+                )
+            {
+                Action::PackageSearch(query)
+            } else {
+                Action::ServerApps(server_apps_worker::Action::SoftwareQuery {
+                    source,
+                    query: Some(query),
+                })
+            },
+        );
         self.state.revise(|s| {
             s.software.pending = Some(serial);
             s.software.installed_view = false;
@@ -64,7 +81,21 @@ impl Ui {
         if !self.software_available(true) {
             return;
         }
-        let serial = self.send(Action::PackageInstalled);
+        let source = self.state.with(software_source);
+        let serial = self.send(
+            if source
+                == arcnix_core::software_install::Source::Native(
+                    arcnix_core::packages::PackageManager::Apt,
+                )
+            {
+                Action::PackageInstalled
+            } else {
+                Action::ServerApps(server_apps_worker::Action::SoftwareQuery {
+                    source,
+                    query: None,
+                })
+            },
+        );
         self.state.revise(|s| {
             s.software.pending = Some(serial);
             s.software.installed_view = true;
@@ -76,12 +107,7 @@ impl Ui {
         if !self.software_available(true) {
             return;
         }
-        match arcnix_core::scripts::Template::package(action) {
-            Ok(template) => self.choose_server_script(template),
-            Err(error) => self
-                .state
-                .revise(|s| s.software.error = format!("{error:#}")),
-        }
+        self.native_package_preview(action);
     }
 }
 
@@ -91,17 +117,20 @@ pub(super) fn event(ui: &Ui, serial: u64, event: Event) {
             if !ui.state.with(|s| s.software.pending == Some(serial)) {
                 return;
             }
-            let supported = result.as_ref().is_ok_and(|e| e.manager.supported());
+            let supported = result
+                .as_ref()
+                .is_ok_and(|e| arcnix_core::software_install::supported(e.manager));
             ui.state.revise(|s| {
                 s.software.pending = None;
                 match result {
                     Ok(env) => {
                         s.software.error.clear();
                         s.software.packages.clear();
-                        s.software.status = if env.manager.supported() {
+                        s.software.status = if arcnix_core::software_install::supported(env.manager)
+                        {
                             "系统识别完成".into()
                         } else {
-                            format!("已识别 {}；当前版本支持 APT 软件管理", env.manager.label())
+                            format!("No supported package manager: {}", env.manager.label())
                         };
                         s.software.environment = Some(env);
                     }
@@ -112,7 +141,7 @@ pub(super) fn event(ui: &Ui, serial: u64, event: Event) {
                 }
             });
             if supported {
-                ui.software_installed();
+                ui.store_enter();
             }
         }
         Event::Packages(result) => {
@@ -153,20 +182,24 @@ fn ready(s: &State) -> bool {
     s.connected
         && !s.system_task_running
         && s.software.pending.is_none()
-        && s.software
-            .environment
-            .as_ref()
-            .is_some_and(|e| e.manager.supported())
+        && if s.software.source == 1 {
+            s.server_apps.applications.snap
+        } else {
+            s.software
+                .environment
+                .as_ref()
+                .is_some_and(|e| arcnix_core::software_install::supported(e.manager))
+        }
 }
 
-pub(super) fn page(ui: Ui) -> impl Widget {
+fn package_page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let detect = ui.clone();
     let search = ui.clone();
     let enter = ui.clone();
     let installed = ui.clone();
     let refresh = ui.clone();
-    col().class("software-page").fill((
+    col().class("package-source-page").fill((
         row().class("software-heading").fill((
             col().fill((
                 text().class("page-title").content(i18n::bind("系统软件")),
@@ -275,8 +308,6 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                     }))
                     .content(i18n::bind(state.map(|s| s.software.error.clone()))),
                 package_table(table_ui),
-                text().class("subtle").content(i18n::bind("Installations and index updates run as server-owned tasks. Review their plans and results in Tasks; closing Arcnix does not stop submitted work.")),
-                btn("View server tasks", { let ui=ui.clone(); move || ui.navigate(navigation::Page::Tasks) }),
             ))
         }),
     ))
@@ -289,7 +320,7 @@ fn package_table(ui: Ui) -> impl Widget {
             text().class("package-name").content(i18n::bind("软件包")),
             text()
                 .class("package-version")
-                .content(i18n::bind("已安装版本")),
+                .content(i18n::bind("Version")),
             text()
                 .class("package-description")
                 .content(i18n::bind("说明")),
@@ -301,6 +332,8 @@ fn package_table(ui: Ui) -> impl Widget {
                 .children(move |item| {
                     let package = item.value;
                     let install = ui.clone();
+                    let upgrade = ui.clone();
+                    let remove = ui.clone();
                     row().class("software-package-row").fill((
                         text()
                             .class("package-name")
@@ -344,6 +377,26 @@ fn package_table(ui: Ui) -> impl Widget {
                                     package.get().name,
                                 ]))
                             }),
+                        when(package.map(|p| p.installed), move || {
+                            let upgrade = upgrade.clone();
+                            let remove = remove.clone();
+                            row().class("source-package-actions").fill((
+                                btn("Upgrade…", move || {
+                                    upgrade.software_source_action(
+                                        vec![package.get().name],
+                                        arcnix_core::software_install::Action::Upgrade,
+                                    )
+                                })
+                                .enabled(state.map(|s| ready(s) && !scripts_ui::busy(s))),
+                                btn("Remove…", move || {
+                                    remove.software_source_action(
+                                        vec![package.get().name],
+                                        arcnix_core::software_install::Action::Remove,
+                                    )
+                                })
+                                .enabled(state.map(|s| ready(s) && !scripts_ui::busy(s))),
+                            ))
+                        }),
                     ))
                 }),
         ),
@@ -365,4 +418,40 @@ fn package_table(ui: Ui) -> impl Widget {
                 .to_string()
             }))),
     ))
+}
+
+fn software_source(s: &State) -> arcnix_core::software_install::Source {
+    if s.software.source == 1 {
+        arcnix_core::software_install::Source::Snap
+    } else {
+        arcnix_core::software_install::Source::Native(
+            s.software
+                .environment
+                .as_ref()
+                .map(|e| e.manager)
+                .unwrap_or(arcnix_core::packages::PackageManager::Unknown),
+        )
+    }
+}
+pub(super) fn server_reply(
+    ui: &Ui,
+    serial: u64,
+    result: std::result::Result<server_apps_worker::Reply, String>,
+) -> Option<std::result::Result<server_apps_worker::Reply, String>> {
+    if !ui.state.with(|s| s.software.pending == Some(serial)) {
+        return software_store_ui::event(ui, serial, result);
+    }
+    let result = match result {
+        Ok(server_apps_worker::Reply::SoftwarePackages(rows)) => Ok(rows),
+        Err(e) => Err(e),
+        _ => Err("Invalid software query response".into()),
+    };
+    event(ui, serial, Event::Packages(result));
+    None
+}
+pub(super) fn packages(ui: Ui) -> impl Widget {
+    package_page(ui)
+}
+pub(super) fn page(ui: Ui) -> impl Widget {
+    software_store_ui::page(ui)
 }

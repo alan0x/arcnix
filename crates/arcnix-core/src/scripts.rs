@@ -116,6 +116,8 @@ impl Template {
                 ServiceAction::Start => "Start service",
                 ServiceAction::Stop => "Stop service",
                 ServiceAction::Restart => "Restart service",
+                ServiceAction::Enable => "Enable service at boot",
+                ServiceAction::Disable => "Disable service at boot",
             }
             .into(),
             description: format!(

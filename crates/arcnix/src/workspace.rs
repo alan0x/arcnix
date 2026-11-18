@@ -3,25 +3,47 @@ use super::*;
 pub(super) fn files(ui: Ui) -> impl Widget {
     col().class("files-workspace").fill((
         file_context::task_status(ui.clone()),
-        splitter::panes(ui.clone(), pane(ui.clone(), false), pane(ui, true)),
+        splitter::panes(
+            ui.clone(),
+            pane(ui.clone(), false, false),
+            pane(ui, true, false),
+        ),
     ))
 }
 
 pub(super) fn explorer(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let transfers = ui.clone();
     col().class("remote-explorer").fill((
-        row().class("explorer-toolbar").fill((
+        explorer_ui::drag_bridge(ui.clone()),
+        file_context::task_status(ui.clone()),
+        row().class("explorer-body").fill((
+            explorer_ui::sidebar(ui.clone()),
+            col()
+                .class(state.map(|s| {
+                    if s.server_apps.explorer_tag.is_some() {
+                        "remote-slot explorer-slot hidden"
+                    } else {
+                        "remote-slot explorer-slot"
+                    }
+                    .to_owned()
+                }))
+                .fill(pane(ui.clone(), true, true)),
+            explorer_ui::tag_results(ui),
+        )),
+    ))
+}
+
+pub(super) fn explorer_window_tools(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    row()
+        .class("desktop-app-tools explorer-window-tools")
+        .fill((
+            explorer_ui::sidebar_toggle(ui.clone()),
             crate::help_ui::tip_raw("Download destination", state.map(|s| s.local_path.clone())),
             text_action("Transfer files", Icon::Upload)
                 .class("button with-icon compact")
-                .on_press(move || transfers.open_workbench(server_desktop::Tab::Files)),
-        )),
-        file_context::task_status(ui.clone()),
-        col()
-            .class("remote-slot explorer-slot")
-            .fill(pane(ui, true)),
-    ))
+                .on_press(move || ui.open_workbench(server_desktop::Tab::Files)),
+        ))
 }
 
 pub(super) fn ready(s: &State, remote: bool) -> bool {
@@ -102,15 +124,101 @@ fn sort_button(
             })
         })
 }
-fn pane(ui: Ui, remote: bool) -> impl Widget {
+fn transfer_button(ui: Ui, remote: bool, compact: bool) -> impl Widget {
     let state = ui.state;
-    let transfer = ui.clone();
+    let label = if remote { "下载" } else { "上传" };
+    sapid::button()
+        .class(if compact {
+            "icon-button explorer-download"
+        } else {
+            "button with-icon primary"
+        })
+        .name(i18n::bind(label))
+        .fill((
+            icons::glyph(if remote { Icon::Download } else { Icon::Upload }),
+            when(!compact, move || text().content(i18n::bind(label))),
+        ))
+        .enabled(state.map(move |s| {
+            file_browser::transfer_ready(s) && !file_browser::selected_entries(s, remote).is_empty()
+        }))
+        .on_press(move || {
+            ui.transfer(if remote {
+                TransferDirection::Download
+            } else {
+                TransferDirection::Upload
+            })
+        })
+}
+
+fn pane_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
     let filter = ui.clone();
     let menu = ui.clone();
+    fragment((
+        icon_action(
+            if remote {
+                "筛选远程文件"
+            } else {
+                "筛选本地文件"
+            },
+            Icon::Filter,
+        )
+        .class(state.map(move |s| {
+            if if remote {
+                s.remote_filter_open
+            } else {
+                s.local_filter_open
+            } {
+                "icon-button active"
+            } else {
+                "icon-button"
+            }
+            .to_string()
+        }))
+        .on_press(move || {
+            filter.state.revise(|s| {
+                if remote {
+                    s.remote_filter_open = !s.remote_filter_open
+                } else {
+                    s.local_filter_open = !s.local_filter_open
+                }
+            })
+        }),
+        col().class("pane-menu-anchor").fill((
+            icon_action(
+                if remote {
+                    "远程文件操作"
+                } else {
+                    "本地文件操作"
+                },
+                Icon::More,
+            )
+            .on_press(move || {
+                menu.state.revise(|s| {
+                    s.host_menu = None;
+                    s.group_menu = None;
+                    s.file_context = None;
+                    s.file_menu = if s.file_menu == Some(remote) {
+                        None
+                    } else {
+                        Some(remote)
+                    }
+                })
+            }),
+            file_context::menu(ui.clone(), remote),
+        )),
+    ))
+}
+
+fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
+    let state = ui.state;
     let all = ui.clone();
     let clear = ui.clone();
     col().class(state.map(move |s| {
         let mut class = if file_browser::icons(s, remote) { "file-pane icons-view" } else { "file-pane details-view" }.to_owned();
+        if compact {
+            class.push_str(" explorer-pane");
+        }
         if file_browser::transfer_ready(s) {
             class.push_str(" file-transfer-ready");
         }
@@ -121,7 +229,9 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
         } else {
             "松开以下载到当前本地目录"
         })),
-        row().class("pane-heading").fill((
+        when(!compact, {
+          let ui = ui.clone();
+          move || row().class("pane-heading").fill((
             col().class("pane-heading-copy").fill((
                 text().class("pane-title").content(i18n::bind(if remote {
                     "远程文件"
@@ -152,25 +262,24 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
                     }
                 }))),
             )),
-            text_action(
-                if remote { "下载" } else { "上传" },
-                if remote { Icon::Download } else { Icon::Upload },
-            )
-            .class("button with-icon primary")
-            .enabled(state.map(move |s| {
-                file_browser::transfer_ready(s) && !file_browser::selected_entries(s, remote).is_empty()
-            }))
-            .on_press(move || {
-                transfer.transfer(if remote {
-                    TransferDirection::Download
-                } else {
-                    TransferDirection::Upload
-                })
-            }),
+            transfer_button(ui.clone(), remote, false),
             file_browser::view_controls(ui.clone(), remote),
-        )),
-        file_browser::pathbar(ui.clone(), remote),
-        row().class("pane-tools").fill((
+          ))
+        }),
+        file_browser::pathbar(ui.clone(), remote, compact, when(compact, {
+            let ui = ui.clone();
+            move || row().class("explorer-path-actions").fill((
+                transfer_button(ui.clone(), remote, true),
+                file_browser::view_controls(ui.clone(), remote),
+                pane_actions(ui.clone(), remote),
+            ))
+        })),
+        when(!compact, {
+          let ui = ui.clone();
+          move || {
+            let all = all.clone();
+            let clear = clear.clone();
+            row().class("pane-tools").fill((
             text()
                 .class("pane-summary")
                 .content(i18n::bind(state.map(move |s| format!("已选 {} 项", selected(s, remote).len())))),
@@ -186,59 +295,10 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
             btn("清空", move || {
                 clear.state.revise(|s| selection(s, remote).clear())
             }),
-            icon_action(
-                if remote {
-                    "筛选远程文件"
-                } else {
-                    "筛选本地文件"
-                },
-                Icon::Filter,
-            )
-            .class(state.map(move |s| {
-                if if remote {
-                    s.remote_filter_open
-                } else {
-                    s.local_filter_open
-                } {
-                    "icon-button active"
-                } else {
-                    "icon-button"
-                }
-                .to_string()
-            }))
-            .on_press(move || {
-                filter.state.revise(|s| {
-                    if remote {
-                        s.remote_filter_open = !s.remote_filter_open
-                    } else {
-                        s.local_filter_open = !s.local_filter_open
-                    }
-                })
-            }),
-            col().class("pane-menu-anchor").fill((
-                icon_action(
-                    if remote {
-                        "远程文件操作"
-                    } else {
-                        "本地文件操作"
-                    },
-                    Icon::More,
-                )
-                .on_press(move || {
-                    menu.state.revise(|s| {
-                        s.host_menu = None;
-                        s.group_menu = None;
-                        s.file_context=None;
-                        s.file_menu = if s.file_menu == Some(remote) {
-                            None
-                        } else {
-                            Some(remote)
-                        }
-                    })
-                }),
-                file_context::menu(ui.clone(),remote),
-            )),
-        )),
+            pane_actions(ui.clone(), remote),
+            ))
+          }
+        }),
         row()
             .class(state.map(move |s| {
                 if if remote {
@@ -279,7 +339,7 @@ fn pane(ui: Ui, remote: bool) -> impl Widget {
                             });
                         }
                     }),
-                text().class("subtle").content(i18n::bind("按文件名筛选")),
+                when(!compact, || text().class("subtle").content(i18n::bind("按文件名筛选"))),
             )),
         row().class("file-header").fill((
             sort_button(ui.clone(), remote, Sort::Name, "名称", "column-name"),

@@ -49,6 +49,28 @@ fn directory_command(directory: &str) -> Result<String> {
     ))
 }
 
+pub fn validate_session(session: &str) -> Result<()> {
+    ensure!(
+        !session.is_empty()
+            && session.len() <= 80
+            && session.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'),
+        "Invalid persistent terminal session"
+    );
+    Ok(())
+}
+pub fn resume_command(session: &str, directory: Option<&str>) -> Result<String> {
+    validate_session(session)?;
+    if let Some(directory) = directory {
+        validate_directory(directory)?;
+    }
+    Ok(format!(
+        "# arcnix:terminal:resume\nexec tmux -L arcnix new-session -A -s {}{}",
+        crate::remote_tasks::quote(&format!("terminal-{session}")),
+        directory
+            .map(|d| format!(" -c {}", crate::remote_tasks::quote(d)))
+            .unwrap_or_default()
+    ))
+}
 impl Pty {
     pub(crate) fn open(session: Session, columns: u32, rows: u32) -> Result<Self> {
         Self::open_with_directory(session, columns, rows, None)
@@ -68,6 +90,29 @@ impl Pty {
         rows: u32,
         directory: Option<&str>,
     ) -> Result<Self> {
+        let command = directory.map(directory_command).transpose()?;
+        Self::open_command(session, columns, rows, command.as_deref())
+    }
+    pub(crate) fn resume(
+        session: Session,
+        columns: u32,
+        rows: u32,
+        id: &str,
+        directory: Option<&str>,
+    ) -> Result<Self> {
+        Self::open_command(
+            session,
+            columns,
+            rows,
+            Some(&resume_command(id, directory)?),
+        )
+    }
+    fn open_command(
+        session: Session,
+        columns: u32,
+        rows: u32,
+        command: Option<&str>,
+    ) -> Result<Self> {
         dimensions(columns, rows)?;
         let mut channel = session
             .channel_session()
@@ -76,9 +121,9 @@ impl Pty {
         channel
             .request_pty("xterm-256color", None, Some((columns, rows, 0, 0)))
             .context("Server refused a terminal PTY")?;
-        if let Some(directory) = directory {
+        if let Some(command) = command {
             channel
-                .exec(&directory_command(directory)?)
+                .exec(command)
                 .context("Server refused a terminal in this directory")?;
         } else {
             channel

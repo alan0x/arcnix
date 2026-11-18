@@ -2112,3 +2112,247 @@ SIGKILL 会立即结束此进程，未保存的数据可能丢失。此进程的
 全屏桌面	Fullscreen desktop
 退出桌面全屏	Exit desktop fullscreen
 下载保存位置	Download destination
+Docker	Docker
+桌面设置	Desktop settings
+跟随应用	Follow application
+重新加载设置	Reload settings
+检测应用	Detect applications
+已保存到服务器	Saved on server
+检测到 Docker	Docker detected
+未检测到 Docker	Docker not detected
+为当前 SSH 用户保存到 ~/.arcnix/desktop.json。跟随应用使用客户端主题，其他服务器和用户各自保存设置。	Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings.
+容器	Containers
+卷	Volumes
+端口	Ports
+筛选 Docker 资源	Filter Docker resources
+刷新 Docker	Refresh Docker
+配置	Configure
+启动容器	Start container
+停止容器	Stop container
+重启容器	Restart container
+配置容器	Configure container
+最近日志	Recent logs
+暂无日志	No logs
+详情	Details
+端口绑定	Port bindings
+挂载	Mounts
+网络	Network
+已发布	Published
+已配置	Configured
+仅暴露	Exposed only
+Docker 操作已完成	Docker operation completed
+暂无 Docker 资源	No Docker resources
+重启策略	Restart policy
+CPU 限制	CPU limit
+内存限制（MiB）	Memory limit (MiB)
+容器配置	Container configuration
+按需读取最后 200 行，包含容器标准输出和错误输出。	Last 200 lines, fetched on demand. Container stdout and stderr are included. No background log process.
+发布映射显示宿主机地址和端口。没有宿主机绑定的暴露端口不会发布；host 网络直接使用服务器网络。修改端口或挂载需要重建容器。	Published mappings show host addresses and ports. Exposed ports without a host binding are not published. Host networking uses the server network directly. Changing mappings or mounts requires recreating the container.
+重启策略可填 no、always、unless-stopped 或 on-failure[:重试次数]。CPU 和内存填 0 表示不限。设置应用到当前容器，Compose 重建时可能覆盖。	Restart policy: no, always, unless-stopped or on-failure[:retries]. CPU and memory limits use 0 for unlimited. Changes apply to this container; Compose may replace them when it recreates the container.
+Docker {} · {} 个容器 · {} 个卷	Docker {} · {} containers · {} volumes
+重启策略：{} · CPU：{} · 内存：{} MiB	Restart policy: {} · CPU: {} · Memory: {} MiB
+Docker 连接	Docker connection
+使用当前 SSH 用户访问服务器本机 Docker，支持无 root 模式，不自动提权。连接失败时可检查 Docker 是否启动及当前用户的套接字权限。	Uses this SSH user's local Docker socket, including rootless Docker. No automatic sudo. Start Docker or check this user's socket access if a connection error appears.
+服务器监听端口	Server listeners
+Docker 端口	Docker ports
+主机网络	Host network
+Docker 显示发布和暴露的端口。host 网络容器直接使用服务器监听端口，可前往资源概览排查。	Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Resources.
+启动	Start
+停止	Stop
+重启	Restart
+监控	Monitor
+块设备	Block devices
+已挂载文件系统	Mounted filesystems
+筛选磁盘和挂载点	Filter disks and mounts
+刷新磁盘	Refresh disks
+已用 {} / {} · 可用 {} · {}	Used {} / {} · Available {} · {}
+所有服务	All services
+活动服务	Active services
+开机启动	Start at boot
+启用开机启动…	Enable at boot…
+禁用开机启动…	Disable at boot…
+新建开机任务	New startup task
+审核开机任务	Review startup task
+任务名称	Task name
+运行用户	Run as user
+启动命令	Startup command
+持续运行，失败后自动重启	Keep running and restart on failure
+开机任务	Startup task
+系统软件包	System packages
+安装软件	Install software
+Compose 项目	Compose projects
+项目	Projects
+项目名称	Project name
+容器镜像	Container image
+监听地址	Listen address
+宿主机端口	Host port
+预览 Compose	Preview Compose
+审核安装	Review installation
+软件包名称	Package names
+Snap 渠道	Snap channel
+允许经典模式（classic）	Allow classic confinement
+刷新项目	Refresh projects
+应用配置…	Apply…
+停止项目…	Stop project…
+重启项目…	Restart project…
+Compose 文件	Compose file
+升级…	Upgrade…
+卸载…	Remove…
+重新连接终端	Reconnect terminal
+安装位置	Installation location
+安装方式	Installation source
+Snap 权限模式	Snap confinement
+正在识别系统…	Detecting system…
+服务器未安装 Snap	Snap is not installed on this server
+需要 Docker 和 Compose v2	Docker and Compose v2 are required
+服务运行状态与开机启动相互独立。启用或禁用只改变开机启动；启动或停止改变当前状态。操作通过审核后的服务器任务执行，保存的命令在脚本页管理。	Running state and boot enablement are independent. Enable/disable changes boot behavior; start/stop changes the current state. Actions run as reviewed server tasks. Saved commands are in Scripts.
+创建随系统启动的 systemd 服务。脚本保存在指定 Linux 用户的 ~/.arcnix/services，需要 root 或 sudo 安装服务；如需立即运行，可创建后单独启动。	Creates a systemd service enabled for boot. The script is private to the selected Linux user in ~/.arcnix/services. Root or sudo is required to install the unit. Start it separately to run it immediately.
+按需查看块设备和文件系统容量，无法读取的容量保持未知。选择挂载点可浏览文件。	Block devices and mounted filesystem usage, queried on demand. Unavailable capacity stays unknown. Select a mount to browse its files.
+配置按当前 SSH 用户隔离，无需修改 /etc，便于备份。Nginx 内容在项目 html 目录；命名卷由 Docker 存储管理。restart: unless-stopped 会在 Docker 启动后恢复容器；Docker 本身的开机启动可在服务页设置。	Configuration is private to this SSH user, writable without changing /etc, and easy to back up. Nginx content is in the project html directory; named-volume data is stored by Docker. restart: unless-stopped restores containers when Docker starts; enable Docker itself at boot in Services.
+配置位于 ~/.arcnix/apps/<项目名>/compose.yaml，命名卷数据由 Docker 管理。应用配置通过服务器任务执行，客户端关闭不影响已接受的任务。	Application definitions are in ~/.arcnix/apps/<name>/compose.yaml. Docker manages named-volume data. Applying changes is a server task; closing the client does not stop accepted work.
+系统包使用检测到的发行版管理器，例如 Ubuntu 的 APT、Fedora 的 DNF，包名和依赖可能不同。Snap 和 Compose 属于独立安装，服务、升级及数据按原方式管理。	System packages use the detected distribution's manager, such as APT on Ubuntu or DNF on Fedora. Package names and dependencies differ. Snap and Compose are separate installations; services, updates and data remain with their original source.
+经典模式的 Snap 可以像传统软件一样访问宿主机，仅在发布者要求且你信任软件时启用。	Classic snaps have traditional host access. Enable only when the publisher requires it and you trust the package.
+右键提供复制、粘贴、清空及标签操作。Ctrl+Shift+C 复制，Ctrl+Shift+V 粘贴。安装 tmux 时，断开后会话、目录和画面由服务器保留；否则仅恢复标签与布局。关闭标签会分离 tmux，输入 exit 结束其中的 shell。	Right-click for copy, paste, clear and tab actions. Ctrl+Shift+C copies; Ctrl+Shift+V pastes. When tmux is installed, the server keeps the session, working directory and screen after disconnect; otherwise only tabs and layout are restored. Closing a tab detaches tmux; exit ends its shell.
+版本	Version
+应用商店	Software store
+发现	Discover
+服务器常用应用	SERVER ESSENTIALS
+为服务器添加好用的工具	Build your server workspace
+Web 服务、数据库与日常运维工具。	Web services, databases and everyday tools.
+了解 Nginx	Explore Nginx
+全部应用	All applications
+浏览应用	Explore applications
+没有匹配的应用	No matching applications
+Web 与网络	Web & networking
+数据库	Databases
+开发工具	Developer tools
+备份与存储	Backup & storage
+安全	Security
+支持 Compose 的应用	Compose-compatible applications
+显示全部应用	Show all applications
+常见用途	Common uses
+项目网站	Project website
+应用目录	Application catalog
+已安装的应用	Installed applications
+显示全部系统软件包	Show all system packages
+刷新已安装应用	Refresh installed applications
+没有匹配的已安装应用	No matching installed applications
+管理项目	Manage project
+搜索应用	Search applications
+按名称安装…	Install by name…
+搜索软件仓库	Search package repositories
+安装方式	Installation method
+此应用不提供	Not provided for this app
+需要 Snap	Requires Snap
+暂无 Compose 模板	No Compose template
+需要 Docker Compose	Requires Docker Compose
+此 Snap 需要允许经典模式	This Snap requires classic confinement
+Web 服务器与反向代理	Web server and reverse proxy
+静态网站 · 反向代理 · 负载均衡	Static websites · Reverse proxy · Load balancing
+支持自动 HTTPS 的 Web 服务器	Web server with automatic HTTPS
+HTTPS 网站 · 反向代理 · 静态文件	HTTPS sites · Reverse proxy · Static files
+内存数据存储与缓存	In-memory data store and cache
+缓存 · 队列 · 键值数据	Caching · Queues · Key-value data
+面向应用的关系数据库	Relational database for applications
+SQL · 事务 · 结构化数据	SQL · Transactions · Structured data
+兼容 MySQL 的关系数据库	Relational database compatible with MySQL
+SQL · Web 应用 · 事务	SQL · Web applications · Transactions
+存储在单个文件中的轻量数据库	Small database stored in a single file
+本地数据库 · SQL 控制台 · 数据查看	Local databases · SQL console · Data inspection
+分布式版本管理	Distributed source control
+代码仓库 · 版本历史 · 协作	Repositories · Version history · Collaboration
+服务端 JavaScript 运行环境	JavaScript runtime for server applications
+Web 应用 · JavaScript 工具 · API	Web applications · JavaScript tools · APIs
+Python 运行环境与脚本工具	Python runtime and scripting tools
+自动化 · 脚本 · 应用运行环境	Automation · Scripts · Application runtime
+Go 编译器与开发工具	Go compiler and development tools
+编译服务 · 命令行工具 · 开发	Compile services · Command-line tools · Development
+在服务器上保持终端会话	Persistent terminal sessions on the server
+重连会话 · 多个 Shell · 终端布局	Reconnect sessions · Multiple shells · Terminal layouts
+交互式进程与资源查看器	Interactive process and resource viewer
+进程 · CPU 与内存 · 交互式查看	Processes · CPU and memory · Interactive inspection
+终端资源监控面板	Terminal resource monitoring dashboard
+CPU · 内存 · 磁盘与网络	CPU · Memory · Disks and network
+支持去重的加密备份工具	Encrypted backups with deduplication
+加密快照 · 远程存储 · 恢复	Encrypted snapshots · Remote storage · Restore
+与远程存储传输和同步文件	Transfer and sync files with remote storage
+对象存储 · 文件同步 · 远程复制	Object storage · File synchronization · Remote copies
+管理 HTTPS 证书的 ACME 客户端	ACME client for HTTPS certificates
+证书签发 · 续期 · HTTPS 配置	Certificate issuance · Renewal · HTTPS setup
+阻止反复认证失败的访问	Block repeated authentication failures
+SSH 防护 · 日志规则 · 临时封禁	SSH protection · Log rules · Temporary bans
+无需常驻守护进程的容器管理工具	Daemonless container management
+OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
+内置应用介绍可以离线浏览。安装使用服务器已启用的软件仓库，或所选发布者的 Snap／镜像；可用版本和包名因环境而异，系统包可能还需要初始化服务。不会自动添加第三方软件源。	Built-in application descriptions are available offline. Installation uses the server's enabled repositories or the selected publisher's Snap/image. Versions and package availability vary; package installation may require additional service initialization. No third-party repository is added automatically.
+系统软件包使用已启用的发行版仓库，包名与版本会有差异。Snap 和 Compose 属于独立安装，更新、服务和数据继续按原来源管理。	System packages use enabled distribution repositories; package names and versions differ. Snap and Compose are separate installations. Updates, services and data remain with their original source.
+主目录	Home folder
+位置	Locations
+文件系统	Filesystem
+收藏文件夹	Favorite folders
+资源管理器侧栏	Explorer sidebar
+切换资源管理器侧栏	Toggle Explorer sidebar
+收藏当前文件夹	Add current folder to favorites
+取消收藏当前文件夹	Remove current folder from favorites
+打开收藏 {p}	Open favorite {p}
+移除收藏 {p}	Remove favorite {p}
+文件夹颜色	Folder color
+文件夹颜色…	Folder color…
+清除文件夹颜色	Clear folder color
+收藏或取消收藏文件夹	Toggle folder favorite
+红色	Red
+橙色	Orange
+黄色	Yellow
+绿色	Green
+蓝色	Blue
+紫色	Purple
+灰色	Gray
+文档	Documents
+标签	Tags
+所有标签	All Tags
+暂无标记项目	No tagged items
+返回文件夹	Back to folder
+清除标签	Clear tag
+文件颜色	File color
+文件颜色…	File color…
+收藏或取消收藏	Toggle favorite
+无法打开此项目	Could not open this item
+壁纸	Wallpaper
+程序坞	Dock
+显示服务器信息	Show server info
+显示 Arcnix 图标	Show Arcnix shortcuts
+重置桌面图标	Reset desktop icons
+隐藏桌面图标	Hide desktop shortcut
+保留在程序坞	Keep in Dock
+从程序坞移除	Remove from Dock
+用作壁纸	Use as wallpaper
+刷新桌面	Refresh desktop
+打开桌面文件夹	Open Desktop folder
+程序坞设置	Dock settings
+关闭菜单	Close menu
+程序坞图标大小	Dock icon size
+小	Small
+中	Medium
+大	Large
+悬停放大图标	Magnify Dock icons
+自动隐藏程序坞	Automatically hide Dock
+重置程序坞	Reset Dock
+极光	Aurora
+沙丘	Dunes
+自定义壁纸	Custom wallpaper
+服务器图片路径	Server image path
+本机图片路径	Local image path
+应用	Apply
+上传并应用	Upload & apply
+选择壁纸	Choose wallpaper
+正在加载壁纸…	Loading wallpaper…
+编辑器	Editor
+打开文件…	Open file…
+编辑源码	Edit source
+Markdown 预览	Markdown preview
+Markdown 预览过大，可切换到源码查看。	Markdown preview is too large. Open the source to read the file.
+已打开的文件	Open files
+关闭文件标签 {}	Close file tab {}
+要放弃所有已打开文件中的未保存修改吗？	Discard unsaved changes in all open files?
+监控分类	Monitor sections
+{} 个逻辑处理器	{} logical processors
+支持不超过 8 MiB 的 PNG、JPEG、WebP、GIF、BMP、AVIF 或 SVG。本机图片会上传到 ~/.arcnix/wallpapers。	PNG, JPEG, WebP, GIF, BMP, AVIF or SVG, up to 8 MiB. Local images are uploaded to ~/.arcnix/wallpapers.

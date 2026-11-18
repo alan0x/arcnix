@@ -76,6 +76,7 @@ impl Ui {
         if self.state.with(|s| {
             navigation::workspace_visible(s)
                 && s.workspace_page == WorkspacePage::Resources
+                && s.metrics.section == monitor_ui::Section::Ports
                 && s.ports.snapshot.is_none()
                 && ready(s)
         }) {
@@ -343,12 +344,14 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
     let refresh = ui.clone();
     col().class("resource-ports").fill((
         row().class("resource-ports-heading").fill((
-            text().class("section-title").content(i18n::bind("Listening ports and processes")),
+            row().class("help-heading").fill((
+                text().class("section-title").content(i18n::bind("Listening ports and processes")),
+                help_ui::tip("Listening ports and processes", "TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions."),
+            )),
             btn("Refresh ports", move || refresh.ports_refresh())
                 .class("button resource-ports-refresh")
                 .enabled(state.map(ready)),
         )),
-        text().class("subtle").content(i18n::bind("TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions.")),
         row().class("resource-ports-toolbar").fill((
             col().class("field resource-ports-filter-field").fill((
             text().class("field-label").content(i18n::bind("Filter ports, PID or program")),

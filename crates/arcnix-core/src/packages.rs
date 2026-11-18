@@ -13,6 +13,7 @@ pub enum PackageManager {
     Apt,
     Dnf,
     Yum,
+    Zypper,
     Apk,
     Pacman,
     Unknown,
@@ -23,6 +24,7 @@ impl PackageManager {
             Self::Apt => "APT",
             Self::Dnf => "DNF",
             Self::Yum => "YUM",
+            Self::Zypper => "Zypper",
             Self::Apk => "APK",
             Self::Pacman => "Pacman",
             Self::Unknown => "未识别",
@@ -66,7 +68,7 @@ pub struct Execution {
     pub use_stdin_password: bool,
 }
 
-pub const DETECT_COMMAND: &str = "# arcnix:packages:detect\nprintf 'ARCNIX_OS_BEGIN\\n'; cat /etc/os-release 2>/dev/null; printf '\\nARCNIX_OS_END\\nARCNIX_MANAGER\\t'; if command -v apt-get >/dev/null 2>&1 && command -v apt-cache >/dev/null 2>&1 && command -v dpkg-query >/dev/null 2>&1; then printf 'apt\\n'; elif command -v dnf >/dev/null 2>&1; then printf 'dnf\\n'; elif command -v yum >/dev/null 2>&1; then printf 'yum\\n'; elif command -v apk >/dev/null 2>&1; then printf 'apk\\n'; elif command -v pacman >/dev/null 2>&1; then printf 'pacman\\n'; else printf 'unknown\\n'; fi; printf 'ARCNIX_UID\\t'; id -u; printf 'ARCNIX_SUDO\\t'; if command -v sudo >/dev/null 2>&1; then printf '1\\n'; else printf '0\\n'; fi; printf 'ARCNIX_ARCH\\t'; dpkg --print-architecture 2>/dev/null || printf '\\n'";
+pub const DETECT_COMMAND: &str = "# arcnix:packages:detect\nprintf 'ARCNIX_OS_BEGIN\\n'; cat /etc/os-release 2>/dev/null; printf '\\nARCNIX_OS_END\\nARCNIX_MANAGER\\t'; if command -v apt-get >/dev/null 2>&1 && command -v apt-cache >/dev/null 2>&1 && command -v dpkg-query >/dev/null 2>&1; then printf 'apt\\n'; elif command -v dnf >/dev/null 2>&1; then printf 'dnf\\n'; elif command -v yum >/dev/null 2>&1; then printf 'yum\\n'; elif command -v zypper >/dev/null 2>&1; then printf 'zypper\\n'; elif command -v apk >/dev/null 2>&1; then printf 'apk\\n'; elif command -v pacman >/dev/null 2>&1; then printf 'pacman\\n'; else printf 'unknown\\n'; fi; printf 'ARCNIX_UID\\t'; id -u; printf 'ARCNIX_SUDO\\t'; if command -v sudo >/dev/null 2>&1; then printf '1\\n'; else printf '0\\n'; fi; printf 'ARCNIX_ARCH\\t'; dpkg --print-architecture 2>/dev/null || printf '\\n'";
 pub const INSTALLED_COMMAND: &str = "# arcnix:packages:installed\nLC_ALL=C dpkg-query -W -f='${binary:Package}\\t${Version}\\t${db:Status-Abbrev}\\t${binary:Summary}\\n'";
 
 fn output(session: &RemoteSession, command: &str) -> Result<String> {
@@ -108,6 +110,7 @@ pub fn parse_environment(text: &str) -> Result<SystemEnvironment> {
         "apt" => PackageManager::Apt,
         "dnf" => PackageManager::Dnf,
         "yum" => PackageManager::Yum,
+        "zypper" => PackageManager::Zypper,
         "apk" => PackageManager::Apk,
         "pacman" => PackageManager::Pacman,
         _ => PackageManager::Unknown,

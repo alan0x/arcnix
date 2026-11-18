@@ -6,13 +6,18 @@ mod browser;
 mod cleanup_records_ui;
 mod client_logs;
 mod clipboard;
+mod compose_ui;
 mod configuration_backup_ui;
 mod configuration_compare_ui;
 mod configuration_records_ui;
 mod configuration_template_ui;
 mod configurations_ui;
 mod deleted_files_ui;
+mod desktop_customization_ui;
 mod diagnostics_ui;
+mod disks_ui;
+mod docker_ui;
+mod explorer_ui;
 mod file_browser;
 mod file_columns;
 mod file_context;
@@ -23,6 +28,7 @@ mod help_ui;
 mod i18n;
 mod icons;
 mod installation_ui;
+mod monitor_ui;
 mod navigation;
 mod observability;
 mod operations;
@@ -36,12 +42,16 @@ mod resource_trends;
 mod script_exchange_ui;
 mod script_parameters_ui;
 mod scripts_ui;
+mod server_apps_ui;
+mod server_apps_worker;
 mod server_desktop;
 mod server_inventory_ui;
 mod server_labels_ui;
 mod servers;
 mod settings;
 mod software;
+mod software_install_ui;
+mod software_store_ui;
 mod splitter;
 mod task_records_ui;
 mod task_refresh_ui;
@@ -82,6 +92,15 @@ use worker::{Action, Request, Update};
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
+    SoftwareInstall,
+    StartupService,
+    DesktopSettings,
+    ExplorerColor {
+        path: String,
+        directory: bool,
+    },
+    DockerAction,
+    DockerConfigure,
     TerminalRename {
         id: u64,
     },
@@ -152,6 +171,8 @@ enum WorkspacePage {
     SystemLogs,
     Terminal,
     Explorer,
+    Docker,
+    Editor,
 }
 
 #[derive(Clone)]
@@ -177,6 +198,7 @@ struct State {
     unassigned_columns: FileColumnSettings,
     properties: Option<file_properties::Editor>,
     remote_editor: Option<remote_editor::Editor>,
+    desktop_editor: remote_editor::Tabs,
     updates: updates_ui::UpdateState,
     import_pending: Option<u64>,
     activity_tab: u8,
@@ -223,6 +245,11 @@ struct State {
     logs: String,
     workspace_page: WorkspacePage,
     workbench: server_desktop::Workbench,
+    server_apps: server_apps_ui::DesktopState,
+    docker: docker_ui::DockerState,
+    disks: disks_ui::DiskState,
+    compose: compose_ui::ComposeState,
+    install: software_install_ui::InstallState,
     navigation: navigation::Page,
     settings_section: navigation::SettingsSection,
     unread_notifications: usize,
@@ -258,6 +285,7 @@ struct State {
 }
 #[derive(Clone)]
 struct Ui {
+    wallpapers: Arc<desktop_customization_ui::WallpaperAssets>,
     update_controller: Arc<updates_ui::Controller>,
     batch_controller: Rc<std::cell::RefCell<Option<batch_worker::Controller>>>,
     batch_events: async_channel::Sender<batch_worker::Event>,
@@ -347,6 +375,11 @@ impl Ui {
                 s.selected = Some(id);
                 s.workspace_page = WorkspacePage::Desktop;
                 s.workbench = Default::default();
+                s.server_apps = Default::default();
+                s.docker = Default::default();
+                s.disks = Default::default();
+                s.compose = Default::default();
+                s.install = Default::default();
                 if let Some(profile) = s
                     .config
                     .servers
@@ -649,6 +682,11 @@ impl Ui {
                 }
                 .unwrap_or_else(|| profile.initial_remote_path.clone());
                 s.software = Default::default();
+                s.server_apps = Default::default();
+                s.docker = Default::default();
+                s.disks = Default::default();
+                s.compose = Default::default();
+                s.install = Default::default();
                 s.operations = Default::default();
                 s.metrics = Default::default();
                 resource_ports_ui::reset(s);
@@ -693,6 +731,12 @@ impl Ui {
             s.remote_selection.clear();
             s.remote_request = 0;
             s.software = Default::default();
+            s.server_apps = Default::default();
+            s.docker = Default::default();
+            s.disks = Default::default();
+            s.compose = Default::default();
+            s.install = Default::default();
+            remote_editor::disconnect(s);
             s.operations = Default::default();
             s.metrics = Default::default();
             resource_ports_ui::reset(s);
@@ -1108,68 +1152,78 @@ fn modal(
         let scrim = ui.clone();
         let focus = scope.cage(None);
         let mounted = scope.mount_with(|| {
-            col().class("modal-backdrop").fill((
-                button()
-                    .class("modal-scrim")
-                    .label(i18n::bind("关闭对话框"))
-                    .focus(FocusMode::Programmatic)
-                    .enabled(ui.state.map(|s| {
-                        (s.file_pending.is_none()
-                            || file_context::deletion_dialog(s)
-                            || file_properties::running(s)
-                            || (s.dialog == Some(Dialog::RemoteEditor) && remote_editor::busy(s)))
-                            && s.import_pending.is_none()
-                    }))
-                    .on(activate, move |_| scrim.close_dialog()),
-                col()
-                    .class(ui.state.map(|s| {
-                        if s.dialog == Some(Dialog::RemoteEditor) {
-                            "modal-card remote-editor-modal"
-                        } else {
-                            "modal-card"
-                        }
-                        .to_owned()
-                    }))
-                    .role(Role::Dialog)
-                    .name(i18n::bind(title.clone()))
-                    .focus(FocusMode::Programmatic)
-                    .node_ref(focus)
-                    .fill((
-                        row().class("modal-header").fill((
-                            text().class("dialog-title").content(i18n::bind(title)),
-                            close_action("关闭对话框")
-                                .enabled(ui.state.map(|s| {
-                                    (s.file_pending.is_none()
-                                        || file_context::deletion_dialog(s)
-                                        || file_properties::running(s)
-                                        || (s.dialog == Some(Dialog::RemoteEditor)
-                                            && remote_editor::busy(s)))
-                                        && s.import_pending.is_none()
+            col()
+                .class(ui.state.map(|s| {
+                    if server_desktop::owns_dialog(s) && s.fingerprint.is_none() {
+                        server_apps_ui::themed(s, "modal-backdrop desktop-modal-backdrop")
+                    } else {
+                        "modal-backdrop".to_owned()
+                    }
+                }))
+                .fill((
+                    button()
+                        .class("modal-scrim")
+                        .label(i18n::bind("关闭对话框"))
+                        .focus(FocusMode::Programmatic)
+                        .enabled(ui.state.map(|s| {
+                            (s.file_pending.is_none()
+                                || file_context::deletion_dialog(s)
+                                || file_properties::running(s)
+                                || (s.dialog == Some(Dialog::RemoteEditor)
+                                    && remote_editor::busy(s)))
+                                && s.import_pending.is_none()
+                        }))
+                        .on(activate, move |_| scrim.close_dialog()),
+                    col()
+                        .class(ui.state.map(|s| {
+                            if s.dialog == Some(Dialog::RemoteEditor) {
+                                "modal-card remote-editor-modal"
+                            } else {
+                                "modal-card"
+                            }
+                            .to_owned()
+                        }))
+                        .role(Role::Dialog)
+                        .name(i18n::bind(title.clone()))
+                        .focus(FocusMode::Programmatic)
+                        .node_ref(focus)
+                        .fill((
+                            row().class("modal-header").fill((
+                                text().class("dialog-title").content(i18n::bind(title)),
+                                close_action("关闭对话框")
+                                    .enabled(ui.state.map(|s| {
+                                        (s.file_pending.is_none()
+                                            || file_context::deletion_dialog(s)
+                                            || file_properties::running(s)
+                                            || (s.dialog == Some(Dialog::RemoteEditor)
+                                                && remote_editor::busy(s)))
+                                            && s.import_pending.is_none()
+                                    }))
+                                    .on_press(move || close.close_dialog()),
+                            )),
+                            col()
+                                .class("modal-body")
+                                .semantics(ui.state.map(|s| {
+                                    Some(Box::new(Semantics {
+                                        inert: s.file_pending.is_some()
+                                            || s.import_pending.is_some(),
+                                        ..Default::default()
+                                    }))
                                 }))
-                                .on_press(move || close.close_dialog()),
+                                .fill(body),
+                            text()
+                                .class(ui.state.map(|s| {
+                                    if s.dialog_error.is_empty() {
+                                        "hidden"
+                                    } else {
+                                        "form-error"
+                                    }
+                                    .to_string()
+                                }))
+                                .content(i18n::bind(ui.state.map(|s| s.dialog_error.clone()))),
+                            row().class("modal-footer").fill(footer),
                         )),
-                        col()
-                            .class("modal-body")
-                            .semantics(ui.state.map(|s| {
-                                Some(Box::new(Semantics {
-                                    inert: s.file_pending.is_some() || s.import_pending.is_some(),
-                                    ..Default::default()
-                                }))
-                            }))
-                            .fill(body),
-                        text()
-                            .class(ui.state.map(|s| {
-                                if s.dialog_error.is_empty() {
-                                    "hidden"
-                                } else {
-                                    "form-error"
-                                }
-                                .to_string()
-                            }))
-                            .content(i18n::bind(ui.state.map(|s| s.dialog_error.clone()))),
-                        row().class("modal-footer").fill(footer),
-                    )),
-            ))
+                ))
         })?;
         scope.retain(mounted)?;
         if let Some(id) = focus.get() {
@@ -1353,8 +1407,12 @@ fn app(ui: Ui) -> impl Widget {
                 servers::dialogs(ui.clone()),
                 updates_ui::overlay(ui.clone()),
                 workspace::file_dialog(ui.clone()),
+                explorer_ui::color_dialog(ui.clone()),
                 fragment((
                     file_context::dialogs(ui.clone()),
+                    server_apps_ui::dialogs(ui.clone()),
+                    software_install_ui::dialogs(ui.clone()),
+                    fragment(docker_ui::dialogs(ui.clone())),
                     terminal_menu::dialogs(ui.clone()),
                     resource_ports_ui::dialog(ui.clone()),
                 )),
@@ -1514,6 +1572,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         unassigned_columns: FileColumnSettings::default(),
         properties: None,
         remote_editor: None,
+        desktop_editor: Default::default(),
         updates: Default::default(),
         import_pending: None,
         activity_tab: 0,
@@ -1560,6 +1619,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         logs: String::new(),
         workspace_page: WorkspacePage::Desktop,
         workbench: Default::default(),
+        server_apps: Default::default(),
+        docker: Default::default(),
+        disks: Default::default(),
+        compose: Default::default(),
+        install: Default::default(),
         navigation: Default::default(),
         settings_section: Default::default(),
         unread_notifications: 0,
@@ -1595,6 +1659,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     });
     let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
+        wallpapers: Arc::new(desktop_customization_ui::WallpaperAssets::default()),
         update_controller,
         batch_controller: Rc::new(std::cell::RefCell::new(None)),
         batch_events,
@@ -1664,6 +1729,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)|Update::TextFile(_)){continue;}
         match response.update {
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
+            Update::ServerApps(result)=>server_apps_ui::event(&events,response.serial,result),
             Update::Operations(event)=>operations::event(&events,response.serial,event),
             Update::Terminal(event)=>terminal::update(&events,event),
             Update::Fingerprint(fingerprint)=>{
@@ -1672,13 +1738,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});events.log("SSH 认证成功");if sftp{events.refresh(true);}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
+            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){events.error(format!("读取目录失败：{message}"));}},
-            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+            Update::ConnectionLost(message)=>{operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
             Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
@@ -1738,19 +1804,28 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Locale bindings patch the existing document. Remounting it would retire
     // live button identities while their browser activations are still queued.
     window.mount(app(ui.clone()))?;
+    let wallpapers = ui.wallpapers.clone();
     Shell::new().run(
         window,
         Config {
-            #[cfg(windows)]
-            native: Some(Box::new(app_icon::AppIcon)),
+            native: Some(Box::new(app_icon::DesktopWindow {
+                state,
+                fullscreen: false,
+                wallpapers: wallpapers.clone(),
+            })),
+            asset_provider: Some(wallpapers),
             initialization_script: Some(
                 [
                     include_str!("../assets/system-theme.js"),
+                    include_str!("../assets/desktop-frame.js"),
                     include_str!("../assets/file-list-events.js"),
+                    include_str!("../assets/desktop-customization.js"),
                     include_str!("../assets/remote-editor-events.js"),
                     include_str!("../assets/help-events.js"),
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
+                    include_str!("../assets/desktop-geometry.js"),
+                    include_str!("../assets/desktop-motion.js"),
                     include_str!("../assets/vendor/xterm/xterm.js"),
                     include_str!("../assets/vendor/addon-fit/addon-fit.js"),
                     include_str!("../assets/terminal.js"),

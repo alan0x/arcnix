@@ -24,6 +24,7 @@ pub struct ConflictDecision {
 
 pub enum Action {
     Keepalive,
+    ServerApps(crate::server_apps_worker::Action),
     Operations(crate::operations_worker::Action),
     Terminal(crate::terminal_worker::Action),
     Probe(Box<ServerProfile>, Option<String>),
@@ -103,6 +104,7 @@ impl Action {
     }
 }
 pub enum Update {
+    ServerApps(Result<crate::server_apps_worker::Reply, String>),
     TextFile(Result<arcnix_core::text_files::Document, String>),
     Alive,
     FileMetadata(Result<arcnix_core::permissions::Metadata, String>),
@@ -331,6 +333,29 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             };
             if let Action::TransferConcurrency(limit) = action {
                 transfers.set_limit(limit);
+                continue;
+            }
+            if let Action::ServerApps(action) = action {
+                let outcome = (|| {
+                    anyhow::ensure!(
+                        epoch == generation.load(Ordering::Acquire) && epoch == active_epoch,
+                        "Server connection has changed"
+                    );
+                    let remote = session
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Connect a server first"))?;
+                    crate::server_apps_worker::handle(remote, action)
+                })();
+                if let Err(error) = &outcome
+                    && arcnix_core::transport_error::is_connection_error(error)
+                {
+                    session = None;
+                    pending = None;
+                    transfers.reset();
+                    package_environment = None;
+                    send(Update::ConnectionLost(format!("{error:#}")));
+                }
+                send(Update::ServerApps(outcome.map_err(|e| format!("{e:#}"))));
                 continue;
             }
             if let Action::Operations(action) = action {

@@ -36,6 +36,16 @@ pub enum Icon {
     StarFilled,
     Fullscreen,
     ExitFullscreen,
+    Docker,
+    Disks,
+    Monitor,
+    Store,
+    Terminal,
+    Services,
+    Logs,
+    WindowMinimize,
+    WindowMaximize,
+    WindowRestore,
 }
 
 impl Icon {
@@ -71,6 +81,16 @@ impl Icon {
             Self::StarFilled => "star-filled",
             Self::Fullscreen => "fullscreen",
             Self::ExitFullscreen => "exit-fullscreen",
+            Self::Docker => "docker",
+            Self::Disks => "disks",
+            Self::Monitor => "monitor",
+            Self::Store => "store",
+            Self::Terminal => "terminal",
+            Self::Services => "services",
+            Self::Logs => "logs",
+            Self::WindowMinimize => "window-minimize",
+            Self::WindowMaximize => "window-maximize",
+            Self::WindowRestore => "window-restore",
         }
     }
     fn svg(self) -> &'static str {
@@ -105,6 +125,16 @@ impl Icon {
             Self::StarFilled => include_str!("../assets/icons/star-filled.svg"),
             Self::Fullscreen => include_str!("../assets/icons/fullscreen.svg"),
             Self::ExitFullscreen => include_str!("../assets/icons/exit-fullscreen.svg"),
+            Self::Docker => include_str!("../assets/icons/docker.svg"),
+            Self::Disks => include_str!("../assets/icons/disks.svg"),
+            Self::Monitor => include_str!("../assets/icons/monitor.svg"),
+            Self::Store => include_str!("../assets/icons/store.svg"),
+            Self::Terminal => include_str!("../assets/icons/terminal.svg"),
+            Self::Services => include_str!("../assets/icons/services.svg"),
+            Self::Logs => include_str!("../assets/icons/logs.svg"),
+            Self::WindowMinimize => include_str!("../assets/icons/window-minimize.svg"),
+            Self::WindowMaximize => include_str!("../assets/icons/window-maximize.svg"),
+            Self::WindowRestore => include_str!("../assets/icons/window-restore.svg"),
         }
     }
 }
@@ -233,6 +263,16 @@ pub fn css() -> String {
         Icon::StarFilled,
         Icon::Fullscreen,
         Icon::ExitFullscreen,
+        Icon::Docker,
+        Icon::Disks,
+        Icon::Monitor,
+        Icon::Store,
+        Icon::Terminal,
+        Icon::Services,
+        Icon::Logs,
+        Icon::WindowMinimize,
+        Icon::WindowMaximize,
+        Icon::WindowRestore,
     ] {
         let encoded = icon
             .svg()
@@ -243,9 +283,20 @@ pub fn css() -> String {
             ".glyph-{}{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n",
             icon.name()
         ));
-        if matches!(icon, Icon::Folder) {
+        if let Some(app) = match icon {
+            Icon::Folder => Some("explorer"),
+            Icon::File => Some("document"),
+            Icon::Edit => Some("editor"),
+            Icon::Docker => Some("docker"),
+            Icon::Monitor => Some("resources"),
+            Icon::Store => Some("software"),
+            Icon::Terminal => Some("terminal"),
+            Icon::Services => Some("operations"),
+            Icon::Logs => Some("logs"),
+            _ => None,
+        } {
             css.push_str(&format!(
-                ".app-explorer .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n"
+                ".app-{app} .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n"
             ));
         }
     }

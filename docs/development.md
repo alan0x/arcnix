@@ -209,6 +209,41 @@ tools/sftp_fixture.py   仅用于回环测试的 SSH/SFTP 服务
 
 ## 界面回归
 
+Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200 行的快照，不跟随或轮询。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口同时显示发布与配置映射、未发布的暴露端口；host 网络可跳转现有资源页检查服务器监听。
+
+重启策略和 CPU／内存限制使用 [Docker container update](https://docs.docker.com/reference/cli/docker/container/update/)，只修改当前容器，不改写 Compose 定义；端口和挂载变更需要重建容器。卷详情使用 [volume inspect](https://docs.docker.com/reference/cli/docker/volume/inspect/)，日志使用 [container logs](https://docs.docker.com/reference/cli/docker/container/logs/) 的有限尾部读取。
+
+桌面外观独立于客户端设置；“跟随应用”沿用客户端主题，亮／暗选择仅作用于 Desktop 及其对话框，外部侧栏、标题栏和应用设置保持客户端主题。远程登录用户的 `~/.arcnix/desktop.json` 保存 v1 JSON（最多 64 KiB，兼容旧版仅 theme 字段），读取不创建文件，保存时以 Base64 传输内容，在相同目录创建临时文件再原子替换，新目录 0700、文件 0600，拒绝目录或文件符号链接及其他所有者。无 SFTP 也可读写；无法读取或版本未知时禁止覆盖，写失败保持原主题及文件。不同客户端按最后一次成功保存为准；按连接世代和请求序号丢弃迟到结果。
+
+Software store 默认展示应用目录：18 个内置应用、7 个分类、搜索、详情和统一已安装列表。仅在点击安装后展示系统软件包／Snap／Docker Compose 的来源卡片，带入发行版对应的包名、Snap 发布者或 Compose 镜像；未定义方案或服务器缺少运行环境时禁用对应来源。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。目录介绍离线可用，不获取远程图片，也不虚构评分、下载量或版本；可用软件包和版本仍以服务器已启用仓库为准。按名称安装和仓库搜索保留为辅助入口。
+
+已安装页通过有限查询合并系统包、Snap 和 Arcnix Compose 项目，显示实际来源和版本；默认只显示目录中识别的系统应用，可勾选显示全部系统包。更新、卸载绑定原来源，Compose 项目跳转 Docker 管理。查询失败保留其他来源的结果并显示错误，刷新由用户主动触发，不增加客户端常驻任务。
+
+系统来源识别 APT、DNF、YUM、Zypper、APK、Pacman；APT 安装继续使用原有事务审核，其他来源在每个目标执行前重新检查管理器。Pacman 升级明确展示为完整系统升级，拒绝单独刷新索引，避免部分升级。软件包名称按管理器验证；不同发行版的同类软件未必同名。Snap 仅在检测到时可用，默认 stable、默认不启用 classic，Certbot 需用户明确允许 classic 才能提交。Snap 身份来自 [Caddy](https://snapcraft.io/caddy)、[htop](https://snapcraft.io/htop)、[Certbot](https://snapcraft.io/certbot) 的发布信息。安装、升级、卸载沿用服务器任务和多目标审核，不自动安装 Snapd、Docker 或 Compose 前置环境。
+
+商店验证入口：`python tools/software_store_smoke.py`，覆盖浏览时隐藏安装渠道、分类和中文搜索、详情、各来源配置、不可用来源、classic 显式选择、安装来源保持、Docker 共用目录、发行版包名及主题／窄窗口布局。完整安装任务仍由 `tools/desktop_extensions_smoke.py` 覆盖。
+
+Compose 内置 Nginx、Redis、Caddy。定义与清单存放于 `~/.arcnix/apps/<name>/compose.yaml` 和 `arcnix.json`，归原 SSH 用户所有、目录 0700、定义 0600。选择用户目录是为了避免写入其他用户或系统配置、便于按用户备份；Nginx 静态文件位于同一项目 html 目录，命名卷仍在 Docker 的实际存储位置。项目名冲突拒绝覆盖，应用修改前核对审核时的 YAML 摘要；仅列出 Arcnix 管理的项目。使用 Compose v2 的 config 和 up --detach --no-build --wait，配置 restart: unless-stopped；Docker daemon 自身需启用开机启动，可在 Services 中检查。停止／重启／应用通过服务器任务执行，保留数据卷。说明依据 [Compose 生产部署](https://docs.docker.com/compose/how-tos/production/) 和 [Compose volumes](https://docs.docker.com/reference/compose-file/volumes/)。
+
+Disks 通过有限 lsblk/findmnt 查询设备、分区及挂载使用量，不提供分区或格式化操作；未知容量保留为未知，挂载点可打开 Explorer。Services 合并 list-units 和 list-unit-files，区分运行状态与开机启用状态；enable/disable 不隐式启动／停止。新启动任务以审核后的系统服务执行，用户脚本存放于目标用户 ~/.arcnix/services/<name>/run.sh，单元在 /etc/systemd/system/arcnix-startup-<name>.service，启用后需独立启动。持续程序由 systemd 管理，客户端无需常驻。
+
+Terminal 仅保留一个窗口标题栏，整合标签与操作菜单，不重复服务器地址。布局保存最多 8 个标签的独立 ID、名称、初始目录、活动标签及窗口最大化状态，不保存输出或输入历史。检测到 tmux 后使用独立 arcnix socket 中的 terminal-<id> 会话，重新连接恢复已有屏幕、目录和程序；关闭标签或客户端只分离连接，exit 才结束对应 shell。未检测到 tmux 时只恢复布局，不自动安装。tmux 默认不跨服务器重启保活。
+
+扩展验证入口为 `python tools/desktop_extensions_smoke.py` 和 `cargo test -p arcnix-core --test desktop_extensions_integration --locked -- --ignored --nocapture`（设置下述 WSL 发行版变量）。前者覆盖主题边界、Disks 浏览、Services、Compose 和 DNF/Snap 安装及终端跨进程恢复；后者执行真实 Linux 磁盘查询、私有工具命令、隔离挂载中的 systemd 配置验证，以及真实 tmux 的重复连接。不会安装真实软件包或联系 Docker daemon。
+
+验证入口为 `python tools/docker_desktop_smoke.py`，覆盖实际 SSH 协议交互、受控 Docker 状态、主题跨进程恢复、用户／服务器隔离、权限错误、损坏设置、不完整响应、迟到结果及中文窄窗口。原生 shell 验证不连接 Docker daemon：
+
+```powershell
+$env:ARCNIX_TEST_SHELL_DISTRIBUTION='Ubuntu'
+cargo test -p arcnix-core --test server_apps_integration --locked -- --ignored --nocapture
+```
+
+该专项使用私有临时 home 和受控 Docker 可执行文件，执行真实 POSIX shell，核对文件原子替换、权限、链接拒绝、含空格／中文的路径、明确本机连接及 CLI 参数，完成后清理自己的目录。
+
+桌面应用打开、切换、最小化、关闭与最大化采用 160–240 毫秒的过渡，打开与最小化分别从启动图标方向展开和朝 Dock 收拢。Rust 通过 desktop-motion-state 仅发布可见性、应用、连接世代与窗口布局；浏览器使用独立窗口的 View Transition 合成快照，不复制应用 DOM 或终端内容、不重建会话，也不等待 SSH 数据。点击仍只交给原有处理器一次；连续点击跳过旧视觉并保持原生操作顺序，切回首页或更换连接立即结束旧过渡。缺少 View Transition 时使用轻量入场，捕获失败仍保留原操作；prefers-reduced-motion 动态关闭两种效果和图标动画。API 行为参考 [startViewTransition](https://developer.mozilla.org/en-US/docs/Web/API/Document/startViewTransition)；专项入口为 `python tools/desktop_motion_smoke.py`，另由 `server_desktop_smoke.py` 和 `software_store_smoke.py` 回归窗口与终端、商店流程。
+
+每个桌面应用分别保存普通窗口的位置、大小和最大化状态。拖动或缩放结束后写入登录用户的 `~/.arcnix/desktop.json`，双击标题栏可以恢复普通尺寸。视口变小时只限制显示范围，打开更大的视口会恢复原窗口几何。资源管理器通过 SFTP 查找主目录及已有的 Desktop、Documents、Downloads，在同一文件中保存侧栏开关、收藏和七色目录标记。`tools/desktop_windows_smoke.py` 验证了跨应用、重开、视口缩小及客户端重启时的恢复。
+
 服务器首页右上角齿轮进入编辑。桌面标签右侧可将服务器桌面铺满应用内容区域；桌面顶栏按钮或 Escape 恢复原布局，弹窗和菜单优先处理 Escape，终端控件与 SSH 会话保留。桌面内“资源管理器”复用现有 SFTP 文件操作，仅显示远程目录，与“传输文件”共享路径、筛选和选择；下载使用当前本地目录，保存位置收进工具栏 `?`，也可跳转到双栏选择本地目录。日志工具栏放大镜重新检测日志源并读取日志，刷新按钮只读取当前查询。`python tools/server_desktop_smoke.py` 覆盖这些入口、实际文件内容、全屏与弹窗层级、语言和窄窗口。
 
 文件区右键菜单与工具栏“…”共用 Rust 操作入口，项目菜单按当前选择显示；右键多选中的项目保留全部选择，右键其他项目单选，空白处清空选择并显示目录操作。复制所选路径使用按显示顺序排列的完整路径，以换行分隔；本地路径移除 Windows 内部命名空间前缀。属性不递归扫描文件夹大小，多选最多展示 100 条路径。

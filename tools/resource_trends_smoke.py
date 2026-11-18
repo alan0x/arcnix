@@ -9,7 +9,7 @@ def queries(peer):
     path=peer.root/'metrics-queries.jsonl'
     return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
 def fixture(peer,**values):(peer.root/'metrics-fixture.json').write_text(json.dumps(dict(trace=True,**values)),encoding='utf-8')
-def resources(p):p.get_by_role('button',name='Resources',exact=True).click()
+def resources(app):app.application('Monitor')
 def refresh(p):
     count=len(data(p)['points']);p.get_by_role('button',name='Refresh resource values',exact=True).click()
     eventually(lambda:len(data(p)['points'])==count+1)
@@ -20,7 +20,7 @@ with Peer(out/'peer') as peer:
     config=peer.config([peer.profile('Alpha'),peer.profile('Beta')],out)
     config['config']['settings']['resource_interval_seconds']=30
     with Desktop(out/'desktop',config) as app:
-        p=app.page;app.connect();resources(p)
+        p=app.page;app.connect();resources(app)
         expect(p.locator('.resource-trend-chart svg')).to_have_count(3)
         eventually(lambda:len(data(p)['points'])==1)
         first=data(p)['points'][0];assert first['cpu'] is None and first['receive'] is None and first['memory']==50
@@ -44,7 +44,7 @@ with Peer(out/'peer') as peer:
         passed('Charts expose sample values by pointer and keyboard, missing values remain labelled, and detailed guidance stays in hover/click help')
 
         fixture(peer,error=True);refresh(p);assert data(p)['points'][-1]['memory'] is None
-        expect(p.locator('.resources-page .software-error')).to_be_visible()
+        expect(p.locator('.monitor-page .software-error')).to_be_visible()
         fixture(peer);refresh(p);assert data(p)['points'][-1]['cpu'] is None;refresh(p)
         expect(p.locator('.resource-trend-memory path.resource-trend-line')).to_have_count(2)
         fixture(peer,missing_memory=True,missing_network=True);refresh(p);point=data(p)['points'][-1]
@@ -62,13 +62,13 @@ with Peer(out/'peer') as peer:
         refresh(p);refresh(p)
         passed('Range changes only select local history; clearing sends no command and the next read starts a fresh series')
 
-        app.settings('Monitoring');p.get_by_role('button',name='Every 3 seconds',exact=True).click();app.servers();resources(p)
+        app.settings('Monitoring');p.get_by_role('button',name='Every 3 seconds',exact=True).click();app.servers();resources(app)
         expect(p.get_by_role('button',name='Refresh resource values',exact=True)).to_be_enabled()
         p.get_by_role('button',name='Pause sampling',exact=True).click();count=len(queries(peer));time.sleep(3.6);assert len(queries(peer))==count
         refresh(p);assert len(queries(peer))==count+1
         refresh(p);assert len(queries(peer))==count+2 and data(p)['points'][-1]['cpu']==30 and data(p)['points'][-1]['receive']==1024
         p.locator('.rail-scripts').click();count=len(queries(peer));time.sleep(3.6);assert len(queries(peer))==count
-        app.servers();resources(p);assert len(queries(peer))==count
+        app.servers();resources(app);assert len(queries(peer))==count
         p.get_by_role('button',name='Resume sampling',exact=True).click();eventually(lambda:len(queries(peer))>=count+2,timeout=9)
         expect(p.get_by_role('button',name='Refresh resource values',exact=True)).to_be_enabled()
         fixture(peer,delay=7);count=len(queries(peer));refresh(p);point=data(p)['points'][-1]
@@ -81,19 +81,21 @@ with Peer(out/'peer') as peer:
         p.get_by_role('button',name='Pause sampling',exact=True).click()
         passed('Paused and hidden pages send no periodic requests; explicit refresh still works, and resuming restores automatic sampling')
 
-        app.settings('General');p.get_by_role('button',name='Dark',exact=True).click();app.servers();resources(p)
+        app.settings('General');p.get_by_role('button',name='Dark',exact=True).click();app.servers();resources(app)
         app.screenshot('resources-dark.png')
-        app.settings('General');p.get_by_role('button',name='Light',exact=True).click();p.get_by_role('button',name='简体中文',exact=True).click();app.servers();p.get_by_role('button',name='资源概览',exact=True).click()
+        dock=p.locator('.desktop-dock')
+        app.settings('General');p.get_by_role('button',name='Light',exact=True).click();p.get_by_role('button',name='简体中文',exact=True).click();app.servers();dock.get_by_role('button',name='监控',exact=True).click()
+        p.locator('.monitor-sidebar').get_by_role('button',name='概览',exact=True).click()
         expect(p.locator('.resource-trend-title')).to_have_text(['CPU 使用率','内存使用','网络速率'])
         p.set_viewport_size(dict(width=900,height=780));expect(p.get_by_role('button',name='继续采样',exact=True)).to_be_visible()
         assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
         assert not p.locator('.resource-trends *:visible').evaluate_all("els=>els.filter(el=>!el.children.length&&el.textContent.trim()&&parseFloat(getComputedStyle(el).fontSize)<12).map(el=>el.textContent)")
         app.screenshot('resources-chinese-narrow.png')
-        p.get_by_role('button',name='文件管理',exact=True).click();p.get_by_role('button',name='资源概览',exact=True).click()
+        dock.get_by_role('button',name='资源管理器',exact=True).click();dock.get_by_role('button',name='监控',exact=True).click()
         expect(p.locator('.resource-trend-chart svg')).to_have_count(3)
         passed('Chinese labels, both themes, 900px layouts and remounting preserve readable charts without duplicated renderers')
 
-        p.set_viewport_size(dict(width=1440,height=980));p.locator('.settings-link').click();p.locator('.context-links').get_by_role('button',name='常规',exact=True).click();p.get_by_role('button',name='English',exact=True).click();app.servers();app.connect(1);resources(p)
+        p.set_viewport_size(dict(width=1440,height=980));p.locator('.settings-link').click();p.locator('.context-links').get_by_role('button',name='常规',exact=True).click();p.get_by_role('button',name='English',exact=True).click();app.servers();app.connect(1);resources(app)
         eventually(lambda:len(data(p)['points'])==1)
         assert data(p)['points'][0]['cpu'] is None and len(data(p)['points'])==1
         saved=json.loads(app.config.read_text(encoding='utf-8'));assert 'points' not in app.config.read_text(encoding='utf-8') and not app.config.with_suffix('.tasks.json').exists()
@@ -102,7 +104,7 @@ with Peer(out/'peer') as peer:
 
     saved['config']['settings']['resource_interval_seconds']=30
     with Desktop(out/'restart',saved) as app:
-        app.connect(1);resources(app.page);eventually(lambda:len(data(app.page)['points'])==1)
+        app.connect(1);resources(app);eventually(lambda:len(data(app.page)['points'])==1)
         assert data(app.page)['points'][0]['cpu'] is None
         passed('Restarting the client starts new session history and requires fresh samples instead of loading historical monitoring data')
 

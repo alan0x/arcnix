@@ -1,14 +1,40 @@
-//! Native window icons share resource 1 with the executable's Explorer icon.
-#[cfg(windows)]
-pub struct AppIcon;
+//! Native window presentation for the server desktop.
+use std::sync::Arc;
 
-#[cfg(windows)]
-impl glory::wry::shell::NativeLifecycle for AppIcon {
+use glory::prelude::Cage;
+use glory::wry::shell::{Fullscreen, NativeLifecycle, NativeWindow, ShellError};
+
+use super::desktop_customization_ui::{WallpaperAssets, wallpaper_asset};
+
+pub(super) struct DesktopWindow {
+    pub state: Cage<super::State>,
+    pub fullscreen: bool,
+    pub wallpapers: Arc<WallpaperAssets>,
+}
+
+impl NativeLifecycle for DesktopWindow {
+    fn poll(&mut self, window: &NativeWindow) -> Result<bool, ShellError> {
+        let fullscreen = self.state.with(super::server_desktop::fullscreen);
+        self.wallpapers.show(self.state.with(wallpaper_asset));
+        if self.fullscreen != fullscreen {
+            window.set_fullscreen(
+                fullscreen.then(|| Fullscreen::Borderless(window.current_monitor())),
+            );
+            self.fullscreen = fullscreen;
+        }
+        Ok(false)
+    }
+
+    fn closed(&mut self, _window: &NativeWindow) {
+        self.wallpapers.show(None);
+    }
+
+    #[cfg(windows)]
     fn opened(
         &mut self,
-        window: &glory::wry::shell::NativeWindow,
+        window: &NativeWindow,
         _wake: &std::task::Waker,
-    ) -> Result<(), glory::wry::shell::ShellError> {
+    ) -> Result<(), ShellError> {
         use glory::wry::shell::NativeWindowExtWindows;
         use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;

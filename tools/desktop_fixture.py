@@ -154,6 +154,7 @@ class Desktop:
             tabs.get_by_role('button', name='Home', exact=True).click()
             self.page.locator('.overview-connect' if label == 'Desktop' else '.overview-transfer').click()
     def application(self, label):
+        if label == 'Software': label = 'Software store'
         self.workspace('Desktop')
         self.page.locator('.desktop-dock').get_by_role('button', name=label, exact=True).click()
     def settings(self, section):

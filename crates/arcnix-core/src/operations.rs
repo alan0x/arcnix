@@ -94,9 +94,11 @@ pub struct Service {
     pub active: String,
     pub sub: String,
     pub description: String,
+    pub startup: String,
 }
 pub const LIST_COMMAND: &str = "# arcnix:services:list\nif command -v systemctl >/dev/null 2>&1 && test -d /run/systemd/system; then LC_ALL=C SYSTEMD_COLORS=0 systemctl --no-pager --no-legend --plain --full --no-ask-password list-units --all --type=service </dev/null; else printf 'Service management requires a running systemd system manager.\\n' >&2; exit 125; fi";
 pub fn parse_services(text: &str) -> Result<Vec<Service>> {
+    let (text, unit_files) = text.split_once("ARCNIX_UNIT_FILES\n").unwrap_or((text, ""));
     let mut services = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for line in text.lines().filter(|s| !s.trim().is_empty()) {
@@ -118,6 +120,7 @@ pub fn parse_services(text: &str) -> Result<Vec<Service>> {
             .ok_or_else(|| anyhow::anyhow!("Incomplete service list"))?;
         ensure!(seen.insert(unit.to_owned()), "Duplicate service unit");
         services.push(Service {
+            startup: "unknown".into(),
             unit: unit.into(),
             load: load.into(),
             active: active.into(),
@@ -125,11 +128,42 @@ pub fn parse_services(text: &str) -> Result<Vec<Service>> {
             description: fields.collect::<Vec<_>>().join(" "),
         });
     }
+    for line in unit_files.lines().filter(|s| !s.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let unit = fields.next().unwrap_or_default();
+        if unit.ends_with("@.service") {
+            continue;
+        }
+        validate_unit(unit)?;
+        let startup = fields
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Missing unit-file state"))?;
+        ensure!(
+            startup.len() <= 32 && startup.bytes().all(|c| c.is_ascii_lowercase() || c == b'-'),
+            "Invalid unit-file state"
+        );
+        if let Some(service) = services.iter_mut().find(|s| s.unit == unit) {
+            service.startup = startup.into();
+        } else {
+            ensure!(services.len() < 4000, "Too many installed services");
+            services.push(Service {
+                unit: unit.into(),
+                load: "not-loaded".into(),
+                active: "inactive".into(),
+                sub: "dead".into(),
+                description: String::new(),
+                startup: startup.into(),
+            });
+        }
+    }
     services.sort_by(|a, b| a.unit.cmp(&b.unit));
     Ok(services)
 }
 pub fn list(session: &RemoteSession) -> Result<Vec<Service>> {
-    let output = session.exec(LIST_COMMAND)?;
+    let command = format!(
+        "{LIST_COMMAND}\nprintf 'ARCNIX_UNIT_FILES\\n'\nLC_ALL=C SYSTEMD_COLORS=0 systemctl --no-pager --no-legend --full --no-ask-password list-unit-files --type=service </dev/null"
+    );
+    let output = session.exec(&command)?;
     ensure!(
         output.exit_code == 0,
         "Cannot list services (exit {}): {}",
@@ -160,6 +194,8 @@ pub enum ServiceAction {
     Start,
     Stop,
     Restart,
+    Enable,
+    Disable,
 }
 impl ServiceAction {
     pub fn verb(self) -> &'static str {
@@ -167,6 +203,8 @@ impl ServiceAction {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Restart => "restart",
+            Self::Enable => "enable",
+            Self::Disable => "disable",
         }
     }
 }
@@ -260,6 +298,18 @@ pub(crate) fn shell_execution(plan: &Plan, password: bool) -> Result<crate::pack
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn boot_enablement_includes_inactive_unloaded_units_without_starting_them() {
+        let rows = parse_services("nginx.service loaded active running Web server\nworker.service loaded inactive dead Worker\nARCNIX_UNIT_FILES\nnginx.service enabled enabled\nworker.service disabled enabled\nunloaded.service enabled enabled\n").unwrap();
+        assert_eq!(rows.len(), 3);
+        let nginx = rows.iter().find(|v| v.unit == "nginx.service").unwrap();
+        let worker = rows.iter().find(|v| v.unit == "worker.service").unwrap();
+        let unloaded = rows.iter().find(|v| v.unit == "unloaded.service").unwrap();
+        assert_eq!(nginx.startup, "enabled");
+        assert_eq!(worker.startup, "disabled");
+        assert_eq!(unloaded.active, "inactive");
+        assert_eq!(unloaded.startup, "enabled");
+    }
     #[test]
     fn saved_commands_roundtrip_and_old_configs_remain_readable() {
         let old =

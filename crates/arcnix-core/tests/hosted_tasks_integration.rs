@@ -376,6 +376,9 @@ fn verify_cross_client_operation_lock(distribution: &str) -> anyhow::Result<()> 
                     pid()?.trim().parse::<u32>()? > 0 && pid()? != original_pid,
                     "Restart did not replace the service process"
                 ),
+                ServiceAction::Enable | ServiceAction::Disable => {
+                    unreachable!("This loop covers service lifecycle operations")
+                }
                 ServiceAction::Stop => {
                     run(&format!(
                         "if systemctl is-active --quiet {}; then exit 1; fi",

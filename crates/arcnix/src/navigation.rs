@@ -484,6 +484,9 @@ fn global_sidebar(ui: Ui) -> impl Widget {
 
 pub(super) fn shell(ui: Ui) -> impl Widget {
     let state = ui.state;
+    let workbench = state.map(|s| {
+        s.navigation == Page::Servers && s.selected.is_some() && !server_inventory_ui::shown(s)
+    });
     let view_log = ui.clone();
     let dismiss = ui.clone();
     row()
@@ -506,54 +509,58 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                 move || global_sidebar(ui.clone())
             }),
             col().class("main-panel").fill((
-                row().class("page-header").fill((
-                    text().class("page-header-title").content(state.map(|s| {
-                        match s.navigation {
-                            Page::Servers if server_inventory_ui::shown(s) => {
-                                i18n::translate("Server overview")
-                            }
-                            Page::Servers => s
-                                .config
-                                .servers
-                                .iter()
-                                .find(|p| Some(&p.id) == s.selected.as_ref())
-                                .map(|p| p.name.clone())
-                                .unwrap_or_else(|| i18n::translate("服务器")),
-                            Page::Scripts => i18n::translate("Scripts"),
-                            Page::Tasks => i18n::translate("Tasks"),
-                            Page::Backups => i18n::translate("Backups"),
-                            Page::Diagnostics => i18n::translate("Diagnostics"),
-                            Page::Configurations => i18n::translate("Configurations"),
-                            Page::Notifications => i18n::translate("所有活动"),
-                            Page::Settings => i18n::translate(s.settings_section.label()),
+                row()
+                    .class_fn(move || {
+                        if workbench.get() {
+                            "page-header workspace-header"
+                        } else {
+                            "page-header"
                         }
-                    })),
-                    when(
-                        state.map(|s| {
-                            s.navigation == Page::Servers
-                                && s.selected.is_some()
-                                && !server_inventory_ui::shown(s)
+                        .to_owned()
+                    })
+                    .fill((
+                        text().class("page-header-title").content(state.map(|s| {
+                            match s.navigation {
+                                Page::Servers if server_inventory_ui::shown(s) => {
+                                    i18n::translate("Server overview")
+                                }
+                                Page::Servers => s
+                                    .config
+                                    .servers
+                                    .iter()
+                                    .find(|p| Some(&p.id) == s.selected.as_ref())
+                                    .map(|p| p.name.clone())
+                                    .unwrap_or_else(|| i18n::translate("服务器")),
+                                Page::Scripts => i18n::translate("Scripts"),
+                                Page::Tasks => i18n::translate("Tasks"),
+                                Page::Backups => i18n::translate("Backups"),
+                                Page::Diagnostics => i18n::translate("Diagnostics"),
+                                Page::Configurations => i18n::translate("Configurations"),
+                                Page::Notifications => i18n::translate("所有活动"),
+                                Page::Settings => i18n::translate(s.settings_section.label()),
+                            }
+                        })),
+                        when(workbench, {
+                            let ui = ui.clone();
+                            move || server_desktop::tabs(ui.clone())
                         }),
-                        {
+                        when(
+                            state.map(|s| {
+                                server_desktop::visible(s) && !server_desktop::fullscreen(s)
+                            }),
+                            {
+                                let ui = ui.clone();
+                                move || server_desktop::settings_action(ui.clone())
+                            },
+                        ),
+                        when(workbench, {
                             let ui = ui.clone();
                             move || connection_controls(ui.clone())
-                        },
-                    ),
-                    when(state.map(|s| s.navigation != Page::Servers), || {
-                        text().class("header-product").content("Arcnix")
-                    }),
-                )),
-                when(
-                    state.map(|s| {
-                        s.navigation == Page::Servers
-                            && s.selected.is_some()
-                            && !server_inventory_ui::shown(s)
-                    }),
-                    {
-                        let ui = ui.clone();
-                        move || server_desktop::tabs(ui.clone())
-                    },
-                ),
+                        }),
+                        when(state.map(|s| s.navigation != Page::Servers), || {
+                            text().class("header-product").content("Arcnix")
+                        }),
+                    )),
                 col().class("workspace-content").fill((
                     row()
                         .class(state.map(|s| {

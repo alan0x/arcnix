@@ -7,7 +7,7 @@ fn payload(s: &State) -> String {
         60 | 900 => m.window,
         _ => 300,
     };
-    let label = |key| i18n::translate(key);
+    let label = |key| i18n::translate_for(key, s.config.settings.language);
     serde_json::json!({
         "range":range,"points":m.history.window(range),
         "labels":{
@@ -22,7 +22,7 @@ fn payload(s: &State) -> String {
         "locale":if s.config.settings.language==arcnix_core::Language::SimplifiedChinese{"zh-CN"}else{"en-US"},
     }).to_string()
 }
-pub(super) fn panel(ui: Ui) -> impl Widget {
+pub(super) fn panel(ui: Ui, section: monitor_ui::Section) -> impl Widget {
     let state = ui.state;
     let resume = ui.clone();
     col().class("resource-trends").fill((
@@ -41,6 +41,11 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
             }),
         )),
         text().class("resource-trend-data hidden").content(state.map(payload)),
-        view().class("resource-trend-plots"),
+        view().class(match section {
+            monitor_ui::Section::Cpu => "resource-trend-plots plot-cpu",
+            monitor_ui::Section::Memory => "resource-trend-plots plot-memory",
+            monitor_ui::Section::Network => "resource-trend-plots plot-network",
+            _ => "resource-trend-plots",
+        }),
     ))
 }

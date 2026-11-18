@@ -39,6 +39,7 @@ pub struct SessionState {
     input_ack: u64,
     copied: bool,
     directory: Option<String>,
+    persistent_id: String,
     name: Option<String>,
     command: Option<UiCommand>,
     command_revision: u64,
@@ -127,6 +128,59 @@ struct UiCommand {
 pub(super) fn directory_supported(directory: &str) -> bool {
     arcnix_core::terminal::validate_directory(directory).is_ok()
 }
+pub(super) fn layout(s: &State) -> arcnix_core::server_apps::TerminalLayout {
+    let mut sessions = s
+        .terminal
+        .background
+        .iter()
+        .chain((s.terminal.id > 0).then_some(&s.terminal.active))
+        .collect::<Vec<_>>();
+    sessions.sort_by_key(|v| v.id);
+    arcnix_core::server_apps::TerminalLayout {
+        tabs: sessions
+            .iter()
+            .filter(|v| !v.persistent_id.is_empty())
+            .map(|v| arcnix_core::server_apps::TerminalTab {
+                id: v.persistent_id.clone(),
+                name: v.name.clone(),
+                directory: v.directory.clone(),
+            })
+            .collect(),
+        active: s.terminal.persistent_id.clone(),
+        maximized: s.workbench.window(WorkspacePage::Terminal).maximized,
+    }
+}
+pub(super) fn restore(s: &mut State, layout: &arcnix_core::server_apps::TerminalLayout) {
+    if s.terminal.session_count() > 0 {
+        return;
+    }
+    let mut sessions = layout
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(i, v)| SessionState {
+            id: i as u64 + 1,
+            persistent_id: v.id.clone(),
+            name: v.name.clone(),
+            directory: v.directory.clone(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    if sessions.is_empty() {
+        return;
+    }
+    let index = sessions
+        .iter()
+        .position(|v| v.persistent_id == layout.active)
+        .unwrap_or(0);
+    let active = sessions.remove(index);
+    s.terminal = TerminalState {
+        active,
+        background: sessions,
+        next_id: layout.tabs.len() as u64,
+        ..Default::default()
+    };
+}
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Input {
@@ -200,11 +254,27 @@ impl Ui {
             navigation::workspace_visible(s)
                 && s.workspace_page == WorkspacePage::Terminal
                 && s.terminal.status == Status::Idle
+                && s.server_apps.discover_pending.is_none()
+                && s.server_apps.preferences_pending.is_none()
         }) {
             self.terminal_start(100, 30);
         }
     }
     fn terminal_start(&self, columns: u32, rows: u32) {
+        if self.state.with(|s| s.terminal.id == 0) {
+            self.state.revise(|s| {
+                let saved = server_apps_ui::desired(s).terminal;
+                restore(s, &saved);
+            });
+        }
+        if self
+            .state
+            .with(|s| s.terminal.id > 0 && s.terminal.status == Status::Idle)
+        {
+            self.state.revise(|s| s.terminal.status = Status::Starting);
+            self.terminal_launch(columns, rows);
+            return;
+        }
         let directory = self.state.with(|s| s.terminal.directory.clone());
         self.terminal_open(columns, rows, directory, false);
     }
@@ -246,6 +316,11 @@ impl Ui {
             } else {
                 terminal.name.clone()
             };
+            let persistent_id = if !keep_active && !terminal.persistent_id.is_empty() {
+                terminal.persistent_id.clone()
+            } else {
+                new_id()
+            };
             let previous = (!keep_active && terminal.id > 0).then_some(terminal.id);
             if keep_active && terminal.id > 0 {
                 terminal
@@ -256,6 +331,7 @@ impl Ui {
             let id = terminal.next_id;
             terminal.active = SessionState {
                 id,
+                persistent_id,
                 status: Status::Starting,
                 directory: directory.clone(),
                 name,
@@ -266,9 +342,32 @@ impl Ui {
         if let Some(id) = previous {
             self.send(Action::Terminal(TerminalAction::Close { id }));
         }
+        let _ = id;
+        self.remember_desktop_layout();
+        self.terminal_launch(columns, rows);
+    }
+    fn terminal_launch(&self, columns: u32, rows: u32) {
+        let (id, directory, persistent) = self.state.with(|s| {
+            (
+                s.terminal.id,
+                s.terminal.directory.clone(),
+                s.server_apps
+                    .applications
+                    .tmux
+                    .then(|| s.terminal.persistent_id.clone()),
+            )
+        });
         let columns = columns.clamp(2, 500);
         let rows = rows.clamp(1, 300);
-        self.send(Action::Terminal(if let Some(directory) = directory {
+        self.send(Action::Terminal(if let Some(session) = persistent {
+            TerminalAction::Resume {
+                id,
+                columns,
+                rows,
+                session,
+                directory,
+            }
+        } else if let Some(directory) = directory {
             TerminalAction::OpenHere {
                 id,
                 columns,
@@ -292,6 +391,8 @@ impl Ui {
                 std::mem::swap(&mut terminal.active, &mut terminal.background[index]);
             }
         });
+        self.remember_desktop_layout();
+        self.terminal_enter();
     }
     pub(super) fn terminal_close_tab(&self, id: u64) {
         self.state.revise(|s| {
@@ -304,11 +405,17 @@ impl Ui {
             }
         });
         self.send(Action::Terminal(TerminalAction::Close { id }));
+        self.remember_desktop_layout();
+        if self.state.with(|s| s.terminal.session_count() > 0) {
+            self.terminal_enter();
+        }
     }
     pub(super) fn terminal_close_all(&self) {
+        self.remember_desktop_layout();
         for id in self.state.with(|s| s.terminal.ids()) {
-            self.terminal_close_tab(id);
+            self.send(Action::Terminal(TerminalAction::Close { id }));
         }
+        self.state.revise(|s| s.terminal = Default::default());
     }
     fn terminal_new_tab(&self, source: u64) {
         let directory = self.state.with(|s| {
@@ -402,6 +509,7 @@ impl Ui {
             }
         });
         self.close_dialog();
+        self.remember_desktop_layout();
     }
     pub(super) fn terminal_dismiss_menu(&self) {
         self.state.revise(|s| s.terminal.menu = None);
@@ -688,14 +796,21 @@ fn tabs(ui: Ui) -> impl Widget {
                 }),
         ))
 }
+pub(super) fn header(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let reconnect = ui.clone();
+    row().class("terminal-controls").fill((
+        tabs(ui),
+        text().class(state.map(|s|if s.terminal.status==Status::Running{"terminal-status running"}else{"terminal-status"}.to_owned())).content(i18n::bind(state.map(|s|match s.terminal.status {Status::Running=>"交互式 SSH",Status::Starting=>"正在启动终端…",Status::Exited=>"终端已关闭",Status::Failed=>"终端连接失败",Status::Idle=>"尚未启动"}.to_owned()))),
+        when(state.map(|s|s.terminal.status!=Status::Running),move||{let reconnect=reconnect.clone();icon_action("Reconnect terminal",Icon::Refresh).class("icon-button terminal-restart").enabled(state.map(|s|s.connected&&s.terminal.status!=Status::Starting)).on_press(move||reconnect.terminal_start(100,30))}),
+        sapid::button().class("icon-button terminal-overflow").name(i18n::bind("Terminal actions")).fill(icons::glyph(Icon::More)),
+        help_ui::tip("Terminal","Right-click for copy, paste, clear and tab actions. Ctrl+Shift+C copies; Ctrl+Shift+V pastes. When tmux is installed, the server keeps the session, working directory and screen after disconnect; otherwise only tabs and layout are restored. Closing a tab detaches tmux; exit ends its shell."),
+    ))
+}
 pub(super) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let bridge = ui.clone();
-    let start = ui.clone();
-    let close = ui.clone();
-    let tabs_ui = ui.clone();
     let menu_ui = ui.clone();
-    let clear = ui;
     col()
         .class(state.map(|s| {
             if navigation::workspace_visible(s) && s.workspace_page == WorkspacePage::Terminal {
@@ -707,62 +822,6 @@ pub(super) fn page(ui: Ui) -> impl Widget {
         }))
         .fill((
             terminal_menu::menu(menu_ui),
-            tabs(tabs_ui),
-            row().class("terminal-toolbar").fill((
-                text().class("terminal-heading").content(i18n::bind("终端")),
-                text()
-                    .class("terminal-status")
-                    .content(i18n::bind(state.map(|s| {
-                        if !s.connected {
-                            return "连接服务器后使用终端".into();
-                        }
-                        match s.terminal.status {
-                            Status::Idle => "尚未启动".into(),
-                            Status::Starting => "正在启动终端…".into(),
-                            Status::Running => "交互式 SSH".into(),
-                            Status::Exited => s
-                                .terminal
-                                .exit_code
-                                .map(|code| format!("终端已退出（{code}）"))
-                                .unwrap_or_else(|| "终端已关闭".into()),
-                            Status::Failed => "终端连接失败".into(),
-                        }
-                    }))),
-                icon_action("复制选中文本", Icon::Copy)
-                    .class(state.map(|s| {
-                        if s.terminal.copied {
-                            "icon-button terminal-copy copied"
-                        } else {
-                            "icon-button terminal-copy"
-                        }
-                        .to_owned()
-                    }))
-                    .enabled(state.map(|s| s.terminal.selected)),
-                icon_action("粘贴到终端", Icon::Paste)
-                    .class("icon-button terminal-paste")
-                    .enabled(state.map(|s| s.terminal.status == Status::Running)),
-                icon_action("清空终端显示", Icon::Clear)
-                    .enabled(state.map(|s| s.terminal.id > 0))
-                    .on_press(move || clear.state.revise(|s| s.terminal.clear += 1)),
-                icon_action("重新启动终端", Icon::Refresh)
-                    .class("icon-button terminal-restart")
-                    .enabled(state.map(|s| s.connected && s.terminal.status != Status::Starting))
-                    .on_press(move || start.terminal_start(100, 30)),
-                close_action("关闭终端")
-                    .class("icon-button terminal-close")
-                    .enabled(
-                        state.map(|s| {
-                            matches!(s.terminal.status, Status::Starting | Status::Running)
-                        }),
-                    )
-                    .on_press(move || {
-                        let id = close.state.revise(|s| {
-                            s.terminal.status = Status::Exited;
-                            s.terminal.id
-                        });
-                        close.send(Action::Terminal(TerminalAction::Close { id }));
-                    }),
-            )),
             text()
                 .class(state.map(|s| {
                     if s.terminal.error.is_empty() {
@@ -808,8 +867,5 @@ pub(super) fn page(ui: Ui) -> impl Widget {
             view()
                 .class("terminal-surface")
                 .name(i18n::bind("交互式 SSH 终端")),
-            text().class("terminal-hint").content(i18n::bind(
-                "Ctrl+C 中断 · Ctrl+Shift+C 复制 · Ctrl+Shift+V 粘贴",
-            )),
         ))
 }

@@ -151,9 +151,15 @@
             state = null;
         }
         if (!state) {
-            state = { root, text: '', data: null, charts: [makeChart(root, 'cpu', ['cpu']), makeChart(root, 'memory', ['memory']), makeChart(root, 'network', ['receive', 'transmit'])] };
+            const catalog = [['cpu', ['cpu']], ['memory', ['memory']], ['network', ['receive', 'transmit']]];
+            const single = catalog.find(([kind]) => root.classList.contains(`plot-${kind}`));
+            const charts = (single ? [single] : catalog).map(([kind, keys]) => makeChart(root, kind, keys));
+            state = { root, text: '', data: null, charts };
             state.resize = new ResizeObserver(() => {
-                if (state.data) for (const chart of state.charts) if (Math.floor(chart.svg.clientWidth) !== chart.width) draw(chart, state.data);
+                if (!state.data) return;
+                for (const chart of state.charts) {
+                    if (chart.data !== state.data || Math.floor(chart.svg.clientWidth) !== chart.width) draw(chart, state.data);
+                }
             });
             state.resize.observe(root);
             panels.set(panel, state);

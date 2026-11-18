@@ -229,6 +229,12 @@ pub struct PendingConnection {
     profile: ServerProfile,
     fingerprint: String,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExplorerLocation {
+    pub name: &'static str,
+    pub path: String,
+}
+
 pub struct RemoteSession {
     session: Session,
     sftp: Option<Sftp>,
@@ -583,6 +589,17 @@ impl RemoteSession {
         let Self { session, sftp } = self;
         drop(sftp);
         crate::terminal::Pty::open_here(session, columns, rows, directory)
+    }
+    pub fn into_terminal_persistent(
+        self,
+        columns: u32,
+        rows: u32,
+        id: &str,
+        directory: Option<&str>,
+    ) -> Result<crate::terminal::Pty> {
+        let Self { session, sftp } = self;
+        drop(sftp);
+        crate::terminal::Pty::resume(session, columns, rows, id, directory)
     }
     pub fn sftp_available(&self) -> bool {
         self.sftp.is_some()
@@ -1173,6 +1190,27 @@ impl RemoteSession {
         Ok(())
     }
 
+    pub fn explorer_locations(&self) -> Result<Vec<ExplorerLocation>> {
+        let sftp = self.sftp()?;
+        let home = path_string(&sftp.realpath(Path::new("."))?)?;
+        crate::terminal::validate_directory(&home)?;
+        let mut locations = vec![ExplorerLocation {
+            name: "Home folder",
+            path: home.clone(),
+        }];
+        for (directory, name) in [
+            ("Desktop", "Desktop"),
+            ("Documents", "Documents"),
+            ("Downloads", "Download directory"),
+        ] {
+            let path = format!("{}/{directory}", home.trim_end_matches('/'));
+            if sftp.stat(Path::new(&path)).is_ok_and(|stat| stat.is_dir()) {
+                locations.push(ExplorerLocation { name, path });
+            }
+        }
+        Ok(locations)
+    }
+
     pub fn list_dir(&self, path: &str) -> Result<(String, Vec<FileEntry>)> {
         validate_path(path)?;
         let canonical = self
@@ -1231,6 +1269,55 @@ impl RemoteSession {
         self.sftp()?
             .mkdir(Path::new(path), 0o755)
             .context("Cannot create remote directory")
+    }
+    pub(crate) fn directory_exists(&self, path: &str) -> Result<bool> {
+        validate_path(path)?;
+        match self.sftp()?.stat(Path::new(path)) {
+            Ok(stat) => Ok(stat.is_dir()),
+            Err(error) if error.code() == ErrorCode::SFTP(2) => Ok(false),
+            Err(error) => Err(error).context("Cannot inspect remote directory"),
+        }
+    }
+    pub(crate) fn read_bounded_file(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
+        validate_path(path)?;
+        let path = Path::new(path);
+        let stat = self.sftp()?.lstat(path)?;
+        ensure!(
+            stat.is_file() && stat.size.is_some_and(|size| size <= limit as u64),
+            "Remote image must be a regular file at most 8 MiB"
+        );
+        let mut file = self.sftp()?.open(path)?;
+        ensure!(
+            file.stat()?.is_file(),
+            "Remote image must be a regular file"
+        );
+        let mut bytes = Vec::new();
+        file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+        ensure!(bytes.len() <= limit, "Remote image exceeds 8 MiB");
+        Ok(bytes)
+    }
+    pub(crate) fn upload_new_bytes(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        validate_path(path)?;
+        self.ensure_absent(path)?;
+        let partial = remote_partial(path)?;
+        let sftp = self.sftp()?;
+        let mut output = sftp.open_mode(
+            Path::new(&partial),
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
+            0o600,
+            OpenType::File,
+        )?;
+        let result = (|| {
+            output.write_all(bytes)?;
+            output.flush()?;
+            output.close()?;
+            self.rename(&partial, path)
+        })();
+        drop(output);
+        if result.is_err() {
+            let _ = sftp.unlink(Path::new(&partial));
+        }
+        result
     }
     pub fn file_metadata(&self, path: &str) -> Result<crate::permissions::Metadata> {
         validate_path(path)?;

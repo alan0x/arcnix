@@ -145,7 +145,7 @@
         if(engine?.term.hasSelection()) emit({kind:"copy",id:engine.id,text:engine.term.getSelection()});
     }
     function terminalModule(target) {
-        const module=target instanceof Element ? target.closest('.terminal-module') : null;
+        const module=target instanceof Element ? (target.closest('.terminal-module') || (target.closest('.terminal-controls') ? document.querySelector('.terminal-module:not(.hidden)') : null)) : null;
         return module && module.getClientRects().length && !module.closest('[inert],[hidden]') ? module : null;
     }
     function terminalTarget(target) {
@@ -196,9 +196,10 @@
             return;
         }
         terminalMenu.opened=true;
+        const frame=desktopFrame.boundsFor(menu);
         const box=menu.getBoundingClientRect();
-        menu.style.left=`${Math.max(8,Math.min(terminalMenu.x,innerWidth-box.width-8))}px`;
-        menu.style.top=`${Math.max(8,Math.min(terminalMenu.y,innerHeight-box.height-8))}px`;
+        menu.style.left=`${Math.max(frame.left+8,Math.min(terminalMenu.x,frame.right-box.width-8))}px`;
+        menu.style.top=`${Math.max(frame.top+8,Math.min(terminalMenu.y,frame.bottom-box.height-8))}px`;
         if(terminalMenu.focus){
             const first=menu.querySelector('.terminal-menu-action:not(:disabled)');
             if(first)first.focus({preventScroll:true});else menu.focus({preventScroll:true});
@@ -208,6 +209,10 @@
     function applicationKey(event) {
         if(handledKeys.has(event))return true;
         if(event.type!=='keydown' || event.isComposing || !(event.target instanceof Element))return false;
+        if(terminalMenu && event.key==='Escape' && document.querySelector('.terminal-context-menu')){
+            dismissContext(true);
+            handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
+        }
         // Fullscreen Escape also works when hiding its entry button moves focus
         // to the document. Dialogs and menus retain their own dismissal first.
         const exitFullscreen=document.querySelector('.desktop-fullscreen-exit');
@@ -288,6 +293,13 @@
     window.addEventListener('resize',()=>{if(terminalMenu?.opened)dismissContext(false);});
     document.addEventListener("click",event=>{
         if(!(event.target instanceof Element))return;
+        const overflow=event.target.closest('.terminal-overflow');
+        if(overflow){
+            const surface=document.querySelector('.terminal-surface');
+            const box=overflow.getBoundingClientRect();
+            if(surface && openContext(surface,{clientX:box.right,clientY:box.bottom},false)){event.preventDefault();event.stopImmediatePropagation();}
+            return;
+        }
         const copyButton=event.target.closest(".terminal-copy"),pasteButton=event.target.closest(".terminal-paste");
         if(copyButton && !copyButton.disabled){event.preventDefault();event.stopImmediatePropagation();copy();engine?.term.focus();}
         if(pasteButton && !pasteButton.disabled && engine){event.preventDefault();event.stopImmediatePropagation();emit({kind:"paste",id:engine.id});engine.term.focus();}
@@ -311,7 +323,7 @@
         if(!visible && !engines.has(`${metadata.epoch}:${metadata.id}`)){detach();return;}
         activate(metadata,surface);
         const term=engine.term;
-        const app=document.querySelector(".app");
+        const app=document.querySelector(".server-desktop:not(.hidden)") || document.querySelector(".app");
         if(app){
             const style=getComputedStyle(app),background=style.getPropertyValue("--surface").trim(),foreground=style.getPropertyValue("--text").trim(),cursor=style.getPropertyValue("--accent").trim();
             const themeKey=`${background}:${foreground}:${cursor}`;

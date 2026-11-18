@@ -432,7 +432,7 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                                 if let Some(file) =
                                                     edit.state.with(|s| single(s, true))
                                                 {
-                                                    remote_editor::open(&edit, &file.path);
+                                                    remote_editor::edit(&edit, &file.path);
                                                 }
                                             }
                                         },
@@ -461,6 +461,66 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                 let ui = ui.clone();
                 move || workspace::begin_file(&ui, remote, false)
             }),
+            when(
+                state.map(move |s| remote && explorer_ui::item_target(s).is_some()),
+                {
+                    let ui = ui.clone();
+                    move || {
+                        let tag = ui.clone();
+                        let favorite = ui.clone();
+                        fragment((
+                            action(
+                                &ui,
+                                remote,
+                                "Toggle favorite",
+                                |s, _| explorer_ui::item_target(s).is_some(),
+                                move || {
+                                    if let Some((path, _)) =
+                                        favorite.state.with(explorer_ui::item_target)
+                                    {
+                                        favorite.toggle_explorer_favorite(path);
+                                    }
+                                },
+                            ),
+                            fragment(
+                                [("Folder color…", true), ("File color…", false)]
+                                    .into_iter()
+                                    .map(|(label, directory)| {
+                                        let ui = tag.clone();
+                                        when(
+                                            state.map(move |s| {
+                                                explorer_ui::item_target(s)
+                                                    .is_some_and(|(_, is_dir)| is_dir == directory)
+                                            }),
+                                            move || {
+                                                let tag = ui.clone();
+                                                action(
+                                                    &ui,
+                                                    remote,
+                                                    label,
+                                                    |s, _| explorer_ui::item_target(s).is_some(),
+                                                    move || {
+                                                        if let Some((path, directory)) =
+                                                            tag.state.with(explorer_ui::item_target)
+                                                        {
+                                                            tag.open_dialog(
+                                                                Dialog::ExplorerColor {
+                                                                    path,
+                                                                    directory,
+                                                                },
+                                                            );
+                                                        }
+                                                    },
+                                                )
+                                            },
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                        ))
+                    }
+                },
+            ),
             action(&ui, remote, "复制当前目录路径", workspace::ready, {
                 let ui = ui.clone();
                 move || copy_paths(&ui, remote, true)

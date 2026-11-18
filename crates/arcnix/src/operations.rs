@@ -5,7 +5,8 @@ use crate::operations_worker::{Action as OpAction, Event as OpEvent, Kind};
 
 #[derive(Clone, Default)]
 pub(super) struct OperationsState {
-    commands: bool,
+    service_view: u8,
+    startup: arcnix_core::startup_services::Definition,
     loaded: bool,
     services: Vec<Service>,
     selected: String,
@@ -25,7 +26,6 @@ impl Ui {
             navigation::workspace_visible(s)
                 && s.workspace_page == WorkspacePage::Operations
                 && !s.operations.loaded
-                && !s.operations.commands
                 && ready(s)
         }) {
             self.operations_list();
@@ -46,6 +46,27 @@ impl Ui {
     }
     fn operations_list(&self) {
         self.op_send(OpAction::List);
+    }
+    fn new_startup_service(&self) {
+        self.state.revise(|s| {
+            s.operations.startup = arcnix_core::startup_services::Definition {
+                user: s
+                    .config
+                    .servers
+                    .iter()
+                    .find(|p| Some(&p.id) == s.selected.as_ref())
+                    .map(|p| p.username.clone())
+                    .unwrap_or_default(),
+                ..Default::default()
+            }
+        });
+        self.open_dialog(Dialog::StartupService);
+    }
+    fn review_startup_service(&self) {
+        match self.state.with(|s| s.operations.startup.template()) {
+            Ok(template) => self.choose_server_script(template),
+            Err(error) => self.state.revise(|s| s.dialog_error = format!("{error:#}")),
+        }
     }
     fn inspect_service(&self) {
         let unit = self.state.with(|s| s.operations.selected.clone());
@@ -182,27 +203,6 @@ pub(super) fn connection_lost(ui: &Ui) {
     ui.state
         .revise(|s| s.operations = OperationsState::default());
 }
-fn mode(ui: Ui, commands: bool, label: &'static str) -> impl Widget {
-    sapid::button()
-        .label(i18n::bind(label))
-        .class(ui.state.map(move |s| {
-            if s.operations.commands == commands {
-                "choice active"
-            } else {
-                "choice"
-            }
-            .to_owned()
-        }))
-        .on_press(move || {
-            ui.state.revise(|s| {
-                s.operations.commands = commands;
-                s.operations.error.clear();
-                s.operations.output.clear();
-                s.operations.status.clear();
-            });
-            ui.operations_enter();
-        })
-}
 fn service_button(
     ui: &Ui,
     label: &'static str,
@@ -221,6 +221,9 @@ fn services(ui: Ui) -> impl Widget {
     let start = ui.clone();
     let stop = ui.clone();
     let restart = ui.clone();
+    let enable = ui.clone();
+    let disable = ui.clone();
+    let startup = ui.clone();
     col().class("operation-services").fill((
         row().class("operations-toolbar").fill((
             row().class("server-search service-search").fill((
@@ -251,9 +254,13 @@ fn services(ui: Ui) -> impl Widget {
             service_button(&ui, "Restart…", true, move || {
                 restart.service_action(ServiceAction::Restart)
             }),
+            service_button(&ui, "Enable at boot…", true, move || enable.service_action(ServiceAction::Enable)),
+            service_button(&ui, "Disable at boot…", true, move || disable.service_action(ServiceAction::Disable)),
+            text_action("New startup task", Icon::Plus).enabled(state.map(|s| ready(s) && !scripts_ui::busy(s))).on_press(move || startup.new_startup_service()),
         )),
-        text().class("subtle").content(i18n::bind(
-            "Loaded systemd services. Select a row to inspect it or review an action.",
+        row().class("services-filters").fill((
+            fragment([(0,"All services"),(1,"Active services"),(2,"Start at boot")].into_iter().map(move |(view,label)| sapid::button().class("button compact").label(i18n::bind(label)).pressed(state.map(move |s| s.operations.service_view == view)).on_press(move || state.revise(|s| s.operations.service_view = view))).collect::<Vec<_>>()),
+            help_ui::tip("Services", "Running state and boot enablement are independent. Enable/disable changes boot behavior; start/stop changes the current state. Actions run as reviewed server tasks. Saved commands are in Scripts."),
         )),
         col().class("service-list").fill(
             each(state.map(|s| {
@@ -262,7 +269,7 @@ fn services(ui: Ui) -> impl Widget {
                     .services
                     .iter()
                     .filter(|v| {
-                        format!("{} {} {}", v.unit, v.description, v.active)
+                        (s.operations.service_view == 0 || s.operations.service_view == 1 && v.active == "active" || s.operations.service_view == 2 && v.startup == "enabled") && format!("{} {} {} {}", v.unit, v.description, v.active, v.startup)
                             .to_lowercase()
                             .contains(&filter)
                     })
@@ -289,7 +296,7 @@ fn services(ui: Ui) -> impl Widget {
                             .content(value.map(|v| v.unit.clone())),
                         text()
                             .class("service-state")
-                            .content(value.map(|v| format!("{} · {}", v.active, v.sub))),
+                            .content(value.map(|v| format!("{} · {} · {}", v.active, v.sub, v.startup))),
                         text()
                             .class("service-description")
                             .content(value.map(|v| v.description.clone())),
@@ -316,43 +323,25 @@ fn services(ui: Ui) -> impl Widget {
         }))),
     ))
 }
-fn snippets(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let add = ui.clone();
-    col().class("operation-snippets").fill((
-        row().class("operations-toolbar").fill((
-            text().class("subtle").content(i18n::bind("Saved commands are shared across servers. Review the target and command before running.")),
-            text_action("New command",Icon::Plus).class("button with-icon primary").on_press(move||add.edit_snippet(None)),
-        )),
-        text().class("subtle").content(i18n::bind(state.map(|s|if s.config.snippets.is_empty(){"No saved commands. Add a command you use often; do not store passwords or tokens in it."}else{""}.to_owned()))),
-        col().class("snippet-list").fill(each(state.map(|s|s.config.snippets.clone())).key(|v|v.id.clone()).children(move|item|{
-            let value=item.value;let run=ui.clone();let edit=ui.clone();let delete=ui.clone();
-            row().class("snippet-row").fill((
-                col().class("snippet-copy").fill((text().class("snippet-name").content(value.map(|v|v.name.clone())),text().class("subtle").content(value.map(|v|v.description.clone())))),
-                icon_action("Run command…",Icon::Play).enabled(state.map(|s| ready(s) && !scripts_ui::busy(s))).on_press(move||run.preview_operation(Intent::Command(value.get()))),
-                row().class("snippet-actions").fill((
-                    icon_action("Edit command",Icon::Edit).on_press(move||edit.edit_snippet(Some(value.get()))),
-                    icon_action("Delete command",Icon::Clear).on_press(move||delete.open_dialog(Dialog::SnippetDelete(value.get().id))),
-                )),
-            ))
-        })),
-    ))
-}
 pub(super) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
-    col().class("operations-page").fill((
-        row().class("operations-modes").fill((mode(ui.clone(),false,"Services"),mode(ui.clone(),true,"Commands"))),
-        text().class(state.map(|s|if s.operations.error.is_empty(){"hidden"}else{"software-error"}.to_owned())).content(i18n::bind(state.map(|s|s.operations.error.clone()))),
-        when(state.map(|s|s.operations.commands),{let ui=ui.clone();move||snippets(ui.clone())}).otherwise({let ui=ui.clone();move||services(ui.clone())}),
-        when(state.map(|s| !s.operations.commands), move || col().class("operations-details").fill((
-            row().class("operations-result-heading").fill((text().class("section-title").content(i18n::bind("Output")),text().class("subtle").content(i18n::bind(state.map(|s|s.operations.status.clone()))))),
-            text().class("operations-output").selectable(true).content(state.map(|s|s.operations.output.clone())),
-        ))),
-        text().class("subtle").content(i18n::bind("Service changes and saved commands run as server-owned tasks. Review their plans and results in Tasks; use Terminal for interactive programs.")),
-        btn("View server tasks", { let ui=ui.clone(); move || ui.navigate(navigation::Page::Tasks) }),
+    col().class("operations-page services-page").fill((
+        text()
+            .class("software-error")
+            .content(i18n::bind(state.map(|s| s.operations.error.clone()))),
+        services(ui.clone()),
+        when(state.map(|s| !s.operations.output.is_empty()), move || {
+            col().class("operations-details").fill((
+                text().class("section-title").content(i18n::bind("Output")),
+                text()
+                    .class("operations-output")
+                    .selectable(true)
+                    .content(state.map(|s| s.operations.output.clone())),
+            ))
+        }),
     ))
 }
-pub(super) fn dialogs(ui: Ui) -> impl Widget {
+fn command_dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
     fragment((
         when(state.map(|s| s.dialog == Some(Dialog::SnippetEdit)), {
@@ -494,6 +483,29 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                         ),
                     )
                 }
+            },
+        ),
+    ))
+}
+
+pub(super) fn dialogs(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let commands = ui.clone();
+    fragment((
+        command_dialogs(commands),
+        when(
+            state.map(|s| s.dialog == Some(Dialog::StartupService)),
+            move || {
+                let review = ui.clone();
+                modal(ui.clone(), "New startup task", col().class("form-stack").fill((
+            field("Task name", &ui, |s| s.operations.startup.name.clone(), |s,v| s.operations.startup.name = v),
+            field("Run as user", &ui, |s| s.operations.startup.user.clone(), |s,v| s.operations.startup.user = v),
+            col().class("field").fill((text().class("field-label").content(i18n::bind("Startup command")),
+                input().multiline(true).class("command-input").name(i18n::bind("Startup command")).value(state.map(|s| s.operations.startup.command.clone())).on(value_changed,move |e| if let Event::ValueChanged {value,..}=e { state.revise(|s| s.operations.startup.command = value); })
+            )),
+            sapid::checkbox().label(i18n::bind("Keep running and restart on failure")).checked(state.map(|s| s.operations.startup.continuous)).on_checked_change(move |v| state.revise(|s| s.operations.startup.continuous = v)),
+            help_ui::tip("Startup task", "Creates a systemd service enabled for boot. The script is private to the selected Linux user in ~/.arcnix/services. Root or sudo is required to install the unit. Start it separately to run it immediately."),
+        )), btn("Review startup task", move || review.review_startup_service()).class("button primary"))
             },
         ),
     ))

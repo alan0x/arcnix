@@ -23,14 +23,17 @@
       return;
     }
     const panel = panelOf(active);
+    const frame = desktopFrame.boundsFor(active);
     const rect = active.getBoundingClientRect();
     const pad = 12;
     const gap = 8;
     const width = panel.offsetWidth;
     const height = panel.offsetHeight;
-    const left = Math.max(pad, Math.min(rect.left, innerWidth - width - pad));
+    const left = Math.max(frame.left + pad, Math.min(rect.left, frame.right - width - pad));
     const below = rect.bottom + gap;
-    const top = below + height <= innerHeight - pad ? below : Math.max(pad, rect.top - gap - height);
+    const above = rect.top - gap - height;
+    const preferred = below + height <= frame.bottom - pad ? below : above;
+    const top = Math.max(frame.top + pad, Math.min(preferred, frame.bottom - height - pad));
     panel.style.left = `${Math.round(left)}px`;
     panel.style.top = `${Math.round(top)}px`;
   }

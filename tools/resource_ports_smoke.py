@@ -34,8 +34,12 @@ def main():
             page = app.page
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
+            def ports():
+                app.application('Monitor')
+                page.locator('.monitor-sidebar').get_by_role('button', name='Ports', exact=True).click()
+
             app.connect()
-            page.get_by_role('button', name='Resources', exact=True).click()
+            ports()
             panel = page.locator('.resource-ports')
             rows = panel.locator('.resource-port-row')
             search = panel.locator('.resource-ports-search')
@@ -178,7 +182,7 @@ def main():
             app.settings('General')
             page.get_by_role('button', name='Dark', exact=True).click()
             app.servers()
-            page.get_by_role('button', name='Resources', exact=True).click()
+            ports()
             page.set_viewport_size(dict(width=1000, height=780))
             panel.scroll_into_view_if_needed()
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -199,7 +203,8 @@ def main():
             app.settings('General')
             page.get_by_role('button', name='简体中文', exact=True).click()
             app.servers()
-            page.get_by_role('button', name='资源概览', exact=True).click()
+            page.locator('.desktop-dock').get_by_role('button', name='监控', exact=True).click()
+            page.locator('.monitor-sidebar').get_by_role('button', name='端口', exact=True).click()
             expect(panel).to_contain_text('监听端口及进程')
             expect(refresh_button).to_have_text('刷新端口')
             web().locator('.resource-port-kill').click()
@@ -210,7 +215,7 @@ def main():
             app.settings('常规')
             page.get_by_role('button', name='English', exact=True).click()
             app.servers()
-            page.get_by_role('button', name='Resources', exact=True).click()
+            ports()
             passed('Chinese port labels and the destructive-action warning remain translated in the narrow layout')
 
             page.get_by_role('button', name='Disconnect', exact=True).click()
@@ -218,7 +223,7 @@ def main():
             expect(rows).to_have_count(0)
             expect(panel.locator('.resource-ports-password')).to_have_count(0)
             app.connect()
-            page.get_by_role('button', name='Resources', exact=True).click()
+            ports()
             expect(rows).to_have_count(4, timeout=20000)
             assert queries('read')[-1]['administrator'] is False
             assert not errors, errors
@@ -237,7 +242,7 @@ def main():
             expect(panel.locator('.resource-ports-password')).to_have_count(0)
             options()
             app.connect()
-            page.get_by_role('button', name='Resources', exact=True).click()
+            ports()
             expect(rows).to_have_count(4, timeout=20000)
             assert queries('read')[-1]['administrator'] is False
             assert not errors, errors

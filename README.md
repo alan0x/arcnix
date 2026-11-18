@@ -10,7 +10,10 @@ A friendly desktop workspace for managing servers over SSH, built with Rust, Glo
 - Context menus for file and folder actions, with keyboard navigation, properties, and confirmed multi-item or recursive deletion.
 - Cancellable deletion with live progress, remote POSIX permissions, and per-server file column preferences.
 - Interactive SSH terminals, software management, resource metrics and system logs.
-- Service management and a reusable library of saved shell commands.
+- An application store with 18 built-in server apps, categories, search, product details and a merged installed list. Choose native packages (APT, DNF, YUM, Zypper, APK or Pacman), Snap or Docker Compose after clicking Install; only supported providers are offered. Updates and removals keep the original source and use reviewed server-owned tasks.
+- Automatically discovered Docker desktop app: containers, volumes, ports, logs, lifecycle controls and Compose projects. Nginx, Redis and Caddy templates store definitions in the SSH user's `~/.arcnix/apps/<name>/`; Docker manages named-volume data.
+- Desktop-only light/dark themes, Monitor, Disks and Services with separate running/boot states and reviewed startup jobs. Preferences and terminal layouts live in the SSH user's `~/.arcnix/desktop.json`.
+- Terminal tabs restore their existing tmux sessions when tmux is available; otherwise only the saved layout is restored. A reusable library of saved shell commands remains in Scripts.
 - On-demand name resolution from selected servers, with optional required IP addresses, saved scope and bounded lookups; accepted diagnostic jobs survive desktop closure.
 - TCP listener investigation from diagnostic findings or independent server records, showing addresses, visible processes and observed cgroup service names through a separate connection.
 - Reviewed script-only bundle import/export, with copy or explicit replacement, editable sharing copies, new-file publication, and the normal multi-server workflow for imported user scripts.
@@ -60,6 +63,8 @@ After connecting, open **Operations**. **Services** lists loaded systemd service
 Software installation and package-index updates also enter this shared flow. Submission requires server systemd, root or sudo, and flock; ordinary command workloads retain the SSH UID. Independent task connections may require entering credentials again. Optional sudo passwords pass through stdin and are never stored in configuration. Disconnecting the workspace, switching servers or closing Arcnix does not stop accepted jobs. Query unknown results before retrying. Prepare the required server tools before using saved tasks on systems without them; Terminal remains available for manual commands.
 
 ## Preferences and updates
+
+The server desktop's gear offers Light, Dark and Follow application. Preferences are saved atomically in the connected SSH user's `~/.arcnix/desktop.json` and restored on reconnect, including from another client. Docker appears when detected; use Detect applications in this dialog after installing or removing it. Docker uses the server's local socket with the SSH account's existing permissions, with support for rootless Docker. Container configuration changes apply to Docker; Compose may replace them when recreating containers.
 
 **Settings** contains display formats, connection timeout/keepalive, separate upload/download conflict defaults, client log export/rotation and updates. Edit a server to set its own directories and connection overrides. File actions expose per-server transfer defaults. Right-click a regular remote text file and choose **Edit file**; drafts stay in memory, preserve UTF-8 BOM/CRLF and are checked against the remote contents before saving. The editor supports files up to 1 MiB.
 

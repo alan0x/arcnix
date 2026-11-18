@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 class Authentication(paramiko.ServerInterface):
+    tmux_sessions = {}
     nginx_installed = False
     services = {"nginx.service": "active", "worker.service": "inactive", "broken.service": "failed"}
     hosted_tasks = {}
@@ -340,6 +341,9 @@ class Authentication(paramiko.ServerInterface):
     def task_finished(self, record):
         finished = time.monotonic() >= record['finish'] or (record.get('held') and (self.fixture_root/'release-held-operation').is_file())
         if finished and record['code'] == 0 and not record.get('applied'):
+            if record.get('application_script'):
+                from server_apps_fixture import apply_task
+                apply_task(self,record)
             if record.get('stop_control'):
                 plan=self.task_stops[record['stop_control']]['plan']
                 for identifier in plan['selection']['ids']:
@@ -354,7 +358,9 @@ class Authentication(paramiko.ServerInterface):
                 type(self).nginx_installed = True
             if record.get('service'):
                 unit, action = record['service']
-                self.services[unit] = 'inactive' if action == 'stop' else 'active'
+                if action in ['enable','disable']:
+                    path=self.fixture_root/'services-startup.json';values=json.loads(path.read_text()) if path.exists() else {};values[unit]='enabled' if action=='enable' else 'disabled';path.write_text(json.dumps(values))
+                else:self.services[unit] = 'inactive' if action == 'stop' else 'active'
             if record.get('cleanup'):
                 plan=self.cleanup_records[record['cleanup']]
                 seed=self.fixture_root/'record-storage-fixture.json'
@@ -554,11 +560,16 @@ class Authentication(paramiko.ServerInterface):
     def check_channel_shell_request(self, channel):
         return self.interactive(channel, "/fixture")
 
-    def interactive(self, channel, directory):
+    def interactive(self, channel, directory, session_id=None):
         # A deterministic SSH PTY protocol peer, never a host OS shell.
         def interactive():
+            nonlocal directory
             try:
+                session=self.tmux_sessions.setdefault((self.username,session_id),dict(directory=directory,history=[])) if session_id else None
+                if session:directory=session['directory']
                 channel.sendall(b"\x1b[?2004h\x1b[32mArcnix terminal fixture\x1b[0m\r\n$ ")
+                if session:
+                    channel.sendall(b''.join(session['history']))
                 line = bytearray()
                 while True:
                     data = channel.recv(8192)
@@ -599,6 +610,13 @@ class Authentication(paramiko.ServerInterface):
                                 channel.sendall(b"BURST COMPLETE\r\n")
                             elif command.startswith("echo "):
                                 channel.sendall(command[5:].encode() + b"\r\n")
+                                if session:
+                                    session['history'].append(command[5:].encode()+b'\r\n')
+                                    session['history']=session['history'][-100:]
+                            elif command.startswith('cd ') and session:
+                                target=command[3:].strip()
+                                if target.startswith('/'):
+                                    directory=target;session['directory']=directory
                             elif command.startswith("checksum "):
                                 channel.sendall(hashlib.sha256(command[9:].encode()).hexdigest().encode() + b"\r\n")
                             elif command:
@@ -724,6 +742,15 @@ class Authentication(paramiko.ServerInterface):
         channel.close()
 
     def check_channel_exec_request(self, channel, command):
+        if command.startswith(b'# arcnix:terminal:resume\n'):
+            try:
+                parts=shlex.split(command.decode().split('\n',1)[1])
+                assert parts[:7]==['exec','tmux','-L','arcnix','new-session','-A','-s']
+                name=parts[7];assert re.fullmatch(r'terminal-[a-fA-F0-9-]{1,80}',name)
+                directory=parts[9] if len(parts)==10 and parts[8]=='-c' else '/fixture'
+                with (self.fixture_root/'terminal-resume-requests.jsonl').open('a') as audit:audit.write(json.dumps(dict(session=name,directory=directory))+'\n')
+                return self.interactive(channel,directory,session_id=name)
+            except (AssertionError,ValueError,IndexError):return False
         if command.startswith(b"# arcnix:terminal:here\n"):
             # Interpret only the fixed client bootstrap grammar. This fixture
             # never passes remote text or a selected path to the host shell.
@@ -755,6 +782,10 @@ class Authentication(paramiko.ServerInterface):
         def reply():
             # Deliberately does not execute arbitrary commands on the developer's machine.
             text = command.decode()
+            if text.startswith(('# arcnix:apps:', '# arcnix:desktop:', '# arcnix:docker:', '# arcnix:disks:', '# arcnix:compose:', '# arcnix:software:')):
+                from server_apps_fixture import reply as application_reply
+                if application_reply(self, channel, text):
+                    return
             if text.strip() == "fixture-stream":
                 channel.sendall(b"first stdout\n")
                 time.sleep(.15)
@@ -960,6 +991,13 @@ class Authentication(paramiko.ServerInterface):
                         self.task_finished(record)
                     for unit, state in self.services.items():
                         channel.sendall(f"{unit} loaded {state} {'running' if state == 'active' else 'dead'} Fixture {unit}\n".encode())
+                    if 'ARCNIX_UNIT_FILES' in text:
+                        states=self.fixture_root/'services-startup.json'
+                        values=json.loads(states.read_text()) if states.exists() else {}
+                        channel.sendall(b'ARCNIX_UNIT_FILES\n')
+                        for unit in self.services:
+                            channel.sendall(f"{unit} {values.get(unit,'enabled' if unit=='nginx.service' else 'disabled')} enabled\n".encode())
+                        channel.sendall(b'not-loaded.service disabled disabled\n')
                     channel.send_exit_status(0)
             elif text.startswith("# arcnix:services:inspect"):
                 unit = shlex.split(text.splitlines()[-1])[-2]
@@ -1165,8 +1203,10 @@ class Authentication(paramiko.ServerInterface):
                         exclusive = '# arcnix:tasks:exclusive' in script
                         blocked = exclusive and self.operation_busy()
                         held = 'fixture-hold-operation' in script
-                        service = re.search(r'systemctl --no-pager --no-ask-password (start|stop|restart) -- .*?(nginx\.service|worker\.service|broken\.service)', script)
+                        service = re.search(r'systemctl --no-pager --no-ask-password (start|stop|restart|enable|disable) -- .*?(nginx\.service|worker\.service|broken\.service)', script)
                         self.hosted_tasks[task_id] = dict(finish=time.monotonic()+(0 if blocked else 120 if held else 4), code=75 if blocked else 7 if "fixture-command-fail" in script else 0, exclusive=exclusive, held=held, blocked=blocked, service=(service.group(2), service.group(1)) if service else None, install_nginx='# arcnix:packages:install' in script and 'nginx' in script, backup="# arcnix:backups:execute" in script, diagnostic=any(marker in script for marker in ['# arcnix:diagnostics:v1','# arcnix:diagnostics:v2']), incomplete="fixture-diagnostic-incomplete" in script)
+                        if any(marker in script for marker in ['# arcnix:compose:','# arcnix:software:mutate','# arcnix:startup:install']):
+                            self.hosted_tasks[task_id].update(application_script=script,application_user=self.username)
                         if self.hosted_tasks[task_id]['diagnostic']:self.hosted_tasks[task_id]['diagnostic_definition']=self.diagnostic_definition(script)
                         if '# arcnix:diagnostics:environment:v1' in script:self.hosted_tasks[task_id]['environment']=self.diagnostic_environment(script)
                         if '# arcnix:installers:v1' in script and not blocked:
@@ -1331,8 +1371,10 @@ ARCNIX_METRICS_END
             elif text.startswith("# arcnix:packages:"):
                 marker = text.splitlines()[0]
                 if marker.endswith(":detect"):
-                    os_id='alpine' if (self.fixture_root/'installer-unsupported').exists() else 'ubuntu'
-                    channel.sendall(f'ARCNIX_OS_BEGIN\nPRETTY_NAME="Ubuntu 24.04 LTS"\nID={os_id}\nVERSION_ID="24.04"\nARCNIX_OS_END\nARCNIX_MANAGER\tapt\nARCNIX_UID\t1000\nARCNIX_SUDO\t1\nARCNIX_ARCH\tamd64\n'.encode())
+                    os_id='alpine' if (self.fixture_root/'installer-unsupported').exists() else 'fedora' if (self.fixture_root/'software-manager').exists() else 'ubuntu'
+                    manager=(self.fixture_root/'software-manager').read_text().strip() if (self.fixture_root/'software-manager').exists() else 'apt'
+                    pretty='Fedora test' if os_id=='fedora' else 'Alpine test' if os_id=='alpine' else 'Ubuntu 24.04 LTS'
+                    channel.sendall(f'ARCNIX_OS_BEGIN\nPRETTY_NAME="{pretty}"\nID={os_id}\nVERSION_ID="24.04"\nARCNIX_OS_END\nARCNIX_MANAGER\t{manager}\nARCNIX_UID\t1000\nARCNIX_SUDO\t1\nARCNIX_ARCH\tamd64\n'.encode())
                 elif marker.endswith(":search"):
                     channel.sendall(b"nginx - web server\ncurl - transfer tool\n")
                 elif marker.endswith(":installed"):
@@ -1372,6 +1414,11 @@ ARCNIX_METRICS_END
 class DelayedHandle(paramiko.SFTPHandle):
     """Optional latency for visible transfer progress in loopback UI tests."""
     delay = 0
+    def stat(self):
+        stream = getattr(self, 'readfile', None) or getattr(self, 'writefile', None)
+        if stream is None:
+            return paramiko.SFTP_FAILURE
+        return paramiko.SFTPAttributes.from_stat(os.fstat(stream.fileno()))
     def read(self, offset, length):
         if self.delay: time.sleep(self.delay)
         return super().read(offset, length)

@@ -152,7 +152,7 @@ def main():
                     expect(jobs.nth(index).locator('.job-status')).to_have_text('Completed', timeout=20000)
 
             def connect():
-                page.locator('.overview-connect').click()
+                page.locator('.overview-transfer').click()
                 page.get_by_role('dialog', name='Connect to server', exact=True).get_by_role('button', name='Connect', exact=True).click()
                 expect(page.locator('.connection-state')).to_have_text('SSH connected')
 

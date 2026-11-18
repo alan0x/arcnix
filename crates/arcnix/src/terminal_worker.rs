@@ -15,6 +15,13 @@ use crate::worker::{Response, Update};
 pub const OUTPUT_WINDOW: usize = 256 * 1024;
 pub const SESSION_LIMIT: usize = 8;
 pub enum Action {
+    Resume {
+        id: u64,
+        columns: u32,
+        rows: u32,
+        session: String,
+        directory: Option<String>,
+    },
     Open {
         id: u64,
         columns: u32,
@@ -108,6 +115,7 @@ struct OpenRequest {
     columns: u32,
     rows: u32,
     directory: Option<String>,
+    persistent: Option<String>,
     serial: u64,
 }
 fn spawn_session(
@@ -121,6 +129,7 @@ fn spawn_session(
         columns,
         rows,
         directory,
+        persistent,
         serial,
     } = request;
     let (tx, rx) = mpsc::sync_channel(64);
@@ -151,7 +160,9 @@ fn spawn_session(
                 current(&credentials, &generation, &stop),
                 "Terminal connection was cancelled"
             );
-            if let Some(directory) = directory {
+            if let Some(persistent) = persistent {
+                remote.into_terminal_persistent(columns, rows, &persistent, directory.as_deref())
+            } else if let Some(directory) = directory {
                 remote.into_terminal_here(columns, rows, &directory)
             } else {
                 remote.into_terminal(columns, rows)
@@ -313,14 +324,27 @@ pub fn start(
                             columns,
                             rows,
                             directory: _,
+                        }
+                        | Action::Resume {
+                            id,
+                            columns,
+                            rows,
+                            session: _,
+                            directory: _,
                         } => {
-                            let directory = match action {
-                                Action::OpenHere { directory, .. } => Some(directory),
-                                _ => None,
+                            let (directory, persistent) = match action {
+                                Action::OpenHere { directory, .. } => (Some(directory), None),
+                                Action::Resume {
+                                    directory, session, ..
+                                } => (directory, Some(session)),
+                                _ => (None, None),
                             };
                             let result: anyhow::Result<()> = (|| {
                                 if let Some(directory) = &directory {
                                     arcnix_core::terminal::validate_directory(directory)?;
+                                }
+                                if let Some(session) = &persistent {
+                                    arcnix_core::terminal::validate_session(session)?;
                                 }
                                 let credentials = credentials
                                     .as_ref()
@@ -344,6 +368,7 @@ pub fn start(
                                             columns,
                                             rows,
                                             directory,
+                                            persistent,
                                             serial,
                                         },
                                         credentials,

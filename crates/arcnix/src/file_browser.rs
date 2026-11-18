@@ -433,6 +433,7 @@ enum GestureKind {
     CopyPaths,
     Properties,
     Refresh,
+    EditPath,
     Select,
     Activate,
     Expand,
@@ -490,10 +491,12 @@ pub(super) fn select(ui: &Ui, remote: bool, target: &str, toggle: bool, range: b
         }
     });
 }
-fn navigate(ui: &Ui, remote: bool, target: String) {
+pub(super) fn navigate(ui: &Ui, remote: bool, target: String) {
     ui.state.revise(|s| {
         if remote {
             s.remote_path = target;
+            s.server_apps.explorer_tag = None;
+            s.server_apps.explorer_open_pending = None;
         } else {
             s.local_path = target;
         }
@@ -644,6 +647,18 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
                 ui.refresh(remote);
             }
         }
+        GestureKind::EditPath => ui.state.revise(|s| {
+            if navigation::workspace_visible(s)
+                && s.dialog.is_none()
+                && matches!(
+                    s.workspace_page,
+                    WorkspacePage::Files | WorkspacePage::Explorer
+                )
+                && (!remote || s.connected && s.sftp_available)
+            {
+                begin_path_edit(s, remote);
+            }
+        }),
         GestureKind::Select => select(ui, remote, &event.path, event.toggle, event.range),
         GestureKind::Activate => activate(ui, remote, &event.path),
         GestureKind::Expand => toggle_tree(ui, remote, &event.path, Some(true)),
@@ -764,6 +779,19 @@ pub(super) fn listing(ui: Ui, remote: bool) -> impl Widget {
                                         text()
                                             .class("file-label")
                                             .content(entry.map(|r| r.entry.name.clone())),
+                                        text()
+                                            .class(state.map(move |s| {
+                                                let file = entry.get();
+                                                if remote
+                                                    && s.workspace_page == WorkspacePage::Explorer
+                                                    && !file.entry.is_symlink
+                                                {
+                                                    explorer_ui::color_dot(s, &file.entry.path)
+                                                } else {
+                                                    "hidden".into()
+                                                }
+                                            }))
+                                            .content(""),
                                     ))
                                     .on_press(move || {
                                         activate(&open, remote, &entry.get().entry.path)
@@ -874,7 +902,21 @@ fn breadcrumbs(path: &str, remote: bool) -> Vec<Crumb> {
     }
     result
 }
-pub(super) fn pathbar(ui: Ui, remote: bool) -> impl Widget {
+fn begin_path_edit(s: &mut State, remote: bool) {
+    if !s.file_browser.pane(remote).editing {
+        let current = path(s, remote).to_owned();
+        let pane = s.file_browser.pane_mut(remote);
+        pane.draft = current;
+        pane.editing = true;
+    }
+}
+
+pub(super) fn pathbar(
+    ui: Ui,
+    remote: bool,
+    explorer: bool,
+    trailing: impl IntoChildren,
+) -> impl Widget {
     let state = ui.state;
     let edit_ui = ui.clone();
     let enter_ui = ui.clone();
@@ -990,22 +1032,26 @@ pub(super) fn pathbar(ui: Ui, remote: bool) -> impl Widget {
                     }
                 }),
         )),
-        icon_action(
-            if remote {
-                "编辑远程路径"
-            } else {
-                "编辑本地路径"
-            },
-            Icon::Edit,
-        )
-        .class("icon-button path-edit")
-        .on_press(move || {
-            edit_ui.state.revise(|s| {
-                let current = path(s, remote).to_owned();
-                let pane = s.file_browser.pane_mut(remote);
-                pane.draft = current;
-                pane.editing = !pane.editing;
-            });
+        when(explorer, move || explorer_ui::favorite_button(ui.clone())),
+        when(!explorer, move || {
+            icon_action(
+                if remote {
+                    "编辑远程路径"
+                } else {
+                    "编辑本地路径"
+                },
+                Icon::Edit,
+            )
+            .class("icon-button path-edit")
+            .on_press(move || {
+                edit_ui.state.revise(|s| {
+                    if s.file_browser.pane(remote).editing {
+                        s.file_browser.pane_mut(remote).editing = false;
+                    } else {
+                        begin_path_edit(s, remote);
+                    }
+                });
+            })
         }),
         icon_action(
             if remote {
@@ -1042,6 +1088,7 @@ pub(super) fn pathbar(ui: Ui, remote: bool) -> impl Widget {
         )
         .enabled(state.map(move |s| !remote || s.connected && s.sftp_available))
         .on_press(move || refresh_ui.refresh(remote)),
+        fragment(trailing),
     ))
 }
 
