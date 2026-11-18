@@ -107,6 +107,7 @@ enum FileAction {
 enum Dialog {
     SoftwareInstall,
     ConfigureNetwork,
+    #[cfg(windows)]
     BrowserForwardingRepair,
     StartupService,
     ExplorerColor {
