@@ -274,13 +274,16 @@ pub(super) fn fullscreen(s: &State) -> bool {
 }
 
 pub(super) fn owns_dialog(s: &State) -> bool {
+    #[cfg(windows)]
+    if s.dialog == Some(Dialog::BrowserForwardingRepair) {
+        return visible(s);
+    }
     visible(s)
         && matches!(
             s.dialog,
             Some(
                 Dialog::SoftwareInstall
                     | Dialog::ConfigureNetwork
-                    | Dialog::BrowserForwardingRepair
                     | Dialog::StartupService
                     | Dialog::ScriptRun
                     | Dialog::DockerAction
