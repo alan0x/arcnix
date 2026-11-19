@@ -27,17 +27,47 @@
         left: var(--command-left) !important;
         width: var(--command-width) !important;
         box-sizing: border-box;
+        border: 0 !important;
+        border-radius: 6px;
+        overflow: hidden;
         animation: none !important;
         transform: none !important;
       }
+      .part.titlebar :is(.titlebar-center, .titlebar-right, .window-appicon, .window-controls-container) { display: none !important; }
+      .part.titlebar .titlebar-left { width: 100% !important; }
+      .has-menu-slot #workbench {
+        top: calc(var(--command-inset) - var(--menu-height));
+        height: calc(100% - var(--command-inset) + var(--menu-height));
+      }
+      .has-menu-slot .part.titlebar { background: var(--command-surround) !important; }
+      .has-menu-slot .part.titlebar .titlebar-left {
+        flex: none !important;
+        margin-left: var(--command-menu-left);
+        width: var(--command-menu-width) !important;
+        min-width: 0 !important;
+      }
+      .has-menu-slot .part.titlebar .menubar { width: 100%; max-width: 100%; }
+      .part.titlebar .menubar-menu-title { padding-inline: 5px; }
       .has-command-slot.title-picker .quick-input-header { padding: 0; }
       .has-command-slot.title-picker .quick-input-box .monaco-inputbox {
         box-sizing: border-box;
         height: var(--command-height);
+        border-radius: 6px;
+        outline-offset: -1px !important;
       }
       .has-command-slot.title-picker .quick-input-box input {
         box-sizing: border-box;
-        height: var(--command-height);
+        height: calc(var(--command-height) - 2px);
+        padding-inline: 8px;
+      }
+      .has-command-slot.title-picker .quick-input-progress.done {
+        display: none;
+      }
+      .has-command-slot.title-picker .quick-input-list:not(:has(.monaco-list-row)) .monaco-list {
+        padding-bottom: 0;
+      }
+      .has-command-slot.title-picker .quick-input-widget:not(:has(.monaco-list-row)) {
+        box-shadow: none;
       }
       .arcnix-preview {
         box-sizing: border-box;

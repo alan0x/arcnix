@@ -35,4 +35,5 @@ pub(super) struct Viewport {
     pub area: Option<BoxPx>,
     pub clip: Vec<BoxPx>,
     pub command_center: Option<BoxPx>,
+    pub menu_slot: Option<BoxPx>,
 }

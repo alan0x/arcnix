@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "arcnix"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "arcnix-core",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "arcnix-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

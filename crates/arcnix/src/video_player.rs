@@ -18,8 +18,9 @@ const EXTENSIONS: &[&str] = if cfg!(all(windows, target_arch = "x86_64")) {
 
 type ReadResult = Result<Vec<u8>, String>;
 
+#[cfg(windows)]
 pub(super) fn native_format(path: &str) -> bool {
-    cfg!(all(windows, target_arch = "x86_64"))
+    cfg!(target_arch = "x86_64")
         && Path::new(path)
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("mkv"))

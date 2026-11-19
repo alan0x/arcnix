@@ -47,7 +47,8 @@ const result = await build({
     'search-worker.js',
   ],
   outdir: 'out',
-  external: ['node:fs/promises'],
+  // Font discovery in the optional ligatures addon requires Node.
+  external: ['node:fs/promises', '@xterm/addon-ligatures'],
   bundle: true,
   write: false,
   format: 'esm',

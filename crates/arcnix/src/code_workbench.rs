@@ -11,6 +11,8 @@ pub(super) struct Runtime {
     pub viewport: Option<native_viewport::Viewport>,
     pub open: Vec<String>,
     pub folder: String,
+    pub root: String,
+    pub terminals: crate::code_terminal::Sessions,
     pub commands: Vec<&'static str>,
     pub pending: std::collections::BTreeMap<u64, u64>,
     pub background: std::collections::BTreeMap<u64, u64>,
@@ -246,7 +248,6 @@ pub(super) fn close(ui: &Ui) -> bool {
             s.code.confirm = true;
             return false;
         }
-        s.code = Runtime::default();
         true
     })
 }
@@ -254,6 +255,8 @@ pub(super) fn title_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     let command = move |id: &'static str| move || state.revise(|s| s.code.commands.push(id));
     row().class("code-title-tools").fill((
+        #[cfg(windows)]
+        view().class("code-menu-slot"),
         icon_action("Back", Icon::Go)
             .class("icon-button code-back")
             .on_press(command("workbench.action.navigateBack")),
@@ -313,7 +316,6 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                         state.revise(|s| s.code.confirm = false)
                     }),
                     btn("Discard changes", move || {
-                        state.revise(|s| s.code = Runtime::default());
                         discard.finish_desktop_close(WorkspacePage::Code);
                     }),
                 )),

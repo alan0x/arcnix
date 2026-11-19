@@ -23,10 +23,10 @@ pub enum Shortcut {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Wallpaper {
-    #[default]
     #[serde(alias = "arcnix")]
     Terracotta,
     Aurora,
+    #[default]
     #[serde(alias = "dunes")]
     Fjord,
     Remote(String),

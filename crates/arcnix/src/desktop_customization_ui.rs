@@ -366,9 +366,9 @@ pub(super) fn launchers(ui: Ui, dock: bool) -> impl Widget {
 }
 
 const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 3] = [
-    (Wallpaper::Terracotta, "Terracotta", "wallpaper-terracotta"),
-    (Wallpaper::Aurora, "Aurora", "wallpaper-aurora"),
     (Wallpaper::Fjord, "Fjord", "wallpaper-fjord"),
+    (Wallpaper::Aurora, "Aurora", "wallpaper-aurora"),
+    (Wallpaper::Terracotta, "Terracotta", "wallpaper-terracotta"),
 ];
 
 pub(super) fn customization_css() -> String {
@@ -659,7 +659,8 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                     let unpinned = app.is_some_and(|app| {
                         state.with(|s| appearance(s).dock.unpinned.contains(&app))
                     });
-                    let can_pin = app.is_some_and(|app| server_desktop::app_page(app) != WorkspacePage::Video);
+                    let can_pin = app
+                        .is_some_and(|app| server_desktop::app_page(app) != WorkspacePage::Video);
                     fragment((
                         when(!dock && app.is_some(), {
                             let ui = ui.clone();

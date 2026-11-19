@@ -641,15 +641,52 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-window:not(.active) { box-shadow: 0 8px 30px #08152b42, 0 2px 7px #08152b20; }
 .desktop-window:not(.active) .desktop-window-title { color: var(--muted); }
 .desktop-window.maximized { inset: 0 0 88px; border-radius: 0; }
-.code-title-tools { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; padding-left: clamp(6px, 8%, 100px); }
+.desktop-window.app-code { container: code-window / inline-size; }
+.app-code > .desktop-window-titlebar { position: relative; }
+.code-title-tools { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; }
 .code-title-tools .icon-button { flex: none; width: 26px !important; min-width: 26px !important; height: 26px !important; padding: 5px !important; }
 .code-panel .action-glyph { transform: rotate(-90deg); }
 .code-secondary .action-glyph, .code-back .action-glyph { transform: rotate(180deg); }
-.code-title-tools .code-quick-open { background: var(--bg) !important; border: 1px solid var(--line) !important; flex: 1; max-width: 430px; min-width: 0 !important; height: 26px !important; display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 0 9px !important; border-radius: 6px; }
+.code-title-tools .code-quick-open {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  width: min(480px, 48%, calc(100% - 456px)); min-width: 0 !important;
+  height: 26px !important; min-height: 26px !important; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--bg) !important; border: 1px solid var(--line) !important;
+  padding: 0 9px !important; border-radius: 6px;
+}
+@container code-window (max-width: 600px) {
+  .app-code .desktop-window-titlebar { gap: 3px; padding-inline: 5px; }
+  .code-title-tools .icon-button, .app-code .desktop-window-actions > .icon-button { width: 21px !important; min-width: 21px !important; }
+  .code-title-tools .code-quick-open { width: min(46%, calc(100% - 364px)); }
+}
+@container code-window (max-width: 480px) {
+  .app-code .desktop-window-title { display: none; }
+  .code-title-tools .code-layout { margin-left: 0; }
+  .code-title-tools .code-panel { margin-left: auto; }
+  .code-title-tools .code-quick-open { width: min(46%, calc(100% - 260px)); }
+}
 .code-title-tools .code-quick-open:hover { border-color: var(--muted) !important; }
 .code-quick-open .action-glyph { width: 14px; height: 14px; flex: none; }
 .code-quick-open span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-layout { margin-left: auto; }
+/* Give the native menubar the space before Quick Open and let it collapse
+   surplus menus into its keyboard-accessible More menu. */
+.app-code:has(.code-menu-slot) > .desktop-window-titlebar > .desktop-window-title { display: none; }
+.code-menu-slot { height: 26px; flex: none; width: max(32px, calc(50cqw - min(240px, 24cqw, (100cqw - 456px) / 2) - 110px)); }
+@container code-window (min-width: 820px) {
+  .code-title-tools:has(.code-menu-slot) .code-back { margin-left: auto; }
+  .code-title-tools:has(.code-menu-slot) .code-layout { margin-left: 0; }
+  .code-title-tools:has(.code-menu-slot) .code-quick-open { width: min(420px, 38%, calc(100% - 584px)); }
+  .code-menu-slot { width: calc(50cqw - min(210px, 19cqw, (100cqw - 584px) / 2) - 50px); }
+}
+@container code-window (max-width: 600px) {
+  .code-menu-slot { width: max(32px,calc(50cqw - min(23cqw, (100cqw - 364px) / 2) - 90px)); }
+}
+@container code-window (max-width: 480px) {
+  .code-menu-slot { width: 30px; }
+  .code-title-tools:has(.code-menu-slot) .code-quick-open { width: min(42%, calc(100% - 314px)); }
+}
 .code-workbench-error:empty { display: none; }
 .desktop-menu-backdrop { position: absolute; inset: 0; z-index: 72; cursor: default; }
 .desktop-context-menu { position: absolute !important; z-index: 73 !important; inset: auto; min-width: 190px; }

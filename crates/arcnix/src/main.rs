@@ -9,6 +9,7 @@ mod cleanup_records_ui;
 mod client_logs;
 mod clipboard;
 mod code_native;
+mod code_terminal;
 mod code_workbench;
 mod compose_ui;
 mod configuration_backup_ui;

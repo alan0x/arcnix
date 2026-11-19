@@ -55,6 +55,7 @@ import search from '@codingame/monaco-vscode-search-service-override';
 import { RemoteSearch } from './search.js';
 import { pagedEditorId, registerPagedFiles } from './paged-files.js';
 import { codeMenuServices } from './menus.js';
+import { sshTerminalServices } from './ssh-terminal.js';
 import textmate from '@codingame/monaco-vscode-textmate-service-override';
 import '@codingame/monaco-vscode-docker-default-extension';
 import '@codingame/monaco-vscode-ini-default-extension';
@@ -292,6 +293,7 @@ await initialize(
     ...explorer(),
     ...search(),
     ...codeMenuServices(),
+    ...sshTerminalServices(root, send),
     ...configuration(),
     ...model(),
     ...languages(),
@@ -321,7 +323,11 @@ await initialize(
       'search.showLineNumbers': true,
       'explorer.openEditors.visible': 0,
       'window.commandCenter': false,
-      'window.menuBarVisibility': 'compact',
+      'window.menuBarVisibility': 'visible',
+      'terminal.integrated.enablePersistentSessions': false,
+      'terminal.integrated.tabs.title': 'SSH',
+      'terminal.integrated.shellIntegration.enabled': false,
+      'terminal.integrated.gpuAcceleration': 'off',
       'workbench.layoutControl.enabled': false,
       'files.autoSave': 'off',
     },
@@ -357,11 +363,14 @@ new ResizeObserver(() => workbenchLayout.layout()).observe(
 window.arcnixCommandSlot = (physical) => {
   const style = document.documentElement.style;
   style.setProperty('--command-surround', dark ? '#17212f' : '#fff');
-  const [left, width, height, inset] = physical ?? [0, 0, 0, 0];
-  for (const [name, n] of Object.entries({ left, width, height, inset }))
+  const [left, width, height, inset, menuLeft, menuWidth] = physical ?? [0, 0, 0, 0, 0, 0];
+  for (const [name, n] of Object.entries({ left, width, height, inset, 'menu-left': menuLeft, 'menu-width': menuWidth }))
     style.setProperty('--command-' + name, n / window.devicePixelRatio + 'px');
   document.documentElement.classList.toggle('has-command-slot', !!physical);
+  document.documentElement.classList.toggle('has-menu-slot', menuWidth > 0);
 };
+const titlebar = document.querySelector('.part.titlebar');
+new ResizeObserver(() => document.documentElement.style.setProperty('--menu-height', titlebar.offsetHeight + 'px')).observe(titlebar);
 const quickInput = await getService(IQuickInputService);
 function setTitlePicker(visible) {
   document.documentElement.classList.toggle('title-picker', visible);
@@ -395,6 +404,7 @@ document.addEventListener(
       return;
     }
     if (
+      event.target.closest?.('.terminal-wrapper, .xterm') ||
       !(event.ctrlKey || event.metaKey) ||
       event.altKey ||
       event.shiftKey ||

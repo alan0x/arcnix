@@ -163,6 +163,7 @@ def main():
             saved()
             expect(desktop_button('Monitor')).to_be_visible()
             settings().get_by_role('button', name='Wallpaper', exact=True).click()
+            expect(settings().locator('.wallpaper-choice')).to_have_text(['Fjord', 'Aurora', 'Terracotta'])
             terracotta = settings().get_by_role('button', name='Terracotta', exact=True)
             terracotta.click()
             saved()

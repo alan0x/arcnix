@@ -506,6 +506,10 @@ impl Ui {
     }
 
     pub(super) fn finish_desktop_close(&self, page: WorkspacePage) {
+        if page == WorkspacePage::Code {
+            crate::code_terminal::close_all(self);
+            self.state.revise(|s| s.code = Default::default());
+        }
         if page == WorkspacePage::Video {
             self.player.stop(self);
         }
@@ -661,9 +665,7 @@ pub(super) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
         .pressed(state.map(move |s| s.workspace_page == page))
         .fill((
             text().class("desktop-app-icon").content(""),
-            text()
-                .class("desktop-app-label")
-                .content(i18n::bind(label)),
+            text().class("desktop-app-label").content(i18n::bind(label)),
         ))
         .on_press(move || ui.open_desktop_app(page))
 }
@@ -690,7 +692,8 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             let browse = ui.clone();
             fragment(when(state.map(|s| s.video.is_some()), move || {
                 let browse = browse.clone();
-                icon_action("Open video", Icon::Folder).on_press(move || browse.player.browse(&browse))
+                icon_action("Open video", Icon::Folder)
+                    .on_press(move || browse.player.browse(&browse))
             }))
         }
         WorkspacePage::Explorer => fragment(workspace::explorer_window_tools(ui.clone())),

@@ -71,18 +71,20 @@ def main():
             }""")
             toolbar = app.page.locator('.app-code .desktop-window-titlebar')
             expect(toolbar.get_by_role('button', name='Quick Open')).to_have_text('project')
-            expect(page.locator('.part.titlebar')).not_to_be_visible()
+            expect(page.get_by_role('menubar')).to_be_visible()
             slot = toolbar.get_by_role('button', name='Quick Open')
             picker = page.locator('.quick-input-widget input:visible').first
             def check_title_input():
                 expect(picker).to_be_focused()
                 slot_size = slot.bounding_box()
+                title_size = toolbar.bounding_box()
+                assert abs(slot_size['x'] + slot_size['width'] / 2 - title_size['x'] - title_size['width'] / 2) < 2
                 box = picker.bounding_box()
                 inside = picker.evaluate("""input => {
                     const r = input.getBoundingClientRect();
                     return [document.documentElement.className, document.elementFromPoint(r.x + 15, r.y + r.height / 2) === input,
                         getComputedStyle(document.documentElement).getPropertyValue('--command-left'),
-                        document.querySelector('#workbench').getBoundingClientRect().top];
+                        document.querySelector('.part.titlebar').getBoundingClientRect().bottom];
                 }""")
                 eventually(lambda: page.locator('.part.statusbar').evaluate('el => Math.abs(el.getBoundingClientRect().bottom - innerHeight) < 2'))
                 assert inside[1] and 'title-picker' in inside[0], (inside, box, slot_size)
@@ -91,6 +93,9 @@ def main():
                 assert box['y'] + box['height'] <= inside[3] + 2, (inside, box)
             slot.click()
             check_title_input()
+            empty_panel = page.locator('.quick-input-widget')
+            expect(empty_panel.locator('.monaco-list-row')).to_have_count(0)
+            eventually(lambda: empty_panel.bounding_box()['height'] <= slot.bounding_box()['height'] + 1)
             picker.press('Escape')
             expect(picker).to_have_count(0)
             maximize = app.page.locator('.app-code .window-maximize')

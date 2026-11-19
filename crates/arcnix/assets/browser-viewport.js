@@ -32,11 +32,12 @@ function observeNativeSurface(app) {
         }
         const surface = browser.querySelector(app === 'video' ? '.remote-player-screen' : '.browser-surface');
         const commandButton = app === 'code' ? browser.querySelector('.code-quick-open') : null;
+        const menuSlot = app === 'code' ? browser.querySelector('.code-menu-slot') : null;
         const canvas = browser.closest('.desktop-canvas');
         const layer = browser.closest('.desktop-window-layer');
         const windows = Array.from(layer.querySelectorAll('.desktop-window:not(.hidden)'));
         const dock = canvas.querySelector('.desktop-dock');
-        const next = new Set([surface, commandButton, canvas, dock, ...windows].filter(Boolean));
+        const next = new Set([surface, commandButton, menuSlot, canvas, dock, ...windows].filter(Boolean));
         for (const node of watched) {
             if (!next.has(node)) {
                 resize.unobserve(node);
@@ -61,7 +62,7 @@ function observeNativeSurface(app) {
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom
         ).slice(0, 32) : [];
         const epoch = Number(browser.querySelector('.browser-epoch').textContent);
-        const serialized = JSON.stringify({epoch, area, clip, command_center: commandCenter});
+        const serialized = JSON.stringify({epoch, area, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
         if (bridge !== previousInput || serialized !== previous) {
             previousInput = bridge;
             previous = serialized;

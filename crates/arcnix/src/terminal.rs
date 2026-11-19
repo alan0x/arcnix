@@ -575,6 +575,7 @@ pub(super) fn update(ui: &Ui, event: TerminalEvent) {
             | TerminalEvent::Failed { id, .. } => *id,
         };
         let Some(session) = s.terminal.session_mut(id) else {
+            s.code.terminals.receive(id, event);
             return;
         };
         match event {

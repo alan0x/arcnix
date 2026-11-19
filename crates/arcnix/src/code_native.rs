@@ -30,9 +30,11 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
             && slot.left >= body.left
             && slot.right <= body.right
     });
+    let menu = port
+        .menu_slot
+        .filter(|m| m.valid() && m.left >= body.left && slot.is_some_and(|s| m.right <= s.left));
     if let Some(slot) = slot {
-        // Keep the editor grid at its original origin. Only the picker may
-        // paint and receive input in the command button's part of the title bar.
+        // Expose only the native menu and the active picker in the host titlebar.
         port.area = Some(BoxPx {
             top: slot.top,
             ..body
@@ -42,17 +44,19 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
             bottom: body.top,
             ..body
         };
-        if picker {
-            port.clip.push(BoxPx {
-                right: slot.left,
-                ..strip
-            });
-            port.clip.push(BoxPx {
-                left: slot.right,
-                ..strip
-            });
-        } else {
-            port.clip.push(strip);
+        let mut left = strip.left;
+        for visible in [menu, picker.then_some(slot)].into_iter().flatten() {
+            if visible.left > left {
+                port.clip.push(BoxPx {
+                    left,
+                    right: visible.left,
+                    ..strip
+                });
+            }
+            left = visible.right;
+        }
+        if left < strip.right {
+            port.clip.push(BoxPx { left, ..strip });
         }
     }
     let geometry = slot.map(|slot| {
@@ -61,6 +65,8 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
             slot.width(),
             slot.height(),
             body.top - slot.top,
+            menu.map_or(0, |m| m.left - body.left),
+            menu.map_or(0, |m| m.width()),
         ]
     });
     view.evaluate_script(&format!("window.arcnixCommandSlot?.({})", json!(geometry)))?;
@@ -163,6 +169,7 @@ impl Host {
             } else {
                 "/"
             };
+            s.code.root = root.to_owned();
             s.code.folder = root
                 .rsplit('/')
                 .find(|s| !s.is_empty())
@@ -217,6 +224,7 @@ impl Host {
                     .state
                     .with(|s| s.connected && Some(s.epoch) == self.epoch)
             {
+                crate::code_terminal::close_all(&self.ui);
                 self.ui
                     .send(Action::CodeFile(code_workbench::FileRequest::CloseRange {
                         cursor: None,
@@ -264,6 +272,7 @@ impl Host {
                     .ui
                     .state
                     .revise(|s| s.code.dirty = msg["value"] == true),
+                Some("terminal") => crate::code_terminal::request(&self.ui, msg),
                 Some("focus") => {
                     if self.ui.state.with(|s| {
                         server_desktop::visible(s)
@@ -303,6 +312,14 @@ impl Host {
                 .state
                 .revise(|s| std::mem::take(&mut s.code.replies));
             let _ = view.evaluate_script(&format!("window.arcnixReply({})", json!(replies)));
+        }
+        if self.ui.state.with(|s| !s.code.terminals.events.is_empty()) {
+            let events = self
+                .ui
+                .state
+                .revise(|s| std::mem::take(&mut s.code.terminals.events));
+            let _ =
+                view.evaluate_script(&format!("window.arcnixTerminalEvents({})", json!(events)));
         }
         if self.ready && self.ui.state.with(|s| !s.code.commands.is_empty()) {
             for command in self
