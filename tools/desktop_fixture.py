@@ -1,6 +1,6 @@
 """Owned desktop/SSH sandboxes shared by workspace integration checks."""
 from pathlib import Path
-import json, os, socket, subprocess, sys, time, urllib.request
+import json, os, shutil, socket, subprocess, sys, tempfile, time, urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'artifacts/python'))
@@ -29,6 +29,14 @@ def executable():
     return Path(data['target_directory']) / 'debug/arcnix.exe'
 
 
+def preview_run_directory(out):
+    path = out.resolve()
+    for root in (ROOT / 'artifacts/manual-preview', ROOT / 'artifacts/panel-preview'):
+        if root in path.parents:
+            return root / path.relative_to(root).parts[0]
+    return None
+
+
 def eventually(probe, timeout=15):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -43,10 +51,12 @@ def eventually(probe, timeout=15):
 
 
 class Peer:
-    def __init__(self, out, io_delay=0, browser_port=0, browser_web=False):
+    def __init__(self, out, io_delay=0, browser_port=0, browser_web=None):
         self.out = out
         self.io_delay = io_delay
         self.browser_port = browser_port
+        if browser_web is None:
+            browser_web = preview_run_directory(out) is not None
         self.browser_web = browser_web
     def __enter__(self):
         self.out.mkdir(parents=True, exist_ok=True)
@@ -78,6 +88,16 @@ class Desktop:
         if config is not None:
             self.config.write_text(json.dumps(config), encoding='utf-8')
         self.binary = binary or executable(); self.extra_env = extra_env or {}
+        self.preview_run = preview_run_directory(out)
+        if self.preview_run and not Path(self.binary).resolve().is_relative_to(self.preview_run):
+            # WebView2 derives the default UI profile from the executable path.
+            # Copies let concurrent previews of one build use independent profiles.
+            source = Path(self.binary)
+            directory = Path(tempfile.mkdtemp(prefix='runtime-', dir=self.out))
+            self.binary = Path(shutil.copy2(source, directory / source.name))
+            sidecar = source.with_name('libmpv-2.dll')
+            if sidecar.is_file():
+                shutil.copy2(sidecar, directory / sidecar.name)
         self.shared_runtime = runtime
         self.viewport = viewport
     def __enter__(self):
@@ -90,10 +110,11 @@ class Desktop:
             sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
         endpoint = f'http://127.0.0.1:{port}'
         env = os.environ.copy(); env.update(self.extra_env)
-        if 'WEBVIEW2_USER_DATA_FOLDER' not in self.extra_env:
-            env['WEBVIEW2_USER_DATA_FOLDER'] = str(self.out/f'webview-{time.time_ns()}')
-        elif self.extra_env['WEBVIEW2_USER_DATA_FOLDER'] == '':
+        # A process-wide override also redirects the SSH browser into the UI profile.
+        if self.preview_run or self.extra_env.get('WEBVIEW2_USER_DATA_FOLDER') == '':
             env.pop('WEBVIEW2_USER_DATA_FOLDER', None)
+        elif 'WEBVIEW2_USER_DATA_FOLDER' not in self.extra_env:
+            env['WEBVIEW2_USER_DATA_FOLDER'] = str(self.out/f'webview-{time.time_ns()}')
         env['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = f'--remote-debugging-port={port} --remote-debugging-address=127.0.0.1'
         self.process = subprocess.Popen([str(self.binary), '--config', str(self.config)], cwd=ROOT, env=env, stdout=self.log, stderr=self.log)
         eventually(lambda: urllib.request.urlopen(endpoint+'/json/version', timeout=1).close() or True, timeout=20)
@@ -156,6 +177,15 @@ class Desktop:
         # Fixture profiles use an unencrypted key, which connects without a credential dialog.
         expect(self.page.locator('.connection-state')).to_have_text('SSH connected')
         expect(self.page.get_by_role('dialog', name='Connect to server', exact=True)).to_have_count(0)
+    def connect_media_preview(self):
+        self.page.locator('.host-select').click()
+        self.page.locator('.overview-transfer').click()
+        connect = self.page.get_by_role('dialog').get_by_role('button', name='连接', exact=True)
+        connected = self.page.locator('.connection-state').filter(has_text='SSH 已连接')
+        expect(connect.or_(connected).first).to_be_visible()
+        if connect.is_visible():
+            connect.click()
+        expect(connected).to_be_visible()
     def workspace(self, label):
         tabs = self.page.locator('.workbench-tabs')
         expect(tabs).to_be_visible()

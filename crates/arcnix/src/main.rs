@@ -1864,6 +1864,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{file_browser::remote_listed(s,&path);s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
+            Update::Children{remote:true,result,..} if events.player.awaiting_directory(response.serial) =>
+                events.player.listed(&events,result),
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){if remote{state.revise(file_browser::remote_browse_failed);}events.error(format!("读取目录失败：{message}"));}},
             #[cfg(windows)]

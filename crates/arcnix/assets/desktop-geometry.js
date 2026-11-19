@@ -7,6 +7,7 @@ const desktopGeometry = (() => {
     let canvas, layout, gesture, observedArea;
     let lastDragEnd = -Infinity;
     const pending = new Map();
+    const openingAreas = new Map();
 
     function area() {
         const frame = canvas.getBoundingClientRect();
@@ -18,23 +19,41 @@ const desktopGeometry = (() => {
     }
 
     function fit(bounds, limits) {
-        const width = clamp(bounds.width, Math.min(minimumWidth, limits.width), limits.width);
-        const height = clamp(bounds.height, Math.min(minimumHeight, limits.height), limits.height);
         return {
-            width, height,
-            x: clamp(bounds.x, 0, limits.width - width),
-            y: clamp(bounds.y, 0, limits.height - height),
+            ...bounds,
+            x: clamp(bounds.x, 0, Math.max(0, limits.width - bounds.width)),
+            y: clamp(bounds.y, 0, Math.max(0, limits.height - bounds.height)),
         };
     }
 
-    function initialBounds(slot, limits) {
-        const offset = slot * 26;
-        return {
+    function initialBounds(item, limits) {
+        const offset = item.slot * 26;
+        return fit({
             x: 22 + offset,
             y: 19 + offset,
-            width: limits.width - Math.max(150, Math.round(limits.width * .13)),
-            height: limits.height - Math.max(136, Math.round(limits.height * .16)),
-        };
+            width: Math.min(limits.width, Math.max(minimumWidth, limits.width - Math.max(150, Math.round(limits.width * .13)))),
+            height: Math.min(limits.height, Math.max(minimumHeight, limits.height - Math.max(136, Math.round(limits.height * .16)))),
+        }, limits);
+    }
+
+    function preferredBounds(item, limits) {
+        if (!openingAreas.has(item.id)) openingAreas.set(item.id, limits);
+        const opening = openingAreas.get(item.id);
+        const bounds = pending.get(item.id)?.bounds ?? item.bounds ?? initialBounds(item, opening);
+        return { ...bounds, reference: bounds.reference ?? opening };
+    }
+
+    function place(bounds, limits) {
+        const width = Math.min(bounds.width, limits.width);
+        const height = Math.min(bounds.height, limits.height);
+        const centerX = (bounds.x + bounds.width / 2) / bounds.reference.width;
+        const centerY = (bounds.y + bounds.height / 2) / bounds.reference.height;
+        return fit({
+            x: Math.round(centerX * limits.width - width / 2),
+            y: Math.round(centerY * limits.height - height / 2),
+            width,
+            height,
+        }, limits);
     }
 
     function draw(element, bounds) {
@@ -49,8 +68,12 @@ const desktopGeometry = (() => {
     }
 
     function drawWindows() {
-        if (!layout?.shown || !canvas) return;
+        if (!layout?.shown || !canvas?.offsetWidth || !canvas.offsetHeight) return;
         const limits = area();
+        const workWidth = limits.width + 'px';
+        if (canvas.style.getPropertyValue('--desktop-work-width') !== workWidth) {
+            canvas.style.setProperty('--desktop-work-width', workWidth);
+        }
         for (const item of layout.windows) {
             const element = canvas.querySelector(`.desktop-window.${item.class}:not(.hidden)`);
             if (!element) continue;
@@ -58,8 +81,8 @@ const desktopGeometry = (() => {
             if (gesture?.element === element && gesture.current) continue;
             const local = pending.get(item.id);
             if (local && JSON.stringify(item.bounds) !== local.original) pending.delete(item.id);
-            const bounds = pending.get(item.id)?.bounds ?? item.bounds ?? initialBounds(item.slot, limits);
-            draw(element, item.maximized ? { x: 0, y: 0, ...limits } : fit(bounds, limits));
+            const bounds = preferredBounds(item, limits);
+            draw(element, item.maximized ? { x: 0, y: 0, ...limits } : place(bounds, limits));
         }
     }
 
@@ -85,8 +108,17 @@ const desktopGeometry = (() => {
         if (!drag.current) return;
         lastDragEnd = performance.now();
         if (commit && !Object.keys(drag.start).every(key => drag.start[key] === drag.current[key])) {
-            pending.set(drag.app, { bounds: drag.current, original: drag.original });
-            send('.desktop-bounds-input', drag.app, { bounds: drag.current });
+            // Only an explicitly moved or resized axis replaces its preferred geometry.
+            const bounds = { ...drag.preferred, reference: { ...drag.preferred.reference } };
+            for (const [position, size] of [['x', 'width'], ['y', 'height']]) {
+                if (drag.current[position] !== drag.start[position] || drag.current[size] !== drag.start[size]) {
+                    bounds[position] = drag.current[position];
+                    bounds[size] = drag.current[size];
+                    bounds.reference[size] = drag.limits[size];
+                }
+            }
+            pending.set(drag.app, { bounds, original: drag.original });
+            send('.desktop-bounds-input', drag.app, { bounds });
         }
         drawWindows();
     }
@@ -101,6 +133,7 @@ const desktopGeometry = (() => {
     });
 
     function sync(next) {
+        if (next?.epoch !== layout?.epoch) openingAreas.clear();
         const nextCanvas = document.querySelector('.desktop-canvas');
         const reset = next?.epoch !== layout?.epoch || nextCanvas !== canvas;
         const changedFrame = reset || !next?.shown || next.fullscreen !== layout?.fullscreen;
@@ -147,7 +180,7 @@ const desktopGeometry = (() => {
             width: element.offsetWidth, height: element.offsetHeight,
         }, limits);
         gesture = {
-            pointer: event.pointerId, element, edge, limits, start,
+            pointer: event.pointerId, element, edge, limits, start, preferred: preferredBounds(item, limits),
             x: event.clientX, y: event.clientY, app: item.id, original: JSON.stringify(item.bounds),
         };
         if (handle) {

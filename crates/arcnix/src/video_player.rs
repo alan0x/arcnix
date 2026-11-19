@@ -8,6 +8,13 @@ use glory::wry::shell::{AssetProvider, AssetSource};
 use glory::wry::{LocalMedia, MediaKind, Renderer};
 
 use super::*;
+mod picker;
+
+const EXTENSIONS: &[&str] = if cfg!(all(windows, target_arch = "x86_64")) {
+    &["MP4", "MKV"]
+} else {
+    &["MP4"]
+};
 
 type ReadResult = Result<Vec<u8>, String>;
 
@@ -18,10 +25,11 @@ pub(super) fn native_format(path: &str) -> bool {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("mkv"))
 }
 pub(super) fn supports(path: &str) -> bool {
-    native_format(path)
-        || Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"))
+    Path::new(path).extension().is_some_and(|ext| {
+        EXTENSIONS
+            .iter()
+            .any(|format| ext.eq_ignore_ascii_case(format))
+    })
 }
 struct RangeRead {
     offset: u64,
@@ -163,6 +171,7 @@ pub(super) struct Playback {
 }
 #[derive(Clone)]
 pub(super) struct Player {
+    picker: Cage<Option<picker::Directory>>,
     #[cfg(windows)]
     pub viewport: Cage<Option<native_viewport::Viewport>>,
     renderer: Renderer,
@@ -172,6 +181,7 @@ pub(super) struct Player {
 impl Player {
     pub fn new(renderer: Renderer, scope: &Scope) -> Self {
         Self {
+            picker: scope.cage(None),
             #[cfg(windows)]
             viewport: scope.cage(None),
             renderer,
@@ -204,6 +214,7 @@ impl Player {
             .revise(|s| server_desktop::remove_window(s, WorkspacePage::Video));
     }
     pub fn stop(&self, ui: &Ui) {
+        self.picker.revise(|picker| *picker = None);
         if !ui.state.with(|s| s.video.is_some()) {
             return;
         }
@@ -264,14 +275,51 @@ impl Player {
         });
     }
 }
+fn empty_player(ui: Ui) -> impl Widget {
+    let browse = ui.clone();
+    col().class("player-idle").fill((
+        col().class("player-idle-stage").fill((
+            sapid::button()
+                .class("player-open-disc")
+                .name(i18n::bind("Open video"))
+                .fill(icons::glyph(Icon::Play))
+                .on_press(move || browse.player.browse(&browse)),
+            text()
+                .class("player-idle-title")
+                .content(i18n::bind("Open video")),
+            text()
+                .class("player-formats")
+                .content(EXTENSIONS.join(" · ")),
+        )),
+        col().class("player-idle-controls").fill((
+            view().class("player-empty-timeline"),
+            row().class("player-idle-transport").fill((
+                icons::glyph(Icon::Play),
+                text().class("player-clock").content("0:00 / 0:00"),
+                text_action("Browse files…", Icon::Folder)
+                    .class("button with-icon player-browse")
+                    .on_press(move || ui.player.browse(&ui)),
+            )),
+        )),
+    ))
+}
+
 pub(super) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
+    let idle = ui.clone();
+    let listing = ui.clone();
     col().class("remote-player").fill((
         #[cfg(windows)]
         crate::mpv_native::bridge(ui.clone()),
         view()
             .class("remote-player-screen")
             .node_ref(ui.player.node),
+        when(state.map(|s| s.video.is_none()), move || {
+            empty_player(idle.clone())
+        }),
+        when(ui.player.picker.map(Option::is_some), move || {
+            picker::panel(listing.clone())
+        }),
         #[cfg(windows)]
         crate::mpv_native::controls(ui.clone()),
         text().class("remote-player-status").content(state.map(|s| {

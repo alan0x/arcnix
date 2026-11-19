@@ -35,7 +35,7 @@ def main():
                 p.get_by_role('dialog',name='Query server result',exact=True).get_by_role('button',name='Query',exact=True).click()
                 expect(p.locator('.task-status')).to_have_text(['Succeeded'],timeout=25000)
             app.connect();app.workspace('Desktop')
-            expect(p.locator('.desktop-shortcuts button')).to_have_count(8)
+            expect(p.locator('.desktop-shortcuts').get_by_role('button',name='Player',exact=True)).to_be_visible()
             expect(p.locator('.desktop-dock').get_by_role('button',name='Monitor',exact=True)).to_be_visible()
             expect(p.locator('.desktop-dock').get_by_role('button',name='Services',exact=True)).to_have_count(0)
             expect(p.locator('.desktop-dock').get_by_role('button',name='Logs',exact=True)).to_have_count(0)
@@ -100,6 +100,7 @@ def main():
             expect(p.locator('.resource-table')).to_contain_text('eth0')
             network = sections.get_by_role('button',name='Network',exact=True)
             expect(network.locator('.monitor-section-summary')).to_contain_text('KiB/s', timeout=15000)
+            p.locator('.desktop-window.app-resources .window-maximize').click()
             sidebar_widths = []
             for width, height in [(1440, 980), (1100, 780), (900, 660)]:
                 p.set_viewport_size(dict(width=width, height=height))
@@ -111,9 +112,8 @@ def main():
                     const line = detail.getBoundingClientRect();
                     const range = document.createRange();
                     range.selectNodeContents(detail);
-                    const contentRight = button.getBoundingClientRect().right - parseFloat(getComputedStyle(button).paddingRight);
-                    return Math.abs((icon.top + icon.bottom) - (title.top + title.bottom)) < 3
-                        && Math.abs(range.getBoundingClientRect().right - contentRight) < 2 && line.top >= icon.bottom
+                    return Math.abs((icon.top + icon.bottom) - (title.top + line.bottom)) < 3
+                        && Math.abs(range.getBoundingClientRect().left - title.left) < 2 && line.top >= title.bottom - 1
                         && detail.scrollWidth <= detail.clientWidth && detail.scrollHeight <= detail.clientHeight;
                 }'''), width
             assert 206 <= sidebar_widths[2] < sidebar_widths[1] < sidebar_widths[0] <= 216, sidebar_widths

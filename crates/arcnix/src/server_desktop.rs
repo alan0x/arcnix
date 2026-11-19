@@ -630,6 +630,11 @@ pub(super) fn entry(ui: Ui, tab: Tab) -> impl Widget {
 
 pub(super) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
     let state = ui.state;
+    let label = if page == WorkspacePage::Video && !dock {
+        "Player"
+    } else {
+        app_label(page)
+    };
     sapid::button()
         .class(state.map(move |s| {
             format!(
@@ -652,13 +657,13 @@ pub(super) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
                 }
             )
         }))
-        .name(i18n::bind(app_label(page)))
+        .name(i18n::bind(label))
         .pressed(state.map(move |s| s.workspace_page == page))
         .fill((
             text().class("desktop-app-icon").content(""),
             text()
                 .class("desktop-app-label")
-                .content(i18n::bind(app_label(page))),
+                .content(i18n::bind(label)),
         ))
         .on_press(move || ui.open_desktop_app(page))
 }
@@ -673,7 +678,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             s.video
                 .as_ref()
                 .map(|v| v.title.clone())
-                .unwrap_or_default()
+                .unwrap_or_else(|| i18n::translate("Player"))
         }))
     } else {
         text().content(i18n::bind(app_label(page)))
@@ -681,6 +686,13 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let tools = match page {
         WorkspacePage::Terminal => fragment(terminal::header(ui.clone())),
         WorkspacePage::Code => fragment(code_workbench::title_tools(ui.clone())),
+        WorkspacePage::Video => {
+            let browse = ui.clone();
+            fragment(when(state.map(|s| s.video.is_some()), move || {
+                let browse = browse.clone();
+                icon_action("Open video", Icon::Folder).on_press(move || browse.player.browse(&browse))
+            }))
+        }
         WorkspacePage::Explorer => fragment(workspace::explorer_window_tools(ui.clone())),
         WorkspacePage::Resources => fragment(monitor_ui::window_tools(ui.clone())),
         #[cfg(windows)]

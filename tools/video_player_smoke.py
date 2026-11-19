@@ -96,7 +96,36 @@ def check_geometry(page, window, native_surface_matches=None):
     return positioned
 
 
-def run(preview, binary=None):
+def watch_player_scrollbars(page):
+    # Sample layout during opening, buffering, seeking and window transitions.
+    page.evaluate("""() => {
+        const stats = window.playerLayout = {frames: 0, overflow: null};
+        function sample() {
+            const player = document.querySelector('.desktop-window.app-video');
+            if (player?.getClientRects().length) {
+                stats.frames++;
+                for (const el of [player, ...player.querySelectorAll('*')]) {
+                    if (!el.clientWidth || !el.clientHeight) continue;
+                    const css = getComputedStyle(el);
+                    if ((/auto|scroll/.test(css.overflowX) && el.scrollWidth > el.clientWidth + 1) ||
+                        (/auto|scroll/.test(css.overflowY) && el.scrollHeight > el.clientHeight + 1)) {
+                        stats.overflow ??= el.className || el.tagName;
+                    }
+                }
+            }
+            requestAnimationFrame(sample);
+        }
+        sample();
+    }""")
+
+
+def verify_player_scrollbars(page):
+    stats = page.evaluate('window.playerLayout')
+    assert stats['frames'] > 0 and stats['overflow'] is None, stats
+    return stats['frames']
+
+
+def run(preview, binary=None, read_delay=.003):
     out = ROOT / 'artifacts' / ('manual-preview' if preview else 'video-smoke') / f'video-{time.time_ns()}'
     out.mkdir(parents=True)
     binary = binary or executable()
@@ -104,7 +133,7 @@ def run(preview, binary=None):
         binary = shutil.copy2(binary, out / binary.name)
     local = out / 'local'
     local.mkdir()
-    with Peer(out / 'ssh', io_delay=.003) as peer:
+    with Peer(out / 'ssh', io_delay=read_delay) as peer:
         media = peer.root / 'Mandelbrot.MP4'
         (peer.root / 'folder' / 'nested.txt').write_text('Remote directory listing')
         make_video(out, media)
@@ -120,12 +149,12 @@ def run(preview, binary=None):
             page = app.page
             session = page.context.new_cdp_session(page)
             if preview:
-                page.locator('.host-select').click()
-                page.locator('.overview-transfer').click()
-                expect(page.locator('.connection-state')).to_have_text('SSH 已连接')
+                app.connect_media_preview()
             else:
                 app.connect()
                 app.workspace('Files')
+            if not preview:
+                watch_player_scrollbars(page)
             app.file(media.name).dblclick()
             video = page.locator('.remote-player video')
             expect(video).to_be_visible()
@@ -183,7 +212,9 @@ def run(preview, binary=None):
             window.locator('.window-close').click()
             expect(video).to_have_count(0)
             expect(page.locator('.desktop-dock .app-video')).to_have_count(0)
-            page.wait_for_timeout(500)
+            # Already-issued SFTP reads may finish after the UI closes. Wait for
+            # the peer to release this handle, then verify that reads stay stopped.
+            eventually(lambda: '/' + media.name in trace.with_suffix('.closed').read_text().splitlines())
             settled = len(reads())
             page.wait_for_timeout(600)
             assert len(reads()) == settled
@@ -202,7 +233,7 @@ def run(preview, binary=None):
             app.workspace('Files')
             page.get_by_role('button', name='Disconnect', exact=True).click()
             expect(video).to_have_count(0)
-            print(json.dumps(dict(file_bytes=size, bytes_at_playback=first, bytes_after_seek=total,
+            print(json.dumps(dict(layout_frames=verify_player_scrollbars(page), file_bytes=size, bytes_at_playback=first, bytes_after_seek=total,
                                   browse_seconds=round(browse, 3), seek_seconds=round(at, 2))))
 
 
@@ -210,5 +241,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preview', action='store_true')
     parser.add_argument('--binary', type=Path, help='Test an already packaged app')
+    parser.add_argument('--read-delay', type=float, default=.003, help='Fixture latency per SFTP read in seconds (0–0.1)')
     args = parser.parse_args()
-    run(args.preview, args.binary)
+    run(args.preview, args.binary, args.read_delay)

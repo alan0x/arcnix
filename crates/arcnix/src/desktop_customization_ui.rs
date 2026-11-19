@@ -271,6 +271,7 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
         icons.extend(
             server_desktop::available_apps(s)
                 .into_iter()
+                .chain([WorkspacePage::Video])
                 .filter_map(server_desktop::app_id)
                 .filter(|app| !settings.hidden.contains(app))
                 .map(Shortcut::App),
@@ -658,6 +659,7 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                     let unpinned = app.is_some_and(|app| {
                         state.with(|s| appearance(s).dock.unpinned.contains(&app))
                     });
+                    let can_pin = app.is_some_and(|app| server_desktop::app_page(app) != WorkspacePage::Video);
                     fragment((
                         when(!dock && app.is_some(), {
                             let ui = ui.clone();
@@ -673,7 +675,7 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                                 })
                             }
                         }),
-                        when(app.is_some(), {
+                        when(can_pin, {
                             let ui = ui.clone();
                             move || {
                                 menu_action(

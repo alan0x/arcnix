@@ -1,7 +1,6 @@
 """Launch the Windows feature-test desktop with a local test page."""
 
 import argparse
-import shutil
 import time
 
 from desktop_browser_smoke import site
@@ -19,17 +18,12 @@ def main():
         parser.error("Build Arcnix first with cargo build -p arcnix --locked")
     out = ROOT / "artifacts" / "manual-preview" / f"desktop-{time.time_ns()}"
     out.mkdir(parents=True)
-    binary = out / source.name
-    shutil.copy2(source, binary)
 
     with site() as localhost, Peer(out / "ssh", browser_port=localhost.server_port, browser_web=args.public_web) as peer:
         label = "功能测试服务器（公网预览）" if args.public_web else "功能测试服务器"
         profile = peer.profile(label)
         config = peer.config([profile], out)
-        with Desktop(
-            out / "app", config, binary=binary,
-            extra_env={"WEBVIEW2_USER_DATA_FOLDER": ""}, viewport=None,
-        ) as app:
+        with Desktop(out / "app", config, binary=source, viewport=None) as app:
             app.connect()
             app.application("Web browser")
             browser = app.page.locator(".desktop-window.app-browser")

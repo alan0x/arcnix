@@ -1451,6 +1451,11 @@ class DelayedHandle(paramiko.SFTPHandle):
     def write(self, offset, data):
         if self.delay: time.sleep(self.delay)
         return super().write(offset, data)
+    def close(self):
+        super().close()
+        if self.range_trace:
+            with self.range_trace.with_suffix('.closed').open('a', encoding='utf-8') as trace:
+                trace.write(self.media_path + '\n')
 
 
 class Files(paramiko.SFTPServerInterface):
@@ -1544,6 +1549,7 @@ class Files(paramiko.SFTPServerInterface):
             trace = self.root.parent / 'video-reads.txt'
             if path.lower().endswith(('.mp4', '.mkv')) and trace.exists():
                 handle.range_trace = trace
+                handle.media_path = path
             if not flags & os.O_WRONLY:
                 handle.readfile = stream
             if flags & (os.O_WRONLY | os.O_RDWR):

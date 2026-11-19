@@ -93,11 +93,33 @@ def main():
             def same(a, b):
                 return all(abs(a[key] - b[key]) <= 2 for key in ('x', 'y', 'width', 'height'))
 
+            def work_area():
+                canvas = p.locator('.desktop-canvas').bounding_box()
+                dock = p.locator('.desktop-dock-zone').bounding_box()
+                return dict(canvas, height=dock['y'] - canvas['y'] - 8)
+
+            def projected(window, reference):
+                area = work_area()
+                result = {}
+                for axis, size in [('x', 'width'), ('y', 'height')]:
+                    center_fraction = (window[axis] - reference[axis] + window[size] / 2) / reference[size]
+                    result[size] = min(window[size], area[size])
+                    offset = center_fraction * area[size] - result[size] / 2
+                    result[axis] = area[axis] + min(max(0, offset), area[size] - result[size])
+                return same(bounds(), result)
+
             app.connect()
             app.application('File explorer')
             settled()
             expect(p.locator('.desktop-resize-handle:visible')).to_have_count(8)
             original = bounds()
+            reference = work_area()
+            p.set_viewport_size(dict(width=1800, height=1100))
+            eventually(lambda: projected(original, reference))
+            p.set_viewport_size(dict(width=760, height=650))
+            eventually(lambda: projected(original, reference))
+            p.set_viewport_size(dict(width=1440, height=980))
+            eventually(lambda: same(bounds(), original))
             drag(p.locator('.desktop-window.active .edge-se'), -250, -170)
             assert abs(bounds()['width'] - (original['width'] - 250)) <= 2, (bounds(),original,errors)
             assert abs(bounds()['height'] - (original['height'] - 170)) <= 2
@@ -123,24 +145,37 @@ def main():
             settled()
             expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             expect(p.locator('.desktop-resize-handle:visible')).to_have_count(0)
+            maximized = bounds()
+            p.set_viewport_size(dict(width=900, height=700))
+            eventually(lambda: bounds()['width'] < maximized['width'] and bounds()['height'] < maximized['height'])
+            p.set_viewport_size(dict(width=1440, height=980))
+            eventually(lambda: same(bounds(), maximized))
             app.application('Monitor')
             settled()
             expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
             monitor_before = bounds()
             assert abs(monitor_before['width'] - disk_layout['width']) <= 2, monitor_before
             assert abs(monitor_before['height'] - disk_layout['height']) <= 2, monitor_before
+            p.set_viewport_size(dict(width=1800, height=1100))
+            eventually(lambda: projected(monitor_before, reference))
+            enlarged_area = work_area()
+            before_drag = bounds()
             drag(p.locator('.desktop-window.active .edge-s'), 0, -65)
-            assert abs(bounds()['height']-monitor_before['height']+65)<=2, (bounds(),monitor_before)
+            after_drag = dict(before_drag, height=before_drag['height'] - 65)
+            eventually(lambda: same(bounds(), after_drag))
             eventually(lambda: prefs()['windows'].get('monitor', {}).get('bounds', {}).get('height') == 505)
+            p.set_viewport_size(dict(width=1440, height=980))
+            eventually(lambda: projected(after_drag, enlarged_area))
             app.application('File explorer')
             settled()
             expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             p.locator('.desktop-window.active .window-maximize').click()
             settled()
             assert same(positioned, bounds())
+            p.set_viewport_size(dict(width=1920, height=1200))
+            eventually(lambda: projected(positioned, reference))
             p.set_viewport_size(dict(width=760, height=650))
-            eventually(lambda: bounds()['width'] < positioned['width'])
-            assert bounds()['x'] >= p.locator('.desktop-canvas').bounding_box()['x'] - 1
+            eventually(lambda: projected(positioned, reference))
             assert prefs()['windows']['explorer']['bounds'] == geometry
             p.set_viewport_size(dict(width=1440, height=980))
             eventually(lambda: same(positioned, bounds()))

@@ -2532,5 +2532,9 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 播放位置	Playback position
 音量	Volume
 视频播放器	Video player
+播放器	Player
+打开视频	Open video
+上一级文件夹	Parent folder
+此文件夹没有可播放的视频。	No playable videos in this folder.
 正在打开视频…	Opening video…
 无法播放此视频，请检查连接和 MP4 编码。	Could not play this video. Check the connection and MP4 codec.

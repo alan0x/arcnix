@@ -82,6 +82,15 @@ pub struct WindowBounds {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<WindowWorkArea>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowWorkArea {
+    pub width: u32,
+    pub height: u32,
 }
 
 impl WindowBounds {
@@ -90,7 +99,10 @@ impl WindowBounds {
             self.x <= 32768
                 && self.y <= 32768
                 && (1..=32768).contains(&self.width)
-                && (1..=32768).contains(&self.height),
+                && (1..=32768).contains(&self.height)
+                && self.reference.is_none_or(|area| {
+                    (1..=32768).contains(&area.width) && (1..=32768).contains(&area.height)
+                }),
             "Invalid desktop window geometry"
         );
         Ok(())

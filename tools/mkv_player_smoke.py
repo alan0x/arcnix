@@ -10,7 +10,7 @@ import time
 
 from desktop_fixture import Desktop, Peer, ROOT, eventually, executable, expect
 from libmpv_runtime import stage
-from video_player_smoke import check_geometry, make_video
+from video_player_smoke import check_geometry, make_video, verify_player_scrollbars, watch_player_scrollbars
 
 
 def native_window(pid):
@@ -31,7 +31,7 @@ def native_window(pid):
     return found[0] if found else None
 
 
-def run(preview=False, binary=None):
+def run(preview=False, binary=None, read_delay=.003):
     out = ROOT / 'artifacts' / ('manual-preview' if preview else 'mkv-smoke') / f'mkv-{time.time_ns()}'
     local = out / 'local'
     local.mkdir(parents=True)
@@ -40,7 +40,7 @@ def run(preview=False, binary=None):
         if preview:
             binary = Path(shutil.copy2(binary, out / binary.name))
         stage(binary.parent)
-    with Peer(out/'ssh', io_delay=.003) as peer:
+    with Peer(out/'ssh', io_delay=read_delay) as peer:
         mp4 = out/'source.mp4'
         make_video(out, mp4)
         mkv = peer.root/'Mandelbrot.MKV'
@@ -58,14 +58,13 @@ def run(preview=False, binary=None):
         with Desktop(out/'app', config, binary=binary, viewport=None) as app:
             page = app.page
             if preview:
-                page.locator('.host-select').click()
-                page.locator('.overview-transfer').click()
-                expect(page.locator('.connection-state')).to_have_text('SSH 已连接')
+                app.connect_media_preview()
             else:
                 app.connect()
                 app.workspace('Files')
             player = page.locator('.desktop-window.app-video')
             if not preview:
+                watch_player_scrollbars(page)
                 app.file('invalid.mkv').click(button='right')
                 app.action('Play')
                 expect(player.locator('.remote-player-status')).to_contain_text('MKV playback failed', timeout=20000)
@@ -149,13 +148,13 @@ def run(preview=False, binary=None):
             page.get_by_role('button',name='Disconnect',exact=True).click()
             expect(player).to_have_count(0)
             eventually(lambda: not user.IsWindow(hwnd))
-            time.sleep(.3)
+            eventually(lambda: '/' + mkv.name in trace.with_suffix('.closed').read_text().splitlines())
             settled = len(reads())
             time.sleep(.6)
             assert len(reads()) == settled and not list(local.iterdir())
             total = sum(n for _,n in reads())
             assert total < size/2
-            print(json.dumps(dict(size=size, first=first, total=total, seek=seek, browse_seconds=browse)))
+            print(json.dumps(dict(layout_frames=verify_player_scrollbars(page), size=size, first=first, total=total, seek=seek, browse_seconds=browse)))
 
 
 if __name__ == '__main__':
@@ -163,5 +162,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preview', action='store_true')
     parser.add_argument('--binary', type=Path, help='Test an already packaged app with its bundled DLL')
+    parser.add_argument('--read-delay', type=float, default=.003, help='Fixture latency per SFTP read in seconds (0–0.1)')
     args = parser.parse_args()
-    run(args.preview,args.binary)
+    run(args.preview, args.binary, args.read_delay)
