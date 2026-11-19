@@ -23,9 +23,12 @@ def main():
             dialog = page.get_by_role('dialog', name='Connect to server', exact=True)
             state = page.locator('.connection-state')
 
-            def start(name):
+            def select(name):
                 app.servers()
                 page.locator('.host-row').filter(has=page.get_by_text(name, exact=True)).locator('.host-select').click()
+
+            def start(name):
+                select(name)
                 app.workspace('Home')
                 page.locator('.overview-transfer').click()
 
@@ -36,8 +39,18 @@ def main():
             start('Unencrypted key')
             expect(state).to_have_text('SSH connected')
             expect(dialog).to_have_count(0)
+            select('Password login')
+            expect(state).to_have_text('SSH disconnected')
+            expect(dialog).to_have_count(0)
+            select('Unencrypted key')
+            expect(state).to_have_text('SSH connected')
+            expect(dialog).to_have_count(0)
             disconnect()
-            print('An unencrypted private key connects without a credential dialog.')
+            select('Password login')
+            select('Unencrypted key')
+            expect(state).to_have_text('SSH disconnected')
+            expect(dialog).to_have_count(0)
+            print('Returning to a key login reconnects unless it was explicitly disconnected.')
 
             start('Password login')
             expect(dialog).to_be_visible()
@@ -45,8 +58,14 @@ def main():
             dialog.get_by_role('textbox', name='Password or key passphrase', exact=True).fill('arcnix-test')
             dialog.get_by_role('button', name='Connect', exact=True).click()
             expect(state).to_have_text('SSH connected')
-            disconnect()
-            print('Password logins still ask for the password.')
+            select('Unencrypted key')
+            expect(state).to_have_text('SSH disconnected')
+            select('Password login')
+            expect(dialog).to_be_visible()
+            expect(dialog.get_by_role('textbox', name='Password or key passphrase', exact=True)).to_have_value('')
+            dialog.get_by_role('button', name='Cancel', exact=True).click()
+            expect(state).to_have_text('SSH disconnected')
+            print('Returning to a password login prompts for a fresh password.')
 
             start('Encrypted key')
             expect(dialog).to_be_visible()

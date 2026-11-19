@@ -212,6 +212,7 @@ impl Ui {
                 self.state.revise(|s| {
                     s.config = restored.config;
                     s.selected = None;
+                    s.reconnect_on_return.clear();
                     s.group = None;
                     s.search.clear();
                     s.collapsed_groups.clear();
