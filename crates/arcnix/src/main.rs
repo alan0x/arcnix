@@ -33,6 +33,8 @@ mod help_ui;
 mod i18n;
 mod icons;
 mod installation_ui;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod monitor_ui;
 #[cfg(windows)]
 mod mpv_native;
@@ -1948,7 +1950,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // live button identities while their browser activations are still queued.
     window.mount(app(ui.clone()))?;
     let wallpapers = ui.wallpapers.clone();
-    Shell::new().run(
+    let shell = Shell::new();
+    // Tao creates its NSApplication subclass when it constructs the event loop.
+    #[cfg(target_os = "macos")]
+    macos_menu::install();
+    shell.run(
         window,
         Config {
             native: Some(Box::new(app_icon::DesktopWindow {
