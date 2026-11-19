@@ -221,7 +221,7 @@ tools/sftp_fixture.py   仅用于回环测试的 SSH/SFTP 服务
 
 Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200 行的快照，不跟随或轮询；按终端 SGR 序列显示颜色和粗体等样式（16 色随主题，256 色和真彩色按原值），其他控制序列移除，回车重绘只保留最终内容，时间戳淡化显示，最多渲染 4000 个样式片段。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口同时显示发布与配置映射、未发布的暴露端口；host 网络可跳转现有资源页检查服务器监听。
 
-重启策略和 CPU／内存限制使用 [Docker container update](https://docs.docker.com/reference/cli/docker/container/update/)，只修改当前容器，不改写 Compose 定义；端口和挂载变更需要重建容器。卷详情使用 [volume inspect](https://docs.docker.com/reference/cli/docker/volume/inspect/)，日志使用 [container logs](https://docs.docker.com/reference/cli/docker/container/logs/) 的有限尾部读取。
+重启策略和 CPU／内存限制使用 [Docker container update](https://docs.docker.com/reference/cli/docker/container/update/)，只修改当前容器，不改写 Compose 定义；端口和挂载变更需要重建容器。卷详情使用 [volume inspect](https://docs.docker.com/reference/cli/docker/volume/inspect/)，日志使用 [container logs](https://docs.docker.com/reference/cli/docker/container/logs/) 的有限尾部读取。标准输出与错误输出在服务器端合并到同一管道，按 Docker 写出的顺序显示；日志正文中的无效 UTF-8 显示为替换字符，不会使读取失败。
 
 桌面外观独立于客户端设置；“跟随应用”沿用客户端主题，亮／暗选择仅作用于 Desktop 及其对话框，外部侧栏、标题栏和应用设置保持客户端主题。远程登录用户的 `~/.arcnix/desktop.json` 保存 v1 JSON（最多 64 KiB，兼容旧版仅 theme 字段），读取不创建文件，保存时以 Base64 传输内容，在相同目录创建临时文件再原子替换，新目录 0700、文件 0600，拒绝目录或文件符号链接及其他所有者。无 SFTP 也可读写；无法读取或版本未知时禁止覆盖，写失败保持原主题及文件。不同客户端按最后一次成功保存为准；按连接世代和请求序号丢弃迟到结果。
 

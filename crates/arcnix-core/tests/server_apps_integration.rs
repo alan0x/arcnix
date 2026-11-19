@@ -170,9 +170,9 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
         let logs = raw(&invoke(&docker::logs_command(&id)?))?;
         ensure!(
             logs.status.success()
-                && logs.stdout == b"container output\n"
-                && logs.stderr == b"container error\n",
-            "Container streams changed"
+                && logs.stdout == b"container output\ncontainer error\ncontainer output again\n"
+                && logs.stderr.is_empty(),
+            "Container streams were not merged in order"
         );
         for operation in [
             Operation::Start,

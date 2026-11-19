@@ -256,6 +256,40 @@ pub(crate) fn execute(
     command: &str,
     limit: usize,
 ) -> Result<CommandOutput> {
+    let (stdout, stderr, exit_code) = execute_bytes(session, command, limit)?;
+    Ok(CommandOutput {
+        stdout: String::from_utf8(stdout)?,
+        stderr: lossy(stderr),
+        exit_code,
+    })
+}
+
+/// Like [`execute`], for output that is displayed rather than parsed: invalid
+/// UTF-8 in either stream becomes U+FFFD instead of failing the request.
+pub(crate) fn execute_lossy(
+    session: &RemoteSession,
+    command: &str,
+    limit: usize,
+) -> Result<CommandOutput> {
+    let (stdout, stderr, exit_code) = execute_bytes(session, command, limit)?;
+    Ok(CommandOutput {
+        stdout: lossy(stdout),
+        stderr: lossy(stderr),
+        exit_code,
+    })
+}
+
+/// Reuses the buffer when it is already valid UTF-8.
+fn lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+}
+
+fn execute_bytes(
+    session: &RemoteSession,
+    command: &str,
+    limit: usize,
+) -> Result<(Vec<u8>, Vec<u8>, i32)> {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let output = session.exec_stream_checked(
@@ -276,11 +310,7 @@ pub(crate) fn execute(
             Ok(())
         },
     )?;
-    Ok(CommandOutput {
-        stdout: String::from_utf8(stdout)?,
-        stderr: String::from_utf8_lossy(&stderr).into_owned(),
-        exit_code: output.exit_code,
-    })
+    Ok((stdout, stderr, output.exit_code))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

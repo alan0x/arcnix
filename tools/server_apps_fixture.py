@@ -204,10 +204,14 @@ def reply(server, channel, command):
             if 'find ' in command: rows=[dict(name='hello-world',version='6.4',summary='canonical - Hello world')]
             return send('Name Version Rev Tracking Publisher Notes\n'+''.join(f"{v['name']} {v['version']} 1 latest/stable canonical -\n" for v in rows))
         return send(''.join(f"{v['name']}\t{v['version']}\t{v['summary']}\n" for v in data['native']))
+    # The logs command merges the CLI's stderr into stdout, so its errors arrive there.
+    merged = command.rstrip().endswith(' 2>&1')
+    def fail(status, error):
+        return send(error, status=status) if merged else send(status=status, error=error)
     if not seed.exists():
         return send(status=127, error='Docker is not installed')
     if (root / 'docker-denied').exists():
-        return send(status=1, error='permission denied connecting to the Docker socket')
+        return fail(1, 'permission denied connecting to the Docker socket')
     data = json.loads(seed.read_text())
     kind = marker.rsplit(':', 1)[-1]
     if kind == 'snapshot':
@@ -220,20 +224,27 @@ def reply(server, channel, command):
             rows.pop()
         return send('\n'.join(rows) + '\n')
     arguments = shlex.split(command.splitlines()[-1])
+    if merged:
+        arguments.pop()
     target = arguments[-1]
     if kind == 'volume':
         volume = next(row for row in data['volumes'] if row['name'] == target)
         return send(json.dumps(volume))
     container = next((row for row in data['containers'] if row['id'] == target), None)
     if not container:
-        return send(status=1, error='No such container')
+        return fail(1, 'No such container')
     if kind == 'inspect':
         detail = dict(container['details'], id=target, name='/' + container['name'], image=container['image'], state=container['state'])
         return send(json.dumps(detail))
     if kind == 'logs':
         if (root / 'docker-slow').exists():
             time.sleep(1.2)
-        return send(container.get('logs', ''), error=container.get('stderr_logs', ''))
+        stdout, stderr = container.get('logs', ''), container.get('stderr_logs', '')
+        if merged:
+            # Docker keeps both streams in one timestamped log, so a shared pipe receives them in time order.
+            lines = stdout.splitlines(keepends=True) + stderr.splitlines(keepends=True)
+            return send(''.join(sorted(lines, key=lambda line: line.split(' ', 1)[0])))
+        return send(stdout, error=stderr)
     if (root / 'docker-action-failed').exists():
         return send(status=1, error='Docker fixture operation failed')
     if kind in ['start', 'restart', 'stop']:
