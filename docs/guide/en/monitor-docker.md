@@ -10,7 +10,7 @@ Open **Desktop → Monitor** for CPU, memory, disk and network information from 
 
 ## Inspect a container
 
-Arcnix detects Docker when your SSH account can access the server’s Docker socket. Open **Docker → Containers**, find a container by name or image and select it. Check its status, port mappings and mounts, or choose **Logs** to fetch recent output. To start, stop or restart it, review the named container and confirm.
+Arcnix detects Docker when your SSH account can access the server’s Docker socket. Open **Docker → Containers**, find a container by name or image and select it. Check its status, port mappings and mounts, or choose **Logs** to fetch recent output, shown with the container’s terminal colors. To start, stop or restart it, review the named container and confirm.
 
 ## Find a volume or port
 
