@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
+use anyhow::Context;
 use arcnix_core::metrics::{self, ResourceSnapshot};
 use arcnix_core::packages::{self, SystemEnvironment};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
@@ -22,6 +23,14 @@ pub struct ConflictDecision {
     pub scope: ConflictScope,
 }
 
+pub enum Login {
+    Manual {
+        secret: zeroize::Zeroizing<String>,
+        remember: bool,
+    },
+    Saved,
+}
+
 pub enum Action {
     PlayVideo {
         path: String,
@@ -33,10 +42,12 @@ pub enum Action {
     Operations(crate::operations_worker::Action),
     Terminal(crate::terminal_worker::Action),
     Probe(Box<ServerProfile>, Option<String>),
+    ProbeSaved(Box<ServerProfile>, String),
     Authenticate {
-        secret: String,
+        login: Login,
         fingerprint: String,
     },
+    ForgetCredentials(Vec<crate::ssh_credentials::Key>, bool),
     Disconnect,
     Local(PathBuf),
     Remote(String),
@@ -181,6 +192,8 @@ pub enum Update {
     },
     Error(String),
     ConnectionError(String),
+    CredentialPrompt(Option<&'static str>),
+    CredentialNotice(&'static str),
     Imported(arcnix_core::ssh_config::ImportReport),
     BrowseError {
         remote: bool,
@@ -276,7 +289,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     }
                 }
                 _ => {
-                    if matches!(request.action, Action::Probe(..) | Action::Disconnect) {
+                    if matches!(
+                        request.action,
+                        Action::Probe(..) | Action::ProbeSaved(..) | Action::Disconnect
+                    ) {
                         router_generation.store(request.epoch, Ordering::Release);
                         let _ = routed_terminal.send(crate::terminal_worker::Command::Reset);
                     }
@@ -366,6 +382,8 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
         let mut transfers = crate::transfer_worker::Pool::new(events.clone(), generation.clone());
         let mut pending: Option<PendingConnection> = None;
         let mut session: Option<RemoteSession> = None;
+        let mut saved_login: Option<(crate::ssh_credentials::Key, zeroize::Zeroizing<String>)> =
+            None;
         let mut active_epoch = 0;
         let mut active_server = String::new();
         let mut active_profile: Option<ServerProfile> = None;
@@ -769,7 +787,39 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 Action::Children { remote: true, path } => Some(path.clone()),
                 _ => None,
             };
-            let connecting = matches!(action, Action::Probe(..) | Action::Authenticate { .. });
+            let action = match action {
+                Action::ForgetCredentials(keys, report_success) => {
+                    if saved_login
+                        .as_ref()
+                        .is_some_and(|(key, _)| keys.contains(key))
+                    {
+                        saved_login = None;
+                    }
+                    let mut failed = false;
+                    for key in keys {
+                        failed |= key.forget().is_err();
+                    }
+                    if failed {
+                        send(Update::CredentialNotice(
+                            "Could not remove the SSH credential from the system credential store.",
+                        ));
+                    } else if report_success {
+                        send(Update::CredentialNotice(
+                            "No saved SSH credential remains for this server.",
+                        ));
+                    }
+                    continue;
+                }
+                action => action,
+            };
+            let try_saved = matches!(&action, Action::ProbeSaved(..));
+            let expected = match &action {
+                Action::Probe(_, expected) => expected.clone(),
+                Action::ProbeSaved(_, expected) => Some(expected.clone()),
+                _ => None,
+            };
+            let connecting =
+                try_saved || matches!(action, Action::Probe(..) | Action::Authenticate { .. });
             let had_session = session.is_some();
             let result: anyhow::Result<()> = (|| {
                 anyhow::ensure!(
@@ -777,8 +827,9 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     "连接已切换，操作已忽略"
                 );
                 match action {
-                    Action::Probe(profile, expected) => {
+                    Action::Probe(profile, ..) | Action::ProbeSaved(profile, ..) => {
                         session_access = None;
+                        saved_login = None;
                         let profile = *profile;
                         package_environment = None;
                         active_epoch = epoch;
@@ -787,6 +838,29 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         session = None;
                         pending = None;
                         transfers.reset();
+                        if try_saved {
+                            let expected = expected
+                                .as_deref()
+                                .context("Saved SSH credentials require a trusted host")?;
+                            let key = crate::ssh_credentials::Key::new(&profile, expected);
+                            match key.load() {
+                                Ok(Some(secret)) => saved_login = Some((key, secret)),
+                                Ok(None) => {
+                                    send(Update::CredentialPrompt(None));
+                                    return Ok(());
+                                }
+                                Err(()) => {
+                                    send(Update::CredentialPrompt(Some(
+                                        "Could not read the system credential store. Enter your SSH credential to connect.",
+                                    )));
+                                    return Ok(());
+                                }
+                            }
+                            if epoch != generation.load(Ordering::Acquire) {
+                                saved_login = None;
+                                return Ok(());
+                            }
+                        }
                         let connection = match expected {
                             Some(expected) => {
                                 PendingConnection::open_for_known_host(&profile, &expected)?
@@ -797,18 +871,60 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         pending = Some(connection);
                         send(Update::Fingerprint(fingerprint));
                     }
-                    Action::Authenticate {
-                        secret,
-                        fingerprint,
-                    } => {
-                        let secret = zeroize::Zeroizing::new(secret);
+                    Action::Authenticate { login, fingerprint } => {
                         if epoch != active_epoch {
                             return Ok(());
                         }
                         let connection = pending
                             .take()
                             .ok_or_else(|| anyhow::anyhow!("连接已失效，请重新连接"))?;
-                        session = Some(connection.authenticate(&secret, &fingerprint)?);
+                        let profile = active_profile.as_ref().context("Missing SSH profile")?;
+                        let (secret, remember, saved_key) = match login {
+                            Login::Manual { secret, remember } => (secret, remember, None),
+                            Login::Saved => {
+                                let Some((key, secret)) = saved_login.take() else {
+                                    send(Update::CredentialPrompt(None));
+                                    return Ok(());
+                                };
+                                // The item was loaded for the saved trust record. Verify that
+                                // this is still the fingerprint associated with that item.
+                                if key != crate::ssh_credentials::Key::new(profile, &fingerprint) {
+                                    send(Update::CredentialPrompt(None));
+                                    return Ok(());
+                                }
+                                (secret, false, Some(key))
+                            }
+                        };
+                        match connection.authenticate(&secret, &fingerprint) {
+                            Ok(remote) => session = Some(remote),
+                            Err(error) => {
+                                if let Some(key) = saved_key
+                                    && crate::ssh_credentials::rejected(&error, &profile.auth)
+                                    && key.forget().is_err()
+                                {
+                                    send(Update::CredentialNotice(
+                                        "Could not remove the SSH credential from the system credential store.",
+                                    ));
+                                }
+                                let mut message = format!("{error:#}");
+                                if !secret.is_empty() {
+                                    message = message.replace(secret.as_str(), "[redacted]");
+                                }
+                                send(Update::ConnectionError(message));
+                                return Ok(());
+                            }
+                        }
+                        if remember
+                            && !secret.is_empty()
+                            && epoch == generation.load(Ordering::Acquire)
+                            && crate::ssh_credentials::Key::new(profile, &fingerprint)
+                                .save(&secret)
+                                .is_err()
+                        {
+                            send(Update::CredentialNotice(
+                                "Connected, but could not save the SSH credential to the system credential store.",
+                            ));
+                        }
                         session_access = Some((fingerprint.clone(), secret.clone()));
                         if let Some(profile) = active_profile.clone() {
                             transfers.attach(
@@ -829,6 +945,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         ));
                     }
                     Action::Disconnect => {
+                        saved_login = None;
                         session_access = None;
                         transfers.reset();
                         package_environment = None;
@@ -1004,6 +1121,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         message: format!("{error:#}"),
                     });
                 } else if connecting {
+                    saved_login = None;
                     send(Update::ConnectionError(format!("{error:#}")));
                 } else {
                     send(Update::Error(format!("{error:#}")));
@@ -1205,7 +1323,10 @@ mod tests {
             88,
             2,
             Action::Authenticate {
-                secret: "arcnix-test".into(),
+                login: crate::worker::Login::Manual {
+                    secret: zeroize::Zeroizing::new("arcnix-test".into()),
+                    remember: false,
+                },
                 fingerprint,
             },
         )?;
@@ -1279,7 +1400,10 @@ mod tests {
         send(
             77,
             Action::Authenticate {
-                secret: "arcnix-test".into(),
+                login: crate::worker::Login::Manual {
+                    secret: zeroize::Zeroizing::new("arcnix-test".into()),
+                    remember: false,
+                },
                 fingerprint,
             },
         )?;
@@ -1466,7 +1590,10 @@ mod tests {
         send(
             2,
             Action::Authenticate {
-                secret: "arcnix-test".into(),
+                login: crate::worker::Login::Manual {
+                    secret: zeroize::Zeroizing::new("arcnix-test".into()),
+                    remember: false,
+                },
                 fingerprint,
             },
         )?;

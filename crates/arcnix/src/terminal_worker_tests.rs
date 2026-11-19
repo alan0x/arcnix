@@ -53,7 +53,10 @@ fn terminal_remains_responsive_during_sftp_and_rejects_old_epochs() -> anyhow::R
     send(
         77,
         Action::Authenticate {
-            secret: "arcnix-test".into(),
+            login: crate::worker::Login::Manual {
+                secret: zeroize::Zeroizing::new("arcnix-test".into()),
+                remember: false,
+            },
             fingerprint,
         },
     )?;
@@ -182,7 +185,10 @@ fn terminal_here_preserves_other_sessions_and_literal_working_directories() -> a
     send(
         91,
         Action::Authenticate {
-            secret: "arcnix-test".into(),
+            login: crate::worker::Login::Manual {
+                secret: zeroize::Zeroizing::new("arcnix-test".into()),
+                remember: false,
+            },
             fingerprint,
         },
     )?;

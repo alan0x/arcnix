@@ -183,7 +183,7 @@ SSH 配置文件路径	SSH configuration file
 连接	Connect
 确定{}“{name}”？	Confirm {} “{name}”?
 组内服务器会移到未分组，不会被删除。	Servers in this group will become ungrouped; they will not be deleted.
-仅删除保存的站点配置，不会删除远程服务器上的文件。	Only the saved server configuration is removed. Remote files are not deleted.
+将删除此服务器的本地配置和已保存的 SSH 凭据。	This removes the local server profile and its saved SSH credential.
 系统软件任务正在执行，完成后才能删除当前服务器	Wait for the software operation to finish before deleting this server.
 正在识别系统和包管理器…	Detecting the operating system and package manager…
 请输入软件包名称，例如 nginx、git 或 curl	Enter a package name, such as nginx, git, or curl.
@@ -587,7 +587,7 @@ Ctrl+C 中断 · Ctrl+Shift+C 复制 · Ctrl+Shift+V 粘贴	Ctrl+C interrupt · 
 解散分组	Dissolve group
 删除分组及服务器	Delete group & servers
 只移除分组，所有服务器配置保留并移到根目录。	Only the group is removed. All server profiles are kept and moved to the root.
-将删除此分组及其 {} 台服务器的本地配置。不会删除远程服务器或远程文件。	This deletes the group and its {} saved server profiles. No remote servers or files will be deleted.
+将删除此分组及其 {} 台服务器的本地配置和已保存的 SSH 凭据。	This removes the group, its {} local server profiles, and their saved SSH credentials.
 目标已不存在，请关闭对话框后重试。	The target no longer exists. Close this dialog and try again.
 无法保存分组顺序：{error:#}	Could not save group order: {error:#}
 
@@ -2544,3 +2544,11 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 仅显示运行中的容器	Only running containers
 没有符合条件的容器	No matching containers
 此版本未提供 Windows 便携 ZIP 包	This release does not include the Windows portable ZIP
+在这台电脑上记住	Remember on this computer
+凭据将保存在系统凭据库中。请先保存 SSH 主机指纹。	Remembering uses the system credential store and requires a saved SSH host fingerprint.
+忘记已保存的 SSH 凭据	Forget saved SSH credential
+保存 SSH 主机指纹后，才能在这台电脑上记住凭据。	Save the SSH host fingerprint to remember the credential on this computer.
+无法读取系统凭据库，请输入 SSH 凭据后连接。	Could not read the system credential store. Enter your SSH credential to connect.
+已连接，但无法在系统凭据库中保存 SSH 凭据。	Connected, but could not save the SSH credential to the system credential store.
+无法从系统凭据库中移除 SSH 凭据。	Could not remove the SSH credential from the system credential store.
+此服务器没有已保存的 SSH 凭据。	No saved SSH credential remains for this server.
