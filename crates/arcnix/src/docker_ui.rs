@@ -15,7 +15,7 @@ pub(super) struct DockerState {
     filter: String,
     running_only: bool,
     detail_open: bool,
-    logs: Option<Vec<LogSpan>>,
+    logs: Option<LogView>,
     error: String,
     status: String,
     target: Option<(Container, Operation)>,
@@ -25,13 +25,20 @@ pub(super) struct DockerState {
     original_cpu: String,
     original_memory: String,
 }
-/// One styled run of log text, keyed by its position.
+/// One styled run of log text.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LogSpan {
-    index: usize,
     text: String,
     class: String,
     style: Style,
+}
+/// The parsed logs from one reply. The spans are shared so that cloning the
+/// state stays cheap, and they are rendered once per reply instead of being
+/// bound individually, which would re-evaluate every span on any state change.
+#[derive(Clone, Default)]
+pub(super) struct LogView {
+    reply: u64,
+    spans: std::rc::Rc<[LogSpan]>,
 }
 /// Bounds the rendered nodes; the oldest spans are merged into plain text first.
 const LOG_SPAN_LIMIT: usize = 4000;
@@ -78,13 +85,7 @@ fn log_spans(logs: &str) -> Vec<LogSpan> {
     }
     spans
         .into_iter()
-        .enumerate()
-        .map(|(index, (text, class, style))| LogSpan {
-            index,
-            text,
-            class,
-            style,
-        })
+        .map(|(text, class, style)| LogSpan { text, class, style })
         .collect()
 }
 fn ready(s: &State) -> bool {
@@ -153,7 +154,8 @@ impl Ui {
             return;
         }
         let id = self.state.with(|s| s.docker.selected.clone());
-        self.state.revise(|s| s.docker.logs = Some(Vec::new()));
+        self.state
+            .revise(|s| s.docker.logs = Some(LogView::default()));
         self.docker_send(AppAction::DockerLogs(id));
     }
     fn docker_prepare(&self, operation: Operation) {
@@ -301,7 +303,12 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
             Ok(Reply::Volume(volume)) if volume.name == s.docker.selected_volume => {
                 s.docker.volume = Some(volume)
             }
-            Ok(Reply::Logs(logs)) => s.docker.logs = Some(log_spans(&logs)),
+            Ok(Reply::Logs(logs)) => {
+                s.docker.logs = Some(LogView {
+                    reply: serial,
+                    spans: log_spans(&logs).into(),
+                })
+            }
             Ok(Reply::Operated) => {
                 refresh = true;
                 close = true;
@@ -437,20 +444,26 @@ fn detail(ui: Ui) -> impl Widget {
                         help_ui::tip("Recent logs", "Last 200 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process."),
                         sapid::button().class("button compact").label(i18n::bind("Details")).on_press(move || overview.state.revise(|s| s.docker.logs = None)),
                     )),
-                    when(state.map(|s| s.docker.logs.as_ref().is_some_and(|v| !v.is_empty())), move || {
-                        view().class("docker-log-output").fill(
-                            each(state.map(|s| s.docker.logs.clone().unwrap_or_default()))
-                                .key(|span: &LogSpan| span.index)
-                                .children(|item| {
-                                    let span = item.value;
-                                    text()
-                                        .kind(TextKind::Inline)
-                                        .selectable(true)
-                                        .class(span.map(|s| s.class.clone()))
-                                        .style(span.map(|s| s.style.clone()))
-                                        .content(span.map(|s| s.text.clone()))
-                                }),
-                        )
+                    when(state.map(|s| s.docker.logs.as_ref().is_some_and(|v| !v.spans.is_empty())), move || {
+                        // Keyed by reply: a new reply rebuilds the spans, other state changes leave them alone.
+                        each(state.map(|s| s.docker.logs.iter().cloned().collect::<Vec<_>>()))
+                            .key(|logs: &LogView| logs.reply)
+                            .children(|item| {
+                                let logs = item.value.get_untracked();
+                                view().class("docker-log-output").fill(
+                                    logs.spans
+                                        .iter()
+                                        .map(|span| {
+                                            text()
+                                                .kind(TextKind::Inline)
+                                                .selectable(true)
+                                                .class(span.class.clone())
+                                                .style(span.style.clone())
+                                                .content(span.text.clone())
+                                        })
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
                     })
                     .otherwise(move || text().class("docker-log-output").content(state.map(|s| i18n::translate(if s.docker.pending.is_some() { "Loading…" } else { "No logs" })))),
                 ))
@@ -936,7 +949,6 @@ mod tests {
                 ("plain\n", "ansi"),
             ]
         );
-        assert!(spans.iter().enumerate().all(|(i, s)| s.index == i));
     }
     #[test]
     fn log_redraws_and_empty_lines_keep_the_line_structure() {
