@@ -21,6 +21,7 @@ mod diagnostics_ui;
 mod disks_ui;
 mod docker_ui;
 mod explorer_search;
+mod explorer_tabs;
 mod explorer_transfer;
 mod explorer_ui;
 mod file_browser;
@@ -177,7 +178,7 @@ enum Dialog {
     TransferConflict,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 enum WorkspacePage {
     #[default]
     Desktop,
@@ -185,13 +186,26 @@ enum WorkspacePage {
     Software,
     Resources,
     Terminal,
-    Explorer,
-    Trash,
+    Explorer(u32),
     Docker,
     Code,
     Video,
     Browser,
     Settings,
+}
+
+impl WorkspacePage {
+    fn explorer_id(self) -> Option<u32> {
+        if let Self::Explorer(id) = self {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    fn is_explorer(self) -> bool {
+        self.explorer_id().is_some()
+    }
 }
 
 #[derive(Clone)]
@@ -2073,6 +2087,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/desktop-geometry.js"),
+                    include_str!("../assets/explorer-tabs.js"),
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),
                     include_str!("../assets/desktop-motion.js"),

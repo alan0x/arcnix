@@ -29,7 +29,7 @@ def main():
         page.emulate_media(reduced_motion='reduce')
         app.connect()
         app.workspace('Desktop')
-        app.application('File explorer')
+        app.application('Files')
         pane = page.locator('.explorer-pane')
         expect(pane).to_have_class(re.compile('explorer-upload-ready'))
         tools = page.locator('.explorer-window-tools')

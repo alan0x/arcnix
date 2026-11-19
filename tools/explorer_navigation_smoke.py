@@ -27,7 +27,7 @@ def main():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             app.connect()
-            app.application('File explorer')
+            app.application('Files')
             explorer = page.locator('.desktop-window.app-explorer.active')
             sidebar = explorer.locator('.explorer-sidebar')
             pathbar = explorer.locator('.pathbar')

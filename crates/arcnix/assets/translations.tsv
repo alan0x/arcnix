@@ -2115,7 +2115,7 @@ SIGKILL 会立即结束此进程，未保存的数据可能丢失。此进程的
 切换最大化	Toggle maximize
 关闭应用	Close application
 显示桌面	Show desktop
-资源管理器	File explorer
+资源管理器	Files
 全屏桌面	Fullscreen desktop
 退出桌面全屏	Exit desktop fullscreen
 Docker	Docker
@@ -2561,3 +2561,10 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 回收站为空	Trash is empty
 永久删除此项目？此操作无法撤销。	Permanently delete this item? This cannot be undone.
 原路径不可用	Original path unavailable
+
+新标签页	New tab
+关闭文件标签页	Close file tab
+文件标签页	File tabs
+在新标签页中打开	Open in new tab
+原路径	Original path
+删除时间	Date deleted

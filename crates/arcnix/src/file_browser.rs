@@ -75,6 +75,107 @@ impl RemoteHistory {
     }
 }
 
+pub(super) struct TabSnapshot {
+    path: String,
+    ready: bool,
+    entries: Vec<FileEntry>,
+    selection: HashSet<String>,
+    pane: PaneState,
+    history: RemoteHistory,
+    icons: bool,
+    tag: Option<explorer_ui::TagFilter>,
+    search: explorer_search::Search,
+    trash: bool,
+}
+
+impl TabSnapshot {
+    pub(super) fn title(&self) -> String {
+        tab_title(&self.path, self.trash, self.tag)
+    }
+
+    pub(super) fn location(&self) -> String {
+        if self.trash {
+            i18n::translate("回收站")
+        } else {
+            self.path.clone()
+        }
+    }
+
+    pub(super) fn preview_entries(&self) -> Vec<FileEntry> {
+        if self.trash || !self.ready {
+            Vec::new()
+        } else {
+            self.entries.iter().take(100).cloned().collect()
+        }
+    }
+}
+
+fn tab_title(path: &str, trash: bool, tag: Option<explorer_ui::TagFilter>) -> String {
+    if trash {
+        i18n::translate("回收站")
+    } else if let Some(tag) = tag {
+        i18n::translate(tag.label())
+    } else {
+        path.rsplit('/')
+            .next()
+            .filter(|p| !p.is_empty())
+            .unwrap_or(if path == "/" { "/" } else { "Files" })
+            .to_owned()
+    }
+}
+
+pub(super) fn live_tab_title(s: &State) -> String {
+    tab_title(
+        &s.remote_path,
+        s.workbench.files.trash,
+        s.server_apps.explorer_tag,
+    )
+}
+
+pub(super) fn capture_tab(s: &State) -> TabSnapshot {
+    let mut pane = s.file_browser.remote.clone();
+    pane.pending.clear();
+    pane.editing = false;
+    TabSnapshot {
+        path: s.remote_path.clone(),
+        ready: s.remote_ready,
+        entries: s.remote.clone(),
+        selection: s.remote_selection.clone(),
+        pane,
+        history: s.file_browser.remote_history.clone(),
+        icons: s.file_browser.remote_icons,
+        tag: s.server_apps.explorer_tag,
+        search: s.server_apps.explorer_search.clone(),
+        trash: s.workbench.files.trash,
+    }
+}
+
+pub(super) fn restore_tab(s: &mut State, tab: &TabSnapshot) {
+    s.remote_path.clone_from(&tab.path);
+    s.remote_ready = tab.ready;
+    s.remote.clone_from(&tab.entries);
+    s.remote_selection.clone_from(&tab.selection);
+    s.file_browser.remote.clone_from(&tab.pane);
+    s.file_browser.remote_history.clone_from(&tab.history);
+    s.file_browser.remote_icons = tab.icons;
+    s.server_apps.explorer_tag = tab.tag;
+    s.server_apps.explorer_search.clone_from(&tab.search);
+    s.server_apps.explorer_open_pending = None;
+    s.workbench.files.trash = tab.trash;
+    s.remote_request = 0;
+    s.file_browser.cancel_drag();
+}
+
+pub(super) fn fresh_tab(s: &mut State) {
+    s.file_browser.remote = PaneState::default();
+    s.file_browser.remote_history = RemoteHistory::default();
+    s.remote_selection.clear();
+    s.remote_ready = false;
+    s.remote_request = 0;
+    s.server_apps.explorer_search = Default::default();
+    s.server_apps.explorer_open_pending = None;
+}
+
 #[derive(Clone)]
 struct FileDrag {
     id: u64,
@@ -411,7 +512,7 @@ fn drag_ready(s: &State) -> bool {
         && s.navigation == navigation::Page::Servers
         && matches!(
             s.workspace_page,
-            WorkspacePage::Files | WorkspacePage::Explorer
+            WorkspacePage::Files | WorkspacePage::Explorer(_)
         )
 }
 
@@ -588,6 +689,9 @@ pub(super) fn select(ui: &Ui, remote: bool, target: &str, toggle: bool, range: b
 pub(super) fn navigate(ui: &Ui, remote: bool, target: String) {
     ui.state.revise(|s| {
         if remote {
+            if s.workspace_page.is_explorer() {
+                s.workbench.files.trash = false;
+            }
             s.file_browser.remote_history.requested = None;
             s.remote_path = target;
             s.server_apps.explorer_tag = None;
@@ -903,11 +1007,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
         }),
         GestureKind::TransferDrop => drop_transfer(ui, remote, event.drag_id),
         GestureKind::ExplorerDownload => {
-            if remote
-                && ui
-                    .state
-                    .with(|s| s.workspace_page == WorkspacePage::Explorer)
-            {
+            if remote && ui.state.with(|s| s.workspace_page.is_explorer()) {
                 drop_transfer(ui, false, event.drag_id);
             }
         }
@@ -944,7 +1044,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
                 && s.dialog.is_none()
                 && matches!(
                     s.workspace_page,
-                    WorkspacePage::Files | WorkspacePage::Explorer
+                    WorkspacePage::Files | WorkspacePage::Explorer(_)
                 )
                 && (!remote || s.connected && s.sftp_available)
             {

@@ -37,9 +37,9 @@ const desktopGeometry = (() => {
     }
 
     function preferredBounds(item, limits) {
-        if (!openingAreas.has(item.id)) openingAreas.set(item.id, limits);
-        const opening = openingAreas.get(item.id);
-        const bounds = pending.get(item.id)?.bounds ?? item.bounds ?? initialBounds(item, opening);
+        if (!openingAreas.has(item.class)) openingAreas.set(item.class, limits);
+        const opening = openingAreas.get(item.class);
+        const bounds = pending.get(item.class)?.bounds ?? item.bounds ?? initialBounds(item, opening);
         return { ...bounds, reference: bounds.reference ?? opening };
     }
 
@@ -79,24 +79,24 @@ const desktopGeometry = (() => {
             if (!element) continue;
             element.style.zIndex = item.order;
             if (gesture?.element === element && gesture.current) continue;
-            const local = pending.get(item.id);
-            if (local && JSON.stringify(item.bounds) !== local.original) pending.delete(item.id);
+            const local = pending.get(item.class);
+            if (local && JSON.stringify(item.bounds) !== local.original) pending.delete(item.class);
             const bounds = preferredBounds(item, limits);
             draw(element, item.maximized ? { x: 0, y: 0, ...limits } : place(bounds, limits));
         }
     }
 
-    function send(selector, app, fields) {
+    function send(selector, item, fields) {
         const input = canvas?.closest('.server-desktop:not(.hidden)')?.querySelector(selector);
         if (!input) return;
-        input.value = JSON.stringify({ epoch: layout.epoch, app, ...fields });
+        input.value = JSON.stringify({ epoch: layout.epoch, app: item.id, window: item.window, ...fields });
         input.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     function raise(element) {
         if (!layout?.shown || element?.classList.contains('active') || element?.closest('[inert]')) return;
         const item = element && windowLayout(element);
-        if (item) send('.desktop-focus-input', item.id);
+        if (item) send('.desktop-focus-input', item);
     }
 
     function finish(commit) {
@@ -118,7 +118,7 @@ const desktopGeometry = (() => {
                 }
             }
             pending.set(drag.app, { bounds, original: drag.original });
-            send('.desktop-bounds-input', drag.app, { bounds });
+            send('.desktop-bounds-input', drag.item, { bounds });
         }
         drawWindows();
     }
@@ -137,12 +137,12 @@ const desktopGeometry = (() => {
         const nextCanvas = document.querySelector('.desktop-canvas');
         const reset = next?.epoch !== layout?.epoch || nextCanvas !== canvas;
         const changedFrame = reset || !next?.shown || next.fullscreen !== layout?.fullscreen;
-        if (changedFrame || (gesture && !next.windows.some(item => item.id === gesture.app && !item.maximized))) {
+        if (changedFrame || (gesture && !next.windows.some(item => item.class === gesture.app && !item.maximized))) {
             finish(false);
         }
         if (reset || !next?.shown) pending.clear();
         else for (const app of pending.keys()) {
-            if (!next.windows.some(item => item.id === app)) pending.delete(app);
+            if (!next.windows.some(item => item.class === app)) pending.delete(app);
         }
         if (nextCanvas !== canvas) {
             observer.disconnect();
@@ -181,7 +181,7 @@ const desktopGeometry = (() => {
         }, limits);
         gesture = {
             pointer: event.pointerId, element, edge, limits, start, preferred: preferredBounds(item, limits),
-            x: event.clientX, y: event.clientY, app: item.id, original: JSON.stringify(item.bounds),
+            x: event.clientX, y: event.clientY, app: item.class, item, original: JSON.stringify(item.bounds),
         };
         if (handle) {
             // Edge presses are resize gestures, so the browser must not start a native drag.

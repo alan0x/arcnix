@@ -33,7 +33,7 @@
     }
     function pathPane(target) {
         if (!(target instanceof Element)) return null;
-        const explorer = target.closest('.explorer-titlebar')?.closest('.desktop-window');
+        const explorer = target.closest('.desktop-window.app-explorer');
         return validPane(explorer?.querySelector('.explorer-pane') || target);
     }
     const fileDragType = 'application/x-arcnix-file-transfer';

@@ -73,7 +73,7 @@ def main():
             expect(p.locator('.server-desktop')).to_have_class(re.compile(r'\btheme-dark\b'))
             assert p.locator('.navigation-rail').evaluate('el=>getComputedStyle(el).backgroundColor')==rail
             assert p.locator('.app').evaluate('el=>getComputedStyle(el).getPropertyValue("--surface").trim()') != p.locator('.server-desktop').evaluate('el=>getComputedStyle(el).getPropertyValue("--surface").trim()')
-            p.locator('.desktop-window.active .window-close').click();enter('File explorer')
+            p.locator('.desktop-window.active .window-close').click();enter('Files')
             expect(p.locator('.desktop-window-host')).to_have_count(0)
             assert p.locator('.file-pane').evaluate('el=>getComputedStyle(el).backgroundColor') not in ['rgb(255, 255, 255)','rgb(245, 247, 251)']
             app.screenshot('desktop-only-dark.png')

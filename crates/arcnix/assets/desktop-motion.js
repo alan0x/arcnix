@@ -11,13 +11,13 @@
     }
     function signature(value) {
         return JSON.stringify(value && [value.shown,value.epoch,value.app,value.fullscreen,
-            value.windows.map(window=>[window.id,window.maximized])]);
+            value.windows.map(window=>[window.class,window.maximized])]);
     }
     function windowFor(app) {
         return app && document.querySelector(`.desktop-window.${app}:not(.hidden)`);
     }
     function appClass(element) {
-        return element && [...element.classList].find(name=>name.startsWith('app-'));
+        return element && ([ ...element.classList ].find(name=>name.startsWith('files-window-')) || [...element.classList].find(name=>name.startsWith('app-')));
     }
     function animate(element,frames,duration) {
         if(!element || reduced.matches || !element.animate)return;

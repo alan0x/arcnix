@@ -149,7 +149,7 @@ pub(super) fn open(ui: &Ui, remote: bool, path: &str) {
         s.dialog.is_some()
             || !navigation::workspace_visible(s)
             || !(s.workspace_page == WorkspacePage::Files
-                || (remote && s.workspace_page == WorkspacePage::Explorer))
+                || (remote && s.workspace_page.is_explorer()))
     }) {
         return;
     }
@@ -346,7 +346,7 @@ pub(super) fn deleted(
 }
 pub(super) fn desktop_menu_open(s: &State) -> bool {
     server_desktop::visible(s)
-        && s.workspace_page == WorkspacePage::Explorer
+        && s.workspace_page.is_explorer()
         && s.file_menu == Some(true)
         && s.dialog.is_none()
 }
@@ -436,6 +436,29 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                 }
                             },
                         ),
+                        when(
+                            state.map(move |s| {
+                                remote
+                                    && s.workspace_page.is_explorer()
+                                    && single(s, true).is_some_and(|f| f.is_dir && !f.is_symlink)
+                            }),
+                            {
+                                let ui = ui.clone();
+                                move || {
+                                    let open = ui.clone();
+                                    action(&ui, true, "Open in new tab", one, move || {
+                                        if let Some((id, path)) = open.state.with(|s| {
+                                            Some((
+                                                s.workspace_page.explorer_id()?,
+                                                single(s, true)?.path,
+                                            ))
+                                        }) {
+                                            explorer_tabs::open_tab(&open, id, Some(path));
+                                        }
+                                    })
+                                }
+                            },
+                        ),
                         when(remote, {
                             let terminal = ui.clone();
                             move || terminal_action(terminal.clone())
@@ -486,19 +509,22 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                 }
                             },
                         ),
-                        action(&ui, remote, "移入回收站", can_delete, move || {
-                            trash_ui::move_items(&recycle, remote)
-                        }),
-                        action(&ui, remote, "永久删除", can_delete, move || {
-                            begin_delete(&delete, remote)
-                        }),
                         action(&ui, remote, "复制所选路径", any, move || {
                             copy_paths(&copy, remote, false)
                         }),
                         action(&ui, remote, "属性", any, move || {
                             properties(&info, remote)
                         }),
-                        text().class("menu-divider").content(""),
+                        fragment((
+                            text().class("menu-divider").content(""),
+                            action(&ui, remote, "移入回收站", can_delete, move || {
+                                trash_ui::move_items(&recycle, remote)
+                            }),
+                            action(&ui, remote, "永久删除", can_delete, move || {
+                                begin_delete(&delete, remote)
+                            }),
+                            text().class("menu-divider").content(""),
+                        )),
                     ))
                 }
             }),
@@ -506,20 +532,45 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                 let terminal = ui.clone();
                 move || terminal_action(terminal.clone())
             }),
-            fragment((
-                action(&ui, remote, "打开回收站", available, {
+            when(
+                state.map(move |s| !remote || !s.workspace_page.is_explorer()),
+                {
                     let ui = ui.clone();
-                    move || trash_ui::open(&ui, remote)
+                    move || {
+                        action(&ui, remote, "打开回收站", available, {
+                            let ui = ui.clone();
+                            move || trash_ui::open(&ui, remote)
+                        })
+                    }
+                },
+            ),
+            when(
+                state.map(move |s| {
+                    !s.workspace_page.is_explorer()
+                        || !s
+                            .file_context
+                            .as_ref()
+                            .is_some_and(|c| c.item && c.remote == remote)
                 }),
-                action(&ui, remote, "新建文件", file_browser::can_create, {
+                {
                     let ui = ui.clone();
-                    move || file_browser::create(&ui, remote, false)
-                }),
-                action(&ui, remote, "新建文件夹", file_browser::can_create, {
-                    let ui = ui.clone();
-                    move || file_browser::create(&ui, remote, true)
-                }),
-            )),
+                    move || {
+                        fragment((
+                            action(&ui, remote, "新建文件", file_browser::can_create, {
+                                let ui = ui.clone();
+                                move || file_browser::create(&ui, remote, false)
+                            }),
+                            action(&ui, remote, "新建文件夹", file_browser::can_create, {
+                                let ui = ui.clone();
+                                move || file_browser::create(&ui, remote, true)
+                            }),
+                            when(state.map(|s| s.workspace_page.is_explorer()), || {
+                                text().class("menu-divider").content("")
+                            }),
+                        ))
+                    }
+                },
+            ),
             when(
                 state.map(move |s| remote && explorer_ui::item_target(s).is_some()),
                 {
@@ -576,15 +627,14 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                     })
                                     .collect::<Vec<_>>(),
                             ),
+                            text().class("menu-divider").content(""),
                         ))
                     }
                 },
             ),
             when(
                 state.map(move |s| {
-                    remote
-                        && s.workspace_page == WorkspacePage::Explorer
-                        && s.file_context.is_none()
+                    remote && s.workspace_page.is_explorer() && s.file_context.is_none()
                 }),
                 {
                     let ui = ui.clone();
@@ -604,35 +654,42 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                     }
                 },
             ),
-            action(&ui, remote, "复制当前目录路径", workspace::ready, {
-                let ui = ui.clone();
-                move || copy_paths(&ui, remote, true)
-            }),
-            action(&ui, remote, "显示列", |s, _| s.file_pending.is_none(), {
-                let ui = ui.clone();
-                move || file_columns::open(&ui, remote)
-            }),
-            action(
-                &ui,
-                remote,
-                "Transfer defaults",
-                |s, _| s.file_pending.is_none() && s.selected.is_some(),
-                {
+            fragment((
+                action(&ui, remote, "复制当前目录路径", workspace::ready, {
                     let ui = ui.clone();
-                    move || ui.open_dialog(Dialog::TransferDefaults)
-                },
-            ),
-            action(
-                &ui,
-                remote,
-                "刷新",
-                |s, r| !r || (s.connected && s.sftp_available && !s.system_task_running),
-                {
+                    move || copy_paths(&ui, remote, true)
+                }),
+                action(&ui, remote, "显示列", |s, _| s.file_pending.is_none(), {
                     let ui = ui.clone();
-                    move || ui.refresh(remote)
-                },
-            ),
-            text().class("menu-divider").content(""),
+                    move || file_columns::open(&ui, remote)
+                }),
+                when(state.map(|s| !s.workspace_page.is_explorer()), {
+                    let ui = ui.clone();
+                    move || {
+                        action(
+                            &ui,
+                            remote,
+                            "Transfer defaults",
+                            |s, _| s.file_pending.is_none() && s.selected.is_some(),
+                            {
+                                let ui = ui.clone();
+                                move || ui.open_dialog(Dialog::TransferDefaults)
+                            },
+                        )
+                    }
+                }),
+                action(
+                    &ui,
+                    remote,
+                    "刷新",
+                    |s, r| !r || (s.connected && s.sftp_available && !s.system_task_running),
+                    {
+                        let ui = ui.clone();
+                        move || ui.refresh(remote)
+                    },
+                ),
+                text().class("menu-divider").content(""),
+            )),
             action(
                 &ui,
                 remote,

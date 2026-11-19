@@ -121,7 +121,7 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                 .fill((text().class("disk-name").content(d.map(|v| if v.kind.is_empty() { v.target.clone() } else { format!("{} · {}",v.target,v.kind) })),
                     text().class("subtle").content(d.map(|v| v.source.clone())),
                     text().content(i18n::bind(d.map(|v| format!("Used {} / {} · Available {} · {}", bytes(v.used), bytes(v.size), bytes(v.available), v.percent)))),
-                )).on_press(move || { browse.open_desktop_app(WorkspacePage::Explorer); file_browser::navigate(&browse, true, d.get().target); })
+                )).on_press(move || { browse.open_desktop_app(WorkspacePage::Explorer(0)); file_browser::navigate(&browse, true, d.get().target); })
         })),
     ))
 }

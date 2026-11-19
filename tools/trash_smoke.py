@@ -68,15 +68,29 @@ def main():
                 pane = p.locator('.remote-slot:visible' if remote else '.local-slot:visible')
                 pane.get_by_role('button', name='Remote file actions' if remote else 'Local file actions', exact=True).click()
                 p.locator('.file-actions-menu:visible').get_by_role('button', name='Open Trash', exact=True).click()
-                return p.get_by_role('dialog', name='Remote Trash' if remote else 'Local Trash', exact=True)
+                return (p.locator('.desktop-window.active.app-explorer .trash-panel') if remote
+                        else p.get_by_role('dialog', name='Local Trash', exact=True))
+
+            def close_bin(panel, remote):
+                if remote:
+                    app.workspace('Transfer files')
+                else:
+                    panel.get_by_role('button', name='Close', exact=True).click()
+
+            def trash_action(panel, row, label):
+                if panel.evaluate("e => e.classList.contains('files-trash')"):
+                    row.click(button='right')
+                    panel.locator('.trash-item-menu').get_by_role('button', name=label, exact=True).click()
+                else:
+                    row.get_by_role('button', name=label, exact=True).click()
 
             def purge(panel, row):
-                row.get_by_role('button', name='Delete permanently', exact=True).click()
+                trash_action(panel, row, 'Delete permanently')
                 review = panel.locator('.trash-confirm')
                 expect(review).to_contain_text('cannot be undone')
                 review.get_by_role('button', name='Cancel', exact=True).click()
                 expect(row).to_be_visible()
-                row.get_by_role('button', name='Delete permanently', exact=True).click()
+                trash_action(panel, row, 'Delete permanently')
                 review.get_by_role('button', name='Delete permanently', exact=True).click()
                 expect(row).to_have_count(0)
 
@@ -96,14 +110,14 @@ def main():
             panel = open_bin(True)
             row = item(panel, '/' + folder.name)
             folder.mkdir()
-            row.get_by_role('button', name='Restore', exact=True).click()
+            trash_action(panel, row, 'Restore')
             expect(panel.locator('.trash-error')).to_contain_text('exists')
             assert info.is_file() and not list(folder.iterdir())
             folder.rmdir()
-            row.get_by_role('button', name='Restore', exact=True).click()
+            trash_action(panel, row, 'Restore')
             expect(row).to_have_count(0)
             assert (folder/'child.txt').read_bytes() == b'folder contents' and not info.exists()
-            panel.get_by_role('button', name='Close', exact=True).click()
+            close_bin(panel, True)
 
             refused = app.file(denied.name)
             refused.click()
@@ -125,10 +139,10 @@ def main():
             assert not list((volume / '.Trash').iterdir())
             panel = open_bin(True)
             row = item(panel, '/volume/sample.txt')
-            row.get_by_role('button', name='Restore', exact=True).click()
+            trash_action(panel, row, 'Restore')
             expect(row).to_have_count(0)
             assert mounted_file.read_bytes() == b'on the mounted disk' and not volume_info.exists()
-            panel.get_by_role('button', name='Close', exact=True).click()
+            close_bin(panel, True)
 
             # With a sticky .Trash, keep both generations even when their original paths match.
             (volume / '.Trash').rmdir()
@@ -151,12 +165,12 @@ def main():
             panel = open_bin(True)
             versions = item(panel, '/volume/sample.txt')
             expect(versions).to_have_count(2)
-            versions.first.get_by_role('button', name='Restore', exact=True).click()
+            trash_action(panel, versions.first, 'Restore')
             expect(versions).to_have_count(1)
             purge(panel, versions)
             assert mounted_file.read_bytes() in {b'first', b'second'}
             assert not list((shared_bin / 'info').iterdir())
-            panel.get_by_role('button', name='Close', exact=True).click()
+            close_bin(panel, True)
 
             # Read a record produced by another FreeDesktop implementation.
             external, metadata, contents = external_record(args.ubuntu_gio)
@@ -170,22 +184,26 @@ def main():
             restricted = peer.root / 'fixture-sftp-only'
             restricted.touch()
             app.workspace('Desktop')
-            p.locator('.desktop-shortcuts').get_by_role('button', name='Trash', exact=True).click()
-            panel = p.locator('.desktop-window.active.app-trash')
+            expect(p.locator('.desktop-shortcuts').get_by_role('button', name='Trash', exact=True)).to_have_count(0)
+            app.application('Files')
+            files = p.locator('.desktop-window.active.app-explorer')
+            files.locator('.explorer-sidebar').get_by_role('button', name='Trash', exact=True).click()
+            panel = files.locator('.trash-panel')
             row = item(panel, original)
             expect(row).to_contain_text(fields['DeletionDate'].replace('T', ' '))
-            row.get_by_role('button', name='Restore', exact=True).click()
+            trash_action(panel, row, 'Restore')
             expect(row).to_have_count(0)
             assert restored.read_text() == contents
             restricted.unlink()
-            panel.locator('.window-close').click()
+            files.locator('.window-close').click()
 
             shortcut = p.locator('.desktop-shortcuts').get_by_role('button', name='desktop.txt', exact=True)
             shortcut.click(button='right')
             p.locator('.desktop-context-menu').get_by_role('button', name='Move to Trash', exact=True).click()
             expect(shortcut).to_have_count(0)
-            app.application('Trash')
-            panel = p.locator('.desktop-window.active.app-trash')
+            app.application('Files')
+            p.locator('.explorer-sidebar').get_by_role('button', name='Trash', exact=True).click()
+            panel = p.locator('.desktop-window.active.app-explorer .trash-panel')
             purge(panel, item(panel, '/home/arcnix/Desktop/desktop.txt'))
             assert not desktop_file.exists()
 
@@ -196,7 +214,7 @@ def main():
             expect(local_entry).to_have_count(0)
             panel = open_bin(False)
             row = item(panel, local_file)
-            row.get_by_role('button', name='Restore', exact=True).click()
+            trash_action(panel, row, 'Restore')
             expect(row).to_have_count(0)
             assert local_file.read_bytes() == b'local original'
             panel.get_by_role('button', name='Close', exact=True).click()

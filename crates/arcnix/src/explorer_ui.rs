@@ -19,7 +19,7 @@ pub(super) enum TagFilter {
 }
 
 impl TagFilter {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Color(color) => COLORS
                 .iter()
@@ -80,7 +80,7 @@ fn editable(s: &State) -> bool {
 
 fn active(s: &State) -> bool {
     server_desktop::visible(s)
-        && s.workspace_page == WorkspacePage::Explorer
+        && s.workspace_page.is_explorer()
         && s.sftp_available
         && s.dialog.is_none()
 }
@@ -116,7 +116,7 @@ impl Ui {
     pub(super) fn explorer_enter(&self) {
         if !self.state.with(|s| {
             server_desktop::visible(s)
-                && s.workspace_page == WorkspacePage::Explorer
+                && s.workspace_page.is_explorer()
                 && s.sftp_available
                 && s.server_apps.explorer_locations.is_none()
                 && s.server_apps.explorer_locations_pending.is_none()
@@ -169,6 +169,7 @@ impl Ui {
 
     fn filter_explorer_tags(&self, filter: Option<TagFilter>) {
         self.state.revise(|s| {
+            s.workbench.files.trash = false;
             s.server_apps.explorer_tag = filter;
             s.server_apps.explorer_open_pending = None;
         });
@@ -216,7 +217,7 @@ impl Ui {
 }
 
 pub(super) fn item_target(s: &State) -> Option<(String, bool)> {
-    if !editable(s) || s.workspace_page != WorkspacePage::Explorer || !s.remote_ready {
+    if !editable(s) || !s.workspace_page.is_explorer() || !s.remote_ready {
         return None;
     }
     let (path, directory) = if s.remote_selection.is_empty() {
@@ -299,11 +300,11 @@ fn place(ui: Ui, label: &'static str, path: String) -> impl Widget {
     sapid::button()
         .class("explorer-place")
         .name(name.clone())
-        .pressed(
-            state.map(move |s| {
-                s.server_apps.explorer_tag.is_none() && s.remote_path == current_path
-            }),
-        )
+        .pressed(state.map(move |s| {
+            !explorer_tabs::trash_active(s)
+                && s.server_apps.explorer_tag.is_none()
+                && s.remote_path == current_path
+        }))
         .fill((
             icons::glyph(match label {
                 "Desktop" => Icon::Monitor,
@@ -367,6 +368,18 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
                         place(place_ui.clone(), location.name, location.path)
                     }),
                     place(ui.clone(), "Filesystem", "/".into()),
+                    sapid::button()
+                        .class("explorer-place explorer-trash-place")
+                        .name(i18n::bind("回收站"))
+                        .pressed(state.map(explorer_tabs::trash_active))
+                        .fill((
+                            icons::glyph(Icon::Clear),
+                            text().content(i18n::bind("回收站")),
+                        ))
+                        .on_press({
+                            let ui = ui.clone();
+                            move || trash_ui::open(&ui, true)
+                        }),
                     col()
                         .class(state.map(|s| {
                             if editable(s) && active(s) {
@@ -393,7 +406,8 @@ pub(super) fn sidebar(ui: Ui) -> impl Widget {
                                                 path.map(|p| format!("Open favorite {p}")),
                                             ))
                                             .pressed(state.map(move |s| {
-                                                s.server_apps.explorer_tag.is_none()
+                                                !explorer_tabs::trash_active(s)
+                                                    && s.server_apps.explorer_tag.is_none()
                                                     && s.remote_path == path.get()
                                             }))
                                             .fill((

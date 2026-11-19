@@ -11,7 +11,7 @@ def main():
         with Desktop(out / 'desktop', peer.config([peer.profile('Network fixture')], out)) as app:
             page = app.page
             app.connect()
-            app.application('File explorer')
+            app.application('Files')
             explorer = page.locator('.explorer-window-tools')
             expect(explorer.get_by_role('button', name='Transfer files', exact=True)).to_have_count(0)
             expect(explorer.get_by_role('button', name='Help: Download destination', exact=True)).to_have_count(0)

@@ -17,11 +17,16 @@ pub(super) fn explorer(ui: Ui) -> impl Widget {
         explorer_ui::drag_bridge(ui.clone()),
         explorer_transfer::bridge(ui.clone()),
         file_context::task_status(ui.clone()),
+        explorer_tab_tools(ui.clone()),
         row().class("explorer-body").fill((
             explorer_ui::sidebar(ui.clone()),
+            when(state.map(explorer_tabs::trash_active), {
+                let ui = ui.clone();
+                move || trash_ui::panel(ui.clone(), true, true)
+            }),
             col()
                 .class(state.map(|s| {
-                    if s.server_apps.explorer_tag.is_some() {
+                    if explorer_tabs::trash_active(s) || s.server_apps.explorer_tag.is_some() {
                         "remote-slot explorer-slot hidden"
                     } else {
                         "remote-slot explorer-slot"
@@ -34,28 +39,28 @@ pub(super) fn explorer(ui: Ui) -> impl Widget {
     ))
 }
 
-pub(super) fn explorer_window_tools(ui: Ui) -> impl Widget {
+fn explorer_tab_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     let browse = ui.clone();
-    row()
-        .class("desktop-app-tools explorer-window-tools")
-        .fill((
-            explorer_ui::sidebar_toggle(ui.clone()),
-            when(
-                state.map(|s| s.server_apps.explorer_tag.is_none()),
-                move || {
-                    file_browser::pathbar(
-                        browse.clone(),
-                        true,
-                        true,
-                        row().class("explorer-path-actions").fill((
-                            file_browser::view_controls(browse.clone(), true),
-                            pane_actions(browse.clone(), true, true),
-                        )),
-                    )
-                },
-            ),
-        ))
+    row().class("explorer-window-tools").fill((
+        when(state.map(explorer_tabs::trash_active), move || {
+            trash_ui::location_tools(ui.clone())
+        }),
+        when(
+            state.map(|s| !explorer_tabs::trash_active(s) && s.server_apps.explorer_tag.is_none()),
+            move || {
+                file_browser::pathbar(
+                    browse.clone(),
+                    true,
+                    true,
+                    row().class("explorer-path-actions").fill((
+                        file_browser::view_controls(browse.clone(), true),
+                        pane_actions(browse.clone(), true, true),
+                    )),
+                )
+            },
+        ),
+    ))
 }
 
 pub(super) fn ready(s: &State, remote: bool) -> bool {

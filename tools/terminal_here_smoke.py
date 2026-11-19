@@ -166,7 +166,7 @@ def main():
             expect(reader).to_contain_text('/' + literal_name)
             checks.append('Without tmux, reconnecting restores the saved tabs and starting directory with a fresh shell and no stale output')
 
-            app.application('File explorer')
+            app.application('Files')
             explorer = page.locator('.desktop-window.app-explorer.active')
             explorer.locator('.explorer-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
             explorer.get_by_role('button', name='terminal-folder', exact=True).click(button='right')

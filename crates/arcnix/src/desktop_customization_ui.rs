@@ -184,7 +184,7 @@ impl Ui {
         let entry = self.state.with(|s| find_file(s, name).cloned());
         if let Some(entry) = entry {
             if entry.is_dir {
-                self.open_desktop_app(WorkspacePage::Explorer);
+                self.open_desktop_app(WorkspacePage::Explorer(0));
                 file_browser::navigate(self, true, entry.path);
             } else if !entry.is_symlink {
                 file_browser::open_remote_file(self, &entry.path);
@@ -784,7 +784,7 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                                                             .map(|items| items.path.clone())
                                                     }) {
                                                         ui.open_desktop_app(
-                                                            WorkspacePage::Explorer,
+                                                            WorkspacePage::Explorer(0),
                                                         );
                                                         file_browser::navigate(ui, true, path);
                                                     }

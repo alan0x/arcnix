@@ -219,7 +219,7 @@ def run(preview, binary=None, read_delay=.003):
             page.wait_for_timeout(600)
             assert len(reads()) == settled
             # The same action must also work inside the server desktop's explorer.
-            app.application('File explorer')
+            app.application('Files')
             page.locator('.explorer-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
             app.file(media.name).dblclick()
             eventually(lambda: video.evaluate('v => v.currentTime > .3'), timeout=25)
