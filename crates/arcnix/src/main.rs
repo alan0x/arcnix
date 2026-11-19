@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod ansi;
 mod app_icon;
 mod backups_ui;
 mod batch_worker;
@@ -32,6 +33,8 @@ mod help_ui;
 mod i18n;
 mod icons;
 mod installation_ui;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod monitor_ui;
 #[cfg(windows)]
 mod mpv_native;
@@ -198,6 +201,8 @@ enum WorkspacePage {
 struct State {
     config: AppConfig,
     selected: Option<String>,
+    // Connected servers left by switching. Consume the entry on return.
+    reconnect_on_return: HashSet<String>,
     group: Option<String>,
     collapsed_groups: HashSet<String>,
     search: String,
@@ -380,14 +385,23 @@ impl Ui {
         self.save();
         self.log("该服务器的文件冲突处理已恢复为全局默认设置");
     }
-    fn select_server(&self, id: String) {
+    fn select_server(&self, id: String, connect_now: bool) {
         if self
             .state
             .with(|s| s.system_task_running && s.selected.as_ref() != Some(&id))
         {
             return;
         }
+        let mut reconnect = false;
         if self.state.with(|s| s.selected.as_ref() != Some(&id)) {
+            reconnect = self.state.revise(|s| {
+                if s.connected
+                    && let Some(current) = &s.selected
+                {
+                    s.reconnect_on_return.insert(current.clone());
+                }
+                s.reconnect_on_return.remove(&id)
+            });
             self.disconnect();
             self.state.revise(|s| {
                 s.file_split = s
@@ -433,6 +447,9 @@ impl Ui {
         });
         self.observability_enter();
         self.terminal_enter();
+        if connect_now || reconnect {
+            self.request_connect();
+        }
     }
     fn save_file_split(&self, ratio: f64) {
         let ratio = if ratio.is_finite() {
@@ -1748,6 +1765,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let state = scope.cage(State {
         config,
         selected: None,
+        reconnect_on_return: HashSet::new(),
         group: None,
         collapsed_groups: HashSet::new(),
         search: String::new(),
@@ -2027,7 +2045,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // live button identities while their browser activations are still queued.
     window.mount(app(ui.clone()))?;
     let wallpapers = ui.wallpapers.clone();
-    Shell::new().run(
+    let shell = Shell::new();
+    // Tao creates its NSApplication subclass when it constructs the event loop.
+    #[cfg(target_os = "macos")]
+    macos_menu::install();
+    shell.run(
         window,
         Config {
             native: Some(Box::new(app_icon::DesktopWindow {

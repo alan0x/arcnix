@@ -524,7 +524,7 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                             ))
                             .on_press(move || {
                                 let id = value.get().id;
-                                select.select_server(id);
+                                select.select_server(id, false);
                                 state.revise(|s| s.group = value.get().group_id);
                             }),
                         icon_action(format!("{}的服务器操作", value.get().name), Icon::More)
@@ -574,8 +574,7 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                             }) {
                                                 connect.disconnect();
                                             } else {
-                                                connect.select_server(id);
-                                                connect.request_connect();
+                                                connect.select_server(id, true);
                                             }
                                             connect.state.revise(|s| s.host_menu = None);
                                         }),
@@ -844,6 +843,7 @@ fn server_dialog(ui: Ui) -> impl Widget {
                             }
                             s.search.clear();
                             if !labels_only {
+                                s.reconnect_on_return.remove(&profile.id);
                                 s.jobs.retain(|j| {
                                     j.server_id != profile.id
                                         || j.status == TransferStatus::Completed
@@ -854,6 +854,7 @@ fn server_dialog(ui: Ui) -> impl Widget {
                             if (same && !labels_only) || (!s.connected && !s.connecting) {
                                 s.file_split =
                                     profile.file_pane_ratio.unwrap_or(500) as f64 / 1000.0;
+                                s.reconnect_on_return.remove(&profile.id);
                                 s.selected = Some(profile.id);
                             }
                             s.dialog = None;
@@ -1191,6 +1192,7 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
                                 s.selected = None;
                                 s.file_split = 0.5;
                             }
+                            s.reconnect_on_return.retain(|id| !removed.contains(id));
                             s.jobs.retain(|j| !removed.contains(&j.server_id));
                             s.dialog = None;
                             s.notice.clear();

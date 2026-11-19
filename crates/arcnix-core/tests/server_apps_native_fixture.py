@@ -23,8 +23,9 @@ elif args[:2] == ['container', 'inspect']:
 elif args[:2] == ['volume', 'inspect']:
     print(json.dumps(dict(name='web-data', driver='local', scope='local', mountpoint='/var/lib/docker/volumes/web-data/_data')))
 elif args[:2] == ['container', 'logs']:
-    print('container output')
-    print('container error', file=sys.stderr)
+    # Like the CLI, copy each entry to its stream as it arrives.
+    for stream, line in [(sys.stdout, 'container output'), (sys.stderr, 'container error'), (sys.stdout, 'container output again')]:
+        print(line, file=stream, flush=True)
 else:
     assert args[0] == 'container' and args[1] in ['start', 'stop', 'restart', 'update']
     assert args[-1] == 'a' * 64
