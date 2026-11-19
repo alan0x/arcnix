@@ -787,7 +787,7 @@ fn target_card(ui: Ui, task: String, plan: Option<Plan>, target: Target) -> impl
             }),
             btn("Open server workspace", move || {
                 if open.state.with(|s| same_server(s, &open_target)) {
-                    open.select_server(open_target.id.clone());
+                    open.select_server(open_target.id.clone(), false);
                 }
             })
             .enabled(state.map(move |s| same_server(s, &enabled_target))),
