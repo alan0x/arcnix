@@ -908,6 +908,13 @@ class Authentication(paramiko.ServerInterface):
                 assert staging.startswith('/home/arcnix/.local/state/arcnix/cleanup-staging/')
                 incoming=self.fixture_root/staging.lstrip('/')
                 (incoming/'request.json').unlink();incoming.rmdir();channel.send_exit_status(0)
+            elif text.startswith('# arcnix:trash:environment'):
+                if (self.fixture_root / 'fixture-sftp-only').exists():
+                    channel.send_exit_status(1)
+                    channel.close()
+                    return
+                channel.sendall(f"/\n/.local/share\n{self.fixture_root.stat().st_uid}\n{time.strftime('%Y-%m-%dT%H:%M:%S')}\n".encode())
+                channel.send_exit_status(0)
             elif text.startswith('# arcnix:task-records:home'):
                 channel.sendall(b'/home/arcnix');channel.send_exit_status(0)
             elif text.startswith('# arcnix:record-storage:context'):
@@ -1492,7 +1499,8 @@ class Files(paramiko.SFTPServerInterface):
             self.transport.close()
             return "/"
         try:
-            return "/" + self.path(path).relative_to(self.root).as_posix().removeprefix(".")
+            relative = self.path(path).relative_to(self.root).as_posix()
+            return "/" if relative == "." else "/" + relative
         except OSError:
             return "/"
 
@@ -1572,6 +1580,7 @@ class Files(paramiko.SFTPServerInterface):
     def mkdir(self, path, attr):
         try:
             self.path(path).mkdir(mode=attr.st_mode or 0o755)
+            self.modes[str(self.path(path))] = (attr.st_mode or 0o755) & 0o7777
             return paramiko.SFTP_OK
         except OSError as exc:
             return self.error(exc)
@@ -1587,6 +1596,8 @@ class Files(paramiko.SFTPServerInterface):
             return self.error(exc)
 
     def rename(self, oldpath, newpath):
+        if oldpath == '/fixture-trash-denied.txt':
+            return paramiko.SFTP_PERMISSION_DENIED
         try:
             target = self.path(newpath)
             if target.exists():

@@ -2552,3 +2552,12 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 已连接，但无法在系统凭据库中保存 SSH 凭据。	Connected, but could not save the SSH credential to the system credential store.
 无法从系统凭据库中移除 SSH 凭据。	Could not remove the SSH credential from the system credential store.
 此服务器没有已保存的 SSH 凭据。	No saved SSH credential remains for this server.
+回收站	Trash
+移入回收站	Move to Trash
+打开回收站	Open Trash
+本地回收站	Local Trash
+远程回收站	Remote Trash
+还原	Restore
+回收站为空	Trash is empty
+永久删除此项目？此操作无法撤销。	Permanently delete this item? This cannot be undone.
+原路径不可用	Original path unavailable

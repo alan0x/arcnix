@@ -63,11 +63,22 @@
 .theme-dark{--bg:#111923;--surface:#17212e;--raised:#202d3e;--input:#111b28;--line:#293647;--text:#e2eaf4;--muted:#92a3b9;--faint:#667b95;--accent:#78adf4;--accent-bg:#263e5d;--nav-bg:#141e2b;--rail-bg:#0c1521}
 .theme-light{--bg:#f5f7fb;--surface:#fff;--raised:#edf2f9;--input:#fff;--line:#dfe5ef;--file-row-line:#edf1f6;--text:#233248;--muted:#687a92;--faint:#8796aa;--accent:#3d73ba;--accent-bg:#e7effd;--nav-bg:#f4f7fc;--rail-bg:#edf2f9}
 .navigation-shell{display:flex;flex:1;min-height:0;min-width:0;width:100%;height:100vh;overflow:hidden}
-.navigation-rail{display:flex;flex-direction:column;align-items:center;gap:10px;width:64px;min-width:64px;height:100%;padding:16px 8px;background:var(--rail-bg);border-right:1px solid var(--line);z-index:3;flex:none}
+.navigation-rail{display:flex;flex-direction:column;align-items:center;gap:10px;width:64px;min-width:64px;height:100%;padding:16px 8px 24px;background:var(--rail-bg);border-right:1px solid var(--line);z-index:3;flex:none}
+.rail-primary{display:flex;flex-direction:column;align-items:center;gap:inherit;min-height:0}
+@media(max-height:430px){
+  .navigation-rail{gap:4px;padding-block-start:8px}
+}
+@media(max-height:380px){
+  .rail-primary{align-self:stretch;margin-inline:-6px;overflow-y:auto;scrollbar-width:thin}
+  .rail-primary .rail-item{anchor-name:--rail-button;anchor-scope:--rail-button}
+  .rail-primary .rail-item:not(.rail-logo)[aria-label]:not([aria-label=""])::after{
+    position:fixed;position-anchor:--rail-button;left:68px;left:calc(anchor(right) + 13px);top:auto;top:anchor(center);
+  }
+}
 .rail-item{position:relative;display:flex!important;align-items:center;justify-content:center;width:44px;min-width:44px;height:44px;border-radius:11px!important;color:var(--muted)!important;flex:none;padding:0!important}
 .rail-item:not(.rail-logo):hover{color:var(--text)!important;background:var(--raised)!important}.rail-item.active{color:var(--accent)!important;background:var(--accent-bg)!important}.rail-item.active::before{content:'';position:absolute;left:-8px;width:3px;height:23px;border-radius:0 4px 4px 0;background:var(--accent)}
 .rail-item .action-glyph{width:21px;height:21px}.rail-logo{margin-bottom:3px;cursor:default}.brand-icon{display:block;width:31px;height:31px;flex:none;align-self:center;background-position:center;background-size:contain;background-repeat:no-repeat}
-.rail-divider{height:1px;width:24px;background:var(--line);margin:0 0 2px;flex:none}.rail-bottom{display:flex;flex-direction:column;gap:10px;margin-top:auto}.rail-item.settings-link{margin-top:0}
+.rail-divider{height:1px;width:24px;background:var(--line);margin:0 0 2px;flex:none}.rail-bottom{display:flex;flex:none;flex-direction:column;gap:10px;margin-top:auto}.rail-item.settings-link{margin-top:0}
 .rail-item:not(.rail-logo)[aria-label]:not([aria-label=""])::after{content:attr(aria-label);position:absolute;left:calc(100% + 13px);top:50%;transform:translateY(-50%);padding:7px 10px;background:var(--raised);border:1px solid var(--line);border-radius:5px;color:var(--text);font-size:var(--font-small);white-space:nowrap;opacity:0;visibility:hidden;pointer-events:none;z-index:220}
 .rail-item:not(.rail-logo)[aria-label]:not([aria-label=""]):is(:hover,:focus-visible)::after{opacity:1;visibility:visible;transition-delay:250ms}.rail-unread{position:absolute;right:3px;top:2px;display:flex;align-items:center;justify-content:center;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:#d16b76;color:#fff;font-size:var(--font-small);border:2px solid var(--rail-bg);box-sizing:content-box}
 .context-sidebar,.navigation-shell>.sidebar{display:flex;flex-direction:column;flex:none;width:252px;min-width:0;height:100%;border-right:1px solid var(--line);background:var(--nav-bg);padding:0;overflow:hidden}
@@ -512,9 +523,9 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   --dock-padding: 9px;
   --dock-item-padding: clamp(6px, calc(var(--dock-frame) * .015), 9px);
   --dock-frame-inset: 16px;
-  /* Budget for Show desktop, up to seven apps, the divider and any status area. */
-  --dock-fixed-space: calc(var(--dock-frame-inset) + 2 * var(--dock-padding) + 9 * var(--dock-gap) + 3px + var(--dock-status-space, 0px));
-  --dock-icon: clamp(var(--dock-min-icon, 16px), calc((var(--dock-frame) - var(--dock-fixed-space)) / 8 - 2 * var(--dock-item-padding)), var(--dock-preview, var(--dock-ideal, 44px)));
+  /* Fit Show desktop and every visible launcher beside the divider and status area. */
+  --dock-fixed-space: calc(var(--dock-frame-inset) + 2 * var(--dock-padding) + (var(--dock-tiles, 1) + 1) * var(--dock-gap) + 3px + var(--dock-status-space, 0px));
+  --dock-icon: clamp(var(--dock-min-icon, 16px), calc((var(--dock-frame) - var(--dock-fixed-space)) / var(--dock-tiles, 1) - 2 * var(--dock-item-padding)), var(--dock-preview, var(--dock-ideal, 44px)));
   --dock-tile-size: calc(var(--dock-icon) + 2 * var(--dock-item-padding));
   display: flex;
   align-items: center;
@@ -1553,3 +1564,14 @@ html[data-explorer-downloading] .explorer-download-drop {
 .details-view .file-row:has(.file-inline-name) .file-name { flex: none; margin: 0; }
 .file-inline-name { flex: 1; min-width: 0; width: 100%; height: 28px; padding-inline: 4px; font: inherit; user-select: text; }
 .icons-view .file-inline-name { flex: none; text-align: center; }
+
+.app-trash { --tile-tint: #667d8c; --tile-shade: #344959; }
+.trash-panel, .trash-items, .trash-details { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.trash-panel { padding: 12px; flex: 1; overflow: auto; }
+.trash-items { overflow: auto; }
+.trash-details { flex: 1; }
+.trash-item, .trash-confirm, .trash-controls { display: flex; align-items: center; gap: 8px; }
+.trash-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.trash-original, .trash-confirm { overflow-wrap: anywhere; white-space: pre-wrap; }
+.trash-error { color: var(--danger); }
+.trash-error:empty, .trash-status:empty { display: none; }

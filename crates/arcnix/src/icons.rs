@@ -304,6 +304,7 @@ pub fn css() -> String {
             Icon::File => Some("document"),
             Icon::Code => Some("code"),
             Icon::Play => Some("video"),
+            Icon::Clear => Some("trash"),
             Icon::Browser => Some("browser"),
             Icon::Docker => Some("docker"),
             Icon::Monitor => Some("resources"),

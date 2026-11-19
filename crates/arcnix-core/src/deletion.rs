@@ -96,21 +96,7 @@ pub(crate) fn remove_with_progress(
     let mut roots = Vec::new();
     for target in targets {
         check()?;
-        let path = fs.normalize(&target.path)?;
-        check_parents(fs, &path)?;
-        let stamp = fs
-            .stat(&path)
-            .with_context(|| format!("Cannot inspect {}", path.display()))?;
-        let link = matches!(stamp.kind, Kind::Link | Kind::DirectoryLink);
-        ensure!(
-            link == target.symlink
-                && (link || (stamp.kind == Kind::Directory) == target.directory)
-                && (target.directory || stamp.size == target.size)
-                && stamp.modified == target.modified,
-            "Selection changed; refresh and select again: {}",
-            path.display()
-        );
-        roots.push((path, stamp));
+        roots.push(checked_target(fs, target)?);
     }
     roots.sort_by_key(|(path, _)| path.components().count());
     let mut unique: Vec<(PathBuf, Stamp)> = Vec::new();
@@ -176,7 +162,7 @@ pub(crate) fn remove_with_progress(
     result.with_context(|| format!("Deletion stopped after removing {removed} entries"))
 }
 
-fn check_parents(fs: &impl FileSystem, path: &Path) -> Result<()> {
+pub(crate) fn check_parents(fs: &impl FileSystem, path: &Path) -> Result<()> {
     for ancestor in path.ancestors().skip(1).filter(|p| p.file_name().is_some()) {
         ensure!(
             fs.stat(ancestor)?.kind == Kind::Directory,
@@ -215,4 +201,22 @@ fn walk(
     ensure!(nodes.len() < 100_000, "Deletion exceeds tree limits");
     nodes.push((path.to_owned(), stamp));
     Ok(())
+}
+
+pub(crate) fn checked_target(fs: &impl FileSystem, target: &Target) -> Result<(PathBuf, Stamp)> {
+    let path = fs.normalize(&target.path)?;
+    check_parents(fs, &path)?;
+    let stamp = fs
+        .stat(&path)
+        .with_context(|| format!("Cannot inspect {}", path.display()))?;
+    let link = matches!(stamp.kind, Kind::Link | Kind::DirectoryLink);
+    ensure!(
+        link == target.symlink
+            && (link || (stamp.kind == Kind::Directory) == target.directory)
+            && (target.directory || stamp.size == target.size)
+            && stamp.modified == target.modified,
+        "Selection changed; refresh and select again: {}",
+        path.display()
+    );
+    Ok((path, stamp))
 }

@@ -20,6 +20,9 @@ use crate::{
     AuthMethod, CommandOutput, FileEntry, ServerInfo, ServerProfile, TransferDirection, new_id,
 };
 
+#[path = "remote_recycle.rs"]
+mod recycle;
+
 const TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const TREE_DEPTH_LIMIT: usize = 64;

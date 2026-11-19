@@ -147,27 +147,29 @@ fn rail(ui: Ui) -> impl Widget {
         .class("navigation-rail")
         .name(i18n::bind("主导航"))
         .fill((
-            row()
-                .class("rail-item rail-logo")
-                .fill(text().class("brand-icon").content("")),
-            text().class("rail-divider").content(""),
-            rail_button(&ui, Page::Servers, "服务器", Icon::Server, "rail-servers"),
-            rail_button(&ui, Page::Scripts, "Scripts", Icon::File, "rail-scripts"),
-            rail_button(&ui, Page::Tasks, "Tasks", Icon::List, "rail-tasks"),
-            rail_button(
-                &ui,
-                Page::Backups,
-                "Backups",
-                Icon::Download,
-                "rail-backups",
-            ),
-            rail_button(
-                &ui,
-                Page::Diagnostics,
-                "Diagnostics",
-                Icon::Search,
-                "rail-diagnostics",
-            ),
+            col().class("rail-primary").fill((
+                row()
+                    .class("rail-item rail-logo")
+                    .fill(text().class("brand-icon").content("")),
+                text().class("rail-divider").content(""),
+                rail_button(&ui, Page::Servers, "服务器", Icon::Server, "rail-servers"),
+                rail_button(&ui, Page::Scripts, "Scripts", Icon::File, "rail-scripts"),
+                rail_button(&ui, Page::Tasks, "Tasks", Icon::List, "rail-tasks"),
+                rail_button(
+                    &ui,
+                    Page::Backups,
+                    "Backups",
+                    Icon::Download,
+                    "rail-backups",
+                ),
+                rail_button(
+                    &ui,
+                    Page::Diagnostics,
+                    "Diagnostics",
+                    Icon::Search,
+                    "rail-diagnostics",
+                ),
+            )),
             col().class("rail-bottom").fill(rail_button(
                 &ui,
                 Page::Settings,

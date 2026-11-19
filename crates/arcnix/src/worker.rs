@@ -61,6 +61,10 @@ pub enum Action {
         default_name: String,
         directory: bool,
     },
+    Trash {
+        remote: bool,
+        operation: recycle::Operation,
+    },
     LocalRename(PathBuf, PathBuf),
     Delete {
         remote: bool,
@@ -196,6 +200,10 @@ pub enum Update {
         remote: bool,
         name: String,
     },
+    Trash {
+        remote: bool,
+        result: Result<Vec<recycle::Item>, String>,
+    },
     Deleted {
         remote: bool,
         result: Result<usize, String>,
@@ -308,6 +316,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 | Action::Children { remote: false, .. }
                 | Action::CreateEntry { remote: false, .. }
                 | Action::LocalRename(..)
+                | Action::Trash { remote: false, .. }
                 | Action::Delete { remote: false, .. }
                 | Action::ImportSshConfig(_) => {
                     if local_tx.send(request).is_err() {
@@ -374,6 +383,13 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     remote: false,
                     directory,
                     name,
+                }),
+                Action::Trash {
+                    remote: false,
+                    operation,
+                } => Ok(Update::Trash {
+                    remote: false,
+                    result: recycle::local(&operation).map_err(|e| format!("{e:#}")),
                 }),
                 Action::LocalRename(from, to) => {
                     local::rename(&from, &to).map(|_| Update::Renamed {
@@ -826,6 +842,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             }
             let browsing = matches!(action, Action::Remote(_));
             let file_kind = match &action {
+                Action::Trash { .. } => Some(4),
                 Action::Delete { .. } => Some(0),
                 Action::Permissions { .. } => Some(1),
                 Action::FileMetadata(_) => Some(2),
@@ -1081,6 +1098,27 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                                     name,
                                 });
                             }
+                            Action::Trash {
+                                remote: true,
+                                operation,
+                            } => {
+                                file_completed = true;
+                                publish_file_result(
+                                    remote.recycle(&operation, || {
+                                        anyhow::ensure!(
+                                            generation.load(Ordering::Acquire) == epoch,
+                                            "Connection changed"
+                                        );
+                                        Ok(())
+                                    }),
+                                    |result| {
+                                        send(Update::Trash {
+                                            remote: true,
+                                            result,
+                                        })
+                                    },
+                                )?;
+                            }
                             Action::RemoteRename(from, to) => {
                                 remote.rename(&from, &to)?;
                                 send(Update::Renamed {
@@ -1156,6 +1194,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                             },
                             1 => Update::Permissions(Err(message)),
                             3 => Update::CodeFile(Err(message)),
+                            4 => Update::Trash {
+                                remote: true,
+                                result: Err(message),
+                            },
                             _ => Update::FileMetadata(Err(message)),
                         });
                     }

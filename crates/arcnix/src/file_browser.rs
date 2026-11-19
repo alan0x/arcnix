@@ -520,6 +520,7 @@ enum GestureKind {
     Context,
     Rename,
     Delete,
+    DeletePermanently,
     CopyPaths,
     Properties,
     Refresh,
@@ -911,7 +912,8 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
             }
         }
         GestureKind::Context => file_context::open(ui, remote, &event.path),
-        GestureKind::Delete => file_context::begin_delete(ui, remote),
+        GestureKind::Delete => trash_ui::move_items(ui, remote),
+        GestureKind::DeletePermanently => file_context::begin_delete(ui, remote),
         GestureKind::Rename => {
             if ui.state.with(|s| {
                 workspace::ready(s, remote)

@@ -107,6 +107,16 @@
     }, true);
 
     document.addEventListener('keydown', event => {
+        const desktopFile = event.target.closest?.('.desktop-shortcut.desktop-file');
+        if (desktopFile && event.key === 'Delete' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            const canvas = canvasFor(desktopFile);
+            const item = shortcut(desktopFile.closest('.desktop-icon-slot'));
+            if (canvas && item?.kind === 'file') {
+                event.preventDefault(); event.stopImmediatePropagation();
+                if (!event.repeat) send(canvas, {kind:'remove_file', name:item.id, permanent:event.shiftKey});
+                return;
+            }
+        }
         const menu = document.querySelector('.server-desktop:not(.hidden) .desktop-context-menu');
         if (!menu) return;
         if (event.key === 'Escape') {

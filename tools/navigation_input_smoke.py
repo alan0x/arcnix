@@ -11,6 +11,23 @@ def active(p,name):expect(p.locator('.navigation-rail .active')).to_have_class(r
 with Desktop(out/'desktop',config) as app:
     p=app.page
     p.evaluate("""()=>{window.__arcnixStableShell=[document.querySelector('.app'),document.querySelector('.navigation-rail'),...document.querySelectorAll('.navigation-rail button')]}""")
+    initial_viewport = p.viewport_size
+    settings = p.locator('.settings-link')
+    def check_settings_bounds():
+        return settings.evaluate("""button => {
+            const r = button.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            return r.height >= 43 && innerHeight - r.bottom >= 23 &&
+                [r.top + 2, r.bottom - 2].every(y => button.contains(document.elementFromPoint(x, y)));
+        }""")
+    for width, height in [(1440, 980), (860, 400), (800, 320)]:
+        p.set_viewport_size(dict(width=width, height=height))
+        assert check_settings_bounds(), (width, height, settings.bounding_box())
+        if height == 320:
+            p.locator('.rail-diagnostics').scroll_into_view_if_needed()
+            expect(p.locator('.rail-diagnostics')).to_be_in_viewport(ratio=0.99)
+            assert check_settings_bounds()
+    p.set_viewport_size(initial_viewport)
     for n in range(args.rounds):
         locale=args.transition.startswith('locale')
         p.locator('.settings-link').click();active(p,'settings-link')

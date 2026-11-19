@@ -17,16 +17,25 @@ const desktopFrame = (() => {
         root.style.setProperty('--desktop-dock-clearance', `${Math.min(box.height / 4, Math.max(0, box.bottom - dockTop))}px`);
     }
 
+    function sizeDockTiles() {
+        if (dock) dock.style.setProperty('--dock-tiles', String(1 + dock.querySelectorAll('.desktop-dock-app').length));
+    }
+    const dockItems = new MutationObserver(sizeDockTiles);
     const resize = new ResizeObserver(sync);
     function bind() {
         const next = document.querySelector('.desktop-canvas');
         if (next === canvas) return;
         resize.disconnect();
+        dockItems.disconnect();
         canvas = next;
         dock = canvas?.querySelector('.desktop-dock-zone');
         if (!canvas) return;
         resize.observe(canvas);
-        if (dock) resize.observe(dock);
+        if (dock) {
+            resize.observe(dock);
+            dockItems.observe(dock, {childList: true, subtree: true});
+            sizeDockTiles();
+        }
         sync();
     }
     new MutationObserver(bind).observe(document, {childList: true, subtree: true});

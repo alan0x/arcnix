@@ -79,6 +79,7 @@ mod transfer_ui;
 mod transfer_worker;
 #[cfg(test)]
 mod transfer_worker_tests;
+mod trash_ui;
 mod update_install;
 mod updates_ui;
 mod video_player;
@@ -137,6 +138,9 @@ enum Dialog {
     FileColumns {
         remote: bool,
     },
+    Trash {
+        remote: bool,
+    },
     DeleteFiles {
         remote: bool,
         targets: Vec<arcnix_core::deletion::Target>,
@@ -182,6 +186,7 @@ enum WorkspacePage {
     Resources,
     Terminal,
     Explorer,
+    Trash,
     Docker,
     Code,
     Video,
@@ -209,6 +214,7 @@ struct State {
     file_menu: Option<bool>,
     file_context: Option<file_context::Target>,
     file_pending: Option<u64>,
+    trash: [trash_ui::Bin; 2],
     deletion: Option<file_context::Deletion>,
     unassigned_columns: FileColumnSettings,
     properties: Option<file_properties::Editor>,
@@ -723,6 +729,7 @@ impl Ui {
                 s.remote.clear();
                 s.remote_selection.clear();
                 s.file_browser.reset_session();
+                s.trash[1] = Default::default();
                 s.remote_path = if profile.locations.remember_paths {
                     profile.locations.last_remote.clone()
                 } else {
@@ -787,6 +794,7 @@ impl Ui {
             s.remote_selection.clear();
             s.remote_request = 0;
             s.file_browser.reset_session();
+            s.trash[1] = Default::default();
             s.software = Default::default();
             s.server_apps = Default::default();
             s.docker = Default::default();
@@ -1596,7 +1604,10 @@ fn app(ui: Ui) -> impl Widget {
                 explorer_ui::color_dialog(ui.clone()),
                 network_ui::dialog(ui.clone()),
                 fragment((
-                    file_context::dialogs(ui.clone()),
+                    fragment((
+                        file_context::dialogs(ui.clone()),
+                        trash_ui::dialog(ui.clone()),
+                    )),
                     software_install_ui::dialogs(ui.clone()),
                     fragment(docker_ui::dialogs(ui.clone())),
                     terminal_menu::dialogs(ui.clone()),
@@ -1752,6 +1763,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         file_menu: None,
         file_context: None,
         file_pending: None,
+        trash: Default::default(),
         deletion: None,
         unassigned_columns: FileColumnSettings::default(),
         properties: None,
@@ -1920,7 +1932,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let events = ui.clone();
     scope.spawn(async move {while let Ok(response)=rx.recv().await {
         if let Update::Finished(id, _)=&response.update { state.revise(|s|{s.inflight_transfers.remove(id);}); }
-        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){continue;}
+        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Trash{..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){continue;}
         match response.update {
             Update::Video(result)=>events.player.ready(&events,response.serial,result),
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
@@ -1953,7 +1965,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Update::ConnectionLost(message)=>{
                 events.player.close(&events);
                 #[cfg(windows)]
-                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
             Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
@@ -1989,6 +2001,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     file_browser::refresh_changed_entry(&events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
                 }
             }
+            Update::Trash{remote,result}=>trash_ui::completed(&events,response.serial,remote,result),
             Update::Deleted{remote,result}=>file_context::deleted(&events,response.serial,remote,result),
             Update::DeletionProgress(progress)=>file_context::deletion_progress(&events,response.serial,progress),
             Update::FileMetadata(result)=>file_properties::metadata(&events,response.serial,result),

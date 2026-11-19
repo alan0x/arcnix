@@ -214,7 +214,7 @@ fn action<F: FnMut() + 'static>(
 ) -> impl Widget + use<F> {
     let close_ui = ui.clone();
     sapid::button()
-        .class(if label == "删除" {
+        .class(if label == "永久删除" {
             "menu-item danger"
         } else {
             "menu-item"
@@ -235,15 +235,18 @@ fn any(s: &State, remote: bool) -> bool {
 fn one(s: &State, remote: bool) -> bool {
     available(s, remote) && single(s, remote).is_some()
 }
-fn can_delete(s: &State, remote: bool) -> bool {
-    available(s, remote)
+pub(super) fn can_delete(s: &State, remote: bool) -> bool {
+    workspace::ready(s, remote) && can_change_files(s, remote) && any(s, remote)
+}
+pub(super) fn can_change_files(s: &State, remote: bool) -> bool {
+    (!remote || (s.connected && s.sftp_available && !s.system_task_running))
         && s.file_pending.is_none()
+        && !s.trash[remote as usize].busy()
         && s.cancels.is_empty()
         && !s
             .jobs
             .iter()
             .any(|job| job.status == TransferStatus::Running)
-        && any(s, remote)
 }
 pub(super) fn begin_delete(ui: &Ui, remote: bool) {
     if !ui
@@ -252,22 +255,23 @@ pub(super) fn begin_delete(ui: &Ui, remote: bool) {
     {
         return;
     }
-    let targets = ui.state.with(|s| {
-        let files = chosen(s, remote);
-        files
-            .iter()
-            .filter(|entry| {
-                !files.iter().any(|parent| {
-                    parent.path != entry.path
-                        && parent.is_dir
-                        && !parent.is_symlink
-                        && Path::new(&entry.path).starts_with(&parent.path)
-                })
-            })
-            .map(arcnix_core::deletion::Target::from)
-            .collect()
-    });
+    let targets = ui.state.with(|s| targets(s, remote));
     ui.open_dialog(Dialog::DeleteFiles { remote, targets });
+}
+pub(super) fn targets(s: &State, remote: bool) -> Vec<arcnix_core::deletion::Target> {
+    let files = chosen(s, remote);
+    files
+        .iter()
+        .filter(|entry| {
+            !files.iter().any(|parent| {
+                parent.path != entry.path
+                    && parent.is_dir
+                    && !parent.is_symlink
+                    && Path::new(&entry.path).starts_with(&parent.path)
+            })
+        })
+        .map(arcnix_core::deletion::Target::from)
+        .collect()
 }
 fn confirm_delete(ui: &Ui) {
     let cancel = Arc::new(AtomicBool::new(false));
@@ -275,7 +279,7 @@ fn confirm_delete(ui: &Ui) {
         let Some(Dialog::DeleteFiles { remote, targets }) = &s.dialog else {
             return None;
         };
-        (can_delete(s, *remote) && !targets.is_empty()).then(|| Action::Delete {
+        (can_change_files(s, *remote) && !targets.is_empty()).then(|| Action::Delete {
             remote: *remote,
             targets: targets.clone(),
             cancel: cancel.clone(),
@@ -334,6 +338,9 @@ pub(super) fn deleted(
     }
     if current && (!remote || ui.state.with(|s| s.connected)) {
         ui.refresh(remote);
+        if remote {
+            ui.refresh_desktop_items(true);
+        }
     }
     ui.schedule();
 }
@@ -384,6 +391,7 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                     let copy = ui.clone();
                     let info = ui.clone();
                     let delete = ui.clone();
+                    let recycle = ui.clone();
                     col().class("file-menu-group").fill((
                         when(
                             state.map(move |s| {
@@ -478,7 +486,10 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                                 }
                             },
                         ),
-                        action(&ui, remote, "删除", can_delete, move || {
+                        action(&ui, remote, "移入回收站", can_delete, move || {
+                            trash_ui::move_items(&recycle, remote)
+                        }),
+                        action(&ui, remote, "永久删除", can_delete, move || {
                             begin_delete(&delete, remote)
                         }),
                         action(&ui, remote, "复制所选路径", any, move || {
@@ -496,6 +507,10 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                 move || terminal_action(terminal.clone())
             }),
             fragment((
+                action(&ui, remote, "打开回收站", available, {
+                    let ui = ui.clone();
+                    move || trash_ui::open(&ui, remote)
+                }),
                 action(&ui, remote, "新建文件", file_browser::can_create, {
                     let ui = ui.clone();
                     move || file_browser::create(&ui, remote, false)
@@ -662,7 +677,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                 let cancel = delete_ui.clone();
                 modal(
                     delete_ui.clone(),
-                    "删除文件",
+                    "永久删除",
                     col().class("file-delete-body").fill((
                         text()
                             .class("file-task-progress")
@@ -705,7 +720,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                             .class("button danger with-icon")
                             .enabled(state.map(|s| {
                                 if let Some(Dialog::DeleteFiles { remote, .. }) = &s.dialog {
-                                    can_delete(s, *remote)
+                                    can_change_files(s, *remote)
                                 } else {
                                     false
                                 }

@@ -37,6 +37,7 @@ pub mod record_cleanup;
 pub mod record_maintenance;
 pub mod record_recovery;
 pub mod recovery_drills;
+pub mod recycle;
 pub mod remote;
 pub mod remote_tasks;
 pub mod resource_ports;

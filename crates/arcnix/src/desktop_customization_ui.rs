@@ -469,6 +469,11 @@ struct Menu {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Gesture {
+    RemoveFile {
+        epoch: u64,
+        name: String,
+        permanent: bool,
+    },
     Context {
         epoch: u64,
         zone: Zone,
@@ -503,7 +508,8 @@ fn gesture(ui: &Ui, value: &str) {
         return;
     };
     let epoch = match &gesture {
-        Gesture::Context { epoch, .. }
+        Gesture::RemoveFile { epoch, .. }
+        | Gesture::Context { epoch, .. }
         | Gesture::Dismiss { epoch }
         | Gesture::Reorder { epoch, .. } => *epoch,
     };
@@ -514,6 +520,13 @@ fn gesture(ui: &Ui, value: &str) {
         return;
     }
     match gesture {
+        Gesture::RemoveFile {
+            name, permanent, ..
+        } => {
+            if let Some(file) = ui.state.with(|s| find_file(s, &name).cloned()) {
+                trash_ui::desktop_file(ui, &file, permanent);
+            }
+        }
         Gesture::Dismiss { .. } => ui.close_desktop_menu(),
         Gesture::Context {
             zone, item, x, y, ..
@@ -662,6 +675,26 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                     let can_pin = app
                         .is_some_and(|app| server_desktop::app_page(app) != WorkspacePage::Video);
                     fragment((
+                        when(!dock && file.is_some(), {
+                            let ui = ui.clone();
+                            let name = file.clone().unwrap_or_default();
+                            move || {
+                                let buttons = [("移入回收站", false), ("永久删除", true)]
+                                    .into_iter()
+                                    .map(|(label, permanent)| {
+                                        let name = name.clone();
+                                        menu_action(&ui, label, move |ui| {
+                                            if let Some(file) =
+                                                ui.state.with(|s| find_file(s, &name).cloned())
+                                            {
+                                                trash_ui::desktop_file(ui, &file, permanent);
+                                            }
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+                                fragment(buttons)
+                            }
+                        }),
                         when(!dock && app.is_some(), {
                             let ui = ui.clone();
                             move || {

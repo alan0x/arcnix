@@ -71,7 +71,7 @@ def main():
             expect(page.locator('.desktop-menubar')).to_have_count(0)
             assert page.locator('.workspace-header').bounding_box()['height'] <= 46
             expect(page.locator('.desktop-shortcuts .desktop-app-label')).to_have_text([
-                'Terminal', 'Monitor', 'Software store', 'File explorer', 'Code', 'Web browser', 'Settings', 'Player',
+                'Terminal', 'Monitor', 'Software store', 'File explorer', 'Code', 'Trash', 'Web browser', 'Settings', 'Player',
             ])
             expect(page.locator('.server-desktop .files-module')).to_have_count(0)
             expect(page.locator('.desktop-window.active')).to_be_hidden()

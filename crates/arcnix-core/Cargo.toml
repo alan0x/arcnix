@@ -12,6 +12,9 @@ keywords = ["ssh", "sftp", "server", "management"]
 categories = ["network-programming"]
 
 [dependencies]
+trash = "5.4"
+percent-encoding = "2"
+time = { version = "0.3", features = ["formatting", "local-offset"] }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

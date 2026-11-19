@@ -11,7 +11,8 @@ def main():
         with Desktop(out/'desktop',peer.config([peer.profile('Desktop motion')],local)) as app:
             p=app.page;errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
             app.connect();app.workspace('Desktop')
-            expect(p.locator('.desktop-shortcuts button')).to_have_count(8)
+            expect(p.locator('.desktop-shortcuts button')).to_have_count(10)
+            expect(p.locator('.desktop-shortcuts').get_by_role('button', name='Trash', exact=True)).to_be_visible()
             app.screenshot('desktop-light.png')
             p.set_viewport_size(dict(width=900,height=650))
             dock=p.locator('.desktop-dock').bounding_box()

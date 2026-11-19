@@ -324,7 +324,7 @@
         if(!pane||!event.target.closest('.file-list-container'))return;
         let kind=null;
         if(event.key==='F2')kind='rename';
-        else if(event.key==='Delete'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.shiftKey)kind='delete';
+        else if(event.key==='Delete'&&!event.ctrlKey&&!event.metaKey&&!event.altKey)kind=event.shiftKey?'delete_permanently':'delete';
         else if(event.key==='F5')kind='refresh';
         else if(event.altKey&&event.key==='Enter')kind='properties';
         else if(additive(event)&&event.shiftKey&&event.key.toLowerCase()==='c')kind='copy_paths';

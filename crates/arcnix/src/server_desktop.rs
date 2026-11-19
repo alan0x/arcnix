@@ -65,6 +65,7 @@ pub(super) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Resources => DesktopApp::Monitor,
         WorkspacePage::Software => DesktopApp::Store,
         WorkspacePage::Explorer => DesktopApp::Explorer,
+        WorkspacePage::Trash => DesktopApp::Trash,
         WorkspacePage::Docker => DesktopApp::Docker,
         WorkspacePage::Code => DesktopApp::Code,
         WorkspacePage::Video => DesktopApp::Video,
@@ -82,6 +83,7 @@ pub(super) fn app_page(app: DesktopApp) -> WorkspacePage {
         }
         DesktopApp::Store => WorkspacePage::Software,
         DesktopApp::Explorer => WorkspacePage::Explorer,
+        DesktopApp::Trash => WorkspacePage::Trash,
         DesktopApp::Docker => WorkspacePage::Docker,
         DesktopApp::Editor => WorkspacePage::Code,
         DesktopApp::Code => WorkspacePage::Code,
@@ -185,12 +187,13 @@ fn focus_window(ui: &Ui, input: &str) {
     }
 }
 
-const APPS: [WorkspacePage; 6] = [
+const APPS: [WorkspacePage; 7] = [
     WorkspacePage::Terminal,
     WorkspacePage::Resources,
     WorkspacePage::Software,
     WorkspacePage::Explorer,
     WorkspacePage::Code,
+    WorkspacePage::Trash,
     WorkspacePage::Settings,
 ];
 
@@ -207,6 +210,7 @@ fn app_label(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "Docker",
         WorkspacePage::Explorer => "File explorer",
+        WorkspacePage::Trash => "回收站",
         WorkspacePage::Code => "Code",
         WorkspacePage::Video => "Video player",
         WorkspacePage::Browser => "Web browser",
@@ -222,6 +226,7 @@ fn app_class(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "app-docker",
         WorkspacePage::Explorer => "app-explorer",
+        WorkspacePage::Trash => "app-trash",
         WorkspacePage::Code => "app-code",
         WorkspacePage::Video => "app-video",
         WorkspacePage::Browser => "app-browser",
@@ -240,6 +245,7 @@ fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Software => Icon::Store,
         WorkspacePage::Settings => Icon::Settings,
         WorkspacePage::Explorer => Icon::Folder,
+        WorkspacePage::Trash => Icon::Clear,
         WorkspacePage::Code => Icon::Code,
         WorkspacePage::Video => Icon::Play,
         WorkspacePage::Browser => Icon::Browser,
@@ -299,6 +305,7 @@ pub(super) fn owns_dialog(s: &State) -> bool {
                     | Dialog::ExplorerColor { .. }
                     | Dialog::RenameFile { remote: true }
                     | Dialog::FileProperties
+                    | Dialog::Trash { remote: true }
                     | Dialog::FileColumns { remote: true }
                     | Dialog::DeleteFiles { remote: true, .. }
                     | Dialog::TransferProgress(_)
@@ -421,6 +428,7 @@ impl Ui {
         self.observability_enter();
         self.store_enter();
         self.explorer_enter();
+        trash_ui::enter(self);
         network_ui::enter(self);
         if self.state.with(|s| {
             navigation::workspace_visible(s)
@@ -709,6 +717,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             workspace::explorer(ui),
         )),
         WorkspacePage::Resources => fragment(monitor_ui::page(ui)),
+        WorkspacePage::Trash => fragment(trash_ui::panel(ui, true)),
         WorkspacePage::Software => fragment(software::page(ui)),
         WorkspacePage::Settings => fragment(server_apps_ui::settings(ui)),
         WorkspacePage::Docker => fragment(docker_ui::page(ui)),

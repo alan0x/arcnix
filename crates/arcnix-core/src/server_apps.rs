@@ -58,12 +58,13 @@ pub enum DesktopApp {
     Editor,
     Code,
     Video,
+    Trash,
     Browser,
     Settings,
 }
 
 impl DesktopApp {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

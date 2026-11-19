@@ -107,6 +107,11 @@ impl FileSystem for LocalFiles {
         Ok(())
     }
 }
+pub(crate) fn recycle(target: &Target) -> Result<()> {
+    let (path, _) = deletion::checked_target(&LocalFiles, target)?;
+    trash::delete(path).context("Could not move item to the system Trash")
+}
+
 pub fn delete(targets: &[Target]) -> Result<usize> {
     deletion::remove(&LocalFiles, targets, || Ok(()))
 }
