@@ -491,9 +491,10 @@ impl RemoteSession {
         previous: crate::text_files::TextSnapshot,
         stamp: Option<[u8; 32]>,
     ) -> Result<(crate::text_files::TextSnapshot, [u8; 32])> {
+        use std::io::{Seek, SeekFrom};
+
         use crate::deletion::FileSystem;
         use crate::text_files::TextSnapshot;
-        use std::io::{Seek, SeekFrom};
         let sftp = self.sftp()?;
         let path = DeleteFiles(sftp).normalize(path)?;
         let stat = sftp.lstat(&path)?;
@@ -562,9 +563,10 @@ impl RemoteSession {
         cursor: Option<u64>,
         check: impl Fn() -> Result<()>,
     ) -> Result<crate::text_files::TextRange> {
+        use std::io::{Seek, SeekFrom};
+
         use crate::deletion::FileSystem;
         use crate::text_files::PAGE_BYTES;
-        use std::io::{Seek, SeekFrom};
         ensure!(
             offset <= snapshot.size && offset.is_multiple_of(PAGE_BYTES),
             "Invalid page offset"

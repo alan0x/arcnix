@@ -1,11 +1,13 @@
 //! Seekable SFTP media source shared by the web and native players.
-use super::*;
-use arcnix_core::remote::RemoteSession;
-use glory::wry::shell::{AssetProvider, AssetSource};
-use glory::wry::{LocalMedia, MediaKind, Renderer};
 use std::io::{Read, Seek, SeekFrom};
 use std::result::Result;
 use std::sync::{Mutex, mpsc};
+
+use arcnix_core::remote::RemoteSession;
+use glory::wry::shell::{AssetProvider, AssetSource};
+use glory::wry::{LocalMedia, MediaKind, Renderer};
+
+use super::*;
 
 type ReadResult = Result<Vec<u8>, String>;
 

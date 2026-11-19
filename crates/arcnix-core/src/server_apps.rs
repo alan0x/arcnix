@@ -362,8 +362,9 @@ pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
     let prefs: Option<DesktopPreferences> = serde_json::from_str(text)?;
     let mut prefs = prefs.unwrap_or_default();
     prefs.validate()?;
-    use crate::desktop_customization::Shortcut;
     use DesktopApp::{Code, Editor};
+
+    use crate::desktop_customization::Shortcut;
     if let Some(window) = prefs.windows.remove(&Editor) {
         prefs.windows.entry(Code).or_insert(window);
     }
