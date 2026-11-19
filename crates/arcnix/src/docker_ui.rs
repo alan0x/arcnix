@@ -56,8 +56,14 @@ fn split_timestamp(line: &str) -> Option<(&str, &str)> {
 /// Container output with its terminal colors, one muted timestamp per line.
 /// A carriage return in a line restarts only the output after the timestamp.
 fn log_spans(logs: &str) -> Vec<LogSpan> {
+    // Styles are computed only for the spans that are kept, after the limit.
+    enum Look {
+        Plain,
+        Time,
+        Pen(crate::ansi::Pen),
+    }
     let mut parser = crate::ansi::Parser::default();
-    let mut spans: Vec<(String, String, Style)> = Vec::new();
+    let mut spans: Vec<(String, Look)> = Vec::new();
     let mut line_spans = Vec::new();
     for line in logs.strip_suffix('\n').unwrap_or(logs).split('\n') {
         let (time, output) = match split_timestamp(line) {
@@ -65,27 +71,39 @@ fn log_spans(logs: &str) -> Vec<LogSpan> {
             None => (None, line),
         };
         if let Some(time) = time {
-            spans.push((format!("{time} "), "docker-log-time".into(), Style::new()));
+            spans.push((format!("{time} "), Look::Time));
         }
         line_spans.clear();
         parser.line(output, &mut line_spans);
-        for span in line_spans.drain(..) {
-            let (class, style) = span.pen.presentation();
-            spans.push((span.text, class, style));
-        }
+        spans.extend(
+            line_spans
+                .drain(..)
+                .map(|span| (span.text, Look::Pen(span.pen))),
+        );
         match spans.last_mut() {
-            Some(last) if !last.0.ends_with('\n') => last.0.push('\n'),
-            _ => spans.push(("\n".into(), String::new(), Style::new())),
+            Some((text, _)) if !text.ends_with('\n') => text.push('\n'),
+            _ => spans.push(("\n".into(), Look::Plain)),
         }
+    }
+    // Output with nothing to show, such as an empty reply, reads as "No logs".
+    if spans.iter().all(|(text, _)| text.trim().is_empty()) {
+        return Vec::new();
     }
     if spans.len() > LOG_SPAN_LIMIT {
         let excess = spans.len() - LOG_SPAN_LIMIT + 1;
-        let plain = spans.drain(..excess).map(|span| span.0).collect();
-        spans.insert(0, (plain, String::new(), Style::new()));
+        let merged = spans.drain(..excess).map(|(text, _)| text).collect();
+        spans.insert(0, (merged, Look::Plain));
     }
     spans
         .into_iter()
-        .map(|(text, class, style)| LogSpan { text, class, style })
+        .map(|(text, look)| {
+            let (class, style) = match look {
+                Look::Plain => (String::new(), Style::new()),
+                Look::Time => ("docker-log-time".into(), Style::new()),
+                Look::Pen(pen) => pen.presentation(),
+            };
+            LogSpan { text, class, style }
+        })
         .collect()
 }
 fn ready(s: &State) -> bool {
@@ -965,5 +983,12 @@ mod tests {
         assert_eq!(spans.last().unwrap().class, "ansi ansi-fg-2");
         let text: String = spans.into_iter().map(|s| s.text).collect();
         assert_eq!(text, "rg\n".repeat(LOG_SPAN_LIMIT));
+    }
+    #[test]
+    fn logs_without_visible_output_read_as_no_logs() {
+        for logs in ["", "\n", "\x1b[0m\n", "\r\n\n"] {
+            assert!(log_spans(logs).is_empty(), "{logs:?}");
+        }
+        assert!(!log_spans("2026-11-18T09:15:02.1Z \n").is_empty());
     }
 }

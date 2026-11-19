@@ -22,6 +22,7 @@ pub(crate) struct Pen {
     pub underline: bool,
     pub inverse: bool,
     pub strike: bool,
+    pub conceal: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,7 +80,8 @@ impl Parser {
         let Some(last) = chars.next_if(|c| matches!(c, '@'..='~')) else {
             return;
         };
-        if last == 'm' && !intermediate && !parameters.starts_with(['<', '=', '>', '?']) {
+        // Private markers are only valid first, and SGR has none; xterm ignores such sequences.
+        if last == 'm' && !intermediate && !parameters.contains(['<', '=', '>', '?']) {
             self.select(&parameters);
         }
     }
@@ -87,7 +89,13 @@ impl Parser {
     fn select(&mut self, parameters: &str) {
         let groups: Vec<Vec<Option<u32>>> = parameters
             .split(';')
-            .map(|group| group.split(':').map(|v| v.parse().ok()).collect())
+            // Empty means the default; an oversized value is kept as unknown, not read as 0.
+            .map(|group| {
+                group
+                    .split(':')
+                    .map(|v| (!v.is_empty()).then(|| v.parse().unwrap_or(u32::MAX)))
+                    .collect()
+            })
             .collect();
         let mut i = 0;
         while i < groups.len() {
@@ -102,12 +110,14 @@ impl Parser {
                 3 => pen.italic = true,
                 4 => pen.underline = group.get(1).is_none_or(|style| *style != Some(0)),
                 7 => pen.inverse = true,
+                8 => pen.conceal = true,
                 9 => pen.strike = true,
                 21 => pen.underline = true,
                 22 => (pen.bold, pen.dim) = (false, false),
                 23 => pen.italic = false,
                 24 => pen.underline = false,
                 27 => pen.inverse = false,
+                28 => pen.conceal = false,
                 29 => pen.strike = false,
                 30..=37 => pen.foreground = TermColor::Indexed((code - 30) as u8),
                 39 => pen.foreground = TermColor::Default,
@@ -166,13 +176,27 @@ fn rgb(r: Option<u32>, g: Option<u32>, b: Option<u32>) -> Option<TermColor> {
     Some(TermColor::Rgb(part(r)?, part(g)?, part(b)?))
 }
 
-/// Skip an OSC, DCS or similar string through BEL or ST.
+/// Skip an OSC, DCS or similar string through BEL or ST. Any other escape also
+/// ends the string, as in a terminal, and is left to start the next sequence.
 fn skip_string(chars: &mut std::iter::Peekable<std::str::Chars>) {
-    while let Some(c) = chars.next() {
+    while let Some(&c) = chars.peek() {
         match c {
-            '\x07' | '\u{9c}' => return,
-            '\x1b' if chars.next_if_eq(&'\\').is_some() => return,
-            _ => {}
+            '\x07' | '\u{9c}' => {
+                chars.next();
+                return;
+            }
+            '\x1b' => {
+                let mut ahead = chars.clone();
+                ahead.next();
+                if ahead.peek() == Some(&'\\') {
+                    chars.next();
+                    chars.next();
+                }
+                return;
+            }
+            _ => {
+                chars.next();
+            }
         }
     }
 }
@@ -245,6 +269,7 @@ impl Pen {
             (self.italic, "ansi-italic"),
             (self.underline, "ansi-underline"),
             (self.strike, "ansi-strike"),
+            (self.conceal, "ansi-conceal"),
         ] {
             if on {
                 classes.push(class);
@@ -321,6 +346,9 @@ mod tests {
         };
         assert_eq!(spans[0].pen, all);
         assert_eq!(spans[1].pen, Pen::default());
+        let hidden = parse(&["\x1b[8msecret\x1b[28mshown"]);
+        assert!(hidden[0].pen.conceal && !hidden[1].pen.conceal);
+        assert_eq!(hidden[0].pen.presentation().0, "ansi ansi-conceal");
         assert!(!parse(&["\x1b[4:0mx"])[0].pen.underline);
         assert!(parse(&["\x1b[4:3mx"])[0].pen.underline);
     }
@@ -359,6 +387,15 @@ mod tests {
         // The underline color's arguments are not read as further attributes.
         assert_eq!(parse(&["\x1b[58;5;1;32mx"])[0].pen, fg(2));
         assert_eq!(parse(&["\x1b[58;2;1;2;3;32mx"])[0].pen, fg(2));
+        // Oversized codes and misplaced private markers are ignored, not read as a reset.
+        assert_eq!(
+            parse(&["\x1b[1;31;99999999999mx"])[0].pen,
+            Pen {
+                bold: true,
+                ..fg(1)
+            }
+        );
+        assert_eq!(parse(&["\x1b[31m\x1b[0;3?mx"])[0].pen, fg(1));
         // Out-of-range or missing values leave the color unchanged.
         assert_eq!(parse(&["\x1b[31;38;5;300mx"])[0].pen, fg(1));
         assert_eq!(parse(&["\x1b[31;38;2;1mx"])[0].pen, fg(1));
@@ -379,6 +416,10 @@ mod tests {
         let spans = parse(&[line]);
         assert_eq!(text(&spans), "ABCDEFGH");
         assert_eq!(spans.last().unwrap().pen, fg(1));
+        // A new escape ends an unterminated string and still takes effect.
+        let spans = parse(&["\x1b]0;title\x1b[32mServer started"]);
+        assert_eq!(text(&spans), "Server started");
+        assert_eq!(spans[0].pen, fg(2));
         // An unterminated sequence at the end of the line is dropped.
         assert_eq!(text(&parse(&["ok\x1b[31"])), "ok");
         assert_eq!(text(&parse(&["ok\x1b]0;title"])), "ok");
