@@ -163,6 +163,8 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
+`crates/arcnix/src/headless_tests.rs` 在 Glory 内存渲染器中挂载完整界面，按英文名称或 CSS 类查找控件并模拟点击和输入，拦截发往 SSH 工作线程的请求，不打开窗口、不访问网络，随 `cargo test` 在所有平台运行。需要真实 WebView、布局、脚本或回环 SSH 的行为仍由下面的 Python 冒烟测试覆盖。
+
 导航、主题及本地 SSH 端到端验证（使用隔离配置，不访问真实服务器）：
 
 ```powershell
