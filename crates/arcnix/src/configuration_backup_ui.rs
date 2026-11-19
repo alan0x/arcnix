@@ -207,6 +207,7 @@ impl Ui {
         match result {
             Ok(restored) => {
                 self.disconnect();
+                self.forget_changed_credentials(&restored.config);
                 formatting::configure(restored.config.settings.display);
                 i18n::set_language(restored.config.settings.language);
                 self.state.revise(|s| {

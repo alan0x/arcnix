@@ -547,6 +547,7 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                 let delete = delete.clone();
                                 let connect = connect.clone();
                                 let reset = reset.clone();
+                                let forget = connect.clone();
                                 col().class("context-popover").fill((
                                     sapid::button()
                                         .class("menu-item")
@@ -578,6 +579,35 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                             }
                                             connect.state.revise(|s| s.host_menu = None);
                                         }),
+                                    when(
+                                        state.map(move |s| {
+                                            ssh_credentials::SUPPORTED
+                                                && ssh_credentials::Key::for_profile(
+                                                    &s.config,
+                                                    &value.get(),
+                                                )
+                                                .is_some()
+                                        }),
+                                        move || {
+                                            let forget = forget.clone();
+                                            btn("Forget saved SSH credential", move || {
+                                                let key = state.with(|s| {
+                                                    ssh_credentials::Key::for_profile(
+                                                        &s.config,
+                                                        &value.get(),
+                                                    )
+                                                });
+                                                if let Some(key) = key {
+                                                    forget.send(Action::ForgetCredentials(
+                                                        vec![key],
+                                                        true,
+                                                    ));
+                                                }
+                                                state.revise(|s| s.host_menu = None);
+                                            })
+                                            .class("menu-item")
+                                        },
+                                    ),
                                     btn("编辑服务器", move || {
                                         edit_server(&edit, &value.get().id)
                                     })
@@ -798,6 +828,7 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         });
                 match result {
                     Ok((config, profile, labels_only)) => {
+                        save.forget_changed_credentials(&config);
                         let same = save
                             .state
                             .with(|s| s.selected.as_ref() == Some(&profile.id));
@@ -990,9 +1021,18 @@ fn connect_dialog(ui: Ui) -> impl Widget {
                         }
                     }),
             )),
-            text()
-                .class("subtle")
-                .content(i18n::bind("凭据仅用于本次连接，不会保存到配置。")),
+            when(state.map(|_| ssh_credentials::SUPPORTED), move || {
+                sapid::checkbox()
+                    .class("preference-check")
+                    .label(i18n::bind("Remember on this computer"))
+                    .checked(state.map(|s| s.remember_ssh_credential))
+                    .on_checked_change(move |checked| state.revise(|s| s.remember_ssh_credential = checked))
+            }),
+            text().class("subtle").content(i18n::bind(if ssh_credentials::SUPPORTED {
+                "Remembering uses the system credential store and requires a saved SSH host fingerprint."
+            } else {
+                "凭据仅用于本次连接，不会保存到配置。"
+            })),
         )),
         (
             cancel(ui),
@@ -1015,7 +1055,7 @@ fn begin_connect(ui: &Ui) {
         s.dialog = None;
         s.dialog_error.clear();
     });
-    ui.connect(true);
+    ui.connect(true, false);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1065,12 +1105,12 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
         DeleteKind::GroupAndServers => "删除分组及服务器",
     };
     let details = match kind {
-        DeleteKind::Server => i18n::translate("仅删除保存的站点配置，不会删除远程服务器上的文件。"),
+        DeleteKind::Server => i18n::translate("将删除此服务器的本地配置和已保存的 SSH 凭据。"),
         DeleteKind::DissolveGroup => {
             i18n::translate("只移除分组，所有服务器配置保留并移到根目录。")
         }
         DeleteKind::GroupAndServers => i18n::translate(&format!(
-            "将删除此分组及其 {} 台服务器的本地配置。不会删除远程服务器或远程文件。",
+            "将删除此分组及其 {} 台服务器的本地配置和已保存的 SSH 凭据。",
             members.len()
         )),
     };
@@ -1125,6 +1165,7 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
                 });
                 match result {
                     Ok(config) => {
+                        confirm.forget_changed_credentials(&config);
                         let removed = state.with(|s| {
                             s.config
                                 .servers

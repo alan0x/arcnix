@@ -61,7 +61,10 @@ impl Bridge {
             _ => bail!("expected fingerprint"),
         };
         bridge.send(Action::Authenticate {
-            secret: "arcnix-test".into(),
+            login: crate::worker::Login::Manual {
+                secret: zeroize::Zeroizing::new("arcnix-test".into()),
+                remember: false,
+            },
             fingerprint,
         })?;
         ensure!(

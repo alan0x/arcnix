@@ -60,6 +60,7 @@ mod software;
 mod software_install_ui;
 mod software_store_ui;
 mod splitter;
+mod ssh_credentials;
 mod task_records_ui;
 mod task_refresh_ui;
 mod task_target_picker;
@@ -226,6 +227,8 @@ struct State {
     group_name: String,
     port: String,
     secret: String,
+    remember_ssh_credential: bool,
+    connecting_with_saved_credential: bool,
     /// The current attempt started without the credential dialog; a failure
     /// reopens it so the user can still enter a passphrase.
     connect_prompt_skipped: bool,
@@ -650,27 +653,34 @@ impl Ui {
             self.log(format!("保存失败: {e:#}"));
         }
     }
-    /// Connects to the selected server, asking for a password or passphrase
-    /// only when one may be needed. Keys that are known to be unencrypted
-    /// skip the dialog; unreadable or unrecognised keys still show it.
     fn request_connect(&self) {
-        if self.state.with(connect_prompt_needed) {
-            self.open_dialog(Dialog::Connect);
-            return;
-        }
         if self.file_task_blocks_dialog() {
             return;
         }
+        let try_saved = self.state.with(|s| {
+            ssh_credentials::SUPPORTED
+                && !s.connected
+                && !s.connecting
+                && selected_profile(s).is_some_and(|profile| {
+                    !needs_no_credentials(profile)
+                        && s.config
+                            .trusted_fingerprint(&profile.host, profile.port)
+                            .is_some()
+                })
+        });
+        if !try_saved && self.state.with(connect_prompt_needed) {
+            self.open_dialog(Dialog::Connect);
+            return;
+        }
         self.state.revise(|s| {
-            // An unencrypted key authenticates with exactly an empty secret.
             s.secret.clear();
+            s.remember_ssh_credential = false;
             dismiss_menus(s);
         });
-        self.connect(false);
+        self.connect(false, try_saved);
     }
-    /// `prompted` records whether the user went through the credential
-    /// dialog; a failed attempt that skipped it reopens the dialog.
-    fn connect(&self, prompted: bool) {
+    /// If the connection starts before a prompt, allow manual entry on failure.
+    fn connect(&self, prompted: bool, try_saved: bool) {
         if self.state.with(|s| s.system_task_running) {
             self.error("系统软件任务正在执行，请等待完成后切换服务器");
             return;
@@ -696,6 +706,7 @@ impl Ui {
                 s.connected = false;
                 s.connecting = true;
                 s.connect_prompt_skipped = !prompted;
+                s.connecting_with_saved_credential = try_saved;
                 s.sync_scope = None;
                 s.terminal = Default::default();
                 s.fingerprint = None;
@@ -725,7 +736,10 @@ impl Ui {
                     .trusted_fingerprint(&profile.host, profile.port)
                     .map(str::to_owned)
             });
-            self.send(Action::Probe(profile.into(), known));
+            self.send(match known {
+                Some(fingerprint) if try_saved => Action::ProbeSaved(profile.into(), fingerprint),
+                known => Action::Probe(profile.into(), known),
+            });
         } else {
             self.log("请先新建并选择服务器");
         }
@@ -757,6 +771,8 @@ impl Ui {
             s.connecting = false;
             s.fingerprint = None;
             s.secret.clear();
+            s.remember_ssh_credential = false;
+            s.connecting_with_saved_credential = false;
             s.remote_ready = false;
             s.remote.clear();
             s.remote_selection.clear();
@@ -814,41 +830,99 @@ impl Ui {
             s.transfer_conflicts.clear();
         });
     }
-    fn authenticate(&self, remember: bool) {
+    fn authenticate(&self, save_trust: bool) {
         let details = self.state.with(|s| {
-            let profile = s
-                .config
+            let profile = selected_profile(s)?.clone();
+            let fingerprint = s.fingerprint.clone()?;
+            let known =
+                s.config.trusted_fingerprint(&profile.host, profile.port) == Some(&fingerprint);
+            Some((profile, fingerprint, known))
+        });
+        let Some((profile, fingerprint, mut trusted)) = details else {
+            return;
+        };
+        if save_trust {
+            let mut config = self.state.with(|s| s.config.clone());
+            let result = config
+                .trust_host(&profile.host, profile.port, &fingerprint)
+                .and_then(|()| {
+                    anyhow::ensure!(self.writable.get(), "配置读取失败，禁止覆盖");
+                    self.store.save(&config)
+                });
+            match result {
+                Ok(()) => {
+                    self.state.revise(|s| s.config = config);
+                    trusted = true;
+                }
+                Err(error) => self.error(error.to_string()),
+            }
+        }
+        if self.state.with(|s| s.connecting_with_saved_credential) && !trusted {
+            self.disconnect();
+            self.open_dialog(Dialog::Connect);
+            return;
+        }
+        let wants_to_remember = self.state.with(|s| s.remember_ssh_credential);
+        if wants_to_remember && !trusted {
+            self.error(
+                "Save the SSH host fingerprint to remember the credential on this computer.",
+            );
+        }
+        let login = self.state.revise(|s| {
+            s.sync_scope = Some(arcnix_core::browser::profile_key(&profile, &fingerprint));
+            s.fingerprint = None;
+            let secret = zeroize::Zeroizing::new(std::mem::take(&mut s.secret));
+            s.remember_ssh_credential = false;
+            if s.connecting_with_saved_credential {
+                worker::Login::Saved
+            } else {
+                worker::Login::Manual {
+                    secret,
+                    remember: ssh_credentials::SUPPORTED && wants_to_remember && trusted,
+                }
+            }
+        });
+        self.send(Action::Authenticate { login, fingerprint });
+    }
+    fn forget_changed_credentials(&self, replacement: &AppConfig) {
+        if !ssh_credentials::SUPPORTED {
+            return;
+        }
+        let keys = self.state.with(|s| {
+            let retained: HashSet<_> = replacement
                 .servers
                 .iter()
-                .find(|p| Some(&p.id) == s.selected.as_ref())?;
-            Some((
-                profile.host.clone(),
-                profile.port,
-                s.fingerprint.clone()?,
-                s.secret.clone(),
-                arcnix_core::browser::profile_key(profile, s.fingerprint.as_deref()?),
-            ))
+                .filter_map(|p| ssh_credentials::Key::for_profile(replacement, p))
+                .collect();
+            s.config
+                .servers
+                .iter()
+                .filter_map(|p| ssh_credentials::Key::for_profile(&s.config, p))
+                .filter(|key| !retained.contains(key))
+                .collect::<Vec<_>>()
         });
-        if let Some((host, port, fingerprint, secret, sync_scope)) = details {
-            if remember {
-                let result = self
-                    .state
-                    .revise(|s| s.config.trust_host(&host, port, &fingerprint));
-                if let Err(e) = result {
-                    self.log(e.to_string());
-                    return;
+        if !keys.is_empty() {
+            self.send(Action::ForgetCredentials(keys, false));
+        }
+    }
+    fn connection_failed(&self, detail: Option<&str>, prompt: bool) {
+        self.state.revise(|s| {
+            s.connecting = false;
+            s.fingerprint = None;
+            s.sync_scope = None;
+            s.secret.clear();
+            s.connecting_with_saved_credential = false;
+            s.remember_ssh_credential = false;
+            let skipped = std::mem::take(&mut s.connect_prompt_skipped);
+            if (prompt || skipped) && s.dialog.is_none() && !file_task_busy(s) {
+                show_dialog(s, Dialog::Connect);
+                if let Some(detail) = detail {
+                    s.dialog_error = detail.to_owned();
                 }
-                self.save();
             }
-            self.state.revise(|s| {
-                s.sync_scope = Some(sync_scope);
-                s.fingerprint = None;
-                s.secret.clear();
-            });
-            self.send(Action::Authenticate {
-                secret,
-                fingerprint,
-            });
+        });
+        if let Some(detail) = detail {
+            self.error(detail);
         }
     }
     fn refresh(&self, remote: bool) {
@@ -1135,12 +1209,21 @@ fn dismiss_menus(s: &mut State) {
 }
 /// Shows `dialog` in place of any open menu. Callers check [`file_task_busy`].
 fn show_dialog(s: &mut State, dialog: Dialog) {
+    if dialog == Dialog::Connect {
+        s.remember_ssh_credential = false;
+    }
     if dialog == Dialog::Server {
         s.server_editor_tab = 0;
     }
     s.dialog = Some(dialog);
     s.dialog_error.clear();
     dismiss_menus(s);
+}
+fn selected_profile(s: &State) -> Option<&ServerProfile> {
+    s.config
+        .servers
+        .iter()
+        .find(|p| Some(&p.id) == s.selected.as_ref())
 }
 /// Whether connecting to the selected server must go through the credential
 /// dialog: always while a connection exists or is starting, and otherwise
@@ -1694,6 +1777,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         group_name: String::new(),
         port: "22".into(),
         secret: String::new(),
+        remember_ssh_credential: false,
+        connecting_with_saved_credential: false,
         connect_prompt_skipped: false,
         connected: false,
         sftp_available: false,
@@ -1845,7 +1930,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let events = ui.clone();
     scope.spawn(async move {while let Ok(response)=rx.recv().await {
         if let Update::Finished(id, _)=&response.update { state.revise(|s|{s.inflight_transfers.remove(id);}); }
-        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)){continue;}
+        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){continue;}
         match response.update {
             Update::Video(result)=>events.player.ready(&events,response.serial,result),
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
@@ -1858,7 +1943,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
+            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
                 #[cfg(windows)]
                 if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
@@ -1913,14 +1998,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
                 else {events.error(format!("错误：{message}"));}
             },
-            Update::ConnectionError(message)=>{
-                let message=format!("连接失败：{message}");
-                // A skipped prompt must not leave the user without a way to enter a passphrase,
-                // but it never replaces another dialog or interrupts a running file task.
-                state.revise(|s|{s.connecting=false;s.fingerprint=None;s.sync_scope=None;s.secret.clear();
-                    if std::mem::take(&mut s.connect_prompt_skipped)&&s.dialog.is_none()&&!file_task_busy(s){show_dialog(s,Dialog::Connect);s.dialog_error=message.clone();}});
-                events.error(&message);
-            },
+            Update::ConnectionError(message)=>events.connection_failed(Some(&format!("连接失败：{message}")),false),
+            Update::CredentialPrompt(detail)=>events.connection_failed(detail,true),
+            Update::CredentialNotice(message)=>events.error(message),
             Update::Metrics(result)=>observability::metrics_event(&events,response.serial,result),
             Update::Ports(result)=>resource_ports_ui::event(&events,response.serial,result),
             Update::PortTerminated(result)=>resource_ports_ui::terminated(&events,response.serial,result),
