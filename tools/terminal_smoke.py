@@ -47,7 +47,6 @@ def main():
                 page.locator('.rail-servers').click()
             page.locator('.host-select').first.click()
             page.locator('.connection-controls').get_by_role('button',name='Connect to server',exact=True).click()
-            page.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             page.get_by_role('button',name='Terminal',exact=True).click()
             expect(page.locator('.terminal-status')).to_have_text('Interactive SSH')

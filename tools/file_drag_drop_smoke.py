@@ -153,7 +153,6 @@ def main():
 
             def connect():
                 page.locator('.overview-transfer').click()
-                page.get_by_role('dialog', name='Connect to server', exact=True).get_by_role('button', name='Connect', exact=True).click()
                 expect(page.locator('.connection-state')).to_have_text('SSH connected')
 
             def gesture(pane, kind, drag_id, row=None):

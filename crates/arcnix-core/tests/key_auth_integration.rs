@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result};
+use arcnix_core::private_keys::{KeyProtection, key_protection};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::{AuthMethod, ServerProfile, new_id};
 
@@ -84,6 +85,28 @@ fn encrypted_key_rejects_missing_or_wrong_passphrase_without_disclosing_it() -> 
         );
         assert!(!message.contains("wrong-test-passphrase"));
         assert!(!message.contains("arcnix-test-key-passphrase"));
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture and ARCNIX_TEST_FIXTURE"]
+fn keys_classified_unencrypted_authenticate_without_a_passphrase() -> Result<()> {
+    // The desktop skips the passphrase prompt only for Unencrypted keys, so
+    // every such key must authenticate with the empty secret it then sends.
+    for (key, expected) in [
+        ("client_key", KeyProtection::Unencrypted),
+        ("client_key_ed25519", KeyProtection::Unencrypted),
+        ("client_key_ed25519_encrypted", KeyProtection::Encrypted),
+    ] {
+        let (profile, _) = fixture_profile(key)?;
+        let path = profile.private_key.as_deref().context("fixture key path")?;
+        assert_eq!(key_protection(path), expected, "{key}");
+        let result = authenticate(key, "");
+        match expected {
+            KeyProtection::Unencrypted => assert!(result?.sftp_available(), "{key}"),
+            _ => assert!(result.is_err(), "{key} accepted an empty passphrase"),
+        }
     }
     Ok(())
 }

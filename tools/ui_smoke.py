@@ -106,7 +106,6 @@ def main(fixture, output, package_checks):
             expect(page.locator(".connection-state")).to_be_visible()
             if page.locator(".connection-state").inner_text() != tr("SSH 已连接"):
                 page.locator(".overview-connect").click()
-                page.get_by_role("dialog", name="连接服务器", exact=True).get_by_role("button", name="连接", exact=True).click()
             expect(page.locator(".connection-state")).to_have_text("SSH 已连接")
             page.get_by_role("button", name="文件管理", exact=True).click()
             expect(page.locator(".local-slot")).to_be_visible()
@@ -711,7 +710,6 @@ def main(fixture, output, package_checks):
             page.locator(".connection-button").click()
             expect(page.locator(".connection-state")).to_have_text("SSH 未连接")
             host_action("连接服务器")
-            page.get_by_role("dialog", name="连接服务器", exact=True).get_by_role("button", name="连接", exact=True).click()
             expect(remote_pane.get_by_role("button", name="notes.txt", exact=True)).to_be_visible()
             local_note.write_bytes(b"Remembered upload rule survives a new connection\n")
             upload_note()
@@ -752,7 +750,6 @@ def main(fixture, output, package_checks):
             edit_dialog.get_by_role("button", name="保存服务器", exact=True).click()
             expect(edit_dialog).to_have_count(0)
             page.locator(".connection-button").click()
-            page.get_by_role("dialog", name="连接服务器", exact=True).get_by_role("button", name="连接", exact=True).click()
             expect(page.locator(".connection-state")).to_have_text("SSH 已连接")
             page.get_by_role("button", name="文件管理", exact=True).click()
             expect(page.locator(".remote-slot .pane-heading .pane-summary")).to_have_text("SFTP · 不可用")

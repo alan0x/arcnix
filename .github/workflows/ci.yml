@@ -72,5 +72,10 @@ jobs:
       - uses: ./.github/actions/windows-build-tools
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # Package verification builds arcnix-core from a temporary registry into the cached
+      # target/debug. Cargo never rebuilds a registry crate of an unchanged version, so a
+      # restored build from an older commit would be linked instead of the packaged sources.
+      - name: Remove cached arcnix-core builds before package verification
+        run: cargo clean -p arcnix-core
       - name: Verify publishable packages without uploading
         run: cargo package --workspace --locked

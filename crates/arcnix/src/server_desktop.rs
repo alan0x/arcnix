@@ -381,7 +381,19 @@ impl Ui {
         }
     }
 
+    /// Opens a workspace from an explicit entry point, connecting if needed.
     pub(super) fn open_workbench(&self, tab: Tab) {
+        self.enter_workbench(tab, true);
+    }
+
+    /// Tab buttons only switch views. While disconnected they show the
+    /// reconnect page, and open the credential dialog only when the server
+    /// needs one, so switching tabs never connects by itself.
+    fn switch_workbench(&self, tab: Tab) {
+        self.enter_workbench(tab, false);
+    }
+
+    fn enter_workbench(&self, tab: Tab, connect: bool) {
         if self.state.with(|s| s.workbench.active != tab) {
             self.state.revise(|s| select_tab(s, tab));
         }
@@ -389,7 +401,11 @@ impl Ui {
             .state
             .with(|s| !s.connected && !s.connecting && tab != Tab::Home)
         {
-            self.open_dialog(Dialog::Connect);
+            if connect {
+                self.request_connect();
+            } else if self.state.with(connect_prompt_needed) {
+                self.open_dialog(Dialog::Connect);
+            }
         }
         self.desktop_enter();
     }
@@ -539,7 +555,7 @@ pub(super) fn tabs(ui: Ui) -> impl Widget {
                                 icons::glyph(tab.icon()),
                                 text().content(i18n::bind(tab.label())),
                             ))
-                            .on_press(move || choose.open_workbench(tab)),
+                            .on_press(move || choose.switch_workbench(tab)),
                         when(tab == Tab::Desktop, move || {
                             fullscreen_action(fullscreen_ui.clone(), false)
                         }),
@@ -1016,7 +1032,7 @@ pub(super) fn reconnect(ui: Ui) -> impl Widget {
                 }
                 .to_owned()
             }))),
-        btn("连接", move || connect.open_dialog(Dialog::Connect))
+        btn("连接", move || connect.request_connect())
             .class("button primary")
             .enabled(state.map(|s| !s.connecting)),
         btn("Home", move || ui.open_workbench(Tab::Home)).class("button quiet"),

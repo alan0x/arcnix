@@ -225,6 +225,9 @@ struct State {
     group_name: String,
     port: String,
     secret: String,
+    /// The current attempt started without the credential dialog; a failure
+    /// reopens it so the user can still enter a passphrase.
+    connect_prompt_skipped: bool,
     connected: bool,
     sftp_available: bool,
     connecting: bool,
@@ -445,24 +448,18 @@ impl Ui {
             self.save();
         }
     }
-    fn open_dialog(&self, dialog: Dialog) {
-        if self.state.with(|s| {
-            s.file_pending.is_some()
-                && (s.deletion.is_some() || s.properties.as_ref().is_some_and(|p| p.is_running()))
-        }) {
+    fn file_task_blocks_dialog(&self) -> bool {
+        let busy = self.state.with(file_task_busy);
+        if busy {
             self.error("文件任务仍在处理当前请求，请稍后重试。");
+        }
+        busy
+    }
+    fn open_dialog(&self, dialog: Dialog) {
+        if self.file_task_blocks_dialog() {
             return;
         }
-        self.state.revise(|s| {
-            s.dialog = Some(dialog);
-            if s.dialog == Some(Dialog::Server) {
-                s.server_editor_tab = 0;
-            }
-            s.dialog_error.clear();
-            s.host_menu = None;
-            s.group_menu = None;
-            s.file_menu = None;
-        });
+        self.state.revise(|s| show_dialog(s, dialog));
     }
     fn close_dialog(&self) {
         let terminal_rename = self
@@ -652,7 +649,27 @@ impl Ui {
             self.log(format!("保存失败: {e:#}"));
         }
     }
-    fn connect(&self) {
+    /// Connects to the selected server, asking for a password or passphrase
+    /// only when one may be needed. Keys that are known to be unencrypted
+    /// skip the dialog; unreadable or unrecognised keys still show it.
+    fn request_connect(&self) {
+        if self.state.with(connect_prompt_needed) {
+            self.open_dialog(Dialog::Connect);
+            return;
+        }
+        if self.file_task_blocks_dialog() {
+            return;
+        }
+        self.state.revise(|s| {
+            // An unencrypted key authenticates with exactly an empty secret.
+            s.secret.clear();
+            dismiss_menus(s);
+        });
+        self.connect(false);
+    }
+    /// `prompted` records whether the user went through the credential
+    /// dialog; a failed attempt that skipped it reopens the dialog.
+    fn connect(&self, prompted: bool) {
         if self.state.with(|s| s.system_task_running) {
             self.error("系统软件任务正在执行，请等待完成后切换服务器");
             return;
@@ -677,6 +694,7 @@ impl Ui {
                 s.cancels.clear();
                 s.connected = false;
                 s.connecting = true;
+                s.connect_prompt_skipped = !prompted;
                 s.sync_scope = None;
                 s.terminal = Default::default();
                 s.fingerprint = None;
@@ -1103,6 +1121,50 @@ fn local_display(path: &Path) -> String {
 }
 fn accepts_listing(latest: u64, received: u64) -> bool {
     latest != 0 && latest == received
+}
+/// A running file task keeps the dialog slot until it finishes.
+fn file_task_busy(s: &State) -> bool {
+    s.file_pending.is_some()
+        && (s.deletion.is_some() || s.properties.as_ref().is_some_and(|p| p.is_running()))
+}
+fn dismiss_menus(s: &mut State) {
+    s.host_menu = None;
+    s.group_menu = None;
+    s.file_menu = None;
+}
+/// Shows `dialog` in place of any open menu. Callers check [`file_task_busy`].
+fn show_dialog(s: &mut State, dialog: Dialog) {
+    if dialog == Dialog::Server {
+        s.server_editor_tab = 0;
+    }
+    s.dialog = Some(dialog);
+    s.dialog_error.clear();
+    dismiss_menus(s);
+}
+/// Whether connecting to the selected server must go through the credential
+/// dialog: always while a connection exists or is starting, and otherwise
+/// unless [`needs_no_credentials`] holds for its profile.
+fn connect_prompt_needed(s: &State) -> bool {
+    s.connecting
+        || s.connected
+        || !s
+            .config
+            .servers
+            .iter()
+            .find(|p| Some(&p.id) == s.selected.as_ref())
+            .is_some_and(needs_no_credentials)
+}
+/// Whether connecting to `profile` needs no password or key passphrase.
+///
+/// Only private keys recognised as unencrypted qualify; passwords, encrypted
+/// keys and keys that cannot be inspected keep the credential dialog.
+fn needs_no_credentials(profile: &ServerProfile) -> bool {
+    use arcnix_core::private_keys::{KeyProtection, key_protection};
+    profile.auth == AuthMethod::PrivateKey
+        && profile
+            .private_key
+            .as_deref()
+            .is_some_and(|key| key_protection(key) == KeyProtection::Unencrypted)
 }
 fn accepts_response(current: u64, received: u64) -> bool {
     current == received
@@ -1631,6 +1693,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         group_name: String::new(),
         port: "22".into(),
         secret: String::new(),
+        connect_prompt_skipped: false,
         connected: false,
         sftp_available: false,
         connecting: false,
@@ -1847,7 +1910,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
                 else {events.error(format!("错误：{message}"));}
             },
-            Update::ConnectionError(message)=>{state.revise(|s|{s.connecting=false;s.fingerprint=None;s.sync_scope=None;s.secret.clear();});events.error(format!("连接失败：{message}"));},
+            Update::ConnectionError(message)=>{
+                let message=format!("连接失败：{message}");
+                // A skipped prompt must not leave the user without a way to enter a passphrase,
+                // but it never replaces another dialog or interrupts a running file task.
+                state.revise(|s|{s.connecting=false;s.fingerprint=None;s.sync_scope=None;s.secret.clear();
+                    if std::mem::take(&mut s.connect_prompt_skipped)&&s.dialog.is_none()&&!file_task_busy(s){show_dialog(s,Dialog::Connect);s.dialog_error=message.clone();}});
+                events.error(&message);
+            },
             Update::Metrics(result)=>observability::metrics_event(&events,response.serial,result),
             Update::Ports(result)=>resource_ports_ui::event(&events,response.serial,result),
             Update::PortTerminated(result)=>resource_ports_ui::terminated(&events,response.serial,result),
@@ -1930,6 +2000,47 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_unencrypted_private_keys_skip_the_credential_dialog() {
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = std::env::temp_dir().join(format!("arcnix-connect-prompt-{}", new_id()));
+        std::fs::create_dir(&directory).unwrap();
+        let _cleanup = Cleanup(directory.clone());
+        let pem = |label: &str, headers: &str| {
+            format!("-----BEGIN {label}-----\n{headers}QUJDRA==\n-----END {label}-----\n")
+        };
+        let unencrypted = directory.join("plain.pem");
+        std::fs::write(&unencrypted, pem("PRIVATE KEY", "")).unwrap();
+        let encrypted = directory.join("encrypted.pem");
+        std::fs::write(&encrypted, pem("ENCRYPTED PRIVATE KEY", "")).unwrap();
+        let unknown = directory.join("unknown.ppk");
+        std::fs::write(&unknown, "PuTTY-User-Key-File-3: ssh-ed25519\n").unwrap();
+
+        let with_key = |path: Option<PathBuf>| ServerProfile {
+            auth: AuthMethod::PrivateKey,
+            private_key: path,
+            ..Default::default()
+        };
+        assert!(needs_no_credentials(&with_key(Some(unencrypted.clone()))));
+        assert!(!needs_no_credentials(&with_key(Some(encrypted))));
+        assert!(!needs_no_credentials(&with_key(Some(unknown))));
+        assert!(!needs_no_credentials(&with_key(Some(
+            directory.join("missing")
+        ))));
+        assert!(!needs_no_credentials(&with_key(None)));
+        // A leftover key path must not bypass the prompt for password logins.
+        let password = ServerProfile {
+            auth: AuthMethod::Password,
+            private_key: Some(unencrypted),
+            ..Default::default()
+        };
+        assert!(!needs_no_credentials(&password));
+    }
     #[test]
     fn import_preserves_alternate_identities_and_reuses_group_case() {
         let mut existing = AppConfig::default();

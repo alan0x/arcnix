@@ -122,7 +122,6 @@ def run(preview, binary=None):
             if preview:
                 page.locator('.host-select').click()
                 page.locator('.overview-transfer').click()
-                page.get_by_role('dialog').get_by_role('button', name='连接', exact=True).click()
                 expect(page.locator('.connection-state')).to_have_text('SSH 已连接')
             else:
                 app.connect()

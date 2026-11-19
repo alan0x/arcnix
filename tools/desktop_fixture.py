@@ -153,8 +153,9 @@ class Desktop:
         self.page.locator('.host-select').nth(index).click()
         self.workspace('Home')
         self.page.locator('.overview-transfer').click()
-        self.page.get_by_role('dialog', name='Connect to server', exact=True).get_by_role('button', name='Connect', exact=True).click()
+        # Fixture profiles use an unencrypted key, which connects without a credential dialog.
         expect(self.page.locator('.connection-state')).to_have_text('SSH connected')
+        expect(self.page.get_by_role('dialog', name='Connect to server', exact=True)).to_have_count(0)
     def workspace(self, label):
         tabs = self.page.locator('.workbench-tabs')
         expect(tabs).to_be_visible()
