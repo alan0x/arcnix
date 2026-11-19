@@ -7,6 +7,7 @@ A friendly desktop workspace for managing servers over SSH, built with Rust, Glo
 - Organize servers in sortable groups, annotate environments and tags, and import SSH configurations. Searches include labels; batch target forms also offer exact label filters.
 - Dual-pane SFTP browsing, drag-and-drop file/folder uploads and downloads, expandable per-file progress, configurable parallel transfers (default 5), and file conflict handling.
 - Context menus for file and folder actions, with keyboard navigation, properties, and confirmed multi-item or recursive deletion.
+- On Windows x64, double-click a remote MP4 or MKV, or choose Play from its context menu. The player reads ranges over SFTP and decodes locally using WebView2 for MP4 and bundled libmpv for MKV.
 - Cancellable deletion with live progress, remote POSIX permissions, and per-server file column preferences.
 - Interactive SSH terminals, software management, resource metrics and system logs.
 - An application store with 18 built-in server apps, categories, search, product details and a merged installed list. Choose native packages (APT, DNF, YUM, Zypper, APK or Pacman), Snap or Docker Compose after clicking Install; only supported providers are offered. Updates and removals keep the original source and use reviewed server-owned tasks.
@@ -28,7 +29,8 @@ A friendly desktop workspace for managing servers over SSH, built with Rust, Glo
 - Audit and residual export storage capacity, cross-page retention previews, and separately reviewed server-owned retirement of eligible cleanup audits; exported copies and cleanup evidence remain protected.
 - Separately reviewed server-owned residual exports and quarantine removal, with full data and metadata checksum verification before source deletion.
 - Per-server default and remembered directories, connection overrides and transfer conflict policies.
-- Remote UTF-8 text editing with change detection, shared size/date formats and rotating client logs.
+- Remote UTF-8 files open in **Code**, a local VS Code workbench with an SFTP file tree. Press **Ctrl+Shift+F** to search text throughout the current remote folder and select a match to jump to its line. UTF-8 files over 1 MiB are scanned in 128 KiB ranges. Large files open in a scrollable read-only viewer from the file tree or at the matching line from search. Scrolling and dragging the scrollbar fetch nearby pages over SFTP. At an unindexed position the text appears first, then exact line numbers appear as the background scan reaches it. At the bottom, the viewer follows new records as the file grows. Scroll up to read in place and return to the bottom to resume. It polls through the existing SFTP connection and extends the line index from the previous tail page. Repeat a search to include newly appended entries in its results. Regular expressions on large files use adjacent ranges for context. Open a Markdown file and press **Ctrl+K V** for a live preview to the side. **Ctrl+S** saves through the active SSH connection.
+- Shared size/date formats and rotating client logs.
 - Windows x64 release checks and verified automatic updates, with idle restart and startup rollback.
 - Reviewed local configuration backup and restore, preserving the previous file and this computer's SSH trust.
 - English and Chinese UI, with system (default), dark and light themes.
@@ -66,7 +68,7 @@ Software installation and package-index updates also enter this shared flow. Sub
 
 The server desktop's gear offers Light, Dark and Follow application. Preferences are saved atomically in the connected SSH user's `~/.arcnix/desktop.json` and restored on reconnect, including from another client. Docker appears when detected; use Detect applications in this dialog after installing or removing it. Docker uses the server's local socket with the SSH account's existing permissions, with support for rootless Docker. Container configuration changes apply to Docker; Compose may replace them when recreating containers.
 
-**Settings** contains display formats, connection timeout/keepalive, separate upload/download conflict defaults, client log export/rotation and updates. Edit a server to set its own directories and connection overrides. File actions expose per-server transfer defaults. Right-click a regular remote text file and choose **Edit file**; drafts stay in memory, preserve UTF-8 BOM/CRLF and are checked against the remote contents before saving. The editor supports files up to 1 MiB.
+**Settings** contains display formats, connection timeout/keepalive, separate upload/download conflict defaults, client log export/rotation and updates. Edit a server to set its own directories and connection overrides. File actions expose per-server transfer defaults. Right-click a regular remote text file and choose **Open in Code**; drafts stay in memory, preserve UTF-8 BOM/CRLF and are checked against the remote contents before saving. The editor supports files up to 1 MiB.
 
 Version information and updates live in **Settings → About**. **General** contains language and theme; **Files** owns browsing and size/date formats. **Logging** separates the operation log from optional file logging.
 

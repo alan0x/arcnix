@@ -104,7 +104,7 @@ pub(super) fn item_opened(ui: &Ui, result: std::result::Result<server_apps_worke
             if item.directory {
                 file_browser::navigate(ui, true, request.path);
             } else {
-                remote_editor::open_verified(ui, &request.path);
+                file_browser::open_remote_file(ui, &request.path);
             }
         }
         Ok(_) => ui.error("Could not open this item"),

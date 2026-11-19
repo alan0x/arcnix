@@ -616,6 +616,14 @@ fn history_button(ui: Ui, backwards: bool) -> impl Widget {
         }
     })
 }
+pub(super) fn open_remote_file(ui: &Ui, path: &str) {
+    if video_player::supports(path) {
+        ui.player.open(ui, path);
+    } else {
+        code_workbench::open(ui, path);
+    }
+}
+
 pub(super) fn activate(ui: &Ui, remote: bool, target: &str) {
     let entry = ui.state.with(|s| {
         entries(s, remote)
@@ -628,7 +636,7 @@ pub(super) fn activate(ui: &Ui, remote: bool, target: &str) {
         } else {
             select(ui, remote, &entry.path, false, false);
             if remote {
-                remote_editor::open(ui, &entry.path);
+                open_remote_file(ui, &entry.path);
             }
         }
     }

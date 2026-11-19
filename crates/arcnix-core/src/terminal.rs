@@ -64,7 +64,9 @@ pub fn resume_command(session: &str, directory: Option<&str>) -> Result<String> 
         validate_directory(directory)?;
     }
     Ok(format!(
-        "# arcnix:terminal:resume\nexec tmux -L arcnix new-session -A -s {}{}",
+        "# arcnix:terminal:resume\nexec tmux -L arcnix new-session -A -s {}{} \\; \
+         set-option mouse on \\; set-window-option -q pane-scrollbars on \\; \
+         set-window-option -q pane-scrollbars-position right",
         crate::remote_tasks::quote(&format!("terminal-{session}")),
         directory
             .map(|d| format!(" -c {}", crate::remote_tasks::quote(d)))

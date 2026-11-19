@@ -99,7 +99,8 @@ fn idle(s: &State) -> bool {
         && s.scripts.refreshing.is_empty()
         && s.file_pending.is_none()
         && s.dialog.is_none()
-        && s.remote_editor.is_none()
+        && s.code.pending.is_empty()
+        && !s.code.dirty
         && s.cancels.is_empty()
         && !s
             .jobs

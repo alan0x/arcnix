@@ -56,12 +56,14 @@ pub enum DesktopApp {
     Disks,
     Docker,
     Editor,
+    Code,
+    Video,
     Browser,
     Settings,
 }
 
 impl DesktopApp {
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 13;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,8 +360,33 @@ pub fn preferences_read_command() -> String {
 pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
     ensure!(text.len() <= 65536, "Desktop preferences exceed 64 KiB");
     let prefs: Option<DesktopPreferences> = serde_json::from_str(text)?;
-    let prefs = prefs.unwrap_or_default();
+    let mut prefs = prefs.unwrap_or_default();
     prefs.validate()?;
+    use crate::desktop_customization::Shortcut;
+    use DesktopApp::{Code, Editor};
+    if let Some(window) = prefs.windows.remove(&Editor) {
+        prefs.windows.entry(Code).or_insert(window);
+    }
+    fn migrate<T: PartialEq>(items: &mut Vec<T>, old: T, new: T) {
+        if items.contains(&new) {
+            items.retain(|item| *item != old);
+        } else if let Some(item) = items.iter_mut().find(|item| **item == old) {
+            *item = new;
+        }
+    }
+    let appearance = &mut prefs.appearance;
+    migrate(
+        &mut appearance.order,
+        Shortcut::App(Editor),
+        Shortcut::App(Code),
+    );
+    for apps in [
+        &mut appearance.hidden,
+        &mut appearance.dock.order,
+        &mut appearance.dock.unpinned,
+    ] {
+        migrate(apps, Editor, Code);
+    }
     Ok(prefs)
 }
 pub fn read_preferences(session: &RemoteSession) -> Result<DesktopPreferences> {
@@ -427,6 +454,29 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn legacy_editor_preferences_move_to_code_once() {
+        use DesktopApp::{Code, Editor, Terminal};
+        let mut old = DesktopPreferences::default();
+        old.windows.insert(
+            Editor,
+            DesktopWindow {
+                maximized: true,
+                ..Default::default()
+            },
+        );
+        old.appearance.dock.order = vec![Editor, Terminal];
+        let migrated = parse_preferences(&serde_json::to_string(&old).unwrap()).unwrap();
+        assert!(migrated.windows[&Code].maximized);
+        assert!(!migrated.windows.contains_key(&Editor));
+        assert_eq!(migrated.appearance.dock.order, [Code, Terminal]);
+        old.appearance.dock.order.push(Code);
+        old.windows.insert(Code, DesktopWindow::default());
+        let mixed = parse_preferences(&serde_json::to_string(&old).unwrap()).unwrap();
+        assert_eq!(mixed.appearance.dock.order, [Terminal, Code]);
+        assert!(!mixed.windows[&Code].maximized);
+    }
+
     #[test]
     fn preferences_require_a_known_schema_and_closed_theme() {
         assert_eq!(

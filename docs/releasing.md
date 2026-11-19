@@ -32,6 +32,13 @@ uninstaller in Windows Settings → Apps. User settings are stored separately an
 survive uninstall. Windows release CI verifies silent installation, the shortcut,
 the installed executable and uninstallation before uploading the assets.
 
+The Windows x64 executable carries the pinned LGPL libmpv runtime and its
+notices in an appended ZIP. The installer, portable ZIP and single-file updater
+ship the same executable. Opening an MKV for the first time extracts the runtime
+to the user's local application cache. An adjacent `libmpv-2.dll` takes precedence
+for development or replacement. To stage it for a developer build, run
+`python tools/libmpv_runtime.py <directory-containing-arcnix.exe>`.
+
 ## Desktop update channel
 
 Windows AMD64 packaging also emits `arcnix-vVERSION-windows-amd64.exe`, copied

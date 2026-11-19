@@ -8,6 +8,8 @@ mod browser_cookies;
 mod cleanup_records_ui;
 mod client_logs;
 mod clipboard;
+mod code_native;
+mod code_workbench;
 mod compose_ui;
 mod configuration_backup_ui;
 mod deleted_files_ui;
@@ -30,6 +32,9 @@ mod i18n;
 mod icons;
 mod installation_ui;
 mod monitor_ui;
+#[cfg(windows)]
+mod mpv_native;
+mod native_viewport;
 mod navigation;
 mod network_ui;
 mod observability;
@@ -39,7 +44,6 @@ mod preferences_ui;
 mod processes_ui;
 mod record_maintenance_ui;
 mod recovery_ui;
-mod remote_editor;
 mod resource_ports_ui;
 mod resource_trends;
 mod script_exchange_ui;
@@ -72,6 +76,7 @@ mod transfer_worker;
 mod transfer_worker_tests;
 mod update_install;
 mod updates_ui;
+mod video_player;
 #[cfg(windows)]
 mod web_browser;
 #[cfg(windows)]
@@ -121,7 +126,6 @@ enum Dialog {
     },
     TransferDefaults,
     TransferProgress(TransferDirection),
-    RemoteEditor,
     Server,
     Group {
         id: Option<String>,
@@ -182,7 +186,8 @@ enum WorkspacePage {
     Terminal,
     Explorer,
     Docker,
-    Editor,
+    Code,
+    Video,
     Browser,
     Settings,
 }
@@ -208,8 +213,8 @@ struct State {
     deletion: Option<file_context::Deletion>,
     unassigned_columns: FileColumnSettings,
     properties: Option<file_properties::Editor>,
-    remote_editor: Option<remote_editor::Editor>,
-    desktop_editor: remote_editor::Tabs,
+    code: code_workbench::Runtime,
+    video: Option<video_player::Playback>,
     updates: updates_ui::UpdateState,
     import_pending: Option<u64>,
     activity_tab: u8,
@@ -298,6 +303,7 @@ struct State {
 }
 #[derive(Clone)]
 struct Ui {
+    player: video_player::Player,
     wallpapers: Arc<desktop_customization_ui::WallpaperAssets>,
     update_controller: Arc<updates_ui::Controller>,
     batch_controller: Rc<std::cell::RefCell<Option<batch_worker::Controller>>>,
@@ -442,9 +448,7 @@ impl Ui {
     fn open_dialog(&self, dialog: Dialog) {
         if self.state.with(|s| {
             s.file_pending.is_some()
-                && (s.deletion.is_some()
-                    || s.properties.as_ref().is_some_and(|p| p.is_running())
-                    || remote_editor::busy(s))
+                && (s.deletion.is_some() || s.properties.as_ref().is_some_and(|p| p.is_running()))
         }) {
             self.error("文件任务仍在处理当前请求，请稍后重试。");
             return;
@@ -464,9 +468,6 @@ impl Ui {
         let terminal_rename = self
             .state
             .with(|s| matches!(s.dialog, Some(Dialog::TerminalRename { .. })));
-        if remote_editor::dismiss(self) {
-            return;
-        }
         if file_context::dismiss_deletion(self) {
             return;
         }
@@ -668,6 +669,7 @@ impl Ui {
                 profile.connection = Some(self.state.with(|s| s.config.settings.connection));
             }
             self.cancel_all();
+            self.player.close(self);
             #[cfg(windows)]
             self.close_web_browser();
             self.state.revise(|s| {
@@ -710,7 +712,6 @@ impl Ui {
         }
     }
     fn disconnect(&self) {
-        remote_editor::cancel(self);
         file_context::cancel_deletion(self);
         file_properties::cancel(self);
         if self.state.with(|s| s.system_task_running) {
@@ -718,6 +719,7 @@ impl Ui {
             return;
         }
         self.cancel_all();
+        self.player.close(self);
         #[cfg(windows)]
         self.close_web_browser();
         if self
@@ -747,7 +749,7 @@ impl Ui {
             s.disks = Default::default();
             s.compose = Default::default();
             s.install = Default::default();
-            remote_editor::disconnect(s);
+            s.code = Default::default();
             s.operations = Default::default();
             s.metrics = Default::default();
             resource_ports_ui::reset(s);
@@ -914,7 +916,7 @@ impl Ui {
             let mut next = Vec::new();
             if s.system_task_running
                 || s.deletion.is_some()
-                || s.remote_editor.is_some()
+                || !s.code.pending.is_empty()
                 || s.properties.as_ref().is_some_and(|p| p.is_running())
                 || !s.connected
                 || s.queue_paused
@@ -1215,16 +1217,13 @@ fn modal(
                         .enabled(ui.state.map(|s| {
                             (s.file_pending.is_none()
                                 || file_context::deletion_dialog(s)
-                                || file_properties::running(s)
-                                || (s.dialog == Some(Dialog::RemoteEditor)
-                                    && remote_editor::busy(s)))
+                                || file_properties::running(s))
                                 && s.import_pending.is_none()
                         }))
                         .on(activate, move |_| scrim.close_dialog()),
                     col()
                         .class(ui.state.map(|s| {
                             match s.dialog {
-                                Some(Dialog::RemoteEditor) => "modal-card remote-editor-modal",
                                 Some(Dialog::TransferProgress(_)) => {
                                     "modal-card transfer-progress-modal"
                                 }
@@ -1243,9 +1242,7 @@ fn modal(
                                     .enabled(ui.state.map(|s| {
                                         (s.file_pending.is_none()
                                             || file_context::deletion_dialog(s)
-                                            || file_properties::running(s)
-                                            || (s.dialog == Some(Dialog::RemoteEditor)
-                                                && remote_editor::busy(s)))
+                                            || file_properties::running(s))
                                             && s.import_pending.is_none()
                                     }))
                                     .on_press(move || close.close_dialog()),
@@ -1470,7 +1467,6 @@ fn app(ui: Ui) -> impl Widget {
                     terminal_menu::dialogs(ui.clone()),
                     resource_ports_ui::dialog(ui.clone()),
                 )),
-                remote_editor::dialogs(ui.clone()),
                 file_columns::dialog(ui.clone()),
                 cleanup_records_ui::dialog(ui.clone()),
                 cleanup_records_ui::download_dialog(ui.clone()),
@@ -1600,6 +1596,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     formatting::configure(config.settings.display);
     let logger = Rc::new(client_logs::Logger::new(store.path()));
     let window = WindowApp::new();
+    window.renderer().enable_local_media();
     let scope = window.app().scope();
     i18n::init(scope, config.settings.language);
     let state = scope.cage(State {
@@ -1622,8 +1619,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         deletion: None,
         unassigned_columns: FileColumnSettings::default(),
         properties: None,
-        remote_editor: None,
-        desktop_editor: Default::default(),
+        code: Default::default(),
+        video: None,
         updates: Default::default(),
         import_pending: None,
         activity_tab: 0,
@@ -1712,6 +1709,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     });
     let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
+        player: video_player::Player::new(window.renderer().clone(), scope),
         wallpapers: Arc::new(desktop_customization_ui::WallpaperAssets::default()),
         update_controller,
         batch_controller: Rc::new(std::cell::RefCell::new(None)),
@@ -1783,8 +1781,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let events = ui.clone();
     scope.spawn(async move {while let Ok(response)=rx.recv().await {
         if let Update::Finished(id, _)=&response.update { state.revise(|s|{s.inflight_transfers.remove(id);}); }
-        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)|Update::TextFile(_)){continue;}
+        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Deleted{..}|Update::Permissions(_)){continue;}
         match response.update {
+            Update::Video(result)=>events.player.ready(&events,response.serial,result),
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
             Update::ServerApps(result)=>server_apps_ui::event(&events,response.serial,result),
             Update::Operations(event)=>operations::event(&events,response.serial,event),
@@ -1811,8 +1810,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             #[cfg(windows)]
             Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(&events,response.serial,result),
             Update::ConnectionLost(message)=>{
+                events.player.close(&events);
                 #[cfg(windows)]
-                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
             Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
@@ -1841,7 +1841,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Update::DeletionProgress(progress)=>file_context::deletion_progress(&events,response.serial,progress),
             Update::FileMetadata(result)=>file_properties::metadata(&events,response.serial,result),
             Update::Permissions(result)=>file_properties::finished(&events,response.serial,result),
-            Update::TextFile(result)=>remote_editor::event(&events,response.serial,result),
+            Update::CodeFile(reply)=>code_workbench::reply(&events,response.serial,reply),
             Update::Error(message)=>{
                 let pending=state.with(|s|s.file_pending==Some(response.serial)||s.import_pending==Some(response.serial));
                 if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
@@ -1883,20 +1883,26 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 wallpapers: wallpapers.clone(),
                 #[cfg(windows)]
                 browser: web_browser_native::Host::new(ui.clone()),
+                #[cfg(windows)]
+                video: mpv_native::Host::new(ui.clone()),
+                code: code_native::Host::new(ui.clone()),
             })),
-            asset_provider: Some(wallpapers),
+            asset_provider: Some(Arc::new(video_player::Assets {
+                wallpapers,
+                player: ui.player.source.clone(),
+            })),
             initialization_script: Some(
                 [
                     include_str!("../assets/system-theme.js"),
                     include_str!("../assets/desktop-frame.js"),
                     include_str!("../assets/file-list-events.js"),
                     include_str!("../assets/desktop-customization.js"),
-                    include_str!("../assets/remote-editor-events.js"),
                     include_str!("../assets/help-events.js"),
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/desktop-geometry.js"),
                     include_str!("../assets/browser-viewport.js"),
+                    include_str!("../assets/video-player.js"),
                     include_str!("../assets/desktop-motion.js"),
                     include_str!("../assets/desktop-shortcuts.js"),
                     include_str!("../assets/vendor/xterm/xterm.js"),

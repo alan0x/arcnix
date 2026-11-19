@@ -12,5 +12,19 @@
     "integrity": "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==",
     "source": "https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.11.0.tgz",
     "license": "MIT"
+  },
+  {
+    "name": "@codingame/monaco-vscode-api",
+    "version": "39.0.5",
+    "integrity": "sha512-r6sEHd1DJ19YdtDfhLIkEGLoFFUNuVLwyj4UV6IDMnRi7Q1YpcfE0oqM3kGLju2a90N7pNBiSYjl3eHEmGk1Bw==",
+    "source": "https://registry.npmjs.org/@codingame/monaco-vscode-api/-/monaco-vscode-api-39.0.5.tgz",
+    "license": "MIT"
+  },
+  {
+    "name": "markdown-it",
+    "version": "15.0.3",
+    "integrity": "sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==",
+    "source": "https://registry.npmjs.org/markdown-it/-/markdown-it-15.0.3.tgz",
+    "license": "MIT"
   }
 ]

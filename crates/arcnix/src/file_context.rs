@@ -387,6 +387,29 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                     col().class("file-menu-group").fill((
                         when(
                             state.map(move |s| {
+                                remote
+                                    && single(s, true).is_some_and(|f| {
+                                        !f.is_dir
+                                            && !f.is_symlink
+                                            && video_player::supports(&f.path)
+                                    })
+                            }),
+                            {
+                                let play = ui.clone();
+                                move || {
+                                    action(&play, true, "播放", one, {
+                                        let ui = play.clone();
+                                        move || {
+                                            if let Some(file) = ui.state.with(|s| single(s, true)) {
+                                                ui.player.open(&ui, &file.path);
+                                            }
+                                        }
+                                    })
+                                }
+                            },
+                        ),
+                        when(
+                            state.map(move |s| {
                                 single(s, remote).is_some_and(|f| f.is_dir && !f.is_symlink)
                             }),
                             {
@@ -439,19 +462,16 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                             {
                                 let edit = ui.clone();
                                 move || {
+                                    let open = edit.clone();
                                     action(
                                         &edit,
                                         true,
-                                        "Edit file",
-                                        |s, _| remote_editor::available(s),
-                                        {
-                                            let edit = edit.clone();
-                                            move || {
-                                                if let Some(file) =
-                                                    edit.state.with(|s| single(s, true))
-                                                {
-                                                    remote_editor::edit(&edit, &file.path);
-                                                }
+                                        "Open in Code",
+                                        |s, _| code_workbench::available(s),
+                                        move || {
+                                            if let Some(file) = open.state.with(|s| single(s, true))
+                                            {
+                                                code_workbench::open(&open, &file.path);
                                             }
                                         },
                                     )

@@ -238,6 +238,16 @@ pub struct ExplorerLocation {
 pub struct RemoteSession {
     session: Session,
     sftp: Option<Sftp>,
+    search_reader: Option<SearchReader>,
+}
+
+struct SearchReader {
+    cursor: u64,
+    path: String,
+    snapshot: crate::text_files::TextSnapshot,
+    next: u64,
+    overlap: Vec<u8>,
+    file: ssh2::File,
 }
 
 impl PendingConnection {
@@ -391,7 +401,11 @@ impl PendingConnection {
                 None
             }
         };
-        Ok(RemoteSession { session, sftp })
+        Ok(RemoteSession {
+            session,
+            sftp,
+            search_reader: None,
+        })
     }
 
     pub(crate) fn authenticate_transport(
@@ -457,6 +471,166 @@ impl PendingConnection {
 }
 
 impl RemoteSession {
+    /// Open a regular file once for seekable, binary SFTP reads. The reported
+    /// length belongs to this handle even if its directory entry is renamed.
+    pub fn open_media(&self, path: &str) -> Result<(impl Read + io::Seek + use<>, u64)> {
+        validate_path(path)?;
+        let mut file = self.sftp()?.open(Path::new(path))?;
+        let stat = file.stat()?;
+        ensure!(stat.is_file(), "Expected a regular video file");
+        let size = stat.size.context("Missing video file length")?;
+        ensure!(size > 0, "Video file is empty");
+        Ok((file, size))
+    }
+
+    /// Poll size/mtime on the existing SFTP session. Only sample the tail on
+    /// initial attachment or growth; an idle viewer never opens the file here.
+    pub fn poll_text_tail(
+        &self,
+        path: &str,
+        previous: crate::text_files::TextSnapshot,
+        stamp: Option<[u8; 32]>,
+    ) -> Result<(crate::text_files::TextSnapshot, [u8; 32])> {
+        use crate::deletion::FileSystem;
+        use crate::text_files::TextSnapshot;
+        use std::io::{Seek, SeekFrom};
+        let sftp = self.sftp()?;
+        let path = DeleteFiles(sftp).normalize(path)?;
+        let stat = sftp.lstat(&path)?;
+        let size = stat.size.context("Missing file size")?;
+        ensure!(
+            stat.is_file()
+                && size >= previous.size
+                && (size != previous.size || stat.mtime == previous.modified),
+            "Remote file changed. Reopen the file."
+        );
+        if let Some(stamp) = stamp
+            && size == previous.size
+        {
+            return Ok((previous, stamp));
+        }
+        ensure!(
+            sftp.realpath(&path)? == path,
+            "Linked paths cannot be followed"
+        );
+        let mut file = sftp.open(&path)?;
+        let mut sample = |end: u64| -> Result<Vec<u8>> {
+            let start = end.saturating_sub(512);
+            file.seek(SeekFrom::Start(start))?;
+            let mut bytes = vec![0; (end - start) as usize];
+            file.read_exact(&mut bytes)?;
+            Ok(bytes)
+        };
+        if let Some(expected) = stamp {
+            let actual: [u8; 32] = Sha256::digest(sample(previous.size)?).into();
+            ensure!(actual == expected, "Remote file changed. Reopen the file.");
+        }
+        // Attach to the original extent first, including for historical search
+        // anchors. A writer may have emitted only part of its last UTF-8 scalar.
+        let mut end = if stamp.is_some() { size } else { previous.size };
+        let mut bytes = sample(end)?;
+        let pending = crate::text_files::incomplete_tail(&bytes);
+        if pending > 0 {
+            end -= pending as u64;
+            bytes = sample(end)?;
+        }
+        let after = file.stat()?;
+        ensure!(
+            after
+                .size
+                .is_some_and(|len| len > size || (len == size && after.mtime == stat.mtime)),
+            "Remote file changed. Reopen the file."
+        );
+        Ok((
+            TextSnapshot {
+                size: end,
+                modified: if end == previous.size {
+                    previous.modified
+                } else {
+                    stat.mtime
+                },
+            },
+            Sha256::digest(bytes).into(),
+        ))
+    }
+
+    pub fn read_text_range(
+        &mut self,
+        path: &str,
+        offset: u64,
+        snapshot: crate::text_files::TextSnapshot,
+        cursor: Option<u64>,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::TextRange> {
+        use crate::deletion::FileSystem;
+        use crate::text_files::PAGE_BYTES;
+        use std::io::{Seek, SeekFrom};
+        ensure!(
+            offset <= snapshot.size && offset.is_multiple_of(PAGE_BYTES),
+            "Invalid page offset"
+        );
+        let next = offset.saturating_add(PAGE_BYTES).min(snapshot.size);
+        let start = offset.saturating_sub(3);
+        let end = next.saturating_add(1).min(snapshot.size);
+        let verify = |stat: ssh2::FileStat| -> Result<()> {
+            // Search the original extent of a growing log. A shorter file or an
+            // in-place change with a new timestamp invalidates that snapshot.
+            ensure!(
+                stat.is_file()
+                    && stat.size.is_some_and(|len| len > snapshot.size
+                        || (len == snapshot.size && stat.mtime == snapshot.modified)),
+                "Remote file changed. Run the search again."
+            );
+            Ok(())
+        };
+        let cached = cursor.and_then(|id| {
+            self.search_reader.take_if(|r| {
+                r.cursor == id && r.path == path && r.snapshot == snapshot && r.next == offset
+            })
+        });
+        let (mut file, mut bytes) = if let Some(reader) = cached {
+            (reader.file, reader.overlap)
+        } else {
+            let sftp = self.sftp()?;
+            let normalized = DeleteFiles(sftp).normalize(path)?;
+            ensure!(
+                sftp.realpath(&normalized)? == normalized,
+                "Linked paths cannot be searched"
+            );
+            verify(sftp.lstat(&normalized)?)?;
+            let mut file = sftp.open(&normalized)?;
+            verify(file.stat()?)?;
+            file.seek(SeekFrom::Start(start))?;
+            (file, Vec::new())
+        };
+        let buffered = bytes.len();
+        bytes.resize((end - start) as usize, 0);
+        for part in bytes[buffered..].chunks_mut(32768) {
+            check()?;
+            file.read_exact(part)?;
+        }
+        verify(file.stat()?)?;
+        let range = crate::text_files::decode_page(&bytes, start, offset, next)?;
+        if let Some(cursor) = cursor
+            && range.next < snapshot.size
+        {
+            self.search_reader = Some(SearchReader {
+                cursor,
+                path: path.to_owned(),
+                snapshot,
+                next,
+                overlap: bytes[(next - 3 - start) as usize..].to_vec(),
+                file,
+            });
+        }
+        Ok(range)
+    }
+
+    pub fn close_search_reader(&mut self, cursor: Option<u64>) {
+        self.search_reader
+            .take_if(|reader| cursor.is_none_or(|id| reader.cursor == id));
+    }
+
     pub fn read_text(
         &self,
         path: &str,
@@ -577,11 +751,15 @@ impl RemoteSession {
             .context("SSH keepalive failed")?;
         Ok(())
     }
+    fn into_ssh_session(self) -> Session {
+        drop(self.search_reader);
+        drop(self.sftp);
+        self.session
+    }
+
     /// Use only a dedicated SSH transport: PTY polling changes its blocking mode.
     pub fn into_terminal(self, columns: u32, rows: u32) -> Result<crate::terminal::Pty> {
-        let Self { session, sftp } = self;
-        drop(sftp);
-        crate::terminal::Pty::open(session, columns, rows)
+        crate::terminal::Pty::open(self.into_ssh_session(), columns, rows)
     }
     /// Opens a fresh interactive shell in an exact absolute remote directory.
     /// The fixed bootstrap never writes commands into an existing terminal.
@@ -592,9 +770,7 @@ impl RemoteSession {
         directory: &str,
     ) -> Result<crate::terminal::Pty> {
         crate::terminal::validate_directory(directory)?;
-        let Self { session, sftp } = self;
-        drop(sftp);
-        crate::terminal::Pty::open_here(session, columns, rows, directory)
+        crate::terminal::Pty::open_here(self.into_ssh_session(), columns, rows, directory)
     }
     pub fn into_terminal_persistent(
         self,
@@ -603,9 +779,7 @@ impl RemoteSession {
         id: &str,
         directory: Option<&str>,
     ) -> Result<crate::terminal::Pty> {
-        let Self { session, sftp } = self;
-        drop(sftp);
-        crate::terminal::Pty::resume(session, columns, rows, id, directory)
+        crate::terminal::Pty::resume(self.into_ssh_session(), columns, rows, id, directory)
     }
     pub fn sftp_available(&self) -> bool {
         self.sftp.is_some()

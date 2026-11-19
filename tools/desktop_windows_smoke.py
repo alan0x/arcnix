@@ -216,7 +216,7 @@ def main():
             expect(pane).to_be_hidden()
             expect(tags.locator('.explorer-tag-item')).to_have_count(1)
             tags.get_by_role('button', name=file_path, exact=True).click()
-            expect(p.locator('.remote-editor-content')).to_have_value('desktop file')
+            expect(app.code().locator('.view-lines')).to_contain_text('desktop file')
             p.locator('.desktop-window.active .window-close').click()
             app.application('File explorer')
             sidebar.get_by_role('button', name='All Tags', exact=True).click()

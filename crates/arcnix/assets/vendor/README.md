@@ -1,15 +1,17 @@
-# Bundled terminal assets
+# Bundled desktop assets
 
-These files are embedded into the desktop executable with `include_str!`; no CDN,
+These files are embedded into the desktop executable at build time; no CDN,
 Node runtime or package manager is required at runtime or for normal Cargo builds.
 
 | Package | Version | Files | License |
 | --- | --- | --- | --- |
 | `@xterm/xterm` | 6.0.0 | `xterm/xterm.js`, `xterm/xterm.css` | `xterm/LICENSE` (MIT) |
 | `@xterm/addon-fit` | 0.11.0 | `addon-fit/addon-fit.js` | `addon-fit/LICENSE` (MIT) |
+| `@codingame/monaco-vscode-api`, service overrides, built-in grammars and Chinese language pack | 39.0.5 | `workbench/workbench.gz` | `workbench/monaco-vscode-api-LICENSE` |
+| VS Code sources and TextMate grammars | 1.145.2 | Included in the workbench | `workbench/vscode-LICENSE`, `workbench/vscode-ThirdPartyNotices.txt` |
+| `markdown-it` | 15.0.3 | Included in the workbench | `workbench/markdown-it-LICENSE` |
 
-Official npm tarball URLs and verified SHA-512 integrity values are recorded in
-`manifest.json`. Only the distributed JavaScript, CSS and license files were
-extracted; source-map comments were removed because source maps are not bundled.
-
-Upstream: https://github.com/xtermjs/xterm.js
+The full workbench dependency graph, npm tarballs and integrity hashes are pinned in
+`tools/monaco/package-lock.json`. Run `npm ci` and `npm run build` in that directory
+to regenerate the embedded bundle. The client serves its JavaScript, workers, fonts,
+themes and translations from a local WebView protocol.

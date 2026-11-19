@@ -734,12 +734,13 @@ SSH 保活	SSH keepalive
 文件内容	File contents
 正在读取远程文件…	Loading remote file…
 编辑后的文件超过 1 MiB	Edited file exceeds 1 MiB
-远程文件已保存	Remote file saved
+已保存	Saved
 有未保存的修改	Unsaved changes
 要放弃未保存的修改吗？	Discard unsaved changes?
 继续编辑	Keep editing
 放弃修改	Discard changes
-从服务器重新载入	Reload from server
+重新载入	Reload
+保存	Save
 保存到服务器	Save to server
 软件更新	Updates
 自动检查更新	Check for updates automatically
@@ -2520,3 +2521,16 @@ OpenSSH 配置已更新，但转发仍被拒绝。请检查 SSH 密钥或证书�
 OpenSSH 已允许转发到任意目标，请检查 authorized_keys、SSH 证书或服务器策略。	OpenSSH already allows forwarding to any destination. Check authorized_keys, SSH certificates, or server policy.
 更早的 SSH Match 规则覆盖了此改动，请管理员修改对应规则。	An earlier SSH Match rule overrides this change. Ask the administrator to update that rule.
 SSH 阻止了部分网页资源	SSH blocked some page resources
+用 Code 打开	Open in Code
+快速打开	Quick Open
+自定义布局	Customize Layout
+切换侧边栏	Toggle Side Bar
+切换面板	Toggle Panel
+切换辅助侧边栏	Toggle Secondary Side Bar
+播放	Play
+暂停播放	Pause playback
+播放位置	Playback position
+音量	Volume
+视频播放器	Video player
+正在打开视频…	Opening video…
+无法播放此视频，请检查连接和 MP4 编码。	Could not play this video. Check the connection and MP4 codec.

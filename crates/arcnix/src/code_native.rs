@@ -1,0 +1,348 @@
+//! Trusted, local WebView for the Code workbench. Only bundled resources are served.
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::io::Read;
+use std::sync::{OnceLock, mpsc};
+use std::task::Waker;
+
+use anyhow::{Context, Result};
+use base64::Engine;
+use glory::wry::shell::NativeWindow;
+use serde_json::{Value, json};
+use wry::{WebView, WebViewBuilder};
+
+use super::*;
+
+#[cfg(windows)]
+const ORIGIN: &str = "http://arcnixcode.localhost";
+#[cfg(not(windows))]
+const ORIGIN: &str = "arcnixcode://localhost";
+
+#[cfg(windows)]
+fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) -> Result<()> {
+    use native_viewport::BoxPx;
+    let mut port = viewport.clone();
+    let body = port.area.context("Missing Code content bounds")?;
+    let slot = port.command_center.filter(|slot| {
+        slot.valid()
+            && slot.top < body.top
+            && slot.bottom <= body.top
+            && slot.left >= body.left
+            && slot.right <= body.right
+    });
+    if let Some(slot) = slot {
+        // Keep the editor grid at its original origin. Only the picker may
+        // paint and receive input in the command button's part of the title bar.
+        port.area = Some(BoxPx {
+            top: slot.top,
+            ..body
+        });
+        let strip = BoxPx {
+            top: slot.top,
+            bottom: body.top,
+            ..body
+        };
+        if picker {
+            port.clip.push(BoxPx {
+                right: slot.left,
+                ..strip
+            });
+            port.clip.push(BoxPx {
+                left: slot.right,
+                ..strip
+            });
+        } else {
+            port.clip.push(strip);
+        }
+    }
+    let geometry = slot.map(|slot| {
+        [
+            slot.left - body.left,
+            slot.width(),
+            slot.height(),
+            body.top - slot.top,
+        ]
+    });
+    view.evaluate_script(&format!("window.arcnixCommandSlot?.({})", json!(geometry)))?;
+    web_browser_native::position(view, &port)
+}
+
+#[cfg(not(windows))]
+fn position(view: &WebView, viewport: &native_viewport::Viewport, _picker: bool) -> Result<()> {
+    use wry::dpi::{PhysicalPosition, PhysicalSize};
+    let area = viewport.area.context("Missing Code content bounds")?;
+    view.set_bounds(wry::Rect {
+        position: PhysicalPosition::new(area.left, area.top).into(),
+        size: PhysicalSize::new(area.width() as u32, area.height() as u32).into(),
+    })?;
+    view.set_visible(viewport.clip.is_empty())?;
+    Ok(())
+}
+
+fn assets() -> &'static HashMap<String, Vec<u8>> {
+    static FILES: OnceLock<HashMap<String, Vec<u8>>> = OnceLock::new();
+    FILES.get_or_init(|| {
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../assets/vendor/workbench/workbench.gz")[..],
+        )
+        .read_to_end(&mut decoded)
+        .expect("embedded workbench archive");
+        let packed: HashMap<String, String> =
+            serde_json::from_slice(&decoded).expect("embedded workbench manifest");
+        packed
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k,
+                    base64::engine::general_purpose::STANDARD
+                        .decode(v)
+                        .expect("embedded workbench asset"),
+                )
+            })
+            .collect()
+    })
+}
+fn asset(req: wry::http::Request<Vec<u8>>) -> wry::http::Response<Cow<'static, [u8]>> {
+    let name = req.uri().path().trim_start_matches('/');
+    let response=wry::http::Response::builder().header("Content-Security-Policy",
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; frame-src 'none'; base-uri 'none'; form-action 'none'");
+    if req.method() == "GET"
+        && let Some(bytes) = assets().get(name)
+    {
+        let mime = match name.rsplit('.').next().unwrap_or("") {
+            "js" => "text/javascript",
+            "css" => "text/css",
+            "html" => "text/html; charset=utf-8",
+            "json" => "application/json",
+            "ttf" => "font/ttf",
+            "svg" => "image/svg+xml",
+            "png" => "image/png",
+            "wasm" => "application/wasm",
+            _ => "application/octet-stream",
+        };
+        return response
+            .header("Content-Type", mime)
+            .body(Cow::Borrowed(bytes.as_slice()))
+            .unwrap();
+    }
+    response.status(404).body(Cow::Borrowed(&[][..])).unwrap()
+}
+pub(super) struct Host {
+    ui: Ui,
+    pub wake: Option<Waker>,
+    rx: mpsc::Receiver<(u64, String)>,
+    tx: mpsc::Sender<(u64, String)>,
+    serial: u64,
+    epoch: Option<u64>,
+    view: Option<WebView>,
+    ready: bool,
+    picker: bool,
+    bounds: Option<native_viewport::Viewport>,
+}
+impl Host {
+    pub fn new(ui: Ui) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            ui,
+            wake: None,
+            rx,
+            tx,
+            serial: 0,
+            epoch: None,
+            view: None,
+            ready: false,
+            picker: false,
+            bounds: None,
+        }
+    }
+    fn create(&mut self, window: &NativeWindow) -> Result<WebView> {
+        let opts = self.ui.state.revise(|s| {
+            let root = if s.remote_path.starts_with('/') {
+                s.remote_path.as_str()
+            } else {
+                "/"
+            };
+            s.code.folder = root
+                .rsplit('/')
+                .find(|s| !s.is_empty())
+                .unwrap_or("/")
+                .to_owned();
+            json!({
+                "root": root,
+                "pageBytes": arcnix_core::text_files::PAGE_BYTES,
+                "zh": i18n::translate("Save") == "保存",
+                "dark": server_apps_ui::desktop_dark(s),
+            })
+        });
+        let tx = self.tx.clone();
+        let wake = self.wake.clone().context("Desktop not ready")?;
+        let serial = self.serial;
+        let view = WebViewBuilder::new()
+            .with_visible(false)
+            .with_focused(false)
+            .with_incognito(true)
+            .with_custom_protocol("arcnixcode".into(), |_, req| asset(req))
+            .with_initialization_script(format!("window.arcnixWorkspace={opts};"))
+            .with_navigation_handler(|url| {
+                url == format!("{ORIGIN}/index.html") || url == "about:blank"
+            })
+            .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+            .with_permission_handler(|_| wry::PermissionResponse::Deny)
+            .with_download_started_handler(|_, _| false)
+            .with_ipc_handler(move |request| {
+                if request
+                    .uri()
+                    .to_string()
+                    .strip_prefix(ORIGIN)
+                    .is_some_and(|path| path.is_empty() || path.starts_with('/'))
+                    && request.body().len() < 7 * 1024 * 1024
+                    && tx.send((serial, request.into_body())).is_ok()
+                {
+                    wake.wake_by_ref();
+                }
+            })
+            .with_url(format!("{ORIGIN}/index.html"))
+            .build_as_child(window)?;
+        Ok(view)
+    }
+    pub fn poll(&mut self, window: &NativeWindow) {
+        let epoch = self.ui.state.with(|s| {
+            (s.connected && s.workbench.apps.contains(&WorkspacePage::Code)).then_some(s.epoch)
+        });
+        if self.epoch != epoch {
+            if epoch.is_none()
+                && self
+                    .ui
+                    .state
+                    .with(|s| s.connected && Some(s.epoch) == self.epoch)
+            {
+                self.ui
+                    .send(Action::CodeFile(code_workbench::FileRequest::CloseRange {
+                        cursor: None,
+                    }));
+            }
+            self.view = None;
+            self.bounds = None;
+            self.ready = false;
+            self.picker = false;
+            self.epoch = epoch;
+            self.serial += 1;
+            if epoch.is_some() {
+                match self.create(window) {
+                    Ok(view) => self.view = Some(view),
+                    Err(e) => self.ui.state.revise(|s| s.code.error = format!("{e:#}")),
+                }
+            }
+        }
+        let Some(view) = &self.view else { return };
+        let mut layout_changed = false;
+        while let Ok((serial, raw)) = self.rx.try_recv() {
+            if serial != self.serial {
+                continue;
+            }
+            let Ok(msg) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            match msg["op"].as_str() {
+                Some("ready") => {
+                    self.ready = true;
+                    layout_changed = true;
+                }
+                Some("titlePicker") => {
+                    let visible = msg["visible"] == true;
+                    layout_changed |= visible != self.picker;
+                    self.picker = visible;
+                }
+                Some("error") => self.ui.state.revise(|s| {
+                    s.code.error = msg["message"]
+                        .as_str()
+                        .unwrap_or("Code initialization failed")
+                        .to_owned()
+                }),
+                Some("dirty") => self
+                    .ui
+                    .state
+                    .revise(|s| s.code.dirty = msg["value"] == true),
+                Some("focus") => {
+                    if self.ui.state.with(|s| {
+                        server_desktop::visible(s)
+                            && s.workbench.window_visible(WorkspacePage::Code)
+                            && s.workspace_page != WorkspacePage::Code
+                            && s.dialog.is_none()
+                    }) {
+                        self.ui.open_desktop_app(WorkspacePage::Code);
+                    }
+                }
+                _ => {
+                    if let Some(id) = msg["id"].as_u64()
+                        && let Ok(request) = serde_json::from_value(msg)
+                    {
+                        let background = matches!(
+                            request,
+                            code_workbench::FileRequest::PollTail { .. }
+                                | code_workbench::FileRequest::CountLines { .. }
+                                | code_workbench::FileRequest::CloseRange { .. }
+                        );
+                        let serial = self.ui.send(Action::CodeFile(request));
+                        self.ui.state.revise(|s| {
+                            if background {
+                                &mut s.code.background
+                            } else {
+                                &mut s.code.pending
+                            }
+                            .insert(serial, id)
+                        });
+                    }
+                }
+            }
+        }
+        if self.ui.state.with(|s| !s.code.replies.is_empty()) {
+            let replies = self
+                .ui
+                .state
+                .revise(|s| std::mem::take(&mut s.code.replies));
+            let _ = view.evaluate_script(&format!("window.arcnixReply({})", json!(replies)));
+        }
+        if self.ready && self.ui.state.with(|s| !s.code.commands.is_empty()) {
+            for command in self
+                .ui
+                .state
+                .revise(|s| std::mem::take(&mut s.code.commands))
+            {
+                let _ = view.focus();
+                let _ = view.evaluate_script(&format!("window.arcnixCommand({})", json!(command)));
+            }
+        }
+        if self.ready && self.ui.state.with(|s| !s.code.open.is_empty()) {
+            for path in self.ui.state.revise(|s| std::mem::take(&mut s.code.open)) {
+                let _ = view.evaluate_script(&format!("window.arcnixOpen({})", json!(path)));
+            }
+        }
+        let next = self.ui.state.with(|s| {
+            if !server_desktop::visible(s)
+                || !s.workbench.window_visible(WorkspacePage::Code)
+                || s.dialog.is_some()
+                || s.fingerprint.is_some()
+                || s.code.confirm
+                || !s.code.error.is_empty()
+            {
+                return None;
+            }
+            s.code
+                .viewport
+                .clone()
+                .filter(|v| v.area.is_some() && Some(v.epoch) == epoch)
+        });
+        if self.bounds != next || layout_changed {
+            if let Some(port) = &next {
+                if let Err(error) = position(view, port, self.picker) {
+                    self.ui.state.revise(|s| s.code.error = error.to_string());
+                }
+            } else {
+                let _ = view.set_visible(false);
+            }
+            self.bounds = next;
+        }
+    }
+}

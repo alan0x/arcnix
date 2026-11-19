@@ -23,6 +23,11 @@ pub struct ConflictDecision {
 }
 
 pub enum Action {
+    PlayVideo {
+        path: String,
+        active: Arc<AtomicBool>,
+    },
+    CodeFile(crate::code_workbench::FileRequest),
     Keepalive,
     ServerApps(crate::server_apps_worker::Action),
     Operations(crate::operations_worker::Action),
@@ -52,15 +57,6 @@ pub enum Action {
     ImportSshConfig(PathBuf),
     RemoteRename(String, String),
     FileMetadata(String),
-    TextRead {
-        path: String,
-        cancel: Arc<AtomicBool>,
-    },
-    TextSave {
-        document: arcnix_core::text_files::Document,
-        content: String,
-        cancel: Arc<AtomicBool>,
-    },
     Permissions {
         targets: Vec<arcnix_core::permissions::Target>,
         mode: u32,
@@ -149,6 +145,8 @@ impl BrowserProxyControl {
 }
 
 pub enum Update {
+    Video(Result<Arc<crate::video_player::Source>, String>),
+    CodeFile(Result<serde_json::Value, String>),
     #[cfg(windows)]
     BrowserProxy(Result<(u16, String), String>),
     #[cfg(windows)]
@@ -156,7 +154,6 @@ pub enum Update {
     #[cfg(windows)]
     BrowserForwardingRepaired(Result<(), String>),
     ServerApps(Result<crate::server_apps_worker::Reply, String>),
-    TextFile(Result<arcnix_core::text_files::Document, String>),
     Alive,
     FileMetadata(Result<arcnix_core::permissions::Metadata, String>),
     Permissions(Result<usize, String>),
@@ -372,8 +369,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
         let mut active_epoch = 0;
         let mut active_server = String::new();
         let mut active_profile: Option<ServerProfile> = None;
-        #[cfg(windows)]
-        let mut browser_access: Option<(String, zeroize::Zeroizing<String>)> = None;
+        let mut session_access: Option<(String, zeroize::Zeroizing<String>)> = None;
         #[cfg(windows)]
         let mut browser_listeners = std::collections::HashMap::new();
         let mut package_environment: Option<SystemEnvironment> = None;
@@ -390,17 +386,44 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                     update,
                 });
             };
-            #[cfg(windows)]
-            let browser_connection = || {
+            let connection = || {
                 active_profile
                     .as_ref()
-                    .zip(browser_access.as_ref())
+                    .zip(session_access.as_ref())
                     .filter(|_| {
                         session.is_some()
                             && epoch == active_epoch
                             && epoch == generation.load(Ordering::Acquire)
                     })
             };
+            if let Action::PlayVideo { path, active } = action {
+                if let Some((profile, (fingerprint, secret))) = connection() {
+                    let profile = profile.clone();
+                    let fingerprint = fingerprint.clone();
+                    let secret = secret.clone();
+                    let events = events.clone();
+                    thread::spawn(move || {
+                        crate::video_player::serve(
+                            &path,
+                            active,
+                            || {
+                                PendingConnection::open_for_known_host(&profile, &fingerprint)?
+                                    .authenticate(&secret, &fingerprint)
+                            },
+                            |result| {
+                                let _ = events.send_blocking(Response {
+                                    epoch,
+                                    serial,
+                                    update: Update::Video(result),
+                                });
+                            },
+                        );
+                    });
+                } else {
+                    send(Update::Video(Err("Connect a server first".into())));
+                }
+                continue;
+            }
             #[cfg(windows)]
             if let Action::RepairBrowserForwarding { sudo } = action {
                 let result = match session.as_ref().filter(|_| {
@@ -420,7 +443,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             }
             #[cfg(windows)]
             if let Action::DiagnoseBrowser(address) = action {
-                if let Some((profile, access)) = browser_connection() {
+                if let Some((profile, access)) = connection() {
                     let profile = profile.clone();
                     let (fingerprint, secret) = access.clone();
                     let events = events.clone();
@@ -446,7 +469,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             }
             #[cfg(windows)]
             if let Action::StartBrowserProxy(control) = action {
-                if let Some((profile, access)) = browser_connection() {
+                if let Some((profile, access)) = connection() {
                     let profile = profile.clone();
                     let (fingerprint, secret) = access.clone();
                     let key = arcnix_core::browser::profile_key(&profile, &fingerprint);
@@ -735,10 +758,10 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
             }
             let browsing = matches!(action, Action::Remote(_));
             let file_kind = match &action {
-                Action::TextRead { .. } | Action::TextSave { .. } => Some(3),
                 Action::Delete { .. } => Some(0),
                 Action::Permissions { .. } => Some(1),
                 Action::FileMetadata(_) => Some(2),
+                Action::CodeFile(_) => Some(3),
                 _ => None,
             };
             let mut file_completed = false;
@@ -755,10 +778,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 );
                 match action {
                     Action::Probe(profile, expected) => {
-                        #[cfg(windows)]
-                        {
-                            browser_access = None;
-                        }
+                        session_access = None;
                         let profile = *profile;
                         package_environment = None;
                         active_epoch = epoch;
@@ -789,10 +809,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                             .take()
                             .ok_or_else(|| anyhow::anyhow!("连接已失效，请重新连接"))?;
                         session = Some(connection.authenticate(&secret, &fingerprint)?);
-                        #[cfg(windows)]
-                        {
-                            browser_access = Some((fingerprint.clone(), secret.clone()));
-                        }
+                        session_access = Some((fingerprint.clone(), secret.clone()));
                         if let Some(profile) = active_profile.clone() {
                             transfers.attach(
                                 epoch,
@@ -812,10 +829,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         ));
                     }
                     Action::Disconnect => {
-                        #[cfg(windows)]
-                        {
-                            browser_access = None;
-                        }
+                        session_access = None;
                         transfers.reset();
                         package_environment = None;
                         active_epoch = epoch;
@@ -832,28 +846,25 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                             .as_mut()
                             .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                         match action {
-                            Action::TextRead { path, cancel } => {
+                            Action::CodeFile(request) => {
+                                let result = request.execute(remote, || {
+                                    anyhow::ensure!(
+                                        generation.load(Ordering::Acquire) == epoch,
+                                        "Connection changed"
+                                    );
+                                    Ok(())
+                                });
                                 file_completed = true;
-                                publish_file_result(
-                                    remote.read_text(&path, || {
-                                        anyhow::ensure!(
-                                            generation.load(Ordering::Acquire) == epoch
-                                                && !cancel.load(Ordering::Relaxed),
-                                            "File read canceled or connection changed"
-                                        );
-                                        Ok(())
-                                    }),
-                                    |result| send(Update::TextFile(result)),
-                                )?;
-                            }
-                            Action::TextSave {
-                                document,
-                                content,
-                                cancel,
-                            } => {
-                                file_completed = true;
-                                let content = zeroize::Zeroizing::new(content);
-                                publish_file_result(remote.save_text(&document,&content,||{anyhow::ensure!(generation.load(Ordering::Acquire)==epoch&&!cancel.load(Ordering::Relaxed),"File save canceled or connection changed; reload to verify the remote result");Ok(())}),|result|send(Update::TextFile(result)))?;
+                                match result {
+                                    Ok(value) => send(Update::CodeFile(Ok(value))),
+                                    Err(error) => {
+                                        send(Update::CodeFile(Err(format!("{error:#}"))));
+                                        if arcnix_core::transport_error::is_connection_error(&error)
+                                        {
+                                            return Err(error);
+                                        }
+                                    }
+                                }
                             }
                             Action::Keepalive => {
                                 remote.keepalive()?;
@@ -964,8 +975,8 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                                 result: Err(message),
                             },
                             1 => Update::Permissions(Err(message)),
-                            2 => Update::FileMetadata(Err(message)),
-                            _ => Update::TextFile(Err(message)),
+                            3 => Update::CodeFile(Err(message)),
+                            _ => Update::FileMetadata(Err(message)),
                         });
                     }
                     if had_session && arcnix_core::transport_error::is_connection_error(&error) {

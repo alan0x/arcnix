@@ -85,6 +85,9 @@
         const addon = new FitAddon.FitAddon();
         term.loadAddon(addon);
         term.open(wrapper);
+        term.onRender(() => {
+            wrapper.classList.toggle("has-scrollback", term.buffer.active.baseY > 0);
+        });
         term.parser.registerOscHandler(52,()=>true); // Remote output cannot write the clipboard.
         const id=metadata.id, epoch=metadata.epoch,key=`${epoch}:${id}`;
         const current={id,epoch,key,term,fit:addon,wrapper,surface,lastPacket:0,ackPacket:0,sentAckPacket:0,clear:metadata.clear,paste:0,visible:false,status:null,selected:false,outbound:[],commandRevision:0,commandAck:0};

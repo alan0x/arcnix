@@ -1,0 +1,120 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Arcnix Code</title>
+    <link rel="stylesheet" href="/workbench.css" />
+    <style>
+      html,
+      body,
+      #workbench {
+        padding: 0;
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .has-command-slot body { background: var(--command-surround); }
+      .has-command-slot #workbench {
+        position: absolute;
+        top: var(--command-inset);
+        height: calc(100% - var(--command-inset));
+      }
+      .has-command-slot.title-picker .quick-input-widget {
+        position: fixed;
+        top: 0 !important;
+        left: var(--command-left) !important;
+        width: var(--command-width) !important;
+        box-sizing: border-box;
+        animation: none !important;
+        transform: none !important;
+      }
+      .has-command-slot.title-picker .quick-input-header { padding: 0; }
+      .has-command-slot.title-picker .quick-input-box .monaco-inputbox {
+        box-sizing: border-box;
+        height: var(--command-height);
+      }
+      .has-command-slot.title-picker .quick-input-box input {
+        box-sizing: border-box;
+        height: var(--command-height);
+      }
+      .arcnix-preview {
+        box-sizing: border-box;
+        height: 100%;
+        overflow: auto;
+        padding: 12px 28px;
+        color: var(--vscode-editor-foreground);
+        background: var(--vscode-editor-background);
+        font: 15px/1.65 system-ui;
+        user-select: text;
+      }
+      .arcnix-preview img {
+        max-width: 100%;
+      }
+      .arcnix-paged-file {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+        user-select: text;
+      }
+      .arcnix-paged-file header {
+        padding: 6px 12px;
+        color: var(--vscode-descriptionForeground);
+        border-bottom: 1px solid var(--vscode-panel-border);
+      }
+      .paged-lines {
+        scrollbar-color: var(--vscode-scrollbarSlider-background)
+          var(--vscode-editor-background);
+        overflow: auto;
+        overflow-anchor: none;
+        overscroll-behavior: contain;
+        flex: 1;
+      }
+      .paged-sheet { position: relative; min-width: 100%; }
+      .paged-row {
+        position: absolute;
+        left: 0;
+        height: 20px;
+        display: flex;
+        min-width: max-content;
+        font: 13px/20px var(--monaco-monospace-font, monospace);
+        white-space: pre;
+      }
+      .paged-number {
+        position: sticky;
+        left: 0;
+        padding: 0 12px;
+        min-width: 5ch;
+        text-align: right;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-editorLineNumber-foreground);
+        user-select: none;
+      }
+      .paged-row mark {
+        color: inherit;
+        background: var(--vscode-editor-findMatchHighlightBackground);
+        outline: 1px solid
+          var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
+      }
+      .arcnix-preview pre {
+        overflow: auto;
+        padding: 12px;
+        background: var(--vscode-textCodeBlock-background);
+      }
+      .arcnix-preview table {
+        border-collapse: collapse;
+      }
+      .arcnix-preview td,
+      .arcnix-preview th {
+        border: 1px solid var(--vscode-panel-border);
+        padding: 4px 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="workbench"></main>
+    <script type="module" src="/bootstrap.js"></script>
+  </body>
+</html>

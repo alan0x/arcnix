@@ -95,7 +95,8 @@ def reply(server, channel, command):
     if marker == '# arcnix:processes:read':
         if (root / 'processes-unavailable').exists():
             return send(status=127, error='ps is unavailable')
-        workers = ''.join(f'{pid} 1000 0.0 512 fixture-idle-{pid}\n' for pid in range(300, 350))
+        end = 5300 if (root / 'large-process-inventory').exists() else 350
+        workers = ''.join(f'{pid} 1000 0.0 512 fixture-idle-{pid}\n' for pid in range(300, end))
         return send('1 0 0.0 1024 systemd\n200 1000 1.2 6144 fixture-web\n'
                     '202 1000 13.5 4096 fixture-batch worker\n' + workers)
     if marker == '# arcnix:network:read':

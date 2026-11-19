@@ -169,6 +169,25 @@ class Desktop:
         if label == 'Software': label = 'Software store'
         self.workspace('Desktop')
         self.page.locator('.desktop-dock').get_by_role('button', name=label, exact=True).click()
+    def code(self):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            self.page.wait_for_timeout(100)
+            for context in self.browser.contexts:
+                for page in context.pages:
+                    if page.url.startswith('http://arcnixcode.localhost/'):
+                        page.set_default_timeout(10000)
+                        return page
+        raise AssertionError('Code WebView did not open')
+
+    def replace_code(self, value):
+        page = self.code()
+        area = page.locator('.monaco-editor textarea.inputarea').first
+        area.focus()
+        area.press('Control+a')
+        page.keyboard.insert_text(value)
+        return area
+
     def settings(self, section):
         self.page.locator('.settings-link').click()
         self.page.locator('.context-links').get_by_role('button', name=section, exact=True).click()

@@ -761,7 +761,14 @@ class Authentication(paramiko.ServerInterface):
                 parts=shlex.split(command.decode().split('\n',1)[1])
                 assert parts[:7]==['exec','tmux','-L','arcnix','new-session','-A','-s']
                 name=parts[7];assert re.fullmatch(r'terminal-[a-fA-F0-9-]{1,80}',name)
-                directory=parts[9] if len(parts)==10 and parts[8]=='-c' else '/fixture'
+                options = parts.index(';', 8)
+                assert parts[options:] == [
+                    ';', 'set-option', 'mouse', 'on',
+                    ';', 'set-window-option', '-q', 'pane-scrollbars', 'on',
+                    ';', 'set-window-option', '-q', 'pane-scrollbars-position', 'right',
+                ]
+                assert options == 8 or (options == 10 and parts[8] == '-c')
+                directory=parts[9] if options == 10 else '/fixture'
                 with (self.fixture_root/'terminal-resume-requests.jsonl').open('a') as audit:audit.write(json.dumps(dict(session=name,directory=directory))+'\n')
                 return self.interactive(channel,directory,session_id=name)
             except (AssertionError,ValueError,IndexError):return False
@@ -1428,6 +1435,7 @@ ARCNIX_METRICS_END
 class DelayedHandle(paramiko.SFTPHandle):
     """Optional latency for visible transfer progress in loopback UI tests."""
     delay = 0
+    range_trace = None
     def stat(self):
         stream = getattr(self, 'readfile', None) or getattr(self, 'writefile', None)
         if stream is None:
@@ -1435,7 +1443,11 @@ class DelayedHandle(paramiko.SFTPHandle):
         return paramiko.SFTPAttributes.from_stat(os.fstat(stream.fileno()))
     def read(self, offset, length):
         if self.delay: time.sleep(self.delay)
-        return super().read(offset, length)
+        data = super().read(offset, length)
+        if self.range_trace and isinstance(data, bytes):
+            with self.range_trace.open('a') as trace:
+                trace.write(f'{offset} {len(data)}\n')
+        return data
     def write(self, offset, data):
         if self.delay: time.sleep(self.delay)
         return super().write(offset, data)
@@ -1529,6 +1541,9 @@ class Files(paramiko.SFTPServerInterface):
             mode = "r+b" if flags & os.O_RDWR else ("wb" if flags & os.O_WRONLY else "rb")
             stream = os.fdopen(fd, mode)
             handle = DelayedHandle(flags)
+            trace = self.root.parent / 'video-reads.txt'
+            if path.lower().endswith(('.mp4', '.mkv')) and trace.exists():
+                handle.range_trace = trace
             if not flags & os.O_WRONLY:
                 handle.readfile = stream
             if flags & (os.O_WRONLY | os.O_RDWR):
