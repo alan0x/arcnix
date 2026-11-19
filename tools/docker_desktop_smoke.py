@@ -1,5 +1,6 @@
 """Owned SSH/WebView checks for Docker management and remote desktop preferences."""
 import json
+import re
 import time
 
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
@@ -12,7 +13,7 @@ def seed():
                           ports={'80/tcp': [dict(HostIp='127.0.0.1', HostPort='8080')], '443/tcp': [dict(HostIp='::1', HostPort='8443')], '9000/tcp': None},
                           bindings={'80/tcp': [dict(HostIp='127.0.0.1', HostPort='8080')]},
                           mounts=[dict(Type='volume', Source='/var/lib/docker/volumes/web-data/_data', Destination='/usr/share/nginx/html', RW=True)]),
-             logs='2026-11-17T11:00:00Z fixture web ready\n', stderr_logs='2026-11-17T11:00:01Z fixture stderr included\n'),
+             logs='2026-11-17T11:00:00Z fixture web ready\n2026-11-17T11:00:02Z fixture web after stderr\n', stderr_logs='2026-11-17T11:00:01Z fixture stderr included\n'),
         dict(id='b' * 64, name='worker', image='busybox:latest', state='exited', status='Exited (0)', ports='', mounts='', networks='host',
              details=dict(restart='no', retries=0, memory=0, nano_cpus=0, network='host', ports={}, bindings={}, mounts=[]), logs=''),
     ], volumes=[dict(name='web-data', driver='local', scope='local', mountpoint='/var/lib/docker/volumes/web-data/_data'), dict(name='unused-volume', driver='local', scope='local', mountpoint='/var/lib/docker/volumes/unused-volume/_data')])
@@ -99,10 +100,9 @@ def main():
             page.locator('.docker-filter').fill('')
             select('web')
             page.locator('.docker-container-actions').get_by_role('button', name='Logs', exact=True).click()
-            expect(page.locator('.docker-log-output')).to_contain_text('fixture web ready')
-            expect(page.locator('.docker-log-output')).to_contain_text('fixture stderr included')
+            expect(page.locator('.docker-log-output')).to_contain_text(re.compile(r'fixture web ready.*fixture stderr included.*fixture web after stderr', re.S))
             page.locator('.docker-log-panel').get_by_role('button', name='Details', exact=True).click()
-            checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded stdout/stderr log snapshots work')
+            checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded, time-ordered stdout/stderr log snapshots work')
 
             def action(name, title, state):
                 page.locator('.docker-container-actions').get_by_role('button', name=name, exact=True).click()

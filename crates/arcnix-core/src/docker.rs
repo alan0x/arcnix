@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::remote::RemoteSession;
-use crate::server_apps::execute;
+use crate::server_apps::{execute, execute_lossy};
 
 const LIMIT: usize = 2 * 1024 * 1024;
 const ROW_LIMIT: usize = 1000;
@@ -99,7 +99,14 @@ fn volume_valid(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 fn run(session: &RemoteSession, command: &str) -> Result<crate::CommandOutput> {
-    let output = execute(session, command, LIMIT)?;
+    check(execute(session, command, LIMIT)?, |output| {
+        output.stderr.trim()
+    })
+}
+fn check(
+    output: crate::CommandOutput,
+    failure_message: fn(&crate::CommandOutput) -> &str,
+) -> Result<crate::CommandOutput> {
     ensure!(
         !matches!(output.exit_code, 124 | 137),
         "Docker command timed out; refresh to check the current container state"
@@ -108,9 +115,30 @@ fn run(session: &RemoteSession, command: &str) -> Result<crate::CommandOutput> {
         output.exit_code == 0,
         "Docker command failed ({}): {}",
         output.exit_code,
-        output.stderr.trim()
+        failure_message(&output)
     );
     Ok(output)
+}
+/// The error of a command whose CLI stderr was merged into stdout.
+///
+/// A prefix check fails before the redirection, so its message is on stderr.
+/// Otherwise the CLI's error is its last output line, bounded because a CLI
+/// that fails without a message leaves a container log line there instead.
+fn merged_failure(output: &crate::CommandOutput) -> &str {
+    const MESSAGE_LIMIT: usize = 500;
+    match output.stderr.trim() {
+        "" => {
+            let line = output
+                .stdout
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("");
+            &line[..line.floor_char_boundary(MESSAGE_LIMIT)]
+        }
+        stderr => stderr,
+    }
 }
 pub fn snapshot_command() -> String {
     format!(
@@ -218,12 +246,20 @@ pub fn volume(session: &RemoteSession, name: &str) -> Result<VolumeDetails> {
 pub fn logs_command(id: &str) -> Result<String> {
     ensure!(id_valid(id), "Invalid container ID");
     Ok(format!(
-        "# arcnix:docker:logs\n{PREFIX}\narcnix_docker container logs --timestamps --tail 200 {id}"
+        "# arcnix:docker:logs\n{PREFIX}\narcnix_docker container logs --timestamps --tail 200 {id} 2>&1"
     ))
 }
+/// The container's stdout and stderr in the order Docker wrote them.
+///
+/// The CLI copies both streams from the daemon one entry at a time, so sharing
+/// one pipe keeps their order. Output is shown, not parsed, so it is decoded
+/// lossily rather than rejected for invalid UTF-8.
 pub fn logs(session: &RemoteSession, id: &str) -> Result<String> {
-    let output = run(session, &logs_command(id)?)?;
-    Ok(format!("{}{}", output.stdout, output.stderr))
+    let output = check(
+        execute_lossy(session, &logs_command(id)?, LIMIT)?,
+        merged_failure,
+    )?;
+    Ok(output.stdout)
 }
 pub fn operation_command(id: &str, operation: &Operation) -> Result<String> {
     ensure!(id_valid(id), "Invalid container ID");
@@ -323,5 +359,47 @@ mod tests {
         assert_eq!(parsed.volumes[0].name, "data");
         assert!(parse_snapshot(&text.replace("ARCNIX_DOCKER_END", "")).is_err());
         assert!(parse_snapshot(&text.replace(&row, &format!("{row}\n{row}"))).is_err());
+    }
+    #[test]
+    fn logs_share_one_pipe_and_failures_report_the_merged_error() {
+        let id = "a".repeat(64);
+        let command = logs_command(&id).unwrap();
+        assert!(command.ends_with(&format!("--tail 200 {id} 2>&1")));
+        assert!(logs_command("a; id").is_err());
+        let output = |stdout: &str, stderr: &str| crate::CommandOutput {
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+            exit_code: 1,
+        };
+        let denied = "permission denied while trying to connect to the docker API";
+        assert_eq!(
+            check(output(&format!("{denied}\n\n"), ""), merged_failure)
+                .unwrap_err()
+                .to_string(),
+            format!("Docker command failed (1): {denied}")
+        );
+        // A prefix check fails before the redirection, so its stderr wins.
+        assert_eq!(
+            merged_failure(&output("partial\n", "Docker is no longer installed\n")),
+            "Docker is no longer installed"
+        );
+        assert_eq!(merged_failure(&output("", "")), "");
+        // A log line left as the last output is bounded on a character boundary.
+        let long = "é".repeat(400);
+        assert_eq!(merged_failure(&output(&long, "")), &long[..500]);
+    }
+    #[test]
+    fn other_commands_report_only_stderr() {
+        let output = crate::CommandOutput {
+            stdout: format!("{}\n", "a".repeat(64)),
+            stderr: String::new(),
+            exit_code: 1,
+        };
+        assert_eq!(
+            check(output, |output| output.stderr.trim())
+                .unwrap_err()
+                .to_string(),
+            "Docker command failed (1): "
+        );
     }
 }
