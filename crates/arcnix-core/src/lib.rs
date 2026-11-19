@@ -31,6 +31,7 @@ pub mod operations;
 pub mod packages;
 pub mod permissions;
 pub mod preferences;
+pub mod private_keys;
 pub mod processes;
 pub mod record_cleanup;
 pub mod record_maintenance;

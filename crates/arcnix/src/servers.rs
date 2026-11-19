@@ -574,7 +574,7 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                                 connect.disconnect();
                                             } else {
                                                 connect.select_server(id);
-                                                connect.open_dialog(Dialog::Connect);
+                                                connect.request_connect();
                                             }
                                             connect.state.revise(|s| s.host_menu = None);
                                         }),
@@ -1015,7 +1015,7 @@ fn begin_connect(ui: &Ui) {
         s.dialog = None;
         s.dialog_error.clear();
     });
-    ui.connect();
+    ui.connect(true);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

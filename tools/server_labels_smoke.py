@@ -41,7 +41,7 @@ with Peer(out/'alpha') as a,Peer(out/'beta',io_delay=.025) as b,Peer(out/'gamma'
     config['config']['snippets']=[dict(id='labels',name='Labels fixture',description='',command="printf '%s\\n' 'label fixture'",administrator=True)]
     config['config']['backup_policies']=[dict(id='website',name='Website',repository='/backups/site',password_file='/secrets/restic',source='/srv/site',servers=['Alpha','Beta'],administrator=False,excludes=[],keep_last=7)]
     with Desktop(out/'desktop',config) as app:
-        p=app.page;p.locator('.host-row').filter(has=p.get_by_text('Beta',exact=True)).locator('.host-select').click();p.locator('.overview-connect').click();p.get_by_role('dialog',name='Connect to server',exact=True).get_by_role('button',name='Connect',exact=True).click();expect(p.locator('.connection-state')).to_have_text('SSH connected')
+        p=app.page;p.locator('.host-row').filter(has=p.get_by_text('Beta',exact=True)).locator('.host-select').click();p.locator('.overview-connect').click();expect(p.locator('.connection-state')).to_have_text('SSH connected')
         app.file('folder').dblclick();folder(p)
         eventually(lambda:saved(app)['servers'][1].get('locations',{}).get('last_remote')=='/folder')
         baseline=saved(app);before_auth=auth(b);d=edit(p,'Beta')

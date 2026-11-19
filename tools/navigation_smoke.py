@@ -113,8 +113,8 @@ def main():
             checks.append("Logo is inert, notifications are absent, and unselected/disconnected server states never expose server modules")
 
             page.locator(".overview-connect").click()
-            page.get_by_role("dialog").get_by_role("button", name="Connect", exact=True).click()
             expect(page.locator(".connection-state")).to_have_text("SSH connected")
+            expect(page.get_by_role("dialog")).to_have_count(0)
             expect(page.locator(".workbench-tab-select")).to_have_count(2)
             expect(page.locator(".server-desktop")).to_be_visible()
             page.screenshot(path=str(output / "server-connected-dark.png"))

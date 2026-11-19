@@ -40,7 +40,6 @@ def main():
             try:
                 page.locator('.host-select').first.click()
                 page.locator('.overview-transfer').click()
-                page.get_by_role('dialog').get_by_role('button',name='Connect',exact=True).click()
                 expect(page.locator('.connection-state')).to_have_text('SSH connected')
                 local_pane=page.locator('.local-slot');remote_pane=page.locator('.remote-slot')
                 def upload():

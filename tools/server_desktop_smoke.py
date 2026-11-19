@@ -56,7 +56,6 @@ def main():
             page.locator('.overview-transfer').click()
             expect(tabs.locator('.workbench-tab-select')).to_have_text(['Home', 'Transfer files'])
             expect(page.locator('.desktop-modal-backdrop')).to_have_count(0)
-            page.get_by_role('dialog').get_by_role('button', name='Connect', exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             identity = page.locator('.workspace-header .connection-target')
             expect(identity).to_have_text('arcnix@127.0.0.1')
@@ -351,19 +350,27 @@ def main():
             page.keyboard.press('Escape')
             checks.append('Light/dark themes, live Chinese localization and 900/1100px layouts render without overflow')
 
-            # Disconnect and cancellation keep useful tabs; switching servers resets their scope.
+            # Disconnect keeps useful tabs; switching servers resets their scope.
             page.locator('.connection-button').click()
             expect(identity).to_be_hidden()
             expect(page.locator('.workspace-reconnect')).to_be_visible()
+            # Switching tabs while disconnected neither connects nor prompts for an unencrypted key.
             tabs.locator('.workbench-tab-select').first.click()
-            page.locator('.overview-connect').click()
-            page.get_by_role('dialog').get_by_role('button', name='取消', exact=True).click()
+            tabs.locator('.workbench-tab-select').last.click()
+            expect(page.locator('.workspace-reconnect')).to_be_visible()
+            expect(page.get_by_role('dialog')).to_have_count(0)
+            expect(page.locator('.connection-state')).to_have_text('SSH 未连接')
+            # Its explicit Connect button reconnects without a prompt.
+            page.locator('.workspace-reconnect').get_by_role('button', name='连接', exact=True).click()
+            expect(page.locator('.connection-state')).to_have_text('SSH 已连接')
+            expect(page.get_by_role('dialog')).to_have_count(0)
+            page.locator('.connection-button').click()
             expect(page.locator('.workspace-reconnect')).to_be_visible()
             page.locator('.host-select').nth(1).click()
             expect(tabs.locator('.workbench-tab-select')).to_have_text(['首页'])
             expect(page.locator('.server-overview')).to_contain_text('Offline')
             assert not errors, errors
-            checks.append('Reconnect/cancel are usable; selecting another server clears its tabs and sessions; no browser errors')
+            checks.append('Tab switches never connect by themselves; reconnect is explicit; selecting another server clears its tabs and sessions; no browser errors')
         profile = dict(peer.profile('SSH only'), username='arcnix-nosftp')
         with Desktop(output / 'without-sftp', peer.config([profile], local)) as app:
             app.connect()

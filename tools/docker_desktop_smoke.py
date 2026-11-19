@@ -218,7 +218,6 @@ def main():
             page.locator('.host-select').nth(1).click()
             app.workspace('Home')
             page.locator('.overview-connect').click()
-            page.get_by_role('dialog').get_by_role('button', name='Connect', exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             docker()
             dialog = settings()
@@ -231,7 +230,6 @@ def main():
             assert json.loads(preferences.read_text())['theme'] == 'Light'
             page.locator('.host-select').nth(2).click()
             page.locator('.overview-connect').click()
-            page.get_by_role('dialog').get_by_role('button', name='Connect', exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             docker()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
@@ -255,7 +253,6 @@ def main():
             page.locator('.docker-container-actions').get_by_role('button', name='Logs', exact=True).click()
             page.locator('.host-select').nth(3).click()
             page.locator('.overview-connect').click()
-            page.get_by_role('dialog').get_by_role('button', name='Connect', exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             expect(page.locator('.desktop-shortcuts .app-docker')).to_have_count(0)
             expect(page.locator('.desktop-shortcuts').get_by_role(
@@ -268,7 +265,6 @@ def main():
             # Return to the original login for localization checks.
             page.locator('.host-select').first.click()
             page.locator('.overview-connect').click()
-            page.get_by_role('dialog').get_by_role('button', name='Connect', exact=True).click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             docker()
             app.settings('General')
