@@ -1,17 +1,26 @@
 param(
     [Parameter(Mandatory)] [string] $Tag,
-    [string] $Artifacts = 'dist'
+    [string] $Artifacts = 'dist',
+    [ValidateSet('CurrentUser', 'AllUsers')] [string] $Scope = 'CurrentUser'
 )
 
 $ErrorActionPreference = 'Stop'
 $stem = "arcnix-$Tag-windows-amd64"
 $setup = Join-Path $Artifacts "$stem-setup.exe"
 $portable = Join-Path $Artifacts "$stem.zip"
-$installDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Arcnix'
+if ($Scope -eq 'AllUsers') {
+    $installDir = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Arcnix'
+    $programs = [Environment]::GetFolderPath('CommonPrograms')
+    $registryRoot = 'HKLM:'
+} else {
+    $installDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Arcnix'
+    $programs = [Environment]::GetFolderPath('Programs')
+    $registryRoot = 'HKCU:'
+}
 $app = Join-Path $installDir 'arcnix.exe'
 $uninstaller = Join-Path $installDir 'unins000.exe'
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Arcnix\Arcnix.lnk'
-$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{CB89D5EC-A886-4760-8578-99CCCE459EA1}_is1'
+$shortcut = Join-Path $programs 'Arcnix\Arcnix.lnk'
+$uninstallKey = Join-Path $registryRoot 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{CB89D5EC-A886-4760-8578-99CCCE459EA1}_is1'
 
 foreach ($path in @($installDir, $shortcut, $uninstallKey)) {
     if (Test-Path -LiteralPath $path) {
@@ -25,7 +34,7 @@ $silent = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
 $version = $Tag.Substring(1)
 try {
     $process = Start-Process -FilePath (Resolve-Path -LiteralPath $setup).Path `
-        -ArgumentList ($silent + '/SP-') -WindowStyle Hidden -Wait -PassThru
+        -ArgumentList ($silent + '/SP-' + "/$Scope") -WindowStyle Hidden -Wait -PassThru
     if ($process.ExitCode -ne 0) {
         throw "Arcnix Setup failed ($($process.ExitCode))."
     }
@@ -60,4 +69,4 @@ foreach ($path in @($installDir, $shortcut, $uninstallKey)) {
         throw "Uninstall left behind $path"
     }
 }
-Write-Output "Verified Arcnix $version installation, version, shortcut and uninstall."
+Write-Output "Verified Arcnix $version $Scope installation, version, shortcut and uninstall."

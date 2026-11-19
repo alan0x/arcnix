@@ -26,11 +26,15 @@ on the existing release. GitHub assets do not depend on crates.io publication.
 target directory. It does not change Cargo home, the build directory or TEMP.
 
 Windows packaging uses Inno Setup. Local packaging requires `ISCC.exe` on `PATH`.
-The installer defaults to `%LOCALAPPDATA%\Programs\Arcnix`, runs without
-administrator privileges, creates a Start menu shortcut and registers an
-uninstaller in Windows Settings → Apps. User settings are stored separately and
-survive uninstall. Windows release CI verifies silent installation, the shortcut,
-the installed executable and uninstallation before uploading the assets.
+On first install, the wizard offers “Install for me only” (default,
+`%LOCALAPPDATA%\Programs\Arcnix`) and “Install for all users” (requires
+administrator privileges, `%ProgramFiles%\Arcnix`). Upgrades reuse the existing
+install scope. For unattended installs, pass `/CURRENTUSER` or `/ALLUSERS`.
+Windows release CI verifies silent installation, the Start menu shortcut,
+the installed executable, registration in Windows Settings → Apps and
+uninstallation for both scopes. User settings survive uninstall.
+For an all-users installation in Program Files, use the installer to update
+when the current user lacks write access to the application folder.
 
 The Windows x64 executable carries the pinned LGPL libmpv runtime and its
 notices in an appended ZIP. The installer and portable ZIP ship the same executable. Opening an MKV for the first time extracts the runtime

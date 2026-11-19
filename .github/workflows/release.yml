@@ -95,7 +95,9 @@ jobs:
       - name: Test Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./tools/windows_installer_smoke.ps1 -Tag $env:GITHUB_REF_NAME
+        run: |
+          ./tools/windows_installer_smoke.ps1 -Tag $env:GITHUB_REF_NAME -Scope CurrentUser
+          ./tools/windows_installer_smoke.ps1 -Tag $env:GITHUB_REF_NAME -Scope AllUsers
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: arcnix-${{ matrix.platform }}
