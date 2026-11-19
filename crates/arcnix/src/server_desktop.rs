@@ -66,7 +66,8 @@ pub(super) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Software => DesktopApp::Store,
         WorkspacePage::Explorer => DesktopApp::Explorer,
         WorkspacePage::Docker => DesktopApp::Docker,
-        WorkspacePage::Editor => DesktopApp::Editor,
+        WorkspacePage::Code => DesktopApp::Code,
+        WorkspacePage::Video => DesktopApp::Video,
         WorkspacePage::Browser => DesktopApp::Browser,
         WorkspacePage::Settings => DesktopApp::Settings,
         _ => return None,
@@ -82,7 +83,9 @@ pub(super) fn app_page(app: DesktopApp) -> WorkspacePage {
         DesktopApp::Store => WorkspacePage::Software,
         DesktopApp::Explorer => WorkspacePage::Explorer,
         DesktopApp::Docker => WorkspacePage::Docker,
-        DesktopApp::Editor => WorkspacePage::Editor,
+        DesktopApp::Editor => WorkspacePage::Code,
+        DesktopApp::Code => WorkspacePage::Code,
+        DesktopApp::Video => WorkspacePage::Video,
         DesktopApp::Browser => WorkspacePage::Browser,
         DesktopApp::Settings => WorkspacePage::Settings,
     }
@@ -187,7 +190,7 @@ const APPS: [WorkspacePage; 6] = [
     WorkspacePage::Resources,
     WorkspacePage::Software,
     WorkspacePage::Explorer,
-    WorkspacePage::Editor,
+    WorkspacePage::Code,
     WorkspacePage::Settings,
 ];
 
@@ -204,7 +207,8 @@ fn app_label(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "Docker",
         WorkspacePage::Explorer => "File explorer",
-        WorkspacePage::Editor => "Editor",
+        WorkspacePage::Code => "Code",
+        WorkspacePage::Video => "Video player",
         WorkspacePage::Browser => "Web browser",
         WorkspacePage::Terminal => "终端",
         WorkspacePage::Resources => "Monitor",
@@ -218,7 +222,8 @@ fn app_class(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "app-docker",
         WorkspacePage::Explorer => "app-explorer",
-        WorkspacePage::Editor => "app-editor",
+        WorkspacePage::Code => "app-code",
+        WorkspacePage::Video => "app-video",
         WorkspacePage::Browser => "app-browser",
         WorkspacePage::Terminal => "app-terminal",
         WorkspacePage::Resources => "app-resources",
@@ -235,7 +240,8 @@ fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Software => Icon::Store,
         WorkspacePage::Settings => Icon::Settings,
         WorkspacePage::Explorer => Icon::Folder,
-        WorkspacePage::Editor => Icon::Edit,
+        WorkspacePage::Code => Icon::Code,
+        WorkspacePage::Video => Icon::Play,
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         _ => Icon::Grid,
@@ -493,13 +499,16 @@ impl Ui {
     }
 
     fn close_desktop_app(&self, page: WorkspacePage) {
-        if page == WorkspacePage::Editor && !remote_editor::close_desktop(self) {
+        if page == WorkspacePage::Code && !code_workbench::close(self) {
             return;
         }
         self.finish_desktop_close(page);
     }
 
     pub(super) fn finish_desktop_close(&self, page: WorkspacePage) {
+        if page == WorkspacePage::Video {
+            self.player.stop(self);
+        }
         #[cfg(windows)]
         if page == WorkspacePage::Browser {
             self.close_web_browser();
@@ -659,8 +668,19 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let minimize = ui.clone();
     let maximize = ui.clone();
     let close = ui.clone();
+    let title = if page == WorkspacePage::Video {
+        text().content(state.map(|s| {
+            s.video
+                .as_ref()
+                .map(|v| v.title.clone())
+                .unwrap_or_default()
+        }))
+    } else {
+        text().content(i18n::bind(app_label(page)))
+    };
     let tools = match page {
         WorkspacePage::Terminal => fragment(terminal::header(ui.clone())),
+        WorkspacePage::Code => fragment(code_workbench::title_tools(ui.clone())),
         WorkspacePage::Explorer => fragment(workspace::explorer_window_tools(ui.clone())),
         WorkspacePage::Resources => fragment(monitor_ui::window_tools(ui.clone())),
         #[cfg(windows)]
@@ -677,7 +697,8 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Software => fragment(software::page(ui)),
         WorkspacePage::Settings => fragment(server_apps_ui::settings(ui)),
         WorkspacePage::Docker => fragment(docker_ui::page(ui)),
-        WorkspacePage::Editor => fragment(remote_editor::page(ui)),
+        WorkspacePage::Code => fragment(code_workbench::page(ui)),
+        WorkspacePage::Video => fragment(video_player::panel(ui)),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::page(ui)),
         _ => fragment(()),
@@ -708,9 +729,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     row()
                         .class("desktop-window-mark")
                         .fill(icons::glyph(app_icon(page))),
-                    text()
-                        .class("desktop-window-title")
-                        .content(i18n::bind(app_label(page))),
+                    title.class("desktop-window-title"),
                     tools,
                     row().class("desktop-window-actions").fill((
                         icon_action("Minimize window", Icon::WindowMinimize)
@@ -729,8 +748,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                             .class("icon-button window-close")
                             .enabled(state.map(move |s| {
                                 !s.system_task_running
-                                    && (page != WorkspacePage::Editor
-                                        || !remote_editor::desktop_busy(s))
+                                    && (page != WorkspacePage::Code || s.code.pending.is_empty())
                             }))
                             .on_press(move || close.close_desktop_app(page)),
                     )),
@@ -963,9 +981,20 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
                                             .on_press(move || show_desktop.toggle_show_desktop()),
                                         text().class("desktop-dock-divider").content(""),
                                     )),
-                                    row().class("desktop-dock-apps").fill(
+                                    row().class("desktop-dock-apps").fill((
                                         desktop_customization_ui::launchers(ui.clone(), true),
-                                    ),
+                                        when(
+                                            state.map(|s| {
+                                                s.workbench.apps.contains(&WorkspacePage::Video)
+                                            }),
+                                            {
+                                                let ui = ui.clone();
+                                                move || {
+                                                    launcher(ui.clone(), WorkspacePage::Video, true)
+                                                }
+                                            },
+                                        ),
+                                    )),
                                     when(
                                         state.map(desktop_customization_ui::panel_mode),
                                         move || dock_clock(state),

@@ -9,6 +9,7 @@ def main():
     with Peer(out/'ubuntu') as ubuntu,Peer(out/'fedora') as fedora:
         (ubuntu.root/'docker-fixture.json').write_text(json.dumps(seed()))
         (ubuntu.root/'tmux-enabled').touch();(ubuntu.root/'software-snap-enabled').touch()
+        (ubuntu.root/'large-process-inventory').touch()
         (ubuntu.root/'work').mkdir();(ubuntu.root/'data').mkdir();(ubuntu.root/'data/disk-file.txt').write_text('Disk mount demo')
         (fedora.root/'software-manager').write_text('dnf')
         (fedora.root/'software-snap-enabled').touch()
@@ -99,24 +100,30 @@ def main():
             expect(p.locator('.resource-table')).to_contain_text('eth0')
             network = sections.get_by_role('button',name='Network',exact=True)
             expect(network.locator('.monitor-section-summary')).to_contain_text('KiB/s', timeout=15000)
-            for width, height in [(1440, 980), (900, 660)]:
+            sidebar_widths = []
+            for width, height in [(1440, 980), (1100, 780), (900, 660)]:
                 p.set_viewport_size(dict(width=width, height=height))
+                sidebar_widths.append(sections.evaluate('el => el.offsetWidth'))
                 assert network.evaluate('''button => {
                     const icon = button.querySelector('.action-glyph').getBoundingClientRect();
                     const title = button.querySelector('.monitor-section-label').getBoundingClientRect();
                     const detail = button.querySelector('.monitor-section-summary');
                     const line = detail.getBoundingClientRect();
+                    const range = document.createRange();
+                    range.selectNodeContents(detail);
+                    const contentRight = button.getBoundingClientRect().right - parseFloat(getComputedStyle(button).paddingRight);
                     return Math.abs((icon.top + icon.bottom) - (title.top + title.bottom)) < 3
-                        && Math.abs(icon.left - line.left) < 1 && line.top >= icon.bottom
+                        && Math.abs(range.getBoundingClientRect().right - contentRight) < 2 && line.top >= icon.bottom
                         && detail.scrollWidth <= detail.clientWidth && detail.scrollHeight <= detail.clientHeight;
                 }'''), width
+            assert 206 <= sidebar_widths[2] < sidebar_widths[1] < sidebar_widths[0] <= 216, sidebar_widths
             p.set_viewport_size(dict(width=1440, height=980))
             sections.get_by_role('button',name='Processes',exact=True).click()
             processes = p.locator('.monitor-process-inventory')
             table = processes.locator('.monitor-process-table')
             header = table.locator('.monitor-process-header')
             rows = table.locator('.monitor-process-row:not(.monitor-process-header)')
-            expect(rows).to_have_count(50)
+            viewport = table.get_by_role('list', name='Processes')
             expect(rows.first).to_contain_text('fixture-batch worker')
             expect(rows.first).to_contain_text('13.5%')
             expect(rows.first).to_contain_text('4.0 MiB')
@@ -125,20 +132,23 @@ def main():
             query = processes.get_by_role('textbox',name='Filter by program, PID, UID or port')
             expect(query).to_have_attribute('placeholder', 'Filter processes')
             toolbar = processes.locator('.monitor-process-toolbar')
-            controls = [query, toolbar.get_by_role('button',name='Port details'), toolbar.get_by_role('button',name='Next page')]
+            controls = [query, toolbar.get_by_role('button',name='Port details'), toolbar.get_by_role('button',name='Refresh processes')]
+            expect(toolbar.get_by_role('button', name=re.compile('Next page|Previous page'))).to_have_count(0)
             centers = [box['y'] + box['height'] / 2 for box in (control.bounding_box() for control in controls)]
             assert max(centers) - min(centers) < 2, centers
             expect(processes).not_to_contain_text(re.compile(r'\d+ processes · \d+ matching'))
             header_y = header.bounding_box()['y']
-            first_row_y = rows.first.bounding_box()['y']
-            table.evaluate('el => { el.scrollTop = 320; }')
-            assert table.evaluate('el => el.scrollTop') > 0
-            assert rows.first.bounding_box()['y'] < first_row_y - 100
+            assert 0 < rows.count() < 80
+            viewport.evaluate('el => { el.scrollTop = el.scrollHeight / 2; }')
+            expect(rows.filter(has_text='fixture-idle-2800')).to_have_count(1)
+            assert rows.count() < 80
+            viewport.evaluate('el => { el.scrollTop = el.scrollHeight; }')
+            expect(rows.last).to_contain_text('fixture-idle-5299')
+            assert rows.count() < 80
             assert abs(header.bounding_box()['y'] - header_y) < 1
             assert p.locator('.monitor-content').evaluate('el => el.scrollTop') == 0
-            processes.get_by_role('button',name='Next page',exact=True).click()
-            expect(rows).to_have_count(3)
-            assert table.evaluate('el => el.scrollTop') == 0
+            query.fill('absent-process')
+            expect(processes).to_contain_text('No matching processes')
             query.fill('8080')
             expect(rows).to_have_count(1)
             expect(rows.first).to_contain_text('fixture-web')
@@ -158,7 +168,8 @@ def main():
             assert p.locator('.monitor-content').evaluate('el=>el.scrollWidth <= el.clientWidth + 1')
             p.set_viewport_size(dict(width=1440,height=980))
             query.fill('')
-            expect(rows).to_have_count(50)
+            expect(rows.first).to_contain_text('fixture-batch worker')
+            assert viewport.evaluate('el => el.scrollTop') == 0
             app.screenshot('monitor-processes.png')
             query.fill('batch')
             processes.get_by_role('button',name='Port details',exact=True).click()

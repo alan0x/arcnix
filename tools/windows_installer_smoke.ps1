@@ -31,6 +31,10 @@ try {
     if ((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash -ne $expectedHash) {
         throw 'The installed executable differs from the updater asset.'
     }
+    python -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); assert {'libmpv-2.dll', 'LICENSES/libmpv/LICENSE.LGPL', 'LICENSES/libmpv/SOURCE.txt'} <= set(z.namelist()) and z.testzip() is None" $app
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The installed executable has an incomplete media runtime.'
+    }
     if (-not (Test-Path -LiteralPath $shortcut)) {
         throw 'Setup did not create the Start menu shortcut.'
     }

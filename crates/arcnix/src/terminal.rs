@@ -801,10 +801,39 @@ pub(super) fn header(ui: Ui) -> impl Widget {
     let reconnect = ui.clone();
     row().class("terminal-controls").fill((
         tabs(ui),
-        text().class(state.map(|s|if s.terminal.status==Status::Running{"terminal-status running"}else{"terminal-status"}.to_owned())).content(i18n::bind(state.map(|s|match s.terminal.status {Status::Running=>"交互式 SSH",Status::Starting=>"正在启动终端…",Status::Exited=>"终端已关闭",Status::Failed=>"终端连接失败",Status::Idle=>"尚未启动"}.to_owned()))),
-        when(state.map(|s|s.terminal.status!=Status::Running),move||{let reconnect=reconnect.clone();icon_action("Reconnect terminal",Icon::Refresh).class("icon-button terminal-restart").enabled(state.map(|s|s.connected&&s.terminal.status!=Status::Starting)).on_press(move||reconnect.terminal_start(100,30))}),
-        sapid::button().class("icon-button terminal-overflow").name(i18n::bind("Terminal actions")).fill(icons::glyph(Icon::More)),
-        help_ui::tip("Terminal","Right-click for copy, paste, clear and tab actions. Ctrl+Shift+C copies; Ctrl+Shift+V pastes. When tmux is installed, the server keeps the session, working directory and screen after disconnect; otherwise only tabs and layout are restored. Closing a tab detaches tmux; exit ends its shell."),
+        text()
+            .class(state.map(|s| {
+                if s.terminal.status == Status::Running {
+                    "terminal-status running"
+                } else {
+                    "terminal-status"
+                }
+                .to_owned()
+            }))
+            .content(i18n::bind(state.map(|s| {
+                match s.terminal.status {
+                    Status::Running => "交互式 SSH",
+                    Status::Starting => "正在启动终端…",
+                    Status::Exited => "终端已关闭",
+                    Status::Failed => "终端连接失败",
+                    Status::Idle => "尚未启动",
+                }
+                .to_owned()
+            }))),
+        when(
+            state.map(|s| s.terminal.status != Status::Running),
+            move || {
+                let reconnect = reconnect.clone();
+                icon_action("Reconnect terminal", Icon::Refresh)
+                    .class("icon-button terminal-restart")
+                    .enabled(state.map(|s| s.connected && s.terminal.status != Status::Starting))
+                    .on_press(move || reconnect.terminal_start(100, 30))
+            },
+        ),
+        sapid::button()
+            .class("icon-button terminal-overflow")
+            .name(i18n::bind("Terminal actions"))
+            .fill(icons::glyph(Icon::More)),
     ))
 }
 pub(super) fn page(ui: Ui) -> impl Widget {

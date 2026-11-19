@@ -232,6 +232,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Snapshot, 
                 // Request serials are global across reconnects, unlike this state.
                 s.ports.revision = serial;
                 s.ports.error.clear();
+                processes_ui::update_filter(s);
             }
             Err(error) => s.ports.error = error,
         }
@@ -253,6 +254,7 @@ pub(super) fn terminated(ui: &Ui, serial: u64, result: std::result::Result<(), S
                 s.ports.confirmation = None;
                 s.ports.snapshot = None;
                 s.ports.process_ports = Arc::default();
+                processes_ui::update_filter(s);
                 s.ports.revision += 1;
                 // Administrator credentials are never kept for a later query.
                 s.ports.administrator = false;

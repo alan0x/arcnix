@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from libmpv_runtime import stage as stage_libmpv
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,11 +109,20 @@ def package(binary, target, tag, output, version):
             licenses = staging / "LICENSES" / name
             licenses.mkdir(parents=True)
             shutil.copy2(vendor / name / "LICENSE", licenses / "LICENSE")
+        shutil.copytree(vendor / "workbench", staging / "LICENSES/workbench",
+                        ignore=shutil.ignore_patterns("workbench.gz"))
         shutil.copy2(vendor / "README.md", staging / "LICENSES/README.md")
         if platform == "windows-amd64":
+            stage_libmpv(staging)
+            # All Windows distributions use the identical self-contained executable.
+            # ZIP supports a PE prefix, so the normal updater can replace one file.
+            with zipfile.ZipFile(executable, "a", zipfile.ZIP_DEFLATED) as payload:
+                for member in ("libmpv-2.dll", "LICENSES/libmpv/LICENSE.LGPL", "LICENSES/libmpv/SOURCE.txt"):
+                    payload.write(staging / member, member)
+            (staging / "libmpv-2.dll").unlink()
             windows_installer(staging, output, stem, version)
             # Raw executable used by the in-app updater; GitHub records its digest.
-            shutil.copy2(binary, output / f"{stem}.exe")
+            shutil.copy2(executable, output / f"{stem}.exe")
             archive = output / f"{stem}.zip"
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as stream:
                 for path in sorted(staging.rglob("*")):

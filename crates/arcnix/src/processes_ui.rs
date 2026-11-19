@@ -3,14 +3,12 @@ use arcnix_core::processes::Process;
 use super::*;
 use crate::server_apps_worker::{Action as AppAction, Reply};
 
-const PAGE_SIZE: usize = 50;
-
 #[derive(Clone, Default)]
 pub(super) struct Runtime {
     pending: Option<u64>,
     snapshot: Option<Arc<[Process]>>,
     filter: String,
-    page: usize,
+    filtered: Option<Arc<[usize]>>,
     error: String,
     port_details: bool,
 }
@@ -76,7 +74,7 @@ pub(super) fn event(
         match result {
             Ok(Reply::Processes(rows)) => {
                 view.snapshot = Some(rows.into());
-                view.page = 0;
+                update_filter(s);
             }
             Ok(_) => view.error = "Invalid process inventory response".into(),
             Err(error) => view.error = error,
@@ -85,31 +83,46 @@ pub(super) fn event(
     None
 }
 
-fn matching(s: &State) -> impl Iterator<Item = &Process> {
+impl Runtime {
+    fn count(&self) -> usize {
+        self.filtered.as_deref().map_or_else(
+            || self.snapshot.as_deref().unwrap_or_default().len(),
+            |indices| indices.len(),
+        )
+    }
+
+    fn process(&self, row: usize) -> Option<&Process> {
+        let index = match &self.filtered {
+            Some(indices) => *indices.get(row)?,
+            None => row,
+        };
+        self.snapshot.as_ref()?.get(index)
+    }
+}
+
+// Store indices into the sorted snapshot so scrolling never repeats a filter or port lookup
+// across the inventory. An unfiltered list indexes the snapshot directly.
+pub(super) fn update_filter(s: &mut State) {
     let view = &s.server_apps.processes;
     let filter = view.filter.trim().to_lowercase();
-    view.snapshot
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .filter(move |process| {
-            filter.is_empty()
-                || process.program.to_lowercase().contains(&filter)
-                || process.pid.to_string().contains(&filter)
-                || process.uid.to_string().contains(&filter)
-                || resource_ports_ui::process_ports(s, process)
-                    .to_ascii_lowercase()
-                    .contains(&filter)
-        })
-}
-
-fn pages(s: &State) -> usize {
-    matching(s).count().div_ceil(PAGE_SIZE).max(1)
-}
-
-fn page_index(s: &State) -> usize {
-    let page = s.server_apps.processes.page;
-    if page == 0 { 0 } else { page.min(pages(s) - 1) }
+    let indices = (!filter.is_empty()).then(|| {
+        view.snapshot
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, p)| {
+                (p.program.to_lowercase().contains(&filter)
+                    || p.pid.to_string().contains(&filter)
+                    || p.uid.to_string().contains(&filter)
+                    || resource_ports_ui::process_ports(s, p)
+                        .to_ascii_lowercase()
+                        .contains(&filter))
+                .then_some(index)
+            })
+            .collect()
+    });
+    s.server_apps.processes.filtered = indices;
 }
 
 fn status(s: &State) -> &'static str {
@@ -165,7 +178,7 @@ fn inventory(ui: Ui) -> impl Widget {
                     if let Event::ValueChanged { value, .. } = event {
                         state.revise(|s| {
                             s.server_apps.processes.filter = value;
-                            s.server_apps.processes.page = 0;
+                            update_filter(s);
                         });
                     }
                 }),
@@ -178,31 +191,6 @@ fn inventory(ui: Ui) -> impl Widget {
                     .enabled(state.map(ready))
                     .on_press(move || refresh(&ui)),
             )),
-            when(state.map(|s| pages(s) > 1), move || {
-                row().class("monitor-process-pager").fill((
-                    icon_action("Previous page", Icon::ChevronRight)
-                        .class("icon-button monitor-process-previous")
-                        .enabled(state.map(|s| page_index(s) > 0))
-                        .on_press(move || {
-                            state.revise(|s| {
-                                s.server_apps.processes.page = page_index(s).saturating_sub(1);
-                            })
-                        }),
-                    text()
-                        .class("subtle")
-                        .content(state.map(|s| format!("{} / {}", page_index(s) + 1, pages(s)))),
-                    icon_action("Next page", Icon::ChevronRight)
-                        .enabled(state.map(|s| page_index(s) + 1 < pages(s)))
-                        .on_press(move || {
-                            state.revise(|s| {
-                                let next = page_index(s) + 1;
-                                if next < pages(s) {
-                                    s.server_apps.processes.page = next;
-                                }
-                            })
-                        }),
-                ))
-            }),
         )),
         when(
             state.map(|s| {
@@ -229,69 +217,33 @@ fn inventory(ui: Ui) -> impl Widget {
             },
         ),
         each(state.map(|s| {
-            matching(s)
-                .next()
-                .map(|_| (page_index(s), s.server_apps.processes.filter.clone()))
+            let view = &s.server_apps.processes;
+            (view.count() > 0)
+                .then(|| view.filter.clone())
                 .into_iter()
                 .collect::<Vec<_>>()
         }))
         .key(Clone::clone)
         .children(move |_| {
-            col()
-                .class("monitor-process-table")
-                .name(i18n::bind("Processes"))
-                .focus(FocusMode::TabStop)
-                .fill((
-                    row()
-                        .class("monitor-process-row monitor-process-header")
-                        .fill((
-                            text().content("PID"),
-                            text().content(i18n::bind("Program")),
-                            text().content("UID"),
-                            text().content("CPU"),
-                            text().content(i18n::bind("Memory")),
-                            text()
-                                .class("monitor-process-port-heading")
-                                .content(i18n::bind("Listening ports")),
-                        )),
-                    each(state.map(|s| {
-                        matching(s)
-                            .skip(page_index(s) * PAGE_SIZE)
-                            .take(PAGE_SIZE)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    }))
-                    .key(|process| process.pid)
-                    .children(move |item| {
-                        let process = item.value;
-                        row().class("monitor-process-row").fill((
-                            text()
-                                .selectable(true)
-                                .content(process.map(|p| p.pid.to_string())),
-                            text().selectable(true).content(process.map(|p| {
-                                if p.program.is_empty() {
-                                    "—".into()
-                                } else {
-                                    p.program.clone()
-                                }
-                            })),
-                            text().content(process.map(|p| p.uid.to_string())),
-                            text().content(process.map(|p| format!("{:.1}%", p.cpu_percent))),
-                            text().content(process.map(|p| size(p.resident_bytes))),
-                            text()
-                                .class("monitor-process-ports")
-                                .selectable(true)
-                                .content(state.map(move |s| {
-                                    process
-                                        .with(|p| resource_ports_ui::process_ports(s, p).to_owned())
-                                })),
-                        ))
-                    }),
-                ))
+            col().class("monitor-process-table").fill((
+                row()
+                    .class("monitor-process-row monitor-process-header")
+                    .fill((
+                        text().content("PID"),
+                        text().content(i18n::bind("Program")),
+                        text().content("UID"),
+                        text().content("CPU"),
+                        text().content(i18n::bind("Memory")),
+                        text()
+                            .class("monitor-process-port-heading")
+                            .content(i18n::bind("Listening ports")),
+                    )),
+                process_list(state),
+            ))
         }),
         when(
             state.map(|s| {
-                s.server_apps.processes.snapshot.is_some() && matching(s).next().is_none()
+                s.server_apps.processes.snapshot.is_some() && s.server_apps.processes.count() == 0
             }),
             || {
                 text()
@@ -300,4 +252,108 @@ fn inventory(ui: Ui) -> impl Widget {
             },
         ),
     ))
+}
+
+fn process_list(state: Cage<State>) -> impl Widget {
+    use glory::style::{Length, Style};
+
+    glory::ui::widget(move |scope| {
+        let offset = scope.cage(0.0_f64);
+        let height = scope.cage(600.0_f64);
+        let row_height = scope.cage(35.0_f64);
+        let window = scope
+            .bond(move || {
+                const MARGIN: usize = 8;
+                let count = state.with(|s| s.server_apps.processes.count());
+                let step = row_height.get();
+                let visible = (height.get() / step).ceil() as usize + 1;
+                let first = ((offset.get() / step) as usize).min(count.saturating_sub(visible));
+                (
+                    first.saturating_sub(MARGIN)..(first + visible + MARGIN).min(count),
+                    count,
+                    step,
+                )
+            })
+            .with_partial_eq();
+        let spacer = |below: bool| {
+            view().class("monitor-process-spacer").style(
+                scope
+                    .bond(move || {
+                        window.with(|(rows, count, step)| {
+                            let n = if below { count - rows.end } else { rows.start };
+                            Style::new().height(Length::Px(n as f64 * step))
+                        })
+                    })
+                    .with_partial_eq(),
+            )
+        };
+        col()
+            .class("monitor-process-viewport")
+            .role(glory::render::Role::List)
+            .name(i18n::bind("Processes"))
+            .focus(FocusMode::TabStop)
+            .on(scroll, move |event| {
+                if let Event::Scroll { y, .. } = event {
+                    offset.revise(|value| *value = y.max(0.0));
+                }
+            })
+            .on(resize, move |event| {
+                if let Event::Resize { viewport, .. } = event {
+                    height.revise(|value| *value = viewport.height);
+                    row_height
+                        .revise(|value| *value = if viewport.width <= 510.0 { 56.0 } else { 35.0 });
+                }
+            })
+            .fill((
+                spacer(false),
+                each(
+                    scope.bond(move || window.with(|(rows, ..)| rows.clone().collect::<Vec<_>>())),
+                )
+                .key(|index| *index)
+                .children(move |item| {
+                    process_row(state, item.value.get())
+                        .style(row_height.map(|step| Style::new().height(Length::Px(*step))))
+                }),
+                spacer(true),
+            ))
+            .build(scope)
+    })
+}
+
+fn process_row(state: Cage<State>, index: usize) -> glory::ui::View {
+    let cell = move |format: fn(&State, &Process) -> String| {
+        state
+            .map(move |s| {
+                s.server_apps
+                    .processes
+                    .process(index)
+                    .map(|p| format(s, p))
+                    .unwrap_or_default()
+            })
+            .with_partial_eq()
+    };
+    row()
+        .class("monitor-process-row")
+        .role(glory::render::Role::ListItem)
+        .fill((
+            text()
+                .selectable(true)
+                .content(cell(|_, p| p.pid.to_string())),
+            text().selectable(true).content(cell(|_, p| {
+                if p.program.is_empty() {
+                    "—".into()
+                } else {
+                    p.program.clone()
+                }
+            })),
+            text().content(cell(|_, p| p.uid.to_string())),
+            text().content(cell(|_, p| format!("{:.1}%", p.cpu_percent))),
+            text().content(cell(|_, p| size(p.resident_bytes))),
+            text()
+                .class("monitor-process-ports")
+                .selectable(true)
+                .content(cell(|s, p| {
+                    resource_ports_ui::process_ports(s, p).to_owned()
+                })),
+        ))
 }

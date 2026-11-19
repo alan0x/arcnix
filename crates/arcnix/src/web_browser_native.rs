@@ -1024,7 +1024,7 @@ fn overlap(a: BoxPx, b: BoxPx) -> Option<BoxPx> {
     (bounds.width() > 0 && bounds.height() > 0).then_some(bounds)
 }
 
-fn position(view: &WebView, viewport: &Viewport) -> Result<()> {
+pub(super) fn position(view: &WebView, viewport: &Viewport) -> Result<()> {
     let area = viewport.area.context("Missing browser content bounds")?;
     view.set_bounds(Rect {
         position: PhysicalPosition::new(area.left, area.top).into(),
@@ -1034,7 +1034,7 @@ fn position(view: &WebView, viewport: &Viewport) -> Result<()> {
     Ok(())
 }
 
-fn install_region(window: HWND, area: BoxPx, occlusion: &[BoxPx]) -> Result<bool> {
+pub(super) fn install_region(window: HWND, area: BoxPx, occlusion: &[BoxPx]) -> Result<bool> {
     // SetWindowRgn takes ownership of the assigned region. Temporary regions
     // remain ours and are released whether or not the operation succeeds.
     unsafe {

@@ -1,0 +1,88 @@
+// Use the same maximize operation as the rest of the server desktop.
+document.addEventListener('loadstart', event => {
+    const video = event.target;
+    if (video.matches?.('.remote-player-screen video')) {
+        video.controlsList.add('nodownload', 'nofullscreen');
+        video.disablePictureInPicture = true;
+    }
+}, true);
+
+// Keep slider thumbs local during a drag; send one SFTP seek on release.
+(() => {
+    let mounted, last;
+    function format(seconds) {
+        const n = Math.floor(seconds);
+        return Math.floor(n / 60) + ':' + String(n % 60).padStart(2, '0');
+    }
+    function sync() {
+        const controls = document.querySelector('.mpv-controls');
+        const bar = controls?.querySelector('.mpv-control-bar');
+        const raw = controls?.querySelector('.mpv-state')?.textContent;
+        if (!raw || !bar || (bar === mounted && raw === last)) return;
+        const state = JSON.parse(raw);
+        function send(command) {
+            const input = controls.querySelector('.mpv-command');
+            input.value = JSON.stringify([JSON.parse(controls.querySelector('.mpv-state').textContent).serial, command]);
+            input.dispatchEvent(new Event('input', {bubbles:true}));
+        }
+        if (bar !== mounted) {
+            const play = document.createElement('button');
+            play.className = 'mpv-play';
+            play.onclick = () => send('toggle');
+            const time = document.createElement('output');
+            function slider(command) {
+                const range = document.createElement('input');
+                range.type = 'range';
+                range.className = 'mpv-' + command;
+                range.min = '0';
+                range.step = command === 'seek' ? '.1' : '1';
+                range.onpointerdown = () => { range.dataset.dragging = 'true'; };
+                range.onpointerup = range.onpointercancel = range.onblur = () => { delete range.dataset.dragging; };
+                range.onchange = () => send({[command]:Number(range.value)});
+                return range;
+            }
+            bar.replaceChildren(play, time, slider('seek'), slider('volume'));
+            mounted = bar;
+        }
+        last = raw;
+        const [play, time, seek, volume] = bar.children;
+        const m = state.media;
+        play.textContent = m.paused ? '▶' : 'Ⅱ';
+        play.setAttribute('aria-label', m.paused ? state.play : state.pause);
+        time.textContent = m.duration > 0 ? format(m.position) + ' / ' + format(m.duration) : format(m.position);
+        seek.setAttribute('aria-label',state.seek);
+        volume.setAttribute('aria-label',state.volume);
+        seek.max = m.duration;
+        if (!seek.dataset.dragging) seek.value = m.position;
+        if (!volume.dataset.dragging) volume.value = m.volume;
+        play.disabled = volume.disabled = !m.loaded;
+        seek.disabled = !m.duration;
+    }
+    new MutationObserver(sync).observe(document, {subtree:true, childList:true, characterData:true});
+})();
+function maximizeVideoWindow(event) {
+    if (!event.target.matches?.('.remote-player-screen video')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.target.closest('.desktop-window')?.querySelector('.window-maximize')?.click();
+}
+document.addEventListener('dblclick', maximizeVideoWindow, true);
+document.addEventListener('keydown', event => {
+    if (event.key.toLowerCase() === 'f' && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        maximizeVideoWindow(event);
+    }
+}, true);
+document.addEventListener('contextmenu', event => {
+    if (event.target.matches?.('.remote-player-screen video')) event.preventDefault();
+}, true);
+document.addEventListener('loadedmetadata', event => {
+    const video = event.target;
+    if (video.matches?.('.remote-player-screen video')) {
+        video.play().catch(() => {});
+    }
+}, true);
+document.addEventListener('error', event => {
+    if (event.target.matches?.('.remote-player-screen video[src]')) {
+        event.target.classList.add('playback-failed');
+    }
+}, true);

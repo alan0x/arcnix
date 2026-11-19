@@ -12,6 +12,9 @@ pub(super) struct DesktopWindow {
     pub wallpapers: Arc<WallpaperAssets>,
     #[cfg(windows)]
     pub browser: super::web_browser_native::Host,
+    #[cfg(windows)]
+    pub video: super::mpv_native::Host,
+    pub code: super::code_native::Host,
 }
 
 impl NativeLifecycle for DesktopWindow {
@@ -24,9 +27,11 @@ impl NativeLifecycle for DesktopWindow {
             );
             self.fullscreen = fullscreen;
         }
+        self.code.poll(window);
         #[cfg(windows)]
         {
             self.browser.poll(window);
+            self.video.poll(window);
             if self.browser.exit_ready() {
                 return Ok(true);
             }
@@ -45,9 +50,20 @@ impl NativeLifecycle for DesktopWindow {
         self.browser.close();
     }
 
+    #[cfg(not(windows))]
+    fn opened(
+        &mut self,
+        _window: &NativeWindow,
+        wake: &std::task::Waker,
+    ) -> Result<(), ShellError> {
+        self.code.wake = Some(wake.clone());
+        Ok(())
+    }
+
     #[cfg(windows)]
     fn opened(&mut self, window: &NativeWindow, wake: &std::task::Waker) -> Result<(), ShellError> {
         self.browser.set_wake(wake.clone());
+        self.code.wake = Some(wake.clone());
         use glory::wry::shell::NativeWindowExtWindows;
         use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;

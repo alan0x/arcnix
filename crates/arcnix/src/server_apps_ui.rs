@@ -788,6 +788,6 @@ fn shortcut_reference(ui: Ui) -> impl Widget {
             ("Browse entries", "↑ ↓ ← → / Home / End"),
             ("Select focused entry", "Space"),
         ]),
-        shortcut_group("Editor", &[("Save to server", "Ctrl+S")]),
+        shortcut_group("Code", &[("Save", "Ctrl+S")]),
     ))
 }

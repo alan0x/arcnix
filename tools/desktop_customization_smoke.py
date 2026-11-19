@@ -88,10 +88,13 @@ def main():
                 active = tray.locator('.desktop-dock-app.active')
                 assert active.evaluate('''button => {
                     const icon = button.querySelector('.desktop-app-icon');
+                    const bar = button.closest('.desktop-dock').getBoundingClientRect();
+                    const glyph = icon.getBoundingClientRect();
                     const top = icon.offsetTop;
                     const bottom = button.clientHeight - top - icon.offsetHeight;
                     const indicator = getComputedStyle(button, '::after');
                     return Math.abs(top - bottom) <= 1
+                        && Math.abs((bar.top + bar.bottom - glyph.top - glyph.bottom) / 2) <= 1
                         && bottom > parseFloat(indicator.bottom) + parseFloat(indicator.height);
                 }''')
 
@@ -141,7 +144,7 @@ def main():
             eventually(lambda: preferences().get('order', [])[:1] == [{'kind': 'file', 'id': 'notes.txt'}])
             expect(p.locator('.desktop-shortcut').first).to_have_attribute('aria-label', 'notes.txt')
             notes.click()
-            expect(p.locator('.remote-editor-content')).to_have_value('desktop notes')
+            expect(app.code().locator('.view-lines')).to_contain_text('desktop notes')
             p.locator('.desktop-window.active .window-close').click()
 
             desktop_button('Monitor').click(button='right')
@@ -212,8 +215,8 @@ def main():
             canvas = p.locator('.desktop-canvas').bounding_box()
             p.mouse.move(canvas['x'] + canvas['width'] / 2, canvas['y'] + canvas['height'] - 4)
             eventually(lambda: p.locator('.desktop-dock').bounding_box()['y'] < canvas['y'] + canvas['height'] - 30)
-            dock_button('Editor').drag_to(dock_button('Terminal'), target_position={'x': 5, 'y': 22})
-            eventually(lambda: preferences()['dock']['order'][:1] == ['editor'])
+            dock_button('Code').drag_to(dock_button('Terminal'), target_position={'x': 5, 'y': 22})
+            eventually(lambda: preferences()['dock']['order'][:1] == ['code'])
             dock_button('Monitor').click(button='right')
             menu('Remove from Dock').click()
             eventually(lambda: 'monitor' in preferences()['dock']['unpinned'])
@@ -229,7 +232,7 @@ def main():
             expect(p.locator('.desktop-wallpaper-copy')).to_have_count(0)
             expect(desktop_button('Projects')).to_be_visible()
             expect(p.locator('.desktop-shortcut').first).to_have_attribute('aria-label', 'Projects')
-            expect(p.locator('.desktop-dock-app').first).to_have_attribute('aria-label', 'Editor')
+            expect(p.locator('.desktop-dock-app').first).to_have_attribute('aria-label', 'Code')
             expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-large dock-auto-hide')
             expect(dock_button('Monitor')).to_have_count(0)
             app.application('Settings')
@@ -262,8 +265,10 @@ def main():
             expect(center_icons).to_have_attribute('aria-pressed', 'true')
             apps_box = apps.bounding_box()
             assert abs(apps_box['x'] + apps_box['width'] / 2 - panel_box['x'] - panel_box['width'] / 2) < 2
-            expect(apps).to_have_css('border-radius', '14px')
-            expect(apps).not_to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+            expect(apps).to_have_css('border-top-width', '0px')
+            expect(apps).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+            expect(apps).to_have_css('box-shadow', 'none')
+            expect(panel).to_have_css('padding-block', '2px')
             check_centered_dock(apps)
             assert abs(panel.get_by_role('button', name='Show desktop').bounding_box()['x'] - panel_box['x']) < 15
             p.set_viewport_size(dict(width=760, height=660))
@@ -376,7 +381,7 @@ def main():
             assert not errors, errors
             app.screenshot('restored.png')
     print(json.dumps(dict(output=str(out), checks=[
-        'A default floating window uses the standard inset and can cover shortcuts; login HOME files open in Explorer or Editor',
+        'A default floating window uses the standard inset and can cover shortcuts; login HOME files open in Explorer or Code',
         'Desktop icon ordering, visibility toggles and reset use the remote preference file',
         'Shortcut hover surrounds the icon and label at both desktop sizes and clips long names',
         'Built-in wallpaper, remote SVG and uploaded local PNG render through the WebView',

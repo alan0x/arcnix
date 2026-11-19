@@ -186,8 +186,10 @@ impl Ui {
             if entry.is_dir {
                 self.open_desktop_app(WorkspacePage::Explorer);
                 file_browser::navigate(self, true, entry.path);
+            } else if !entry.is_symlink {
+                file_browser::open_remote_file(self, &entry.path);
             } else {
-                remote_editor::open_verified(self, &entry.path);
+                code_workbench::open(self, &entry.path);
             }
         }
     }

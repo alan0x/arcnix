@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 
 use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT, normalize_address, parse_address};
 use arcnix_core::browser_proxy::Diagnosis;
-use serde::Deserialize;
 use zeroize::Zeroizing;
 
 use super::*;
@@ -99,40 +98,7 @@ pub(super) enum Command {
     Stop,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BoxPx {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
-impl BoxPx {
-    pub fn width(self) -> i32 {
-        self.right - self.left
-    }
-
-    pub fn height(self) -> i32 {
-        self.bottom - self.top
-    }
-
-    fn valid(self) -> bool {
-        [self.left, self.top, self.right, self.bottom]
-            .into_iter()
-            .all(|n| (0..=32768).contains(&n))
-            && self.width() > 0
-            && self.height() > 0
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Viewport {
-    epoch: u64,
-    pub area: Option<BoxPx>,
-    pub clip: Vec<BoxPx>,
-}
+pub(super) use super::native_viewport::{BoxPx, Viewport};
 
 impl Browser {
     pub fn tab(&self, id: u64) -> Option<&Tab> {
