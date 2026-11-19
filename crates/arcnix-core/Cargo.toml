@@ -19,6 +19,7 @@ directories = "6"
 # WinCNG cannot authenticate Ed25519 keys. Build and statically link OpenSSL
 # so the shipped client needs neither system OpenSSL nor the ssh executable.
 ssh2 = { version = "0.9.7", features = ["openssl-on-win32", "vendored-openssl"] }
+zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
 sha2 = "0.10"
 getrandom = "0.3"
 similar = "3.2.1"

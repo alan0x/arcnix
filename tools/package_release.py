@@ -121,8 +121,6 @@ def package(binary, target, tag, output, version):
                     payload.write(staging / member, member)
             (staging / "libmpv-2.dll").unlink()
             windows_installer(staging, output, stem, version)
-            # Raw executable used by the in-app updater; GitHub records its digest.
-            shutil.copy2(executable, output / f"{stem}.exe")
             archive = output / f"{stem}.zip"
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as stream:
                 for path in sorted(staging.rglob("*")):

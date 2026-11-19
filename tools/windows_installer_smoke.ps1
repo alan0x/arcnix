@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $stem = "arcnix-$Tag-windows-amd64"
 $setup = Join-Path $Artifacts "$stem-setup.exe"
-$updater = Join-Path $Artifacts "$stem.exe"
+$portable = Join-Path $Artifacts "$stem.zip"
 $installDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\Arcnix'
 $app = Join-Path $installDir 'arcnix.exe'
 $uninstaller = Join-Path $installDir 'unins000.exe'
@@ -19,7 +19,8 @@ foreach ($path in @($installDir, $shortcut, $uninstallKey)) {
     }
 }
 
-$expectedHash = (Get-FileHash -LiteralPath $updater -Algorithm SHA256).Hash
+$expectedHash = python -c "import hashlib, sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); print(hashlib.file_digest(z.open(sys.argv[2]), 'sha256').hexdigest())" $portable "$stem/arcnix.exe"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot verify the portable ZIP executable.' }
 $silent = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
 $version = $Tag.Substring(1)
 try {
@@ -29,7 +30,7 @@ try {
         throw "Arcnix Setup failed ($($process.ExitCode))."
     }
     if ((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash -ne $expectedHash) {
-        throw 'The installed executable differs from the updater asset.'
+        throw 'The installed executable differs from the portable ZIP executable.'
     }
     python -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); assert {'libmpv-2.dll', 'LICENSES/libmpv/LICENSE.LGPL', 'LICENSES/libmpv/SOURCE.txt'} <= set(z.namelist()) and z.testzip() is None" $app
     if ($LASTEXITCODE -ne 0) {

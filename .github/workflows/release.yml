@@ -130,10 +130,9 @@ jobs:
           stem="arcnix-$tag-windows-amd64"
           setup="$stem-setup.exe"
           portable="$stem.zip"
-          updater="$stem.exe"
-          sha256sum "$setup" "$portable" "$updater" "${archives[@]}" > SHA256SUMS
+          sha256sum "$setup" "$portable" "${archives[@]}" > SHA256SUMS
           assets=("$setup#Windows x64 installer ($tag)" "$portable#Windows x64 portable ZIP ($tag)"
-                  "$updater#Windows x64 executable for updates ($tag)" "${archives[@]}" SHA256SUMS)
+                  "${archives[@]}" SHA256SUMS)
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber
           else

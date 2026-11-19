@@ -222,7 +222,7 @@ fn parse(source: &Source, current: &str, bytes: &[u8]) -> Result<Check> {
                 || page.as_str() == format!("{REPOSITORY}/releases/tag/v{version}")),
         "Release page is not trusted"
     );
-    let expected = format!("arcnix-v{version}-windows-amd64.exe");
+    let expected = format!("arcnix-v{version}-windows-amd64.zip");
     let selected = release
         .assets
         .into_iter()
@@ -257,7 +257,7 @@ fn parse(source: &Source, current: &str, bytes: &[u8]) -> Result<Check> {
             None
         }
     } else {
-        reason = "This release does not include the automatic-update executable".into();
+        reason = "This release does not include the Windows portable ZIP".into();
         None
     };
     Ok(Check::Available(Release {
@@ -282,17 +282,8 @@ pub fn digest(path: &Path) -> Result<String> {
         metadata.is_file() && !metadata.is_symlink() && metadata.len() <= MAX_ASSET,
         "Update file must be a bounded regular file"
     );
-    let mut input = fs::File::open(path)?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let count = input.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
+    let mut file = fs::File::open(path)?;
+    copy_hashed(&mut file, std::io::sink(), metadata.len(), &|| Ok(()))
 }
 pub fn validate_executable(path: &Path) -> Result<()> {
     let mut file = fs::File::open(path)?;
@@ -314,22 +305,85 @@ pub fn validate_executable(path: &Path) -> Result<()> {
     );
     Ok(())
 }
-fn cached_update(root: &Path, release: &Release, asset: &Asset) -> Option<Prepared> {
+// Never unpack paths supplied by the archive. The release packager puts exactly
+// one application at this version-specific path; all other entries are ignored.
+fn read_portable_executable(
+    archive: fs::File,
+    version: &str,
+    output: impl Write,
+    check: &impl Fn() -> Result<()>,
+) -> Result<String> {
+    let path = format!("arcnix-v{version}-windows-amd64/arcnix.exe");
+    let mut zip = zip::ZipArchive::new(archive).context("Invalid portable update ZIP")?;
+    let mut entry = zip
+        .by_name(&path)
+        .context("Portable ZIP is missing arcnix.exe")?;
+    let size = entry.size();
+    ensure!(
+        entry.is_file() && !entry.is_symlink() && size > 0 && size <= MAX_ASSET,
+        "Invalid executable in portable ZIP"
+    );
+    copy_hashed(&mut entry, output, size, check)
+}
+
+fn copy_hashed(
+    input: &mut impl Read,
+    mut output: impl Write,
+    size: u64,
+    check: &impl Fn() -> Result<()>,
+) -> Result<String> {
+    let mut hash = Sha256::new();
+    let mut written = 0u64;
+    let mut buffer = [0u8; 65536];
+    loop {
+        check()?;
+        let n = input.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        written += n as u64;
+        ensure!(written <= size, "Update file exceeds the expected size");
+        output.write_all(&buffer[..n])?;
+        hash.update(&buffer[..n]);
+    }
+    ensure!(written == size, "Incomplete update file");
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn cached_update(
+    root: &Path,
+    release: &Release,
+    asset: &Asset,
+    check: &impl Fn() -> Result<()>,
+) -> Option<Prepared> {
     let receipt = root.join("ready.json");
     let metadata = fs::symlink_metadata(&receipt).ok()?;
     if !metadata.is_file() || metadata.is_symlink() || metadata.len() > 32768 {
         return None;
     }
-    let mut cached: Prepared = serde_json::from_slice(&fs::read(receipt).ok()?).ok()?;
+    let cached: Prepared = serde_json::from_slice(&fs::read(receipt).ok()?).ok()?;
+    let stage = cached.executable.parent()?;
     if cached.version != release.version
-        || cached.digest != asset.digest
+        || stage.parent()? != root
+        || fs::canonicalize(stage).ok()? != stage
         || cached.executable.file_name()? != "candidate.exe"
     {
         return None;
     }
-    cached.executable = fs::canonicalize(&cached.executable).ok()?;
-    if !cached.executable.starts_with(root)
-        || digest(&cached.executable).ok()? != asset.digest
+    let archive_path = stage.join("portable.zip");
+    let metadata = fs::symlink_metadata(&archive_path).ok()?;
+    if !metadata.is_file() || metadata.len() != asset.size {
+        return None;
+    }
+    let mut archive = fs::File::open(archive_path).ok()?;
+    if copy_hashed(&mut archive, std::io::sink(), asset.size, check).ok()? != asset.digest {
+        return None;
+    }
+    archive.rewind().ok()?;
+    let expected =
+        read_portable_executable(archive, &release.version, std::io::sink(), check).ok()?;
+    if cached.digest != expected
+        || digest(&cached.executable).ok()? != expected
         || validate_executable(&cached.executable).is_err()
     {
         return None;
@@ -352,18 +406,19 @@ pub fn prepare(
     check()?;
     fs::create_dir_all(root)?;
     let root = fs::canonicalize(root)?;
-    if let Some(cached) = cached_update(&root, release, asset) {
+    if let Some(cached) = cached_update(&root, release, asset, &check) {
         check()?;
         progress(asset.size, asset.size);
         return Ok(cached);
     }
     let stage = root.join(crate::new_id());
     fs::create_dir(&stage)?;
-    let temporary = stage.join("candidate.download");
+    let archive = stage.join("portable.zip");
     let candidate = stage.join("candidate.exe");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    let temporary_receipt = root.join(format!("ready-{}.tmp", crate::new_id()));
     let result = runtime.block_on(async {
         let mut response = cancellable(source.download_client()?.get(url).send(), &check)
             .await??
@@ -376,8 +431,9 @@ pub fn prepare(
         }
         let mut output = OpenOptions::new()
             .create_new(true)
+            .read(true)
             .write(true)
-            .open(&temporary)?;
+            .open(&archive)?;
         let mut hash = Sha256::new();
         let mut done = 0u64;
         progress(0, asset.size);
@@ -400,22 +456,30 @@ pub fn prepare(
             "Update checksum mismatch; file will not be installed"
         );
         output.sync_all()?;
-        drop(output);
+        output.rewind()?;
         check()?;
-        validate_executable(&temporary)?;
-        crate::local::rename(&temporary, &candidate)?;
+        let mut executable = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)?;
+        let executable_digest =
+            read_portable_executable(output, &release.version, &mut executable, &check)?;
+        executable.sync_all()?;
+        drop(executable);
+        validate_executable(&candidate)?;
+        check()?;
         let prepared = Prepared {
             executable: candidate.clone(),
-            digest: asset.digest.clone(),
+            digest: executable_digest,
             version: release.version.clone(),
         };
-        let temporary_receipt = root.join(format!("ready-{}.tmp", crate::new_id()));
         fs::write(&temporary_receipt, serde_json::to_vec(&prepared)?)?;
-        fs::rename(temporary_receipt, root.join("ready.json"))?;
+        fs::rename(&temporary_receipt, root.join("ready.json"))?;
         Ok(prepared)
     });
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(&temporary_receipt);
+        let _ = fs::remove_file(&archive);
         let _ = fs::remove_file(&candidate);
         let _ = fs::remove_dir(&stage);
     }
@@ -441,6 +505,42 @@ mod tests {
         assert!(!valid_digest("deadbeef"));
         assert!(valid_digest(&"ab".repeat(32)));
     }
+    #[test]
+    fn selects_the_portable_zip_for_the_release() -> Result<()> {
+        let tag = "v1.1.0";
+        let mut release: serde_json::Value = serde_json::from_slice(&response(tag))?;
+        let asset = |suffix: &str| {
+            let name = format!("arcnix-{tag}-windows-amd64.{suffix}");
+            serde_json::json!({
+                "name": name,
+                "browser_download_url": format!("{REPOSITORY}/releases/download/{tag}/{name}"),
+                "size": 128, "state": "uploaded", "digest": format!("sha256:{}", "ab".repeat(32))
+            })
+        };
+        release["assets"] = serde_json::json!([asset("exe")]);
+        let source = Source::github();
+        let available = |value: &serde_json::Value| -> Result<Release> {
+            let Check::Available(result) = parse(&source, "1.0.0", &serde_json::to_vec(value)?)?
+            else {
+                bail!("Expected an available release");
+            };
+            Ok(result)
+        };
+        assert!(available(&release)?.asset.is_none());
+        release["assets"] = serde_json::json!([asset("exe"), asset("zip")]);
+        assert!(
+            available(&release)?
+                .asset
+                .unwrap()
+                .url
+                .ends_with("windows-amd64.zip")
+        );
+        release["assets"][1]["browser_download_url"] =
+            format!("{REPOSITORY}/releases/download/v1.0.0/old.zip").into();
+        assert!(available(&release).is_err());
+        Ok(())
+    }
+
     fn payload() -> Vec<u8> {
         let mut data = vec![0u8; 256];
         data[..2].copy_from_slice(b"MZ");
@@ -448,6 +548,13 @@ mod tests {
         data[64..68].copy_from_slice(b"PE\0\0");
         data[68..70].copy_from_slice(&0x8664u16.to_le_bytes());
         data
+    }
+    fn portable(path: &str, contents: &[u8]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file(path, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(contents).unwrap();
+        zip.finish().unwrap().into_inner()
     }
     fn download_fixture(bytes: Vec<u8>, digest: String) -> (Source, Release) {
         use std::net::TcpListener;
@@ -472,7 +579,7 @@ mod tests {
             notes: String::new(),
             page: format!("http://{address}/release"),
             asset: Some(Asset {
-                url: format!("http://{address}/candidate.exe"),
+                url: format!("http://{address}/candidate.zip"),
                 size,
                 digest,
             }),
@@ -486,12 +593,29 @@ mod tests {
         fs::create_dir(&root)?;
         let bytes = payload();
         let expected = format!("{:x}", Sha256::digest(&bytes));
-        let (source, release) = download_fixture(bytes, expected.clone());
+        let zip = portable("arcnix-v9.9.9-windows-amd64/arcnix.exe", &bytes);
+        let outer_digest = format!("{:x}", Sha256::digest(&zip));
+        let (source, release) = download_fixture(zip, outer_digest);
         let prepared = prepare(&source, &release, &root, || Ok(()), |_, _| {})?;
         assert_eq!(digest(&prepared.executable)?, expected);
         let cached = prepare(&source, &release, &root, || Ok(()), |_, _| {})?;
         assert_eq!(cached.executable, prepared.executable);
+        fs::write(&cached.executable, b"changed")?;
+        assert!(
+            cached_update(
+                &fs::canonicalize(&root)?,
+                &release,
+                release.asset.as_ref().unwrap(),
+                &|| Ok(())
+            )
+            .is_none()
+        );
         let bad = root.join("bad");
+        let wrong_zip = portable("outside/arcnix.exe", &bytes);
+        let hash = format!("{:x}", Sha256::digest(&wrong_zip));
+        let (source, release) = download_fixture(wrong_zip, hash);
+        assert!(prepare(&source, &release, &bad, || Ok(()), |_, _| {}).is_err());
+        assert_eq!(fs::read_dir(&bad)?.count(), 0);
         let (source, release) = download_fixture(payload(), "00".repeat(32));
         assert!(
             prepare(&source, &release, &bad, || Ok(()), |_, _| {})

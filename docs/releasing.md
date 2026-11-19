@@ -33,27 +33,24 @@ survive uninstall. Windows release CI verifies silent installation, the shortcut
 the installed executable and uninstallation before uploading the assets.
 
 The Windows x64 executable carries the pinned LGPL libmpv runtime and its
-notices in an appended ZIP. The installer, portable ZIP and single-file updater
-ship the same executable. Opening an MKV for the first time extracts the runtime
+notices in an appended ZIP. The installer and portable ZIP ship the same executable. Opening an MKV for the first time extracts the runtime
 to the user's local application cache. An adjacent `libmpv-2.dll` takes precedence
 for development or replacement. To stage it for a developer build, run
 `python tools/libmpv_runtime.py <directory-containing-arcnix.exe>`.
 
 ## Desktop update channel
 
-Windows AMD64 packaging also emits `arcnix-vVERSION-windows-amd64.exe`, copied
-from the same binary as the ZIP. The release job uploads this executable and adds
-it to `SHA256SUMS`. The updater reads the published stable release from the fixed
-`arcnix-org/arcnix` GitHub API, requires the exact executable name and download path,
-and verifies its size and GitHub API `sha256:` asset digest. Prereleases,
-downgrades, missing digests and unexpected URLs are rejected. HTTPS metadata
-plus an asset hash provides transport integrity, not an independent publisher
-signature or protection against a compromised release account.
+Windows x64 updates use the same portable ZIP offered for manual downloads.
+The updater selects the exact `arcnix-vVERSION-windows-amd64.zip` asset from
+the pinned stable GitHub release and verifies its size and GitHub API SHA-256
+digest before opening it. Only `arcnix-vVERSION-windows-amd64/arcnix.exe` is
+read into the private update stage. The extracted executable has its own
+digest for installation, architecture and version checks, replacement and rollback.
+The ZIP and staged binary are revalidated before cache reuse.
 
-No new release is created by these local source changes. Until a matching stable
-release and executable asset are published, the UI reports that no accessible
-release is available or that automatic installation is unavailable. A missing
-digest must be fixed in the release channel; there is no insecure fallback.
+Clients through 0.3.1 expect a standalone executable. Install the first
+ZIP-aware version manually once using the installer or portable ZIP. Subsequent
+updates use the portable ZIP in-app. Historical releases keep their assets.
 
 Only Windows x64 supports automatic replacement. Other platforms expose the
 release page. Background checks/installation are enabled in release builds and

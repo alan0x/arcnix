@@ -5,13 +5,20 @@ terminated. The real desktop installation and user configuration are untouched.
 """
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import hashlib, json, os, shutil, subprocess, threading, time
+import hashlib, io, json, os, zipfile, shutil, subprocess, threading, time
 from desktop_fixture import ROOT, Desktop, Peer, executable, eventually, expect
 
 
 def sha(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def portable(executable):
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as package:
+        package.writestr('arcnix-v9.9.9-windows-amd64/arcnix.exe', executable)
+    return archive.getvalue()
 
 
 class ReleaseServer:
@@ -30,7 +37,7 @@ class ReleaseServer:
                             self.send_error(404); return
                         version = owner.current if owner.mode == 'current' else '9.9.9'
                         digest = '0' * 64 if owner.mode == 'corrupt' else hashlib.sha256(owner.payload).hexdigest()
-                        assets = [] if owner.mode == 'missing' else [dict(name=f'arcnix-v{version}-windows-amd64.exe', state='uploaded', size=len(owner.payload), digest='sha256:'+digest, browser_download_url=owner.base+'/candidate.exe')]
+                        assets = [] if owner.mode == 'missing' else [dict(name=f'arcnix-v{version}-windows-amd64.zip', state='uploaded', size=len(owner.payload), digest='sha256:'+digest, browser_download_url=owner.base+'/candidate.zip')]
                         data = json.dumps(dict(tag_name='v'+version, html_url=owner.base+'/release', body='Owned update fixture', assets=assets)).encode()
                         self.send_response(200); self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
                     else:
@@ -83,7 +90,7 @@ def main():
     source=executable(); original=sha(source); checks=[]
     good=build_stub(out, 'healthy'); failed=build_stub(out, 'failed', fail=True); wrong=build_stub(out, 'wrong', version='9.9.8')
     version=subprocess.check_output([str(source), '--version'],text=True).strip().split()[-1]
-    with Peer(out) as peer, ReleaseServer(good,version) as server:
+    with Peer(out) as peer, ReleaseServer(portable(good),version) as server:
         def desktop(name, automatic=False, query=False):
             case=out/name; case.mkdir(); binary=case/'arcnix.exe'; shutil.copy2(source,binary)
             config=peer.config([peer.profile('Update fixture')], case, updates=dict(automatic_checks=False, automatic_install=automatic, interval_days=1))
@@ -111,11 +118,11 @@ def main():
                 expect(panel.locator('.update-error')).to_contain_text('canceled', timeout=4000)
                 assert time.monotonic()-start<4 and sha(app.binary)==original
                 checks.append('Handles missing/current/uninstallable releases, refuses corrupt checksums, and cancels a stalled network read promptly without replacing the application')
-                server.mode='good'; server.payload=wrong; check(panel); expect(panel.get_by_role('button',name='Download update',exact=True)).to_be_enabled(); download(panel); install(panel)
+                server.mode='good'; server.payload=portable(wrong); check(panel); expect(panel.get_by_role('button',name='Download update',exact=True)).to_be_enabled(); download(panel); install(panel)
                 expect(panel.locator('.update-error')).to_contain_text('version does not match', timeout=20000)
                 assert app.process.poll() is None and sha(app.binary)==original
                 checks.append('Rejects a verified executable whose reported version differs from the release before shutting down the application')
-            server.payload=good
+            server.payload=portable(good)
             with desktop('result-query',automatic=True,query=True) as app:
                 p=app.page;p.locator('.rail-scripts').click()
                 p.locator('.context-links').get_by_role('button',name='My scripts',exact=True).click()
@@ -164,7 +171,7 @@ def main():
                 assert receipt['pid'] in owned_processes(app.out)
                 checks.append('Downloads while SSH is connected, waits for disconnection, offers a deferrable countdown, then installs and starts the verified executable with the old binary retained')
                 owned_processes(app.out,True)
-            server.payload=failed
+            server.payload=portable(failed)
             with desktop('rollback') as app:
                 panel=settings(app); check(panel); expect(panel.get_by_role('button',name='Download update',exact=True)).to_be_enabled(); download(panel); install(panel)
                 failure=eventually(lambda: json.loads((app.out/'updates/failure.json').read_text()),timeout=40)
@@ -173,7 +180,7 @@ def main():
                 eventually(lambda: owned_processes(app.out))
                 checks.append('A replacement that exits before startup acknowledgement is rolled back to the exact original executable and the previous application is restarted')
                 owned_processes(app.out,True)
-            server.payload=good
+            server.payload=portable(good)
             with desktop('automatic',automatic=True) as app:
                 panel=settings(app); panel.get_by_role('checkbox',name='Check for updates automatically',exact=True).check()
                 expect(panel.locator('.update-status')).to_have_text('Update verified and ready to install',timeout=25000)

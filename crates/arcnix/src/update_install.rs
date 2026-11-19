@@ -371,6 +371,7 @@ pub(super) fn apply(path: &Path) -> Result<()> {
                     stage: Some(stage.clone()),
                     files: vec![
                         plan.candidate.clone(),
+                        stage.join("portable.zip"),
                         plan.health.clone(),
                         plan.ready.clone(),
                         path.to_owned(),
@@ -476,6 +477,7 @@ pub(super) fn cleanup(config: &Path) -> Result<bool> {
             .to_string_lossy();
         ensure!(
             name == "candidate.exe"
+                || name == "portable.zip"
                 || name == "installer.log"
                 || (name.starts_with("install-") && name.ends_with(".json"))
                 || (name.starts_with("startup-") && name.ends_with(".ok"))

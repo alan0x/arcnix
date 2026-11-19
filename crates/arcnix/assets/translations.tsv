@@ -2538,3 +2538,9 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 此文件夹没有可播放的视频。	No playable videos in this folder.
 正在打开视频…	Opening video…
 无法播放此视频，请检查连接和 MP4 编码。	Could not play this video. Check the connection and MP4 codec.
+返回容器列表	Back to containers
+驱动 / 作用域	Driver / scope
+使用容器	Used by
+仅显示运行中的容器	Only running containers
+没有符合条件的容器	No matching containers
+此版本未提供 Windows 便携 ZIP 包	This release does not include the Windows portable ZIP
