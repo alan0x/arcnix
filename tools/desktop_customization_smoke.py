@@ -81,7 +81,13 @@ def main():
                         button.clientWidth - icon.offsetLeft - icon.offsetWidth];
                 }''')
                 assert min(margins) >= 4 and max(margins) - min(margins) <= 1, margins
-                assert active.evaluate('el => getComputedStyle(el).boxShadow') != 'none'
+                assert active.evaluate('''el => {
+                    const indicator = getComputedStyle(el, '::after');
+                    return indicator.content !== 'none'
+                        && parseFloat(indicator.height) > 0
+                        && parseFloat(indicator.width) > parseFloat(indicator.height)
+                        && indicator.backgroundColor !== 'rgba(0, 0, 0, 0)';
+                }''')
                 assert p.locator('.desktop-dock').evaluate('el => el.scrollWidth <= el.clientWidth')
 
             def check_centered_dock(tray):
@@ -389,7 +395,7 @@ def main():
         'Dock reorder, size, auto-hide, magnification and unpin survive restart',
         'Full-width panel, server clock, persistent icon alignment, live slider preview and saved custom size',
         'Equal Dock icon margins, centered magnification and a two-line floating clock that ticks every second',
-        'Dock selection surrounds the icon; all seven Settings pages fit the compact layout',
+        'The active Dock icon has a visible underline and all seven Settings pages fit the compact layout',
     ]), indent=2))
 
 
