@@ -11,6 +11,20 @@
         bridge.value = JSON.stringify({kind, path: row?.getAttribute("aria-label") || "", toggle: !!additive(event), range: !!event.shiftKey, ...extra, sequence: ++sequence});
         bridge.dispatchEvent(new Event("input", {bubbles: true}));
     }
+    function finishName(field, cancel) {
+        send(validPane(field), 'finish_name', field.closest('.file-row'), {}, {name: cancel ? null : field.value});
+    }
+    document.addEventListener('keydown', event => {
+        const field = event.target;
+        if (!field.matches?.('.file-inline-name') || event.isComposing || event.keyCode === 229) return;
+        if (event.key !== 'Escape' && event.key !== 'Enter') return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        finishName(field, event.key === 'Escape');
+    }, true);
+    document.addEventListener('focusout', event => {
+        if (event.target.matches?.('.file-inline-name') && event.target.isConnected) finishName(event.target, false);
+    }, true);
     let fileMenu = null;
     let menuScheduled = false;
     function validPane(target) {
@@ -245,8 +259,8 @@
     function updateDraggableRows() {
         if (fileDrag && !dragPaneReady(fileDrag.pane)) clearFileDrag();
         for (const row of document.querySelectorAll('.file-row')) {
-            const draggable = (row.closest('.remote-explorer') && !!favoriteSource(row))
-                || (row.classList.contains('file-draggable') && dragPaneReady(validPane(row)));
+            const draggable = !row.querySelector('.file-inline-name') && ((row.closest('.remote-explorer') && !!favoriteSource(row))
+                || (row.classList.contains('file-draggable') && dragPaneReady(validPane(row))));
             if (row.draggable !== !!draggable) row.draggable = !!draggable;
         }
         for (const row of document.querySelectorAll('.explorer-favorite-row')) {
@@ -258,7 +272,7 @@
     function context(target,event,keyboard=false) {
         const pane=validPane(target);
         const listing=target instanceof Element && target.closest('.file-list-container,.file-empty');
-        if(!pane||!listing)return false;
+        if(!pane||!listing||target.closest('.file-inline-name'))return false;
         const row=target.closest('.file-row');
         const origin=row?.querySelector('.file-name:not(:disabled)')||pane.querySelector('.file-list-container');
         origin?.focus({preventScroll:true});
@@ -391,7 +405,7 @@
         }
         lastPane = pathPane(event.target) || lastPane;
         const row = event.target.closest(".file-list .file-row");
-        if (!row || event.target.closest(".file-expander")) return;
+        if (!row || event.target.closest(".file-expander,.file-inline-name")) return;
         const name = row.querySelector(".file-name");
         if (!name || name.disabled) return;
         event.preventDefault(); event.stopImmediatePropagation();
@@ -456,7 +470,7 @@
     const focused = new WeakSet();
     const currentPaths = new WeakMap();
     new MutationObserver(() => {
-        for (const field of document.querySelectorAll(".path-input,.explorer-search-input")) {
+        for (const field of document.querySelectorAll(".path-input,.explorer-search-input,.file-inline-name")) {
             if (field.classList.contains("hidden")) focused.delete(field);
             else if (!focused.has(field) && field.getClientRects().length) { focused.add(field); field.focus(); field.select(); }
         }

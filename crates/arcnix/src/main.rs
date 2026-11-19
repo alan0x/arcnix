@@ -106,13 +106,6 @@ use glory::wry::shell::{Config, Shell, WindowApp};
 use icons::{Icon, close_action, icon_action, text_action};
 use worker::{Action, Request, Update};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FileAction {
-    CreateFile,
-    CreateFolder,
-    Rename,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
     SoftwareInstall,
@@ -137,9 +130,8 @@ enum Dialog {
     },
     Import,
     Connect,
-    File {
+    RenameFile {
         remote: bool,
-        action: FileAction,
     },
     FileProperties,
     FileColumns {
@@ -730,7 +722,7 @@ impl Ui {
                 s.remote_ready = false;
                 s.remote.clear();
                 s.remote_selection.clear();
-                s.file_browser.reset_remote_history();
+                s.file_browser.reset_session();
                 s.remote_path = if profile.locations.remember_paths {
                     profile.locations.last_remote.clone()
                 } else {
@@ -794,7 +786,7 @@ impl Ui {
             s.remote.clear();
             s.remote_selection.clear();
             s.remote_request = 0;
-            s.file_browser.reset_remote_history();
+            s.file_browser.reset_session();
             s.software = Default::default();
             s.server_apps = Default::default();
             s.docker = Default::default();
@@ -1073,63 +1065,17 @@ impl Ui {
             });
         }
     }
-    fn mutate_file(&self, remote: bool, action: FileAction) {
+    fn rename_selected(&self, remote: bool) {
         let operation = self.state.with(|s| {
-            if (remote && !s.remote_ready) || (!remote && !s.local_ready) {
-                return Err("请先成功读取目标目录");
-            }
-            let name = s.name.trim();
-            if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
-                return Err("请输入不含路径分隔符的文件名");
-            }
-            if !remote && !safe_local_name(name) {
-                return Err("本地名称包含无效字符、设备名或路径前缀");
-            }
-            let base = if remote {
-                &s.remote_path
+            let selected = if remote {
+                &s.remote_selection
             } else {
-                &s.local_path
+                &s.local_selection
             };
-            if action == FileAction::Rename {
-                let selected = if remote {
-                    &s.remote_selection
-                } else {
-                    &s.local_selection
-                };
-                if selected.len() != 1 {
-                    return Err("重命名时请选择一个项目");
-                }
-                let from = selected.iter().next().unwrap().clone();
-                let to = if remote {
-                    remote_join(
-                        from.rsplit_once('/')
-                            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
-                            .unwrap_or("."),
-                        name,
-                    )
-                } else {
-                    Path::new(&from)
-                        .parent()
-                        .unwrap_or_else(|| Path::new(base))
-                        .join(name)
-                        .to_string_lossy()
-                        .into_owned()
-                };
-                return Ok(if remote {
-                    Action::RemoteRename(from, to)
-                } else {
-                    Action::LocalRename(from.into(), to.into())
-                });
+            if selected.len() != 1 {
+                return Err("重命名时请选择一个项目");
             }
-            Ok(match (action, remote) {
-                (FileAction::CreateFile, true) => Action::RemoteCreateFile(remote_join(base, name)),
-                (FileAction::CreateFile, false) => {
-                    Action::LocalCreateFile(Path::new(base).join(name))
-                }
-                (FileAction::CreateFolder, true) => Action::RemoteMkdir(remote_join(base, name)),
-                (FileAction::CreateFolder, false) => Action::LocalMkdir(Path::new(base).join(name)),
-                (FileAction::Rename, _) => unreachable!(),
-            })
+            rename_action(s, remote, selected.iter().next().unwrap(), &s.name)
         });
         match operation {
             Ok(action) => {
@@ -1141,6 +1087,32 @@ impl Ui {
             }
             Err(e) => self.state.revise(|s| s.dialog_error = e.into()),
         }
+    }
+}
+fn rename_action(
+    s: &State,
+    remote: bool,
+    from: &str,
+    name: &str,
+) -> std::result::Result<Action, &'static str> {
+    if !workspace::ready(s, remote) {
+        return Err("请先成功读取目标目录");
+    }
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return Err("请输入不含路径分隔符的文件名");
+    }
+    if remote {
+        let parent = from.rsplit_once('/').map_or(".", |(parent, _)| parent);
+        Ok(Action::RemoteRename(from.into(), remote_join(parent, name)))
+    } else {
+        if !safe_local_name(name) {
+            return Err("本地名称包含无效字符、设备名或路径前缀");
+        }
+        Ok(Action::LocalRename(
+            from.into(),
+            Path::new(from).with_file_name(name),
+        ))
     }
 }
 fn import_profiles(
@@ -1966,8 +1938,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
-            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.file_browser.reset(false);s.local_path=local_display(&path);s.local_ready=true;s.local=entries;s.local_selection.clear();s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
-            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{file_browser::remote_listed(s,&path);s.file_browser.reset(true);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;s.remote_selection.clear();});events.save();},
+            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
+            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
             Update::Children{remote:true,result,..} if events.player.awaiting_directory(response.serial) =>
                 events.player.listed(&events,result),
             Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
@@ -1981,7 +1953,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             Update::ConnectionLost(message)=>{
                 events.player.close(&events);
                 #[cfg(windows)]
-                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
             Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
@@ -2001,17 +1973,29 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 if state.with(|s|s.cancels.is_empty()) {events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}}
                 events.schedule();
             }
-            Update::Log(message)=>{
-                events.log(message);
-                let file=state.with(|s|if s.file_pending==Some(response.serial){s.dialog.clone()}else{None});
-                if let Some(Dialog::File{remote,..})=file {state.revise(|s|{s.file_pending=None;s.dialog=None;s.dialog_error.clear();s.notice.clear();});events.refresh(remote);}
-            },
+            Update::Created{remote,name,directory}=>{
+                events.log(match (remote,directory) {
+                    (true,true)=>"远程目录已创建", (true,false)=>"远程文件已创建",
+                    (false,true)=>"本地目录已创建", (false,false)=>"本地文件已创建",
+                });
+                file_browser::refresh_changed_entry(&events,remote,response.serial,file_browser::NewEntryFocus::Edit(name));
+            }
+            Update::Renamed{remote,name}=>{
+                events.log(if remote {"远程文件已重命名"} else {"本地文件已重命名"});
+                if state.with(|s|s.file_pending==Some(response.serial) && s.dialog==Some(Dialog::RenameFile{remote})){
+                    state.revise(|s|{s.file_pending=None;s.dialog=None;s.dialog_error.clear();s.notice.clear();});
+                    events.refresh(remote);
+                }else{
+                    file_browser::refresh_changed_entry(&events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
+                }
+            }
             Update::Deleted{remote,result}=>file_context::deleted(&events,response.serial,remote,result),
             Update::DeletionProgress(progress)=>file_context::deletion_progress(&events,response.serial,progress),
             Update::FileMetadata(result)=>file_properties::metadata(&events,response.serial,result),
             Update::Permissions(result)=>file_properties::finished(&events,response.serial,result),
             Update::CodeFile(reply)=>code_workbench::reply(&events,response.serial,reply),
             Update::Error(message)=>{
+                if file_browser::mutation_failed(&events,response.serial,&message) {continue;}
                 let pending=state.with(|s|s.file_pending==Some(response.serial)||s.import_pending==Some(response.serial));
                 if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
                 else {events.error(format!("错误：{message}"));}

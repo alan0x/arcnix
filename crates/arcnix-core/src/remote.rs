@@ -1466,16 +1466,40 @@ impl RemoteSession {
     }
     pub fn create_file(&self, path: &str) -> Result<()> {
         validate_path(path)?;
-        let mut file = self
-            .sftp()?
+        self.open_new_file(path)?
+            .close()
+            .context("Cannot close the new remote file")
+    }
+
+    fn open_new_file(&self, path: &str) -> Result<ssh2::File> {
+        self.sftp()?
             .open_mode(
                 Path::new(path),
                 OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
                 0o644,
                 OpenType::File,
             )
-            .context("Cannot create remote file")?;
-        file.close().context("Cannot close the new remote file")
+            .context("Cannot create remote file")
+    }
+
+    /// SFTP v3 servers can report a generic failure for name collisions.
+    pub fn try_create_entry(&self, path: &str, directory: bool) -> Result<bool> {
+        validate_path(path)?;
+        let opened = if directory {
+            self.mkdir(path).map(|()| None)
+        } else {
+            self.open_new_file(path).map(Some)
+        };
+        match opened {
+            Ok(file) => {
+                if let Some(mut file) = file {
+                    file.close().context("Cannot close the new remote file")?;
+                }
+                Ok(true)
+            }
+            Err(_) if self.sftp()?.lstat(Path::new(path)).is_ok() => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn mkdir(&self, path: &str) -> Result<()> {

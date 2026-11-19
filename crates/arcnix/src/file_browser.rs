@@ -15,6 +15,16 @@ pub(super) struct PaneState {
     pub editing: bool,
     draft: String,
     copied: bool,
+    mutation: Option<u64>,
+    edit_path: Option<String>,
+    name_error: String,
+    after_listing: Option<NewEntryFocus>,
+}
+
+#[derive(Clone)]
+pub(super) enum NewEntryFocus {
+    Edit(String),
+    Select(String),
 }
 
 #[derive(Clone, Default)]
@@ -78,8 +88,13 @@ struct FileDrag {
     entries: Vec<FileEntry>,
 }
 impl BrowserState {
-    pub(super) fn reset_remote_history(&mut self) {
+    pub(super) fn reset_session(&mut self) {
         self.remote_history = RemoteHistory::default();
+        self.reset(true);
+        self.local.mutation = None;
+        self.local.edit_path = None;
+        self.local.after_listing = None;
+        self.local.name_error.clear();
     }
 
     pub(super) fn cancel_path_edit(&mut self, remote: bool) {
@@ -359,6 +374,19 @@ pub(super) fn rows(s: &State, remote: bool) -> Vec<FileRow> {
         0,
         &mut out,
     );
+    if let Some(path) = &s.file_browser.pane(remote).edit_path
+        && !out.iter().any(|row| row.entry.path == *path)
+        && let Some(entry) = (if remote { &s.remote } else { &s.local })
+            .iter()
+            .find(|entry| entry.path == *path)
+    {
+        out.push(FileRow {
+            entry: entry.clone(),
+            depth: 0,
+            expanded: false,
+            loading: false,
+        });
+    }
     out
 }
 pub(super) fn entries(s: &State, remote: bool) -> Vec<FileEntry> {
@@ -496,6 +524,7 @@ enum GestureKind {
     Properties,
     Refresh,
     EditPath,
+    FinishName,
     Select,
     Activate,
     Expand,
@@ -514,6 +543,8 @@ struct Gesture {
     range: bool,
     #[serde(default)]
     drag_id: u64,
+    #[serde(default)]
+    name: Option<String>,
 }
 pub(super) fn clear_selection(s: &mut State, remote: bool) {
     selection(s, remote).clear();
@@ -696,6 +727,132 @@ fn toggle_tree(ui: &Ui, remote: bool, target: &str, force: Option<bool>) {
         });
     }
 }
+pub(super) fn can_create(s: &State, remote: bool) -> bool {
+    workspace::ready(s, remote)
+        && s.file_pending.is_none()
+        && (!remote || !s.system_task_running)
+        && s.file_browser.pane(remote).mutation.is_none()
+}
+
+pub(super) fn create(ui: &Ui, remote: bool, directory: bool) {
+    if !ui.state.with(|s| can_create(s, remote)) {
+        return;
+    }
+    let serial = ui.send(Action::CreateEntry {
+        remote,
+        parent: ui.state.with(|s| path(s, remote).to_owned()),
+        default_name: i18n::translate(if directory {
+            "新建文件夹"
+        } else {
+            "新建文件"
+        }),
+        directory,
+    });
+    ui.state.revise(|s| {
+        let pane = s.file_browser.pane_mut(remote);
+        pane.mutation = Some(serial);
+        pane.edit_path = None;
+        pane.name_error.clear();
+    });
+}
+
+pub(super) fn refresh_changed_entry(ui: &Ui, remote: bool, serial: u64, focus: NewEntryFocus) {
+    if ui
+        .state
+        .with(|s| s.file_browser.pane(remote).mutation == Some(serial))
+    {
+        ui.refresh(remote);
+        ui.state
+            .revise(|s| s.file_browser.pane_mut(remote).after_listing = Some(focus));
+    }
+}
+
+pub(super) fn listed(s: &mut State, remote: bool) {
+    let focus = s.file_browser.pane_mut(remote).after_listing.take();
+    s.file_browser.reset(remote);
+    selection(s, remote).clear();
+    let Some(focus) = focus else { return };
+    let name = match &focus {
+        NewEntryFocus::Edit(name) | NewEntryFocus::Select(name) => name,
+    };
+    let entries = if remote { &s.remote } else { &s.local };
+    if let Some(path) = entries
+        .iter()
+        .find(|entry| entry.name == *name)
+        .map(|entry| entry.path.clone())
+    {
+        selection(s, remote).insert(path.clone());
+        let pane = s.file_browser.pane_mut(remote);
+        pane.anchor = Some(path.clone());
+        if matches!(focus, NewEntryFocus::Edit(_)) {
+            pane.edit_path = Some(path);
+        }
+    }
+}
+
+fn finish_name(ui: &Ui, remote: bool, target: &str, name: Option<&str>) {
+    let editing = ui.state.with(|s| {
+        let pane = s.file_browser.pane(remote);
+        pane.edit_path.as_deref() == Some(target) && pane.mutation.is_none()
+    });
+    if !editing {
+        return;
+    }
+    let original = if remote {
+        target.rsplit('/').next()
+    } else {
+        Path::new(target).file_name().and_then(|n| n.to_str())
+    };
+    let Some(name) = name.map(str::trim).filter(|name| Some(*name) != original) else {
+        ui.state.revise(|s| {
+            let pane = s.file_browser.pane_mut(remote);
+            pane.edit_path = None;
+            pane.name_error.clear();
+        });
+        return;
+    };
+    match ui.state.with(|s| rename_action(s, remote, target, name)) {
+        Ok(action) => {
+            let serial = ui.send(action);
+            ui.state.revise(|s| {
+                let pane = s.file_browser.pane_mut(remote);
+                pane.mutation = Some(serial);
+                pane.name_error.clear();
+            });
+        }
+        Err(message) => ui
+            .state
+            .revise(|s| s.file_browser.pane_mut(remote).name_error = message.to_owned()),
+    }
+}
+
+fn pending_pane(s: &State, serial: u64) -> Option<bool> {
+    [false, true]
+        .into_iter()
+        .find(|&remote| s.file_browser.pane(remote).mutation == Some(serial))
+}
+
+pub(super) fn mutation_failed(ui: &Ui, serial: u64, message: &str) -> bool {
+    let Some(remote) = ui.state.with(|s| pending_pane(s, serial)) else {
+        return false;
+    };
+    let editing = ui.state.revise(|s| {
+        let pane = s.file_browser.pane_mut(remote);
+        pane.mutation = None;
+        if pane.edit_path.is_some() {
+            pane.name_error = message.to_owned();
+            true
+        } else {
+            false
+        }
+    });
+    if editing {
+        ui.log(message);
+    } else {
+        ui.error(message);
+    }
+    true
+}
 pub(super) fn accept_children(
     ui: &Ui,
     remote: bool,
@@ -767,7 +924,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
                     .len()
                         == 1
             }) {
-                workspace::begin_file(ui, remote, FileAction::Rename);
+                workspace::begin_rename(ui, remote);
             }
         }
         GestureKind::CopyPaths => file_context::copy_paths(ui, remote, false),
@@ -792,6 +949,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
                 begin_path_edit(s, remote);
             }
         }),
+        GestureKind::FinishName => finish_name(ui, remote, &event.path, event.name.as_deref()),
         GestureKind::Select => select(ui, remote, &event.path, event.toggle, event.range),
         GestureKind::Activate => activate(ui, remote, &event.path),
         GestureKind::Expand => toggle_tree(ui, remote, &event.path, Some(true)),
@@ -929,6 +1087,18 @@ pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                                         activate(&open, remote, &entry.get().entry.path)
                                     }),
                                 when(
+                                    state.map(move |s| {
+                                        s.file_browser.pane(remote).edit_path.as_deref()
+                                            == Some(entry.get().entry.path.as_str())
+                                    }),
+                                    move || {
+                                        input()
+                                            .class("file-inline-name")
+                                            .name(i18n::bind("新名称"))
+                                            .value(entry.get().entry.name)
+                                    },
+                                ),
+                                when(
                                     state.map(move |s| file_columns::visible(s, remote).size),
                                     move || {
                                         text().class("file-size").content(i18n::bind(entry.map(
@@ -974,6 +1144,16 @@ pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                                 ),
                             ))
                     }),
+            ),
+            when(
+                state.map(move |s| !s.file_browser.pane(remote).name_error.is_empty()),
+                move || {
+                    text()
+                        .class("form-error file-name-error")
+                        .content(i18n::bind(
+                            state.map(move |s| s.file_browser.pane(remote).name_error.clone()),
+                        ))
+                },
             ),
         ))
 }

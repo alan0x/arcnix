@@ -182,8 +182,14 @@ pub fn rename(from: &Path, to: &Path) -> Result<()> {
         fs::remove_file(from)?;
         return Ok(());
     }
-    #[cfg(not(windows))]
-    bail!("Directory rename without overwrite is currently supported on Windows only");
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
+        renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE)
+            .context("Cannot rename local entry without overwrite")
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    bail!("Directory rename without overwrite is unavailable on this platform");
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -414,6 +420,8 @@ mod tests {
             assert!(rename(&root.join("测试.txt"), &root.join("existing")).is_err());
             assert_eq!(fs::read(root.join("existing"))?, b"keep");
             rename(&root.join("测试.txt"), &root.join("renamed"))?;
+            rename(&root.join("目录"), &root.join("renamed folder"))?;
+            assert!(root.join("renamed folder").is_dir());
             Ok(())
         })();
         fs::remove_dir_all(&root)?;

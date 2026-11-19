@@ -79,23 +79,18 @@ fn selection(s: &mut State, remote: bool) -> &mut HashSet<String> {
         &mut s.local_selection
     }
 }
-pub(super) fn begin_file(ui: &Ui, remote: bool, action: FileAction) {
+pub(super) fn begin_rename(ui: &Ui, remote: bool) {
     if ui.state.with(|s| s.file_pending.is_some()) {
         return;
     }
     ui.state.revise(|s| {
-        s.name = if action == FileAction::Rename {
-            let entries = file_browser::entries(s, remote);
-            entries
-                .iter()
-                .find(|f| selected(s, remote).contains(&f.path))
-                .map(|f| f.name.clone())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        s.name = file_browser::entries(s, remote)
+            .iter()
+            .find(|f| selected(s, remote).contains(&f.path))
+            .map(|f| f.name.clone())
+            .unwrap_or_default();
     });
-    ui.open_dialog(Dialog::File { remote, action });
+    ui.open_dialog(Dialog::RenameFile { remote });
 }
 fn sort_button(
     ui: Ui,
@@ -409,49 +404,39 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
 pub(super) fn file_dialog(ui: Ui) -> impl Widget {
     let state = ui.state;
     when(
-        state.map(|s| matches!(s.dialog, Some(Dialog::File { .. }))),
+        state.map(|s| matches!(s.dialog, Some(Dialog::RenameFile { .. }))),
         move || {
-            let (remote, action) = ui.state.with(|s| match s.dialog {
-                Some(Dialog::File { remote, action }) => (remote, action),
-                _ => (false, FileAction::CreateFolder),
-            });
-            let (title, field, button) = match action {
-                FileAction::Rename => ("重命名", "新名称", "重命名"),
-                FileAction::CreateFolder => ("新建文件夹", "文件夹名称", "创建文件夹"),
-                FileAction::CreateFile => ("新建文件", "文件名", "创建文件"),
-            };
+            let remote = ui
+                .state
+                .with(|s| matches!(s.dialog, Some(Dialog::RenameFile { remote: true })));
             let submit = ui.clone();
             let enter = ui.clone();
             let cancel = ui.clone();
             modal(
                 ui.clone(),
-                title,
+                "重命名",
                 (
                     text()
                         .class("dialog-description")
                         .content(i18n::bind(state.map(move |s| {
                             let chosen = selected(s, remote).iter().next();
-                            let directory = if action == FileAction::Rename {
-                                chosen.map(|from| {
-                                    if remote {
-                                        from.rsplit_once('/')
-                                            .map(
-                                                |(parent, _)| {
-                                                    if parent.is_empty() { "/" } else { parent }
-                                                },
-                                            )
-                                            .unwrap_or(".")
-                                            .to_owned()
-                                    } else {
-                                        Path::new(from)
-                                            .parent()
-                                            .map(local_display)
-                                            .unwrap_or_else(|| s.local_path.clone())
-                                    }
-                                })
-                            } else {
-                                None
-                            };
+                            let directory = chosen.map(|from| {
+                                if remote {
+                                    from.rsplit_once('/')
+                                        .map(
+                                            |(parent, _)| {
+                                                if parent.is_empty() { "/" } else { parent }
+                                            },
+                                        )
+                                        .unwrap_or(".")
+                                        .to_owned()
+                                } else {
+                                    Path::new(from)
+                                        .parent()
+                                        .map(local_display)
+                                        .unwrap_or_else(|| s.local_path.clone())
+                                }
+                            });
                             if remote {
                                 format!(
                                     "远程目录：{}",
@@ -465,9 +450,9 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
                             }
                         }))),
                     col().class("field").fill((
-                        text().class("field-label").content(i18n::bind(field)),
+                        text().class("field-label").content(i18n::bind("新名称")),
                         input()
-                            .name(i18n::bind(field))
+                            .name(i18n::bind("新名称"))
                             .value(state.map(|s| s.name.clone()))
                             .on(value_changed, move |e| {
                                 if let Event::ValueChanged { value, .. } = e {
@@ -479,7 +464,7 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
                             })
                             .on(commit, move |_| {
                                 if enter.state.with(|s| s.file_pending.is_none()) {
-                                    enter.mutate_file(remote, action)
+                                    enter.rename_selected(remote)
                                 }
                             }),
                     )),
@@ -496,12 +481,12 @@ pub(super) fn file_dialog(ui: Ui) -> impl Widget {
                             if s.file_pending.is_some() {
                                 "正在处理…"
                             } else {
-                                button
+                                "重命名"
                             }
                             .to_string()
                         })))
                         .enabled(state.map(|s| s.file_pending.is_none()))
-                        .on_press(move || submit.mutate_file(remote, action)),
+                        .on_press(move || submit.rename_selected(remote)),
                 ),
             )
         },

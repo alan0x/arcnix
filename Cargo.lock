@@ -77,6 +77,7 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "reqwest",
+ "rustix",
  "semver",
  "serde",
  "serde_json",

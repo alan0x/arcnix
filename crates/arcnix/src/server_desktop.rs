@@ -297,7 +297,7 @@ pub(super) fn owns_dialog(s: &State) -> bool {
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess
                     | Dialog::ExplorerColor { .. }
-                    | Dialog::File { remote: true, .. }
+                    | Dialog::RenameFile { remote: true }
                     | Dialog::FileProperties
                     | Dialog::FileColumns { remote: true }
                     | Dialog::DeleteFiles { remote: true, .. }

@@ -452,7 +452,7 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                             },
                         ),
                         action(&ui, remote, "重命名", one, move || {
-                            workspace::begin_file(&rename, remote, FileAction::Rename)
+                            workspace::begin_rename(&rename, remote)
                         }),
                         when(
                             state.map(move |s| {
@@ -496,13 +496,13 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                 move || terminal_action(terminal.clone())
             }),
             fragment((
-                action(&ui, remote, "新建文件", available, {
+                action(&ui, remote, "新建文件", file_browser::can_create, {
                     let ui = ui.clone();
-                    move || workspace::begin_file(&ui, remote, FileAction::CreateFile)
+                    move || file_browser::create(&ui, remote, false)
                 }),
-                action(&ui, remote, "新建文件夹", available, {
+                action(&ui, remote, "新建文件夹", file_browser::can_create, {
                     let ui = ui.clone();
-                    move || workspace::begin_file(&ui, remote, FileAction::CreateFolder)
+                    move || file_browser::create(&ui, remote, true)
                 }),
             )),
             when(

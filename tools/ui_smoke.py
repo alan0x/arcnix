@@ -104,10 +104,10 @@ def main(fixture, output, package_checks):
             profile_row(index).locator(".host-select").click()
             expect(profile_row(index)).to_have_class(re.compile("selected"))
             expect(page.locator(".connection-state")).to_be_visible()
-            if page.locator(".connection-state").inner_text() != tr("SSH 已连接"):
-                page.locator(".overview-connect").click()
+            page.locator(".workbench-tabs").get_by_role("button", name="Home", exact=True).click()
+            page.locator(".overview-transfer").click()
             expect(page.locator(".connection-state")).to_have_text("SSH 已连接")
-            page.get_by_role("button", name="文件管理", exact=True).click()
+            expect(page.locator(".workbench-tab.active .workbench-tab-select")).to_have_text("Transfer files")
             expect(page.locator(".local-slot")).to_be_visible()
 
         expect(page.locator(".module-nav")).to_have_count(0)
@@ -115,8 +115,11 @@ def main(fixture, output, package_checks):
         expect(page.locator(".connection-controls")).to_have_count(0)
         expect(page.get_by_role("button", name="编辑服务器", exact=True)).to_have_count(0)
         expect(page.get_by_role("textbox", name="SSH 配置文件路径", exact=True)).to_have_count(0)
-        expect(page.locator(".navigation-rail button")).to_have_count(7)
-        assert "rail-servers" in page.locator(".navigation-rail button").first.get_attribute("class")
+        rail_buttons = page.locator(".navigation-rail button")
+        sections = ["Servers", "Scripts", "Tasks", "Backups", "Diagnostics", "Settings"]
+        expect(rail_buttons).to_have_count(len(sections))
+        for index, section in enumerate(sections):
+            expect(rail_buttons.nth(index)).to_have_accessible_name(section)
         workspace()
         expect(page.locator(".local-slot .file-row")).to_have_count(3)
 
@@ -285,7 +288,9 @@ def main(fixture, output, package_checks):
         nested.rmdir()
         page.screenshot(path=str(output / "explorer-files.png"))
         checks.append("Breadcrumb ancestors navigate directly; Ctrl+L edits, Escape cancels, and native copy preserves the full Unicode path")
-        assert page.locator(".module-nav").bounding_box()["y"] >= page.locator(".page-header").bounding_box()["height"], "connected modules belong below the page header"
+        expect(page.locator(".workspace-header .workbench-tabs")).to_be_visible()
+        header = page.locator(".workspace-header").bounding_box()
+        assert local_pane.bounding_box()["y"] >= header["y"] + header["height"]
         expect(page.locator(".connection-button")).to_have_text("断开连接")
         expect(page.locator(".connection-state")).to_have_text("SSH 已连接")
         expect(page.get_by_role("textbox", name="SSH 配置文件路径")).to_have_count(0)
@@ -388,15 +393,18 @@ def main(fixture, output, package_checks):
 
         page.get_by_role("button", name="本地文件操作", exact=True).click()
         page.get_by_role("button", name="新建文件夹", exact=True).click()
-        dialog = page.get_by_role("dialog", name="新建文件夹", exact=True)
-        dialog.get_by_role("textbox", name="文件夹名称", exact=True).fill("Documents")
-        dialog.get_by_role("button", name="创建文件夹", exact=True).click()
-        expect(dialog.locator(".form-error")).to_be_visible()
-        dialog.get_by_role("textbox", name="文件夹名称", exact=True).fill("new-folder")
-        dialog.get_by_role("button", name="创建文件夹", exact=True).click()
-        expect(dialog).to_have_count(0)
+        field = page.locator(".local-slot .file-inline-name")
+        expect(field).to_be_focused()
+        expect(field).to_have_value(tr("新建文件夹"))
+        assert (local / tr("新建文件夹")).is_dir()
+        field.fill("Documents")
+        field.press("Enter")
+        expect(page.locator(".file-name-error")).to_be_visible()
+        field.fill("new-folder")
+        field.press("Enter")
+        expect(field).to_have_count(0)
         assert (local / "new-folder").is_dir()
-        checks.append("File actions use contextual dialog and close only after worker success")
+        checks.append("New folders are created immediately and renamed inline")
 
         page.get_by_role("button", name="操作日志", exact=True).click()
         expect(page.locator(".logs")).to_be_visible()

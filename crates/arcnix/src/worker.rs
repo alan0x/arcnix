@@ -55,10 +55,12 @@ pub enum Action {
         remote: bool,
         path: String,
     },
-    LocalCreateFile(PathBuf),
-    RemoteCreateFile(String),
-    LocalMkdir(PathBuf),
-    RemoteMkdir(String),
+    CreateEntry {
+        remote: bool,
+        parent: String,
+        default_name: String,
+        directory: bool,
+    },
     LocalRename(PathBuf, PathBuf),
     Delete {
         remote: bool,
@@ -176,6 +178,11 @@ pub enum Update {
     Disconnected,
     Local(PathBuf, Vec<FileEntry>),
     Remote(String, Vec<FileEntry>),
+    Created {
+        remote: bool,
+        directory: bool,
+        name: String,
+    },
     Children {
         remote: bool,
         parent: String,
@@ -185,7 +192,10 @@ pub enum Update {
     TransferPlan(String, arcnix_core::transfer::TransferPlan),
     TransferFile(String, arcnix_core::transfer::FileProgress),
     Finished(String, Result<(), String>),
-    Log(String),
+    Renamed {
+        remote: bool,
+        name: String,
+    },
     Deleted {
         remote: bool,
         result: Result<usize, String>,
@@ -257,6 +267,23 @@ fn deletion_progress(
         }
     }
 }
+fn create_named_entry(
+    default_name: &str,
+    mut try_create: impl FnMut(&str) -> anyhow::Result<bool>,
+) -> anyhow::Result<String> {
+    for index in 1u64.. {
+        let name = if index == 1 {
+            default_name.to_owned()
+        } else {
+            format!("{default_name} ({index})")
+        };
+        if try_create(&name)? {
+            return Ok(name);
+        }
+    }
+    anyhow::bail!("No available name")
+}
+
 pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
     let (tx, rx) = mpsc::channel::<Request>();
     let (events, receive) = async_channel::bounded(128);
@@ -279,8 +306,7 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 }
                 Action::Local(_)
                 | Action::Children { remote: false, .. }
-                | Action::LocalCreateFile(_)
-                | Action::LocalMkdir(_)
+                | Action::CreateEntry { remote: false, .. }
                 | Action::LocalRename(..)
                 | Action::Delete { remote: false, .. }
                 | Action::ImportSshConfig(_) => {
@@ -326,14 +352,38 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                         .map(|(_, entries)| entries)
                         .map_err(|e| format!("{e:#}")),
                 }),
-                Action::LocalCreateFile(path) => {
-                    local::create_file(&path).map(|_| Update::Log("本地文件已创建".into()))
-                }
-                Action::LocalMkdir(path) => {
-                    local::mkdir(&path).map(|_| Update::Log("本地目录已创建".into()))
-                }
+                Action::CreateEntry {
+                    remote: false,
+                    parent,
+                    default_name,
+                    directory,
+                } => create_named_entry(&default_name, |name| {
+                    let path = Path::new(&parent).join(name);
+                    let result = if directory {
+                        local::mkdir(&path)
+                    } else {
+                        local::create_file(&path)
+                    };
+                    match result {
+                        Ok(()) => Ok(true),
+                        Err(_) if std::fs::symlink_metadata(&path).is_ok() => Ok(false),
+                        Err(error) => Err(error),
+                    }
+                })
+                .map(|name| Update::Created {
+                    remote: false,
+                    directory,
+                    name,
+                }),
                 Action::LocalRename(from, to) => {
-                    local::rename(&from, &to).map(|_| Update::Log("本地文件已重命名".into()))
+                    local::rename(&from, &to).map(|_| Update::Renamed {
+                        remote: false,
+                        name: to
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                    })
                 }
                 Action::Delete {
                     remote: false,
@@ -1013,17 +1063,30 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                                     }),
                                 }
                             }
-                            Action::RemoteCreateFile(path) => {
-                                remote.create_file(&path)?;
-                                send(Update::Log("远程文件已创建".into()));
-                            }
-                            Action::RemoteMkdir(path) => {
-                                remote.mkdir(&path)?;
-                                send(Update::Log("远程目录已创建".into()));
+                            Action::CreateEntry {
+                                remote: true,
+                                parent,
+                                default_name,
+                                directory,
+                            } => {
+                                let name = create_named_entry(&default_name, |name| {
+                                    remote.try_create_entry(
+                                        &crate::remote_join(&parent, name),
+                                        directory,
+                                    )
+                                })?;
+                                send(Update::Created {
+                                    remote: true,
+                                    directory,
+                                    name,
+                                });
                             }
                             Action::RemoteRename(from, to) => {
                                 remote.rename(&from, &to)?;
-                                send(Update::Log("远程文件已重命名".into()));
+                                send(Update::Renamed {
+                                    remote: true,
+                                    name: to.rsplit('/').next().unwrap_or(&to).to_owned(),
+                                });
                             }
                             Action::FileMetadata(path) => {
                                 file_completed = true;
@@ -1441,7 +1504,15 @@ mod tests {
             }
             _ => anyhow::bail!("wrong-server transfer was not rejected"),
         }
-        send(76, Action::RemoteMkdir("/must-not-be-created".into()))?;
+        send(
+            76,
+            Action::CreateEntry {
+                remote: true,
+                parent: "/".into(),
+                default_name: "must-not-be-created".into(),
+                directory: true,
+            },
+        )?;
         let stale = receive(&rx)?;
         assert_eq!(stale.epoch, 76);
         assert!(matches!(stale.update, Update::Error(_)));

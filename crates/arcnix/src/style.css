@@ -1548,3 +1548,8 @@ html[data-explorer-downloading] .explorer-download-drop {
 .remote-player-status, .remote-player-error { padding: 12px 14px; overflow-wrap: anywhere; }
 .remote-player-status:empty, .remote-player-error { display: none; }
 .remote-player:has(.playback-failed) .remote-player-error { display: block; color: var(--danger); }
+
+.file-row:has(.file-inline-name) .file-label { display: none; }
+.details-view .file-row:has(.file-inline-name) .file-name { flex: none; margin: 0; }
+.file-inline-name { flex: 1; min-width: 0; width: 100%; height: 28px; padding-inline: 4px; font: inherit; user-select: text; }
+.icons-view .file-inline-name { flex: none; text-align: center; }
