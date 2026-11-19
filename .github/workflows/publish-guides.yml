@@ -1,0 +1,21 @@
+name: Publish user guides
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/guide/**']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  rebuild-website:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start the production website build
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_ACTIONS_TOKEN }}
+        run: |
+          : "${GH_TOKEN:?Set WEBSITE_ACTIONS_TOKEN with Actions write access to arcnix-org/website}"
+          gh workflow run deploy.yml --repo arcnix-org/website --ref main
