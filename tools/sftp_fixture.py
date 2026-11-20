@@ -1370,6 +1370,11 @@ ARCNIX_METRICS_END
                     channel.send_exit_status(1)
                 elif "empty.service" in text:
                     channel.send_exit_status(0)
+                elif "colors.service" in text:
+                    # journalctl exports a message with control characters as a byte array.
+                    record = dict(__REALTIME_TIMESTAMP="1794499320000000", _SYSTEMD_UNIT="colors.service", PRIORITY="6", MESSAGE=list(b"\x1b[32mFixture colored line\x1b[0m done"))
+                    channel.sendall((json.dumps(record) + "\n").encode())
+                    channel.send_exit_status(0)
                 elif "journalctl" in text:
                     records = [dict(__REALTIME_TIMESTAMP="1794499200000000", _SYSTEMD_UNIT="ssh.service", PRIORITY="6", MESSAGE="Accepted publickey for arcnix"),
                                dict(__REALTIME_TIMESTAMP="1794499260000000", _SYSTEMD_UNIT="nginx.service", PRIORITY="4", MESSAGE="Fixture service warning\nSecond line preserved")]

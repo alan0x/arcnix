@@ -25,13 +25,7 @@ pub(super) struct DockerState {
     original_cpu: String,
     original_memory: String,
 }
-/// One styled run of log text.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct LogSpan {
-    text: String,
-    class: String,
-    style: Style,
-}
+use crate::log_text::{LogSpan, Spans};
 /// The parsed logs from one reply. The spans are shared so that cloning the
 /// state stays cheap, and they are rendered once per reply instead of being
 /// bound individually, which would re-evaluate every span on any state change.
@@ -40,8 +34,6 @@ pub(super) struct LogView {
     reply: u64,
     spans: std::rc::Rc<[LogSpan]>,
 }
-/// Bounds the rendered nodes; the oldest spans are merged into plain text first.
-const LOG_SPAN_LIMIT: usize = 4000;
 /// `docker logs --timestamps` prefixes each line with an RFC 3339 time and a space.
 fn split_timestamp(line: &str) -> Option<(&str, &str)> {
     let (time, rest) = line.split_once(' ')?;
@@ -56,55 +48,23 @@ fn split_timestamp(line: &str) -> Option<(&str, &str)> {
 /// Container output with its terminal colors, one muted timestamp per line.
 /// A carriage return in a line restarts only the output after the timestamp.
 fn log_spans(logs: &str) -> Vec<LogSpan> {
-    // Styles are computed only for the spans that are kept, after the limit.
-    enum Look {
-        Plain,
-        Time,
-        Pen(crate::ansi::Pen),
-    }
-    let mut parser = crate::ansi::Parser::default();
-    let mut spans: Vec<(String, Look)> = Vec::new();
-    let mut line_spans = Vec::new();
+    let mut spans = Spans::default();
     for line in logs.strip_suffix('\n').unwrap_or(logs).split('\n') {
-        let (time, output) = match split_timestamp(line) {
-            Some((time, output)) => (Some(time), output),
-            None => (None, line),
+        let output = match split_timestamp(line) {
+            Some((time, output)) => {
+                spans.plain(&format!("{time} "), "docker-log-time");
+                output
+            }
+            None => line,
         };
-        if let Some(time) = time {
-            spans.push((format!("{time} "), Look::Time));
-        }
-        line_spans.clear();
-        parser.line(output, &mut line_spans);
-        spans.extend(
-            line_spans
-                .drain(..)
-                .map(|span| (span.text, Look::Pen(span.pen))),
-        );
-        match spans.last_mut() {
-            Some((text, _)) if !text.ends_with('\n') => text.push('\n'),
-            _ => spans.push(("\n".into(), Look::Plain)),
-        }
+        spans.output(output);
+        spans.newline();
     }
     // Output with nothing to show, such as an empty reply, reads as "No logs".
-    if spans.iter().all(|(text, _)| text.trim().is_empty()) {
+    if spans.is_blank() {
         return Vec::new();
     }
-    if spans.len() > LOG_SPAN_LIMIT {
-        let excess = spans.len() - LOG_SPAN_LIMIT + 1;
-        let merged = spans.drain(..excess).map(|(text, _)| text).collect();
-        spans.insert(0, (merged, Look::Plain));
-    }
-    spans
-        .into_iter()
-        .map(|(text, look)| {
-            let (class, style) = match look {
-                Look::Plain => (String::new(), Style::new()),
-                Look::Time => ("docker-log-time".into(), Style::new()),
-                Look::Pen(pen) => pen.presentation(),
-            };
-            LogSpan { text, class, style }
-        })
-        .collect()
+    spans.finish()
 }
 fn ready(s: &State) -> bool {
     s.connected
@@ -467,20 +427,7 @@ fn detail(ui: Ui) -> impl Widget {
                         each(state.map(|s| s.docker.logs.iter().cloned().collect::<Vec<_>>()))
                             .key(|logs: &LogView| logs.reply)
                             .children(|item| {
-                                let logs = item.value.get_untracked();
-                                view().class("docker-log-output").fill(
-                                    logs.spans
-                                        .iter()
-                                        .map(|span| {
-                                            text()
-                                                .kind(TextKind::Inline)
-                                                .selectable(true)
-                                                .class(span.class.clone())
-                                                .style(span.style.clone())
-                                                .content(span.text.clone())
-                                        })
-                                        .collect::<Vec<_>>(),
-                                )
+                                crate::log_text::view_spans("docker-log-output", &item.value.get_untracked().spans)
                             })
                     })
                     .otherwise(move || text().class("docker-log-output").content(state.map(|s| i18n::translate(if s.docker.pending.is_some() { "Loading…" } else { "No logs" })))),
@@ -962,9 +909,9 @@ mod tests {
             [
                 ("2026-11-18T09:15:02.123456789Z ", "docker-log-time"),
                 ("INFO", "ansi ansi-fg-2"),
-                (" ready\n", "ansi"),
+                (" ready\n", ""),
                 ("2026-11-18T09:15:03.000000000Z ", "docker-log-time"),
-                ("plain\n", "ansi"),
+                ("plain\n", ""),
             ]
         );
     }
@@ -973,16 +920,6 @@ mod tests {
         let logs = "2026-11-18T09:15:02.1Z 10%\r100%\n\nno timestamp: here\n";
         let text: String = log_spans(logs).into_iter().map(|s| s.text).collect();
         assert_eq!(text, "2026-11-18T09:15:02.1Z 100%\n\nno timestamp: here\n");
-    }
-    #[test]
-    fn log_spans_are_bounded_keeping_the_newest_colors() {
-        let line = "\x1b[31mr\x1b[32mg\n".repeat(LOG_SPAN_LIMIT);
-        let spans = log_spans(&line);
-        assert_eq!(spans.len(), LOG_SPAN_LIMIT);
-        assert_eq!(spans[0].class, "");
-        assert_eq!(spans.last().unwrap().class, "ansi ansi-fg-2");
-        let text: String = spans.into_iter().map(|s| s.text).collect();
-        assert_eq!(text, "rg\n".repeat(LOG_SPAN_LIMIT));
     }
     #[test]
     fn logs_without_visible_output_read_as_no_logs() {

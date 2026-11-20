@@ -34,6 +34,16 @@ fn discover_and_read_logs_without_sftp() -> Result<()> {
     assert_eq!(logs.source, LogSource::Journal);
     assert!(!logs.entries.is_empty());
     assert!(logs.entries.iter().any(|entry| entry.timestamp.is_some()));
+    // A message with control characters arrives as journalctl's byte array.
+    let colored = LogQuery {
+        unit: "colors.service".into(),
+        ..query.clone()
+    };
+    let logs = system_logs::read(&session, &colored)?;
+    assert_eq!(
+        logs.entries[0].message,
+        "\x1b[32mFixture colored line\x1b[0m done"
+    );
     let file_query = LogQuery {
         source: LogSource::Syslog,
         ..Default::default()

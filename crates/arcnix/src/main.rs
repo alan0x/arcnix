@@ -34,6 +34,7 @@ mod help_ui;
 mod i18n;
 mod icons;
 mod installation_ui;
+mod log_text;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod monitor_ui;
