@@ -900,7 +900,7 @@ impl Ui {
                 if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
-            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());}if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
+            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
             Update::Children{remote:true,result,..} if events.player.awaiting_directory(events, response.serial) =>
                 events.player.listed(events,result),
@@ -959,7 +959,7 @@ impl Ui {
             Update::Error(message)=>{
                 if file_browser::mutation_failed(events,response.serial,&message) {return;}
                 let pending=state.with(|s|s.file_pending==Some(response.serial)||(!s.background&&s.import_pending==Some(response.serial)));
-                if pending {state.revise(|s|{if s.file_pending==Some(response.serial){s.file_pending=None;}if s.import_pending==Some(response.serial){s.import_pending=None;}s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
+                if pending {state.revise(|s|{if s.file_pending==Some(response.serial){s.file_pending=None;};if s.import_pending==Some(response.serial){s.import_pending=None;}s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
                 else {events.error(format!("错误：{message}"));}
             },
             Update::ConnectionError(message)=>events.connection_failed(Some(&format!("连接失败：{message}")),false),
@@ -1392,15 +1392,15 @@ impl Ui {
             }
             s.parked
                 .iter()
-                .filter_map(|(key, session)| {
-                    (session.connected
+                .filter(|(key, session)| {
+                    session.connected
                         && !session.queue_paused
                         && s.jobs.iter().any(|job| {
                             job.status == TransferStatus::Queued
                                 && Some(&job.server_id) == key.as_ref()
-                        }))
-                    .then(|| key.clone())
+                        })
                 })
+                .map(|(key, _)| key.clone())
                 .collect::<Vec<_>>()
         });
         for key in parked {
