@@ -101,7 +101,7 @@ def watch_player_scrollbars(page):
     page.evaluate("""() => {
         const stats = window.playerLayout = {frames: 0, overflow: null};
         function sample() {
-            const player = document.querySelector('.desktop-window.app-video');
+            const player = document.querySelector('.desktop-window.app-player');
             if (player?.getClientRects().length) {
                 stats.frames++;
                 for (const el of [player, ...player.querySelectorAll('*')]) {
@@ -162,7 +162,7 @@ def run(preview, binary=None, read_delay=.003):
             assert video.evaluate('v => v.videoWidth === 640 && v.duration > 150 && v.getVideoPlaybackQuality().totalVideoFrames > 0')
             first = sum(length for _, length in reads())
             assert first < size / 4
-            window = page.locator('.desktop-window.app-video')
+            window = page.locator('.desktop-window.app-player')
             expect(window.locator('.desktop-window-title')).to_have_text(media.name)
             if preview:
                 eventually(lambda: video.evaluate('v => v.currentTime > 2'))
@@ -171,6 +171,24 @@ def run(preview, binary=None, read_delay=.003):
                 app.screenshot('player.png')
                 print(f'Preview ready: {app.process.pid} {out}', flush=True)
                 return app.process.wait()
+            open_video = window.locator('.desktop-window-actions').get_by_role('button', name='Open video', exact=True)
+            assert open_video.evaluate("button => button.nextElementSibling.matches('.window-minimize')")
+            open_video.click()
+            picker = page.get_by_role('dialog', name='Open video', exact=True)
+            expect(picker.get_by_role('button', name=media.name, exact=True)).to_be_visible()
+            expect(picker.locator('xpath=ancestor::*[contains(@class, "desktop-modal-backdrop")]')).to_be_visible()
+            expect(video).to_be_visible()
+            page.keyboard.press('Escape')
+            expect(picker).to_have_count(0)
+            expect(window.locator('.desktop-window-title')).to_have_text(media.name)
+
+            video.click()
+            eventually(lambda: video.evaluate('v => v.paused'))
+            expect(window.locator('.player-feedback')).to_have_attribute('data-symbol', 'play')
+            expect(window.locator('.player-feedback')).to_be_visible()
+            video.click()
+            eventually(lambda: video.evaluate('v => !v.paused'))
+            expect(window.locator('.player-feedback')).to_be_hidden()
             # Minimize the playing video, use SFTP, then return through the Dock.
             media_element = video.element_handle()
             playing_at = video.evaluate('v => v.currentTime')
@@ -183,7 +201,7 @@ def run(preview, binary=None, read_delay=.003):
             expect(app.file('nested.txt')).to_be_visible(timeout=2500)
             browse = time.monotonic() - started
             eventually(lambda: media_element.evaluate('(v,t) => !v.paused && v.currentTime > t + .25', playing_at))
-            app.application('Video player')
+            app.application('Player')
             expect(window).to_be_visible()
             assert video.evaluate('(v, previous) => v === previous', media_element)
             click_play_pause(page, session)
@@ -192,7 +210,7 @@ def run(preview, binary=None, read_delay=.003):
             positioned = check_geometry(page, window)
             window.locator('.window-minimize').click()
             expect(window).to_be_hidden()
-            app.application('Video player')
+            app.application('Player')
             page.wait_for_timeout(800)
             assert video.evaluate('v => v.currentTime') == stopped
             before = len(reads())
@@ -211,22 +229,22 @@ def run(preview, binary=None, read_delay=.003):
             assert total < size / 2 and not list(local.iterdir())
             window.locator('.window-close').click()
             expect(video).to_have_count(0)
-            expect(page.locator('.desktop-dock .app-video')).to_have_count(0)
+            expect(page.locator('.desktop-dock .app-player')).to_have_count(0)
             # Already-issued SFTP reads may finish after the UI closes. Wait for
             # the peer to release this handle, then verify that reads stay stopped.
             eventually(lambda: '/' + media.name in trace.with_suffix('.closed').read_text().splitlines())
             settled = len(reads())
             page.wait_for_timeout(600)
             assert len(reads()) == settled
-            # The same action must also work inside the server desktop's explorer.
+            # The same action must also work inside the server desktop's files.
             app.application('Files')
-            page.locator('.explorer-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
+            page.locator('.files-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
             app.file(media.name).dblclick()
             eventually(lambda: video.evaluate('v => v.currentTime > .3'), timeout=25)
             window.locator('.window-close').click()
             expect(video).to_have_count(0)
             app.file(media.name).click(button='right')
-            app.action('Play')
+            app.action('Open with'); app.action('Player')
             eventually(lambda: video.evaluate('v => v.currentTime > .3'), timeout=25)
             restored = window.bounding_box()
             assert all(abs(restored[k] - v) <= 2 for k, v in positioned.items()), (restored, positioned)

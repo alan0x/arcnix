@@ -1,5 +1,6 @@
 """Owned SSH/WebView scenarios for desktop isolation, installers and session restore."""
 import json,time,re
+from server_apps_fixture import read_desktop_settings
 from desktop_fixture import Desktop,Peer,ROOT,expect,eventually
 from docker_desktop_smoke import seed
 
@@ -58,7 +59,7 @@ def main():
             d.get_by_role('button',name='Every 10 s',exact=True).click()
             expect(d).to_contain_text('Saved on server')
             prefs=ubuntu.root/'home/arcnix/.arcnix/desktop.json'
-            assert json.loads(prefs.read_text())['resource_interval_seconds']==10
+            assert read_desktop_settings(prefs)['resource_interval_seconds']==10
             d.get_by_role('button',name='Keyboard shortcuts',exact=True).click()
             expect(d).to_contain_text('Ctrl+Shift+T')
             expect(d).to_contain_text('Ctrl+S')
@@ -99,7 +100,7 @@ def main():
             expect(p.locator('.resource-table')).to_contain_text('eth0')
             network = sections.get_by_role('button',name='Network',exact=True)
             expect(network.locator('.monitor-section-summary')).to_contain_text('KiB/s', timeout=15000)
-            p.locator('.desktop-window.app-resources .window-maximize').click()
+            p.locator('.desktop-window.app-monitor .window-maximize').click()
             sidebar_widths = []
             for width, height in [(1440, 980), (1100, 780), (900, 660)]:
                 p.set_viewport_size(dict(width=width, height=height))
@@ -231,8 +232,8 @@ def main():
             checks.append('Services link to filtered logs within Monitor and retain the selected unit on return. Task dialogs and scrims stay within the resized desktop')
 
             enter('Docker');p.locator('.docker-toolbar').get_by_role('button',name='Install software',exact=True).click()
-            expect(p.locator('.software-store')).to_be_visible()
-            p.locator('.store-app-card').filter(has=p.get_by_role('button',name='Nginx',exact=True)).get_by_role('button',name='Install…',exact=True).click()
+            expect(p.locator('.app-center-content')).to_be_visible()
+            p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name='Nginx',exact=True)).get_by_role('button',name='Install…',exact=True).click()
             d=p.get_by_role('dialog',name='Install software',exact=True)
             expect(d.get_by_role('button',name='Docker Compose',exact=True)).to_have_attribute('aria-pressed','true')
             d.get_by_role('textbox',name='Project name',exact=True).fill('nginx-demo')
@@ -250,7 +251,7 @@ def main():
             p.get_by_role('button',name='Compose file',exact=True).click();expect(p.locator('.compose-preview')).to_contain_text('18080:80')
             p.locator('.compose-actions').get_by_role('button',name='Open folder',exact=True).click()
             expect(app.file('compose.yaml')).to_be_visible()
-            checks.append('Docker and Software share one installer; Compose definitions persist under the SSH home and projects support review/apply, lifecycle and Explorer access')
+            checks.append('Docker and App Center share one installer; Compose definitions persist under the SSH home and projects support review/apply, lifecycle and Files access')
 
             enter('Terminal');reader=p.locator('.terminal-surface .xterm-accessibility-tree');keyboard=p.locator('.terminal-surface .xterm-helper-textarea')
             expect(p.locator('.terminal-status')).to_have_text('Interactive SSH')
@@ -259,34 +260,34 @@ def main():
             title=p.locator('.desktop-window.active .desktop-window-titlebar').bounding_box();surface=p.locator('.terminal-surface').bounding_box();assert surface['y']-title['y']<=60,(title,surface)
             p.locator('.desktop-window.active .window-maximize').click()
             prefs=ubuntu.root/'home/arcnix/.arcnix/desktop.json'
-            eventually(lambda:json.loads(prefs.read_text()).get('terminal',{}).get('maximized') is True)
+            eventually(lambda:read_desktop_settings(prefs).get('terminal',{}).get('maximized') is True)
             app.screenshot('compact-terminal.png')
-            saved=json.loads(prefs.read_text());assert 'SESSION_SURVIVES_CLIENT' not in prefs.read_text()
+            saved=read_desktop_settings(prefs);assert 'SESSION_SURVIVES_CLIENT' not in json.dumps(saved)
             app.stop();app.launch();p=app.page;p.on('pageerror',lambda e:errors.append(str(e)))
             app.connect();enter('Terminal');reader=p.locator('.terminal-surface .xterm-accessibility-tree');keyboard=p.locator('.terminal-surface .xterm-helper-textarea')
             expect(reader).to_contain_text('SESSION_SURVIVES_CLIENT')
             expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             keyboard.focus();p.keyboard.type('pwd');p.keyboard.press('Enter');expect(reader).to_contain_text('/work')
-            assert json.loads(prefs.read_text())['terminal']['tabs'][0]['id']==saved['terminal']['tabs'][0]['id']
+            assert read_desktop_settings(prefs)['terminal']['tabs'][0]['id']==saved['terminal']['tabs'][0]['id']
             enter('Monitor');expect(p.locator('.monitor-sampling-interval')).to_have_text('Every 10 s')
             checks.append('Terminal uses one window header, persists layout without output transcripts and reconnects to the same tmux session/cwd after client restart')
 
-            p.locator('.host-select').nth(1).click();app.connect(1);enter('Software')
-            expect(p.locator('.store-app-card')).to_have_count(18)
-            p.locator('.store-app-card').filter(has=p.get_by_role('button',name='Nginx',exact=True)).get_by_role('button',name='Install…',exact=True).click()
+            p.locator('.host-select').nth(1).click();app.connect(1);enter('App Center')
+            expect(p.locator('.app-center-app-card')).to_have_count(18)
+            p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name='Nginx',exact=True)).get_by_role('button',name='Install…',exact=True).click()
             d=p.get_by_role('dialog',name='Install software',exact=True);expect(d.locator('.install-provider')).to_contain_text('DNF')
             expect(d.locator('.install-package-name')).to_have_text('nginx')
             d.get_by_role('button',name='Install',exact=True).click();finish_task(review=False)
-            p.locator('.store-navigation').get_by_role('button',name='Installed',exact=True).click()
-            expect(p.locator('.store-inventory-list')).to_contain_text('nginx')
-            p.locator('.store-navigation').get_by_role('button',name='Discover',exact=True).click()
-            p.locator('.store-app-card').filter(has=p.get_by_role('button',name='htop',exact=True)).get_by_role('button',name='Install…',exact=True).click()
+            p.locator('.app-center-navigation').get_by_role('button',name='Installed',exact=True).click()
+            expect(p.locator('.app-center-inventory-list')).to_contain_text('nginx')
+            p.locator('.app-center-navigation').get_by_role('button',name='Discover',exact=True).click()
+            p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name='htop',exact=True)).get_by_role('button',name='Install…',exact=True).click()
             d=p.get_by_role('dialog',name='Install software',exact=True);d.get_by_role('button',name='Snap',exact=True).click()
             expect(d.get_by_role('checkbox',name='Allow classic confinement',exact=True)).not_to_be_checked()
             d.get_by_role('button',name='Install',exact=True).click();finish_task(review=False)
-            p.locator('.store-navigation').get_by_role('button',name='Installed',exact=True).click()
-            expect(p.locator('.store-inventory-list')).to_contain_text('htop')
-            snap_row=p.locator('.store-installed-row').filter(has_text='htop')
+            p.locator('.app-center-navigation').get_by_role('button',name='Installed',exact=True).click()
+            expect(p.locator('.app-center-inventory-list')).to_contain_text('htop')
+            snap_row=p.locator('.app-center-installed-row').filter(has_text='htop')
             snap_row.get_by_role('button',name='Upgrade…',exact=True).click()
             p.get_by_role('dialog',name='Upgrade software',exact=True).get_by_role('button',name='Upgrade',exact=True).click()
             finish_task(review=False)

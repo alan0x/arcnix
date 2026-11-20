@@ -44,7 +44,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
     config['config']['trusted_hosts'].append(dict(host=host,port=int(port),fingerprint=b.data['host_key_rsa_fingerprint']))
     config['config']['snippets']=[dict(id='hold',name='Hold operation',description='Fixture server task',command='echo fixture-hold-operation',administrator=False),dict(id='param',name='Safe parameter',description='Literal input',command="printf '%s\\n' {{message}}",administrator=False)]
     with Desktop(out/f'desktop-{time.time_ns()}',config) as app:
-        p=enter_workspace(app,0,'Software')
+        p=enter_workspace(app,0,'App Center')
         p.get_by_role('textbox',name='Search packages',exact=True).fill('nginx')
         p.get_by_role('button',name='Search',exact=True).click()
         p.get_by_role('button',name='Preview install nginx',exact=True).click()
@@ -75,7 +75,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
                 if p.locator('.task-status').nth(index).inner_text()=='Succeeded':break
                 assert time.monotonic()<deadline,'Original server task did not finish'
                 time.sleep(.25)
-        p=enter_workspace(app,1,'Software')
+        p=enter_workspace(app,1,'App Center')
         p.get_by_role('textbox',name='Search packages',exact=True).fill('nginx')
         p.get_by_role('button',name='Search',exact=True).click()
         expect(p.get_by_role('button',name='Installed nginx',exact=True)).to_be_visible()
@@ -155,7 +155,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         p.get_by_role('button',name='Status',exact=True).click()
         expect(p.locator('.operations-output')).to_contain_text('ActiveState=active')
         app.stop();app.launch();p=app.page
-        p=enter_workspace(app,1,'Software')
+        p=enter_workspace(app,1,'App Center')
         p.get_by_role('button',name='Update package index',exact=True).click()
         check(app,'Failed');expect(p.locator('.task-output')).to_contain_text('Another Arcnix server operation is running')
         p=services(app);p.get_by_role('button',name='worker.service',exact=True).click()

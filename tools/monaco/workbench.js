@@ -18,6 +18,9 @@ import model from '@codingame/monaco-vscode-model-service-override';
 import theme from '@codingame/monaco-vscode-theme-service-override';
 import languages from '@codingame/monaco-vscode-languages-service-override';
 import keys from '@codingame/monaco-vscode-keybindings-service-override';
+import { Emitter } from '@codingame/monaco-vscode-api/vscode/vs/base/common/event';
+import { IKeybindingService } from '@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/keybinding.service';
+import { ResolvedKeybindingItem } from '@codingame/monaco-vscode-api/vscode/vs/platform/keybinding/common/resolvedKeybindingItem';
 import quickAccess from '@codingame/monaco-vscode-quickaccess-service-override';
 import notifications from '@codingame/monaco-vscode-notifications-service-override';
 import dialogs from '@codingame/monaco-vscode-dialogs-service-override';
@@ -55,6 +58,7 @@ import search from '@codingame/monaco-vscode-search-service-override';
 import { RemoteSearch } from './search.js';
 import { pagedEditorId, registerPagedFiles } from './paged-files.js';
 import { codeMenuServices } from './menus.js';
+import { registerCodeFormatters } from './formatters.js';
 import { sshTerminalServices } from './ssh-terminal.js';
 import textmate from '@codingame/monaco-vscode-textmate-service-override';
 import '@codingame/monaco-vscode-docker-default-extension';
@@ -335,6 +339,7 @@ await initialize(
 );
 
 const searchService = await getService(ISearchService);
+await registerCodeFormatters(zh);
 const pagedFiles = await registerPagedFiles(request, zh, remoteFiles.large);
 const remoteSearch = new RemoteSearch(root, request, zh, pagedFiles);
 for (const type of [SearchProviderType.file, SearchProviderType.text])
@@ -387,6 +392,27 @@ await (
   await getService(ICommandService)
 ).executeCommand('workbench.view.explorer');
 const textFiles = await getService(ITextFileService);
+const saveCommand = 'workbench.action.files.save';
+const keybindings = await getService(IKeybindingService);
+const saveShortcutChanged = new Emitter();
+keybindings.registerKeybindingProvider({
+  onDidChangeKeybindings: saveShortcutChanged.event,
+  provideKeybindings: () => {
+    const binding = window.arcnixWorkspace.saveShortcut;
+    if (binding === 'Ctrl+S') return [];
+    const layout = binding?.toLowerCase().replace(/arrow(up|down|left|right)/, '$1');
+    const custom = layout ? keybindings.resolveUserBinding(layout) : [];
+    return [
+      new ResolvedKeybindingItem(undefined, '-' + saveCommand, undefined, undefined, false, null, false),
+      ...custom.map((key) => new ResolvedKeybindingItem(key, saveCommand, undefined, undefined, false, null, false)),
+    ];
+  },
+});
+window.arcnixSetSaveShortcut = (binding) => {
+  if (window.arcnixWorkspace.saveShortcut === binding) return;
+  window.arcnixWorkspace.saveShortcut = binding;
+  saveShortcutChanged.fire();
+};
 document.addEventListener(
   'keydown',
   (event) => {
@@ -403,17 +429,13 @@ document.addEventListener(
       void commands.executeCommand('workbench.action.quickOpen');
       return;
     }
-    if (
-      event.target.closest?.('.terminal-wrapper, .xterm') ||
-      !(event.ctrlKey || event.metaKey) ||
-      event.altKey ||
-      event.shiftKey ||
-      event.key.toLowerCase() !== 's'
-    )
-      return;
+    if (event.target.closest?.('.terminal-wrapper, .xterm')) return;
+    const save = window.arcnixChordMatches(event, window.arcnixWorkspace.saveShortcut);
+    // Suppress the bundled workbench's original binding after remapping it.
+    if (!save && !window.arcnixChordMatches(event, 'Ctrl+S')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (event.isComposing) return;
+    if (!save || event.repeat) return;
     const editorUri = event.target
       .closest?.('.monaco-editor[data-uri]')
       ?.getAttribute('data-uri');

@@ -137,12 +137,12 @@ impl Modified {
 }
 
 pub(super) fn current(s: &State) -> &Search {
-    &s.server_apps.explorer_search
+    &s.server_apps.files_search
 }
 
 fn change(ui: &Ui, update: impl FnOnce(&mut Search)) {
     ui.state.revise(|s| {
-        update(&mut s.server_apps.explorer_search);
+        update(&mut s.server_apps.files_search);
         s.remote_selection.clear();
         s.file_browser.cancel_drag();
         s.file_menu = None;
@@ -157,7 +157,7 @@ fn folder_search_icon() -> impl Widget {
 pub(super) fn toggle(ui: Ui) -> impl Widget {
     let state = ui.state;
     sapid::button()
-        .class("icon-button explorer-search-toggle")
+        .class("icon-button files-search-toggle")
         .name(i18n::bind("Search files"))
         .pressed(state.map(|s| current(s).open))
         .enabled(
@@ -167,10 +167,10 @@ pub(super) fn toggle(ui: Ui) -> impl Widget {
         .on_press(move || {
             ui.state.revise(|s| {
                 if current(s).open {
-                    s.server_apps.explorer_search = Search::default();
+                    s.server_apps.files_search = Search::default();
                     file_browser::prune_selection(s, true);
                 } else {
-                    s.server_apps.explorer_search.open = true;
+                    s.server_apps.files_search.open = true;
                     s.file_browser.cancel_path_edit(true);
                 }
                 s.file_menu = None;
@@ -183,10 +183,10 @@ pub(super) fn field(ui: Ui) -> impl Widget {
     let state = ui.state;
     let query = ui.clone();
     let clear = ui.clone();
-    row().class("explorer-search-field").fill((
+    row().class("files-search-field").fill((
         row().class("folder-search-icon").fill(folder_search_icon()),
         input()
-            .class("explorer-search-input")
+            .class("files-search-input")
             .name(i18n::bind("Search current folder"))
             .semantics(Some(Box::new(Semantics {
                 placeholder: Some(i18n::translate("Search by filename")),
@@ -201,15 +201,15 @@ pub(super) fn field(ui: Ui) -> impl Widget {
         when(state.map(|s| !current(s).query.is_empty()), move || {
             let clear = clear.clone();
             close_action("Clear search")
-                .class("icon-button explorer-search-clear")
+                .class("icon-button files-search-clear")
                 .on_press(move || change(&clear, |search| search.query.clear()))
         }),
         sapid::button()
             .class(state.map(|s| {
                 if current(s).has_options() {
-                    "icon-button explorer-search-options-toggle filtered".to_owned()
+                    "icon-button files-search-options-toggle filtered".to_owned()
                 } else {
-                    "icon-button explorer-search-options-toggle".to_owned()
+                    "icon-button files-search-options-toggle".to_owned()
                 }
             }))
             .name(i18n::bind("Search filters"))
@@ -217,7 +217,7 @@ pub(super) fn field(ui: Ui) -> impl Widget {
             .fill(icons::glyph(Icon::Filter))
             .on_press(move || {
                 state.revise(|s| {
-                    s.server_apps.explorer_search.options = !current(s).options;
+                    s.server_apps.files_search.options = !current(s).options;
                     s.file_menu = None;
                     s.file_context = None;
                 });
@@ -232,10 +232,10 @@ pub(super) fn options(ui: Ui) -> impl Widget {
         move || {
             let reset = ui.clone();
             col()
-                .class("explorer-search-options")
+                .class("files-search-options")
                 .name(i18n::bind("Search filters"))
                 .fill((
-                    row().class("explorer-search-options-heading").fill((
+                    row().class("files-search-options-heading").fill((
                         text()
                             .class("section-title")
                             .content(i18n::bind("File types")),
@@ -254,7 +254,7 @@ pub(super) fn options(ui: Ui) -> impl Widget {
                             .map(|(kind, label)| {
                                 let choose = ui.clone();
                                 sapid::button()
-                                    .class("button compact explorer-filter-choice")
+                                    .class("button compact files-filter-choice")
                                     .label(i18n::bind(label))
                                     .pressed(state.map(move |s| current(s).kinds.contains(&kind)))
                                     .on_press(move || {
@@ -276,7 +276,7 @@ pub(super) fn options(ui: Ui) -> impl Widget {
                             .map(|(date, label)| {
                                 let choose = ui.clone();
                                 sapid::button()
-                                    .class("button compact explorer-filter-choice")
+                                    .class("button compact files-filter-choice")
                                     .label(i18n::bind(label))
                                     .pressed(state.map(move |s| current(s).modified == date))
                                     .on_press(move || {

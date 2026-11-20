@@ -9,9 +9,11 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
 
     use anyhow::{Result, ensure};
     use arcnix_core::Theme;
+    use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT};
     use arcnix_core::docker::{self, Operation};
     use arcnix_core::remote_tasks::quote as q;
-    use arcnix_core::server_apps::{self as apps, DesktopPreferences};
+    use arcnix_core::server_apps::{DesktopApp, DesktopPreferences, DesktopWindow, FolderColor};
+    use arcnix_core::sync::{Document, Snapshot, decode_desktop, desktop_commit_command};
 
     let distro = std::env::var("ARCNIX_TEST_SHELL_DISTRIBUTION")?;
     let raw = |script: &str| -> Result<Output> {
@@ -62,8 +64,18 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
         q(&root)
     ))?;
     let result = (|| -> Result<()> {
+        let document = Document::Desktop;
+        let read = document.read_command()?;
+        let commit = |base: &Snapshot, prefs: &DesktopPreferences| -> Result<String> {
+            let (command, payload) = desktop_commit_command(base, prefs)?;
+            Ok(format!(
+                "printf '%s' {} | {}",
+                q(std::str::from_utf8(&payload)?),
+                invoke(&command)
+            ))
+        };
         ensure!(
-            run(&invoke(&apps::preferences_read_command()))?.trim() == "null",
+            run(&invoke(&read))? == "M\n",
             "Missing preferences did not load defaults"
         );
         ensure!(
@@ -76,51 +88,185 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
         let prefs = DesktopPreferences {
             version: 1,
             theme: Theme::Dark,
+            browser_bookmarks: (0..BOOKMARK_LIMIT)
+                .map(|i| {
+                    let prefix = format!("https://example.com/{i}?q=");
+                    Bookmark {
+                        title: format!("Bookmark {i}"),
+                        url: format!("{prefix}{}", "x".repeat(URL_LIMIT - prefix.len())),
+                    }
+                })
+                .collect(),
+            windows: [
+                (
+                    DesktopApp::Files,
+                    DesktopWindow {
+                        maximized: true,
+                        ..Default::default()
+                    },
+                ),
+                (DesktopApp::Code, DesktopWindow::default()),
+            ]
+            .into(),
             ..Default::default()
         };
-        run(&invoke(&apps::preferences_write_command(&prefs)?))?;
-        let loaded = apps::parse_preferences(&run(&invoke(&apps::preferences_read_command()))?)?;
+        ensure!(
+            run(&commit(&Snapshot(None), &prefs)?)? == "OK\n",
+            "Initial save failed"
+        );
+        let output = run(&invoke(&read))?;
+        let data = output
+            .strip_prefix("F\n")
+            .expect("present desktop document");
+        ensure!(
+            data.len() > 128 * 1024,
+            "Native shell fixture did not exercise streamed input"
+        );
+        let base = Snapshot(Some(data.as_bytes().to_vec()));
+        let loaded = decode_desktop(&base)?;
         ensure!(loaded == prefs, "Remote preference round trip failed");
+        let config = format!("{home}/.arcnix/desktop");
+        let files: serde_json::Value = serde_json::from_str(&run(&format!(
+            "cat {}",
+            q(&format!("{config}/apps/files.json"))
+        ))?)?;
+        let code: serde_json::Value = serde_json::from_str(&run(&format!(
+            "cat {}",
+            q(&format!("{config}/apps/code.json"))
+        ))?)?;
+        ensure!(
+            files["window"]["maximized"] == true && code["window"]["maximized"] == false,
+            "Window state lost application ownership"
+        );
+        ensure!(
+            files.get("settings").is_some() && code.get("settings").is_none(),
+            "File settings leaked to another application"
+        );
+        let system = format!("{config}/system.json");
         let modes = run(&format!(
             "stat -c '%a' {} {}",
             q(&format!("{home}/.arcnix")),
-            q(&format!("{home}/.arcnix/desktop.json"))
+            q(&system)
         ))?;
         ensure!(
             modes == "700\n600\n",
             "Preferences were not private: {modes}"
         );
-        let inode = run(&format!(
-            "stat -c '%i' {}",
-            q(&format!("{home}/.arcnix/desktop.json"))
-        ))?;
-        run(&invoke(&apps::preferences_write_command(
-            &DesktopPreferences {
-                version: 1,
-                theme: Theme::Light,
-                ..Default::default()
-            },
-        )?))?;
+        let inode = run(&format!("stat -c '%i' {}", q(&system)))?;
+        let mut next = DesktopPreferences {
+            theme: Theme::Light,
+            ..prefs.clone()
+        };
+        next.files.colors.insert("/work".into(), FolderColor::Blue);
+        next.windows.get_mut(&DesktopApp::Code).unwrap().maximized = true;
+        let (interrupted, _) = desktop_commit_command(&base, &next)?;
         ensure!(
-            inode
-                != run(&format!(
-                    "stat -c '%i' {}",
-                    q(&format!("{home}/.arcnix/desktop.json"))
-                ))?,
-            "Save overwrote the original inode"
+            interrupted.starts_with("# arcnix:desktop:domains:commit\n"),
+            "Multi-file save did not use snapshot publication"
         );
-        run(&format!(
-            "mv {} {}\nprintf keep > {}\nln -s {} {}",
-            q(&format!("{home}/.arcnix/desktop.json")),
-            q(&format!("{home}/.arcnix/original.json")),
-            q(&format!("{root}/outside")),
-            q(&format!("{root}/outside")),
-            q(&format!("{home}/.arcnix/desktop.json"))
-        ))?;
         ensure!(
-            !raw(&invoke(&apps::preferences_write_command(&prefs)?))?
+            !raw(&format!("printf incomplete | {}", invoke(&interrupted)))?
                 .status
                 .success(),
+            "An incomplete upload was published"
+        );
+        ensure!(
+            run(&invoke(&read))? == output,
+            "An incomplete upload changed the active snapshot"
+        );
+        ensure!(
+            run(&commit(&base, &next)?)? == "OK\n",
+            "Updated save failed"
+        );
+        let updated = run(&invoke(&read))?;
+        let updated = updated
+            .strip_prefix("F\n")
+            .expect("present desktop document");
+        ensure!(
+            decode_desktop(&Snapshot(Some(updated.as_bytes().to_vec())))? == next,
+            "Publish exposed a mixture of revisions across application files"
+        );
+        ensure!(
+            run(&commit(&base, &prefs)?)? == "STALE\n",
+            "Stale revision overwrote the latest settings"
+        );
+        ensure!(
+            inode != run(&format!("stat -c '%i' {}", q(&system)))?,
+            "Save overwrote the original inode"
+        );
+
+        let active_generation = || run(&format!("readlink -- {}", q(&config)));
+        let generation = active_generation()?;
+        let files_path = format!("{config}/apps/files.json");
+        let unrelated = format!("{config}/apps/web_browser.json");
+        run(&format!("printf '\\n' >> {}", q(&unrelated)))?;
+        let file_identity = |path: &str| run(&format!("stat -c '%i %y' -- {}", q(path)));
+        let unchanged_browser = file_identity(&unrelated)?;
+        let files_before = file_identity(&files_path)?;
+        let output = run(&invoke(&read))?;
+        let current = Snapshot(Some(
+            output.strip_prefix("F\n").unwrap().as_bytes().to_vec(),
+        ));
+        let mut files_changed = next.clone();
+        files_changed
+            .files
+            .colors
+            .insert("/other".into(), FolderColor::Blue);
+        let (single, payload) = desktop_commit_command(&current, &files_changed)?;
+        ensure!(
+            single.starts_with("# arcnix:desktop:domains:file\n") && payload.len() < 4096,
+            "Files-only save uploaded a full snapshot"
+        );
+        ensure!(
+            !raw(&format!("printf incomplete | {}", invoke(&single)))?
+                .status
+                .success()
+                && file_identity(&files_path)? == files_before,
+            "Incomplete single-file upload changed Files"
+        );
+        let mut other_change = next.clone();
+        other_change.theme = Theme::System;
+        ensure!(run(&commit(&current, &other_change)?)? == "OK\n");
+        ensure!(
+            run(&commit(&current, &files_changed)?)? == "STALE\n"
+                && file_identity(&files_path)? == files_before,
+            "A stale single-file save was published"
+        );
+        let output = run(&invoke(&read))?;
+        let latest = Snapshot(Some(
+            output.strip_prefix("F\n").unwrap().as_bytes().to_vec(),
+        ));
+        files_changed.theme = other_change.theme;
+        let save_files = commit(&latest, &files_changed)?;
+        ensure!(run(&save_files)? == "OK\n");
+        let files_after = file_identity(&files_path)?;
+        ensure!(
+            files_after != files_before
+                && run(&save_files)? == "OK\n"
+                && file_identity(&files_path)? == files_after,
+            "Single-file save did not replace only once"
+        );
+        let output = run(&invoke(&read))?;
+        let saved = Snapshot(Some(
+            output.strip_prefix("F\n").unwrap().as_bytes().to_vec(),
+        ));
+        ensure!(
+            active_generation()? == generation
+                && file_identity(&unrelated)? == unchanged_browser
+                && decode_desktop(&saved)? == files_changed,
+            "Single-file saves changed the generation, touched the browser, or lost an edit"
+        );
+
+        run(&format!(
+            "mv {} {}\nprintf keep > {}\nln -s {} {}",
+            q(&system),
+            q(&format!("{config}/system.saved")),
+            q(&format!("{root}/outside")),
+            q(&format!("{root}/outside")),
+            q(&system)
+        ))?;
+        ensure!(
+            !raw(&commit(&base, &prefs)?)?.status.success(),
             "Linked preference file was followed"
         );
         ensure!(
@@ -129,22 +275,18 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
         );
         run(&format!(
             "rm -- {}\nmv {} {}\nln -s {} {}",
-            q(&format!("{home}/.arcnix/desktop.json")),
+            q(&system),
             q(&format!("{home}/.arcnix")),
             q(&format!("{home}/original-dir")),
             q(&format!("{home}/original-dir")),
             q(&format!("{home}/.arcnix"))
         ))?;
         ensure!(
-            !raw(&invoke(&apps::preferences_read_command()))?
-                .status
-                .success(),
+            !raw(&invoke(&read))?.status.success(),
             "Linked preference directory was followed"
         );
         ensure!(
-            !raw(&invoke(&apps::preferences_write_command(&prefs)?))?
-                .status
-                .success(),
+            !raw(&commit(&base, &prefs)?)?.status.success(),
             "Linked preference directory was written"
         );
 

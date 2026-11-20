@@ -189,7 +189,7 @@
     document.addEventListener('dblclick', event => {
         const target = event.target;
         if (event.button !== 0 || !(target instanceof Element) || desktopGeometry.movedRecently()) return;
-        if (target.closest('button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .explorer-search-options')) return;
+        if (target.closest('button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .files-search-options')) return;
         const titlebar = target.closest('.desktop-window-titlebar');
         if (!titlebar?.closest('.desktop-window:not(.hidden)') || !state()?.shown) return;
         const maximize = titlebar.querySelector('.window-maximize:not(:disabled)');

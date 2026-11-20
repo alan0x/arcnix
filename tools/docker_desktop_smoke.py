@@ -3,6 +3,7 @@ import json
 import re
 import time
 
+from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
 
@@ -101,8 +102,20 @@ def main():
             select('web')
             page.locator('.docker-container-actions').get_by_role('button', name='Logs', exact=True).click()
             expect(page.locator('.docker-log-output')).to_contain_text(re.compile(r'fixture web ready.*fixture stderr included.*fixture web after stderr', re.S))
-            page.locator('.docker-log-panel').get_by_role('button', name='Details', exact=True).click()
-            checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded, time-ordered stdout/stderr log snapshots work')
+            log_panel = page.locator('.docker-log-panel')
+            trace = peer.root / 'server-app-queries.jsonl'
+            log_panel.get_by_role('button', name='1000', exact=True).click()
+            expect(log_panel.get_by_role('button', name='1000', exact=True)).to_have_class(re.compile(r'\bactive\b'))
+            eventually(lambda: '--tail 1000 ' in trace.read_text())
+            expect(page.locator('.docker-log-output')).to_contain_text('fixture web after stderr')
+            log_panel.locator('.logs-filter').fill('STDERR')
+            expect(page.locator('.docker-log-output')).to_contain_text('fixture stderr included')
+            expect(page.locator('.docker-log-output')).not_to_contain_text('fixture web ready')
+            log_panel.locator('.logs-filter').fill('no such text')
+            expect(page.locator('.docker-log-output')).to_have_text('No entries match this filter.')
+            log_panel.locator('.logs-filter').fill('')
+            log_panel.get_by_role('button', name='Details', exact=True).click()
+            checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded, time-ordered stdout/stderr log snapshots work, with a line count and a text filter')
 
             def action(name, title, state):
                 page.locator('.docker-container-actions').get_by_role('button', name=name, exact=True).click()
@@ -143,7 +156,7 @@ def main():
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_have_attribute('aria-pressed', 'true')
             expect(dialog).to_contain_text('Saved on server')
             preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
-            assert json.loads(preferences.read_text())['theme'] == 'Dark'
+            assert read_desktop_settings(preferences)['theme'] == 'Dark'
             close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-dark desktop-dark')
             app.application('Terminal')
@@ -160,7 +173,7 @@ def main():
             expect(page.locator('.app')).to_have_class('app theme-light')
             app.workspace('Desktop')
             expect(page.locator('.app')).to_have_class('app theme-light')
-            checks.append('Remote-user theme saves to ~/.arcnix/desktop.json, changes the desktop and controls, preserves terminal history, and leaves Home using the client theme')
+            checks.append('Remote-user theme saves to its system.json domain, changes the desktop and controls, preserves terminal history, and leaves Home using the client theme')
 
             app.stop()
             app.launch()
@@ -176,7 +189,7 @@ def main():
             expect(dialog).to_contain_text('Permission denied')
             expect(dialog).to_contain_text('Pending sync')
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
-            assert json.loads(preferences.read_text())['theme'] == 'Dark'
+            assert read_desktop_settings(preferences)['theme'] == 'Dark'
             denied.unlink()
             dialog.get_by_role('button', name='Light', exact=True).click()
             expect(dialog.get_by_role('button', name='Light', exact=True)).to_have_attribute('aria-pressed', 'true')
@@ -184,15 +197,16 @@ def main():
             close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
             app.screenshot('docker-light-restored.png')
-            original = preferences.read_text()
-            preferences.write_text('{invalid JSON')
+            system_domain = desktop_settings_dir(preferences) / 'system.json'
+            original = system_domain.read_text()
+            system_domain.write_text('{invalid JSON')
             dialog = settings('General')
             dialog.get_by_role('button', name='Reload settings', exact=True).click()
             expect(dialog.locator('.desktop-preferences > .error')).not_to_be_empty()
             dialog.get_by_role('button', name='Desktop', exact=True).click()
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_be_disabled()
-            assert preferences.read_text() == '{invalid JSON'
-            preferences.write_text(original)
+            assert system_domain.read_text() == '{invalid JSON'
+            system_domain.write_text(original)
             dialog.get_by_role('button', name='General', exact=True).click()
             dialog.get_by_role('button', name='Reload settings', exact=True).click()
             dialog.get_by_role('button', name='Desktop', exact=True).click()
@@ -239,8 +253,8 @@ def main():
             expect(dialog).to_contain_text('Saved on server')
             close_settings()
             second = peer.root / 'home/arcnix-nosftp/.arcnix/desktop.json'
-            assert json.loads(second.read_text())['theme'] == 'Dark'
-            assert json.loads(preferences.read_text())['theme'] == 'Light'
+            assert read_desktop_settings(second)['theme'] == 'Dark'
+            assert read_desktop_settings(preferences)['theme'] == 'Light'
             page.locator('.host-select').nth(2).click()
             page.locator('.overview-connect').click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
@@ -274,7 +288,7 @@ def main():
             )).to_be_visible()
             expect(page.locator('.docker-page')).to_have_count(0)
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
-            assert not (other.root / 'home/arcnix/.arcnix/desktop.json').exists()
+            assert desktop_settings_dir(other.root / 'home/arcnix/.arcnix/desktop.json') is None
             checks.append('Malformed settings are preserved, partial inventory is rejected, and delayed Docker responses cannot leak into another server')
             # Return to the original login for localization checks.
             page.locator('.host-select').first.click()

@@ -16,6 +16,9 @@ pub(super) struct DockerState {
     running_only: bool,
     detail_open: bool,
     logs: Option<LogView>,
+    /// One of [`docker::LOG_LINES`]; zero until the user picks another count.
+    log_lines: u16,
+    log_filter: String,
     error: String,
     status: String,
     target: Option<(Container, Operation)>,
@@ -25,23 +28,22 @@ pub(super) struct DockerState {
     original_cpu: String,
     original_memory: String,
 }
-/// One styled run of log text.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct LogSpan {
-    text: String,
-    class: String,
-    style: Style,
-}
-/// The parsed logs from one reply. The spans are shared so that cloning the
-/// state stays cheap, and they are rendered once per reply instead of being
-/// bound individually, which would re-evaluate every span on any state change.
+use crate::log_text::{LogSpan, Spans};
+/// The logs from one reply. The text is shared so that cloning the state stays
+/// cheap; it is turned into spans only when the reply, filter or language
+/// changes, not on every state change.
 #[derive(Clone, Default)]
 pub(super) struct LogView {
     reply: u64,
-    spans: std::rc::Rc<[LogSpan]>,
+    text: std::rc::Rc<str>,
 }
-/// Bounds the rendered nodes; the oldest spans are merged into plain text first.
-const LOG_SPAN_LIMIT: usize = 4000;
+fn log_lines(s: &State) -> u16 {
+    if docker::LOG_LINES.contains(&s.docker.log_lines) {
+        s.docker.log_lines
+    } else {
+        docker::LOG_LINES[0]
+    }
+}
 /// `docker logs --timestamps` prefixes each line with an RFC 3339 time and a space.
 fn split_timestamp(line: &str) -> Option<(&str, &str)> {
     let (time, rest) = line.split_once(' ')?;
@@ -55,56 +57,33 @@ fn split_timestamp(line: &str) -> Option<(&str, &str)> {
 }
 /// Container output with its terminal colors, one muted timestamp per line.
 /// A carriage return in a line restarts only the output after the timestamp.
-fn log_spans(logs: &str) -> Vec<LogSpan> {
-    // Styles are computed only for the spans that are kept, after the limit.
-    enum Look {
-        Plain,
-        Time,
-        Pen(crate::ansi::Pen),
-    }
-    let mut parser = crate::ansi::Parser::default();
-    let mut spans: Vec<(String, Look)> = Vec::new();
-    let mut line_spans = Vec::new();
+///
+/// Only lines whose text as shown contains `filter` are kept. Colors set in a
+/// hidden line still apply to the lines after it, as they would in a terminal.
+fn log_spans(logs: &str, filter: &str) -> Vec<LogSpan> {
+    let needle = filter.to_lowercase();
+    let mut spans = Spans::default();
     for line in logs.strip_suffix('\n').unwrap_or(logs).split('\n') {
-        let (time, output) = match split_timestamp(line) {
-            Some((time, output)) => (Some(time), output),
-            None => (None, line),
+        let start = spans.mark();
+        let output = match split_timestamp(line) {
+            Some((time, output)) => {
+                spans.plain(&format!("{time} "), "docker-log-time");
+                output
+            }
+            None => line,
         };
-        if let Some(time) = time {
-            spans.push((format!("{time} "), Look::Time));
+        spans.output(output);
+        if !needle.is_empty() && !spans.text_since(start).to_lowercase().contains(&needle) {
+            spans.truncate(start);
+            continue;
         }
-        line_spans.clear();
-        parser.line(output, &mut line_spans);
-        spans.extend(
-            line_spans
-                .drain(..)
-                .map(|span| (span.text, Look::Pen(span.pen))),
-        );
-        match spans.last_mut() {
-            Some((text, _)) if !text.ends_with('\n') => text.push('\n'),
-            _ => spans.push(("\n".into(), Look::Plain)),
-        }
+        spans.newline();
     }
     // Output with nothing to show, such as an empty reply, reads as "No logs".
-    if spans.iter().all(|(text, _)| text.trim().is_empty()) {
+    if spans.is_blank() {
         return Vec::new();
     }
-    if spans.len() > LOG_SPAN_LIMIT {
-        let excess = spans.len() - LOG_SPAN_LIMIT + 1;
-        let merged = spans.drain(..excess).map(|(text, _)| text).collect();
-        spans.insert(0, (merged, Look::Plain));
-    }
-    spans
-        .into_iter()
-        .map(|(text, look)| {
-            let (class, style) = match look {
-                Look::Plain => (String::new(), Style::new()),
-                Look::Time => ("docker-log-time".into(), Style::new()),
-                Look::Pen(pen) => pen.presentation(),
-            };
-            LogSpan { text, class, style }
-        })
-        .collect()
+    spans.finish()
 }
 fn ready(s: &State) -> bool {
     s.connected
@@ -186,6 +165,7 @@ impl Ui {
             s.docker.detail_open = true;
             s.docker.details = None;
             s.docker.logs = None;
+            s.docker.log_filter.clear();
             s.docker.view = 0;
         });
         self.docker_send(AppAction::DockerInspect(id));
@@ -195,9 +175,10 @@ impl Ui {
             return;
         }
         let id = self.state.with(|s| s.docker.selected.clone());
+        let lines = self.state.with(log_lines);
         self.state
             .revise(|s| s.docker.logs = Some(LogView::default()));
-        self.docker_send(AppAction::DockerLogs(id));
+        self.docker_send(AppAction::DockerLogs(id, lines));
     }
     fn docker_prepare(&self, operation: Operation) {
         if !self.state.with(actionable) {
@@ -347,7 +328,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
             Ok(Reply::Logs(logs)) => {
                 s.docker.logs = Some(LogView {
                     reply: serial,
-                    spans: log_spans(&logs).into(),
+                    text: logs.into(),
                 })
             }
             Ok(Reply::Operated) => {
@@ -482,31 +463,63 @@ fn detail(ui: Ui) -> impl Widget {
                 col().class("docker-log-panel").fill((
                     row().class("section-heading").fill((
                         text().content(i18n::bind("Recent logs")),
-                        help_ui::tip("Recent logs", "Last 200 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process."),
+                        help_ui::tip("Recent logs", "The last 200, 500 or 1000 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process."),
                         sapid::button().class("button compact").label(i18n::bind("Details")).on_press(move || overview.state.revise(|s| s.docker.logs = None)),
                     )),
-                    when(state.map(|s| s.docker.logs.as_ref().is_some_and(|v| !v.spans.is_empty())), move || {
-                        // Keyed by reply: a new reply rebuilds the spans, other state changes leave them alone.
-                        each(state.map(|s| s.docker.logs.iter().cloned().collect::<Vec<_>>()))
-                            .key(|logs: &LogView| logs.reply)
-                            .children(|item| {
-                                let logs = item.value.get_untracked();
-                                view().class("docker-log-output").fill(
-                                    logs.spans
-                                        .iter()
-                                        .map(|span| {
-                                            text()
-                                                .kind(TextKind::Inline)
-                                                .selectable(true)
-                                                .class(span.class.clone())
-                                                .style(span.style.clone())
-                                                .content(span.text.clone())
-                                        })
-                                        .collect::<Vec<_>>(),
-                                )
-                            })
-                    })
-                    .otherwise(move || text().class("docker-log-output").content(state.map(|s| i18n::translate(if s.docker.pending.is_some() { "Loading…" } else { "No logs" })))),
+                    row().class("docker-log-tools").fill((
+                        text().class("field-label").content(i18n::bind("Lines")),
+                        row().class("logs-options").fill(docker::LOG_LINES.iter().map(|&lines| {
+                            let ui = ui.clone();
+                            sapid::button()
+                                .class(state.map(move |s| if log_lines(s) == lines { "choice active" } else { "choice" }.to_owned()))
+                                .label(lines.to_string())
+                                .enabled(state.map(actionable))
+                                .on_press(move || {
+                                    ui.state.revise(|s| s.docker.log_lines = lines);
+                                    ui.docker_logs();
+                                })
+                        }).collect::<Vec<_>>()),
+                        input()
+                            .name(i18n::bind("筛选当前日志"))
+                            .semantics(Some(Box::new(Semantics { placeholder: Some(i18n::translate("筛选当前结果…")), ..Default::default() })))
+                            .class("logs-filter")
+                            .value(state.map(|s| s.docker.log_filter.clone()))
+                            .on(value_changed, move |e| {
+                                if let glory::ui::Event::ValueChanged { value, .. } = e {
+                                    state.revise(|s| s.docker.log_filter = value);
+                                }
+                            }),
+                    )),
+                    // The scrolling block stays, so filtering keeps the scroll position. Its
+                    // spans are rebuilt for a new reply, filter or language; other state
+                    // changes leave them alone.
+                    view().class("docker-log-output").fill(
+                        each(state.map(|s| {
+                            s.docker.logs.as_ref().map(|v| {
+                                let loading = v.reply == 0 && s.docker.pending.is_some();
+                                (v.reply, loading, s.docker.log_filter.clone(), s.config.settings.language as u8)
+                            }).into_iter().collect::<Vec<_>>()
+                        }))
+                        .key(Clone::clone)
+                        .children(move |item| {
+                            let (_, loading, filter, _) = item.value.get_untracked();
+                            let text = state.with_untracked(|s| s.docker.logs.as_ref().map(|v| v.text.clone()).unwrap_or_default());
+                            let mut spans = log_spans(&text, &filter);
+                            if spans.is_empty() {
+                                let message = if loading {
+                                    "Loading…"
+                                } else if filter.is_empty() || log_spans(&text, "").is_empty() {
+                                    "No logs"
+                                } else {
+                                    "No entries match this filter."
+                                };
+                                let mut empty = Spans::default();
+                                empty.plain(&i18n::translate(message), "");
+                                spans = empty.finish();
+                            }
+                            crate::log_text::view_spans("log-text", &spans)
+                        }),
+                    ),
                 ))
             }
         }).otherwise(move || col().class("docker-inspection").fill((
@@ -674,7 +687,7 @@ fn ports(ui: Ui) -> impl Widget {
                         monitor_ui::set_section(s, monitor_ui::Section::Processes);
                         processes_ui::show_port_details(s, true);
                     });
-                    listeners.open_desktop_app(WorkspacePage::Resources);
+                    listeners.open_desktop_app(WorkspacePage::Monitor);
                 }),
             help_ui::tip("Docker ports", "Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details."),
         )),
@@ -1015,7 +1028,7 @@ mod tests {
     #[test]
     fn logs_keep_colors_and_mute_docker_timestamps() {
         let logs = "2026-11-18T09:15:02.123456789Z \x1b[32mINFO\x1b[0m ready\r\n2026-11-18T09:15:03.000000000Z plain\n";
-        let spans = log_spans(logs);
+        let spans = log_spans(logs, "");
         let parts: Vec<_> = spans
             .iter()
             .map(|s| (s.text.as_str(), s.class.as_str()))
@@ -1025,33 +1038,50 @@ mod tests {
             [
                 ("2026-11-18T09:15:02.123456789Z ", "docker-log-time"),
                 ("INFO", "ansi ansi-fg-2"),
-                (" ready\n", "ansi"),
+                (" ready\n", ""),
                 ("2026-11-18T09:15:03.000000000Z ", "docker-log-time"),
-                ("plain\n", "ansi"),
+                ("plain\n", ""),
             ]
         );
     }
     #[test]
     fn log_redraws_and_empty_lines_keep_the_line_structure() {
         let logs = "2026-11-18T09:15:02.1Z 10%\r100%\n\nno timestamp: here\n";
-        let text: String = log_spans(logs).into_iter().map(|s| s.text).collect();
+        let text: String = log_spans(logs, "").into_iter().map(|s| s.text).collect();
         assert_eq!(text, "2026-11-18T09:15:02.1Z 100%\n\nno timestamp: here\n");
     }
     #[test]
-    fn log_spans_are_bounded_keeping_the_newest_colors() {
-        let line = "\x1b[31mr\x1b[32mg\n".repeat(LOG_SPAN_LIMIT);
-        let spans = log_spans(&line);
-        assert_eq!(spans.len(), LOG_SPAN_LIMIT);
-        assert_eq!(spans[0].class, "");
-        assert_eq!(spans.last().unwrap().class, "ansi ansi-fg-2");
-        let text: String = spans.into_iter().map(|s| s.text).collect();
-        assert_eq!(text, "rg\n".repeat(LOG_SPAN_LIMIT));
+    fn the_filter_keeps_matching_lines_and_the_colors_before_them() {
+        let logs = "2026-11-18T09:15:01Z \x1b[31mERR\x1b[0mOR one\n2026-11-18T09:15:02Z \x1b[32mhidden\n2026-11-18T09:15:03Z green on\n";
+        let parts = |filter| {
+            log_spans(logs, filter)
+                .into_iter()
+                .map(|s| (s.text, s.class))
+                .collect::<Vec<_>>()
+        };
+        // The filter matches the text as shown, timestamps included.
+        assert_eq!(
+            parts("error"),
+            [
+                ("2026-11-18T09:15:01Z ".into(), "docker-log-time".into()),
+                ("ERR".into(), "ansi ansi-fg-1".into()),
+                ("OR one\n".into(), String::new()),
+            ]
+        );
+        assert_eq!(parts("09:15:03")[0].0, "2026-11-18T09:15:03Z ");
+        // Green set in the hidden line still applies, as in a terminal.
+        assert_eq!(
+            parts("GREEN")[1],
+            ("green on\n".into(), "ansi ansi-fg-2".into())
+        );
+        assert!(parts("[31m").is_empty());
+        assert!(parts("nothing").is_empty());
     }
     #[test]
     fn logs_without_visible_output_read_as_no_logs() {
         for logs in ["", "\n", "\x1b[0m\n", "\r\n\n"] {
-            assert!(log_spans(logs).is_empty(), "{logs:?}");
+            assert!(log_spans(logs, "").is_empty(), "{logs:?}");
         }
-        assert!(!log_spans("2026-11-18T09:15:02.1Z \n").is_empty());
+        assert!(!log_spans("2026-11-18T09:15:02.1Z \n", "").is_empty());
     }
 }

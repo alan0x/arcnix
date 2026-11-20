@@ -4,7 +4,7 @@ use super::*;
 
 #[derive(Clone, Default)]
 pub(super) struct SoftwareState {
-    pub store: software_store_ui::StoreState,
+    pub app_center: app_center_ui::AppCenterState,
     pub source: u8,
     pub environment: Option<SystemEnvironment>,
     pub packages: Vec<Package>,
@@ -141,7 +141,7 @@ pub(super) fn event(ui: &Ui, serial: u64, event: Event) {
                 }
             });
             if supported {
-                ui.store_enter();
+                ui.app_center_enter();
             }
         }
         Event::Packages(result) => {
@@ -439,7 +439,7 @@ pub(super) fn server_reply(
     result: std::result::Result<server_apps_worker::Reply, String>,
 ) -> Option<std::result::Result<server_apps_worker::Reply, String>> {
     if !ui.state.with(|s| s.software.pending == Some(serial)) {
-        return software_store_ui::event(ui, serial, result);
+        return app_center_ui::event(ui, serial, result);
     }
     let result = match result {
         Ok(server_apps_worker::Reply::SoftwarePackages(rows)) => Ok(rows),
@@ -451,7 +451,4 @@ pub(super) fn server_reply(
 }
 pub(super) fn packages(ui: Ui) -> impl Widget {
     package_page(ui)
-}
-pub(super) fn page(ui: Ui) -> impl Widget {
-    software_store_ui::page(ui)
 }

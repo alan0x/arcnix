@@ -11,6 +11,8 @@ use crate::remote::RemoteSession;
 use crate::server_apps::{DIRECTORY, DesktopApp, execute};
 
 pub const MAX_ICONS: usize = 128 + DesktopApp::COUNT;
+pub(crate) const DESKTOP_NAME_LIMIT: usize = 255;
+pub(crate) const WALLPAPER_PATH_LIMIT: usize = 1536;
 const MAX_WALLPAPER: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -45,27 +47,56 @@ impl DockSize {
     pub const fn pixels(self) -> u8 {
         match self {
             Self::Small => 32,
-            Self::Medium => 44,
-            Self::Large => 54,
+            Self::Medium => 48,
+            Self::Large => 56,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockPosition {
+    Left,
+    Right,
+    #[default]
+    Bottom,
+}
+
+impl DockPosition {
+    fn is_bottom(&self) -> bool {
+        *self == Self::Bottom
+    }
+}
+
+fn discard_magnification<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<(), D::Error> {
+    bool::deserialize(deserializer).map(|_| ())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Dock {
     pub order: Vec<DesktopApp>,
     pub unpinned: Vec<DesktopApp>,
     pub size: DockSize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_size: Option<u8>,
+    #[serde(skip_serializing_if = "DockPosition::is_bottom")]
+    pub position: DockPosition,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub panel_mode: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub panel_centered: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub floating_status: bool,
-    pub magnify: bool,
+    #[serde(
+        rename = "magnify",
+        skip_serializing,
+        deserialize_with = "discard_magnification"
+    )]
+    legacy_magnify: (),
     pub auto_hide: bool,
 }
 
@@ -76,10 +107,11 @@ impl Default for Dock {
             unpinned: vec![],
             size: DockSize::Medium,
             icon_size: None,
+            position: DockPosition::Bottom,
             panel_mode: false,
             panel_centered: false,
             floating_status: false,
-            magnify: true,
+            legacy_magnify: (),
             auto_hide: false,
         }
     }
@@ -168,7 +200,7 @@ fn unique<T: Eq + std::hash::Hash>(values: &[T]) -> bool {
 
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
-        && name.len() <= 255
+        && name.len() <= DESKTOP_NAME_LIMIT
         && !matches!(name, "." | "..")
         && !name.contains('/')
         && !name.chars().any(char::is_control)
@@ -231,7 +263,9 @@ pub fn is_wallpaper(path: &str) -> bool {
 
 fn validate_image_path(path: &str) -> Result<()> {
     ensure!(
-        path.starts_with('/') && path.len() <= 1536 && !path.chars().any(char::is_control),
+        path.starts_with('/')
+            && path.len() <= WALLPAPER_PATH_LIMIT
+            && !path.chars().any(char::is_control),
         "Invalid server wallpaper path"
     );
     format(Path::new(path))?;

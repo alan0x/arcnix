@@ -4,6 +4,7 @@ use arcnix_core::metrics::{self, ResourceSnapshot, ResourceUsage};
 use arcnix_core::system_logs::{JournalPeriod, LogCapabilities, LogQuery, LogSnapshot, LogSource};
 
 use super::*;
+use crate::log_text::{LogSpan, Spans};
 
 #[derive(Clone, Default)]
 pub(super) struct MetricState {
@@ -26,6 +27,8 @@ pub(super) struct LogsState {
     pub capabilities: Option<LogCapabilities>,
     pub query: LogQuery,
     pub snapshot: Option<LogSnapshot>,
+    /// The request that produced `snapshot`, which keys its rendered spans.
+    reply: u64,
     pub filter: String,
     pub auto_refresh: bool,
     pub error: String,
@@ -254,6 +257,7 @@ pub(super) fn logs_event(ui: &Ui, serial: u64, result: std::result::Result<LogSn
         match result {
             Ok(snapshot) => {
                 l.snapshot = Some(snapshot);
+                l.reply = serial;
                 l.updated = clock_label();
                 l.error.clear();
             }
@@ -322,65 +326,73 @@ fn priority_choice(ui: Ui, priority: Option<u8>) -> impl Widget {
         .enabled(state.map(log_ready))
         .on_press(move || update_query(&ui, |q| q.priority = priority))
 }
-fn filtered_logs(s: &State) -> String {
-    let l = &s.system_logs;
-    let Some(snapshot) = &l.snapshot else {
-        return String::new();
-    };
-    let needle = l.filter.to_lowercase();
-    let lines: Vec<String> = snapshot
-        .entries
-        .iter()
-        .filter(|e| {
-            needle.is_empty()
-                || format!(
-                    "{} {} {}",
-                    e.timestamp.as_deref().unwrap_or(""),
-                    e.unit.as_deref().unwrap_or(""),
-                    e.message
-                )
-                .to_lowercase()
-                .contains(&needle)
-        })
-        .map(|e| {
-            let mut prefix = Vec::new();
-            if let Some(t) = &e.timestamp {
-                prefix.push(t.clone());
-            }
-            if let Some(p) = e.priority {
-                prefix.push(format!(
-                    "[{}]",
-                    i18n::translate(match p {
-                        0 => "紧急",
-                        1 => "警报",
-                        2 => "严重",
-                        3 => "错误",
-                        4 => "警告",
-                        5 => "通知",
-                        6 => "信息",
-                        _ => "调试",
-                    })
-                ));
-            }
-            if let Some(u) = &e.unit {
-                prefix.push(u.clone());
-            }
-            if prefix.is_empty() {
-                e.message.clone()
-            } else {
-                format!("{}  {}", prefix.join(" "), e.message)
-            }
-        })
-        .collect();
-    if lines.is_empty() {
-        i18n::translate(if needle.is_empty() {
-            "当前条件下没有日志记录。"
-        } else {
-            "没有匹配此筛选的记录。"
-        })
-    } else {
-        lines.join("\n")
+/// The current snapshot's entries that match the filter, with their terminal
+/// colors. Colors never carry from one entry into the next: entries can come
+/// from different services, and the filter can hide any of them.
+fn log_spans(snapshot: &LogSnapshot, filter: &str) -> Vec<LogSpan> {
+    let needle = filter.to_lowercase();
+    let mut spans = Spans::default();
+    let mut shown = false;
+    for e in &snapshot.entries {
+        let start = spans.mark();
+        if shown {
+            spans.newline();
+        }
+        let mut prefix = Vec::new();
+        if let Some(t) = &e.timestamp {
+            prefix.push(t.clone());
+        }
+        if let Some(p) = e.priority {
+            prefix.push(format!(
+                "[{}]",
+                i18n::translate(match p {
+                    0 => "紧急",
+                    1 => "警报",
+                    2 => "严重",
+                    3 => "错误",
+                    4 => "警告",
+                    5 => "通知",
+                    6 => "信息",
+                    _ => "调试",
+                })
+            ));
+        }
+        if let Some(u) = &e.unit {
+            prefix.push(u.clone());
+        }
+        if !prefix.is_empty() {
+            spans.plain(&format!("{}  ", prefix.join(" ")), "");
+        }
+        let message = spans.mark();
+        spans.reset();
+        spans.output_lines(&e.message);
+        // The filter matches the text as shown, without escape sequences.
+        if !needle.is_empty()
+            && !format!(
+                "{} {} {}",
+                e.timestamp.as_deref().unwrap_or(""),
+                e.unit.as_deref().unwrap_or(""),
+                spans.text_since(message)
+            )
+            .to_lowercase()
+            .contains(&needle)
+        {
+            spans.truncate(start);
+            continue;
+        }
+        shown = true;
     }
+    if !shown {
+        spans.plain(
+            &i18n::translate(if needle.is_empty() {
+                "当前条件下没有日志记录。"
+            } else {
+                "没有匹配此筛选的记录。"
+            }),
+            "",
+        );
+    }
+    spans.finish()
 }
 pub(super) fn logs_window_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
@@ -594,11 +606,96 @@ pub(super) fn logs(ui: Ui) -> impl Widget {
                         }
                         w.join("\n")
                     }))),
-                text()
-                    .class("system-log-output")
-                    .selectable(true)
-                    .content(state.map(filtered_logs)),
+                // The scrolling block stays, so refreshes keep the scroll position.
+                // Its spans are rebuilt for a new reply, filter or language;
+                // other state changes leave them alone.
+                view().class("system-log-output").fill(
+                    each(state.map(|s| {
+                        let l = &s.system_logs;
+                        l.snapshot
+                            .as_ref()
+                            .map(|_| (l.reply, l.filter.clone(), s.config.settings.language as u8))
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                    }))
+                    .key(Clone::clone)
+                    .children(move |_| {
+                        crate::log_text::view_spans(
+                            "log-text",
+                            &state.with_untracked(|s| {
+                                let l = &s.system_logs;
+                                l.snapshot
+                                    .as_ref()
+                                    .map(|r| log_spans(r, &l.filter))
+                                    .unwrap_or_default()
+                            }),
+                        )
+                    }),
+                ),
             ))
         }),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use arcnix_core::system_logs::LogEntry;
+
+    use super::*;
+
+    fn snapshot(messages: &[(&str, &str)]) -> LogSnapshot {
+        LogSnapshot {
+            source: LogSource::Journal,
+            entries: messages
+                .iter()
+                .map(|(unit, message)| LogEntry {
+                    timestamp: None,
+                    unit: Some((*unit).into()),
+                    priority: None,
+                    message: (*message).into(),
+                })
+                .collect(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn journal_colors_stay_within_their_entry() {
+        let logs = snapshot(&[
+            ("a.service", "\x1b[31mred"),
+            ("b.service", "plain\n\x1b[1mbold"),
+        ]);
+        let spans = log_spans(&logs, "");
+        let parts: Vec<_> = spans
+            .iter()
+            .map(|s| (s.text.as_str(), s.class.as_str()))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                ("a.service  ", ""),
+                ("red\n", "ansi ansi-fg-1"),
+                ("b.service  plain\n", ""),
+                ("bold", "ansi ansi-bold"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_filter_matches_the_text_as_shown() {
+        let logs = snapshot(&[
+            ("a.service", "\x1b[1mERR\x1b[0mOR disk"),
+            ("b.service", "fine"),
+        ]);
+        let text = |filter| -> String {
+            log_spans(&logs, filter)
+                .into_iter()
+                .map(|s| s.text)
+                .collect()
+        };
+        assert_eq!(text("error"), "a.service  ERROR disk");
+        assert_eq!(text("B.SERVICE"), "b.service  fine");
+        assert_eq!(text("[1m"), i18n::translate("没有匹配此筛选的记录。"));
+        assert_eq!(text(""), "a.service  ERROR disk\nb.service  fine");
+    }
 }

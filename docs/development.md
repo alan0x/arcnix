@@ -140,7 +140,7 @@ Ctrl+C 在有选中文字时复制，否则向远程程序发送中断；Ctrl+Sh
 - CPU 和网络速率根据两次远程采样差值计算；第一次采样显示等待，无法读取的指标显示不可用及原因。仅在资源页面自动采集，默认约 3 秒一次；安装任务期间暂停自动采集。
 - 端口面板读取当前网络命名空间内 TCP 监听和 UDP 绑定端口（IPv4／IPv6），列出地址、PID、UID、程序名称、可执行路径及 systemd 单元。首次进入自动读取，之后手动刷新；本地搜索不发远程命令。扫描上限、不可读进程和旧快照均明确标记，可选择使用 sudo 查询完整的进程信息。
 - 每个可核实的占用进程可打开“强制结束”确认框。执行 SIGKILL 前重新校验启动标识、网络命名空间、PID 开始时间和 socket 描述符，再通过 pidfd 发送信号；身份变化或缺少 pidfd 支持会拒绝执行。结束针对整个进程，服务管理器可能重新启动它。连接变化会取消待处理请求并清理快照与凭据。验证入口为 `python tools/resource_ports_smoke.py` 和真实 Linux 的 `python3 tools/resource_ports_linux_check.py`。
-- 系统日志支持 journalctl，以及当前账户可读的 syslog、messages、auth.log、kern.log 和 APT history.log。自动发现可用来源，提供服务单元、时间范围、级别筛选和本地关键词筛选；文件来源只提供文本筛选。
+- 系统日志支持 journalctl，以及当前账户可读的 syslog、messages、auth.log、kern.log 和 APT history.log。自动发现可用来源，提供服务单元、时间范围、级别筛选和本地关键词筛选；文件来源只提供文本筛选。消息按终端 SGR 序列显示颜色和样式，规则与 Docker 日志相同；每条记录从默认样式开始，颜色不延续到下一条，关键词筛选匹配显示出的文字。
 - 日志使用有界快照，可手动刷新或开启自动刷新。权限不足时显示原因，不自动提权；没有 SFTP 仍可读取资源和日志。当前不提供持续 `journalctl -f`、历史翻页或日志写入，服务控制在运维操作模块中提供。
 
 采样与日志命令依据 [Linux proc 文档](https://www.kernel.org/doc/html/latest/filesystems/proc.html) 和 [journalctl 官方手册](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html)。
@@ -219,23 +219,23 @@ tools/sftp_fixture.py   仅用于回环测试的 SSH/SFTP 服务
 
 ## 界面回归
 
-Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo；系统套接字权限不足时提示将 SSH 账号加入 docker 组（等同 root 权限）并重新连接。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200 行的快照，不跟随或轮询；按终端 SGR 序列显示颜色和粗体等样式（16 色随主题，256 色和真彩色按原值），其他控制序列移除，回车重绘只保留最终内容，时间戳淡化显示，最多渲染 4000 个样式片段。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口同时显示发布与配置映射、未发布的暴露端口；host 网络可跳转现有资源页检查服务器监听。
+Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo；系统套接字权限不足时提示将 SSH 账号加入 docker 组（等同 root 权限）并重新连接。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200、500 或 1000 行（默认 200）的快照，不跟随或轮询，更改行数会重新读取；可按显示出的文字（含时间戳）在本地筛选行，被隐藏的行设置的颜色仍作用于后续行；按终端 SGR 序列显示颜色和粗体等样式（16 色随主题，256 色和真彩色按原值），其他控制序列移除，回车重绘只保留最终内容，时间戳淡化显示，最多渲染 4000 个样式片段。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口同时显示发布与配置映射、未发布的暴露端口；host 网络可跳转现有资源页检查服务器监听。
 
 重启策略和 CPU／内存限制使用 [Docker container update](https://docs.docker.com/reference/cli/docker/container/update/)，只修改当前容器，不改写 Compose 定义；端口和挂载变更需要重建容器。卷详情使用 [volume inspect](https://docs.docker.com/reference/cli/docker/volume/inspect/)，日志使用 [container logs](https://docs.docker.com/reference/cli/docker/container/logs/) 的有限尾部读取。标准输出与错误输出在服务器端合并到同一管道，按 Docker 写出的顺序显示；日志正文中的无效 UTF-8 显示为替换字符，不会使读取失败。
 
-桌面外观独立于客户端设置；“跟随应用”沿用客户端主题，亮／暗选择仅作用于 Desktop 及其对话框，外部侧栏、标题栏和应用设置保持客户端主题。远程登录用户的 `~/.arcnix/desktop.json` 保存 v1 JSON（最多 64 KiB，兼容旧版仅 theme 字段），读取不创建文件，保存时以 Base64 传输内容，在相同目录创建临时文件再原子替换，新目录 0700、文件 0600，拒绝目录或文件符号链接及其他所有者。无 SFTP 也可读写；无法读取或版本未知时禁止覆盖，写失败保持原主题及文件。不同客户端按最后一次成功保存为准；按连接世代和请求序号丢弃迟到结果。
+桌面外观独立于客户端设置。“跟随应用”沿用客户端主题，亮／暗选择作用于 Desktop 及其对话框。远端 `~/.arcnix/desktop` 下的 `system.json`、`preferences/` 和 `apps/` 保存分域的 v1 JSON，通过 SSH 读写。首次保存、旧版 `desktop.json` 迁移和同次修改涉及多个文件时，生成一个配置目录并原子切换 `desktop` 链接。单文件修改只上传该文件，在锁内校验读到的配置版本，再原子替换目标文件。单文件保存之间共用当前代目录，上一代对应上次整套发布。并发修改触发重新读取和三方合并，同字段发生冲突时由用户选择。
 
-Software store 默认展示应用目录：18 个内置应用、7 个分类、搜索、详情和统一已安装列表。仅在点击安装后展示系统软件包／Snap／Docker Compose 的来源卡片，带入发行版对应的包名、Snap 发布者或 Compose 镜像；未定义方案或服务器缺少运行环境时禁用对应来源。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。目录介绍离线可用，不获取远程图片，也不虚构评分、下载量或版本；可用软件包和版本仍以服务器已启用仓库为准。按名称安装和仓库搜索保留为辅助入口。
+App Center 默认展示应用目录：18 个内置应用、7 个分类、搜索、详情和统一已安装列表。仅在点击安装后展示系统软件包／Snap／Docker Compose 的来源卡片，带入发行版对应的包名、Snap 发布者或 Compose 镜像；未定义方案或服务器缺少运行环境时禁用对应来源。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。目录介绍离线可用，不获取远程图片，也不虚构评分、下载量或版本；可用软件包和版本仍以服务器已启用仓库为准。按名称安装和仓库搜索保留为辅助入口。
 
 已安装页通过有限查询合并系统包、Snap 和 Arcnix Compose 项目，显示实际来源和版本；默认只显示目录中识别的系统应用，可勾选显示全部系统包。更新、卸载绑定原来源，Compose 项目跳转 Docker 管理。查询失败保留其他来源的结果并显示错误，刷新由用户主动触发，不增加客户端常驻任务。
 
 系统来源识别 APT、DNF、YUM、Zypper、APK、Pacman；APT 安装继续使用原有事务审核，其他来源在每个目标执行前重新检查管理器。Pacman 升级明确展示为完整系统升级，拒绝单独刷新索引，避免部分升级。软件包名称按管理器验证；不同发行版的同类软件未必同名。Snap 仅在检测到时可用，默认 stable、默认不启用 classic，Certbot 需用户明确允许 classic 才能提交。Snap 身份来自 [Caddy](https://snapcraft.io/caddy)、[htop](https://snapcraft.io/htop)、[Certbot](https://snapcraft.io/certbot) 的发布信息。安装、升级、卸载沿用服务器任务和多目标审核，不自动安装 Snapd、Docker 或 Compose 前置环境。
 
-商店验证入口：`python tools/software_store_smoke.py`，覆盖浏览时隐藏安装渠道、分类和中文搜索、详情、各来源配置、不可用来源、classic 显式选择、安装来源保持、Docker 共用目录、发行版包名及主题／窄窗口布局。完整安装任务仍由 `tools/desktop_extensions_smoke.py` 覆盖。
+应用中心验证入口：`python tools/app_center_smoke.py`，覆盖浏览时隐藏安装渠道、分类和中文搜索、详情、各来源配置、不可用来源、classic 显式选择、安装来源保持、Docker 共用目录、发行版包名及主题／窄窗口布局。完整安装任务仍由 `tools/desktop_extensions_smoke.py` 覆盖。
 
 Compose 内置 Nginx、Redis、Caddy。定义与清单存放于 `~/.arcnix/apps/<name>/compose.yaml` 和 `arcnix.json`，归原 SSH 用户所有、目录 0700、定义 0600。选择用户目录是为了避免写入其他用户或系统配置、便于按用户备份；Nginx 静态文件位于同一项目 html 目录，命名卷仍在 Docker 的实际存储位置。项目名冲突拒绝覆盖，应用修改前核对审核时的 YAML 摘要；仅列出 Arcnix 管理的项目。使用 Compose v2 的 config 和 up --detach --no-build --wait，配置 restart: unless-stopped；Docker daemon 自身需启用开机启动，可在 Services 中检查。停止／重启／应用通过服务器任务执行，保留数据卷。说明依据 [Compose 生产部署](https://docs.docker.com/compose/how-tos/production/) 和 [Compose volumes](https://docs.docker.com/reference/compose-file/volumes/)。
 
-Disks 通过有限 lsblk/findmnt 查询设备、分区及挂载使用量，不提供分区或格式化操作；未知容量保留为未知，挂载点可打开 Explorer。Services 合并 list-units 和 list-unit-files，区分运行状态与开机启用状态；enable/disable 不隐式启动／停止。新启动任务以审核后的系统服务执行，用户脚本存放于目标用户 ~/.arcnix/services/<name>/run.sh，单元在 /etc/systemd/system/arcnix-startup-<name>.service，启用后需独立启动。持续程序由 systemd 管理，客户端无需常驻。
+Disks 通过有限 lsblk/findmnt 查询设备、分区及挂载使用量，不提供分区或格式化操作；未知容量保留为未知，挂载点可打开 Files。Services 合并 list-units 和 list-unit-files，区分运行状态与开机启用状态；enable/disable 不隐式启动／停止。新启动任务以审核后的系统服务执行，用户脚本存放于目标用户 ~/.arcnix/services/<name>/run.sh，单元在 /etc/systemd/system/arcnix-startup-<name>.service，启用后需独立启动。持续程序由 systemd 管理，客户端无需常驻。
 
 Terminal 仅保留一个窗口标题栏，整合标签与操作菜单，不重复服务器地址。布局保存最多 8 个标签的独立 ID、名称、初始目录、活动标签及窗口最大化状态，不保存输出或输入历史。检测到 tmux 后使用独立 arcnix socket 中的 terminal-<id> 会话，重新连接恢复已有屏幕、目录和程序；关闭标签或客户端只分离连接，exit 才结束对应 shell。未检测到 tmux 时只恢复布局，不自动安装。tmux 默认不跨服务器重启保活。
 
@@ -250,9 +250,9 @@ cargo test -p arcnix-core --test server_apps_integration --locked -- --ignored -
 
 该专项使用私有临时 home 和受控 Docker 可执行文件，执行真实 POSIX shell，核对文件原子替换、权限、链接拒绝、含空格／中文的路径、明确本机连接及 CLI 参数，完成后清理自己的目录。
 
-桌面应用打开、切换、最小化、关闭与最大化采用 160–240 毫秒的过渡，打开与最小化分别从启动图标方向展开和朝 Dock 收拢。Rust 通过 desktop-motion-state 仅发布可见性、应用、连接世代与窗口布局；浏览器使用独立窗口的 View Transition 合成快照，不复制应用 DOM 或终端内容、不重建会话，也不等待 SSH 数据。点击仍只交给原有处理器一次；连续点击跳过旧视觉并保持原生操作顺序，切回首页或更换连接立即结束旧过渡。缺少 View Transition 时使用轻量入场，捕获失败仍保留原操作；prefers-reduced-motion 动态关闭两种效果和图标动画。API 行为参考 [startViewTransition](https://developer.mozilla.org/en-US/docs/Web/API/Document/startViewTransition)；专项入口为 `python tools/desktop_motion_smoke.py`，另由 `server_desktop_smoke.py` 和 `software_store_smoke.py` 回归窗口与终端、商店流程。
+桌面应用打开、切换、最小化、关闭与最大化采用 160–240 毫秒的过渡，打开与最小化分别从启动图标方向展开和朝 Dock 收拢。Rust 通过 desktop-motion-state 仅发布可见性、应用、连接世代与窗口布局；浏览器使用独立窗口的 View Transition 合成快照，不复制应用 DOM 或终端内容、不重建会话，也不等待 SSH 数据。点击仍只交给原有处理器一次；连续点击跳过旧视觉并保持原生操作顺序，切回首页或更换连接立即结束旧过渡。缺少 View Transition 时使用轻量入场，捕获失败仍保留原操作；prefers-reduced-motion 动态关闭两种效果和图标动画。API 行为参考 [startViewTransition](https://developer.mozilla.org/en-US/docs/Web/API/Document/startViewTransition)；专项入口为 `python tools/desktop_motion_smoke.py`，另由 `server_desktop_smoke.py` 和 `app_center_smoke.py` 回归窗口与终端、应用中心流程。
 
-每个桌面应用分别保存普通窗口的位置、大小和最大化状态。拖动或缩放结束后写入登录用户的 `~/.arcnix/desktop.json`，双击标题栏可以恢复普通尺寸。视口变小时只限制显示范围，打开更大的视口会恢复原窗口几何。资源管理器通过 SFTP 查找主目录及已有的 Desktop、Documents、Downloads，在同一文件中保存侧栏开关、收藏和七色目录标记。`tools/desktop_windows_smoke.py` 验证了跨应用、重开、视口缩小及客户端重启时的恢复。
+每个桌面应用在自己的 `~/.arcnix/desktop/apps/*.json` 中保存普通窗口的位置、大小和最大化状态。拖动或缩放结束后保存，双击标题栏可以恢复普通尺寸。视口变小时只限制显示范围，打开更大的视口会恢复原窗口几何。Files 通过 SFTP 查找主目录及已有的 Desktop、Documents、Downloads，侧栏开关、收藏、目录标记和自定义文件夹图标都保存在 `apps/files.json`。`tools/desktop_windows_smoke.py` 验证了跨应用、重开、视口缩小及客户端重启时的恢复。
 
 服务器首页右上角齿轮进入编辑。桌面标签右侧可将服务器桌面铺满应用内容区域；桌面顶栏按钮或 Escape 恢复原布局，弹窗和菜单优先处理 Escape，终端控件与 SSH 会话保留。桌面内“资源管理器”复用现有 SFTP 文件操作，仅显示远程目录，与“传输文件”共享路径、筛选和选择；下载使用当前本地目录，保存位置收进工具栏 `?`，也可跳转到双栏选择本地目录。日志工具栏放大镜重新检测日志源并读取日志，刷新按钮只读取当前查询。`python tools/server_desktop_smoke.py` 覆盖这些入口、实际文件内容、全屏与弹窗层级、语言和窄窗口。
 
@@ -260,7 +260,7 @@ cargo test -p arcnix-core --test server_apps_integration --locked -- --ignored -
 
 Shift+F10／菜单键打开菜单，方向键和 Home／End 移动焦点，Escape 关闭并恢复焦点；F2 重命名，Delete 移入回收站，Shift+Delete 打开永久删除确认，Alt+Enter 查看属性，Ctrl+Shift+C 复制所选路径，F5 刷新。路径输入框保留正常的文本编辑行为。`python tools/file_context_smoke.py` 会自行启动隔离的回环 SSH 服务，验证本地、SFTP 和键盘交互，不读取默认配置或真实服务器凭据。
 
-桌面 Files 的「位置」包含回收站。回收站列表显示原路径和删除时间，项目右键可还原或确认永久删除。文件夹右键可在新标签页打开。Files 标题栏的 ＋ 和 Ctrl+T 新建标签页，Ctrl+W 关闭当前标签页。标签页保留各自的路径、浏览历史和选择，拖出窗口后在桌面上形成独立的 Files 窗口，拖入另一窗口后合并。使用 `python tools/explorer_tabs_smoke.py` 验证标签页和回收站交互。
+桌面 Files 的「位置」包含回收站。回收站列表显示原路径和删除时间，项目右键可还原或确认永久删除。文件夹右键可在新标签页打开。Files 标题栏的 ＋ 和 Ctrl+T 新建标签页，Ctrl+W 关闭当前标签页。标签页保留各自的路径、浏览历史和选择，拖出窗口后在桌面上形成独立的 Files 窗口，拖入另一窗口后合并。使用 `python tools/files_tabs_smoke.py` 验证标签页和回收站交互。
 
 文件传输的本地和远程栏分别提供“移入回收站”“永久删除”和“打开回收站”。远程栏的“打开回收站”进入 Files 的回收站位置。本地使用系统回收站，macOS 通过 Finder 管理回收站。远程遵循 FreeDesktop Trash 规范，在用户数据目录的 `Trash` 或原挂载盘的用户回收站保存文件和 `.trashinfo`。无法完成移动时保留文件，还原时原路径已被占用则提示冲突。`python tools/trash_smoke.py` 验证两个界面及远程元数据的互操作。安装了 Ubuntu WSL 的 Windows 主机可追加 `--ubuntu-gio`，使用 Ubuntu 的 `gio trash` 生成还原用的记录和文件。
 
@@ -693,7 +693,7 @@ HTML 分别保留执行状态、保存退出码、采集是否得到核验，以
 
 最近诊断卡片与独立服务器记录共用弹窗。`diagnostic_log_worker` 新建有限 SSH 连接，提交前和显示结果前核对原 ID、账户／端点及可信指纹，不切换主工作区、不复用其日志来源发现、不安装工具、不重启服务。默认普通账户读取，管理员选项才进行身份查询和显式 sudo；密码只在 stdin 传递。关闭或切页清除弹窗凭据并使迟到事件失效，工作线程的请求和凭据有界，不维护自动刷新。
 
-默认采用服务器采样开始前后各 900 秒的 UNIX 时间窗口，可改为最近一小时、今天或当前启动；固定窗口最长 3600 秒且不超过公元 9999 年。该窗口并不绑定原 InvocationID，可能包含同名服务的后续运行。使用 `journalctl --unit` 的字面量完整服务名，保留合法 `\xHH` 转义和实例名；不降级到 syslog/auth 或不带服务过滤的查询。保留 journal 的权限警告，空结果不代表无故障。
+默认采用服务器采样开始前后各 900 秒的 UNIX 时间窗口，可改为最近一小时、今天或当前启动；固定窗口最长 3600 秒且不超过公元 9999 年。该窗口并不绑定原 InvocationID，可能包含同名服务的后续运行。使用 `journalctl --unit` 的字面量完整服务名，保留合法 `\xHH` 转义和实例名；不降级到 syslog/auth 或不带服务过滤的查询。保留 journal 的权限警告，空结果不代表无故障。消息颜色的显示方式与系统日志相同。
 
 每次读取受服务器 20 秒 timeout／2 秒终止宽限、SSH 流 35 秒、stdout 2 MiB／stderr 64 KiB 约束，界面可选 100／200／500 条。JSON 解析后再脱敏消息、服务字段及警告，错误输出同样脱敏，避免破坏编码后的 JSON。失败保留同一查询的旧快照和原接收时间并明确标记；改变服务、时间、条数或管理员选项则清空旧数据。读取不产生服务器托管任务，不写入本地任务历史或配置。
 

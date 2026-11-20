@@ -10,7 +10,7 @@ pub(super) enum Tab {
     #[default]
     Home,
     Desktop,
-    Files,
+    TransferFiles,
 }
 
 impl Tab {
@@ -18,14 +18,14 @@ impl Tab {
         match self {
             Self::Home => "Home",
             Self::Desktop => "Desktop",
-            Self::Files => "Transfer files",
+            Self::TransferFiles => "Transfer files",
         }
     }
     fn icon(self) -> Icon {
         match self {
             Self::Home => Icon::Server,
             Self::Desktop => Icon::Grid,
-            Self::Files => Icon::Folder,
+            Self::TransferFiles => Icon::Folder,
         }
     }
 }
@@ -39,7 +39,7 @@ pub(super) struct Workbench {
     stack: Vec<WorkspacePage>,
     desktop_restore: Vec<WorkspacePage>,
     slots: BTreeMap<WorkspacePage, usize>,
-    pub files: explorer_tabs::Windows,
+    pub files: files_tabs::Windows,
     pub windows: BTreeMap<DesktopApp, DesktopWindow>,
     pub fullscreen: bool,
 }
@@ -64,12 +64,12 @@ impl Default for Workbench {
 pub(super) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
     Some(match page {
         WorkspacePage::Terminal => DesktopApp::Terminal,
-        WorkspacePage::Resources => DesktopApp::Monitor,
-        WorkspacePage::Software => DesktopApp::Store,
-        WorkspacePage::Explorer(_) => DesktopApp::Explorer,
+        WorkspacePage::Monitor => DesktopApp::Monitor,
+        WorkspacePage::AppCenter => DesktopApp::AppCenter,
+        WorkspacePage::Files(_) => DesktopApp::Files,
         WorkspacePage::Docker => DesktopApp::Docker,
         WorkspacePage::Code => DesktopApp::Code,
-        WorkspacePage::Video => DesktopApp::Video,
+        WorkspacePage::Player => DesktopApp::Player,
         WorkspacePage::Browser => DesktopApp::Browser,
         WorkspacePage::Settings => DesktopApp::Settings,
         _ => return None,
@@ -80,14 +80,14 @@ pub(super) fn app_page(app: DesktopApp) -> WorkspacePage {
     match app {
         DesktopApp::Terminal => WorkspacePage::Terminal,
         DesktopApp::Monitor | DesktopApp::Disks | DesktopApp::Services | DesktopApp::Logs => {
-            WorkspacePage::Resources
+            WorkspacePage::Monitor
         }
-        DesktopApp::Store => WorkspacePage::Software,
-        DesktopApp::Explorer | DesktopApp::Trash => WorkspacePage::Explorer(0),
+        DesktopApp::AppCenter => WorkspacePage::AppCenter,
+        DesktopApp::Files | DesktopApp::Trash => WorkspacePage::Files(0),
         DesktopApp::Docker => WorkspacePage::Docker,
         DesktopApp::Editor => WorkspacePage::Code,
         DesktopApp::Code => WorkspacePage::Code,
-        DesktopApp::Video => WorkspacePage::Video,
+        DesktopApp::Player => WorkspacePage::Player,
         DesktopApp::Browser => WorkspacePage::Browser,
         DesktopApp::Settings => WorkspacePage::Settings,
     }
@@ -95,7 +95,7 @@ pub(super) fn app_page(app: DesktopApp) -> WorkspacePage {
 
 impl Workbench {
     pub(super) fn window(&self, page: WorkspacePage) -> DesktopWindow {
-        if let Some(id) = page.explorer_id().filter(|id| *id != 0) {
+        if let Some(id) = page.files_window_id().filter(|id| *id != 0) {
             return self.files.layout(id).unwrap_or_default();
         }
         app_id(page)
@@ -149,7 +149,7 @@ fn save_bounds(ui: &Ui, input: &str) {
     }
     let page = event
         .window
-        .map_or_else(|| app_page(event.app), WorkspacePage::Explorer);
+        .map_or_else(|| app_page(event.app), WorkspacePage::Files);
     let changed = ui.state.revise(|s| {
         if !visible(s)
             || s.dialog.is_some()
@@ -166,7 +166,7 @@ fn save_bounds(ui: &Ui, input: &str) {
         window.bounds = Some(event.bounds);
         true
     });
-    if changed && page.explorer_id().is_none_or(|id| id == 0) {
+    if changed && page.files_window_id().is_none_or(|id| id == 0) {
         ui.remember_desktop_layout();
     }
 }
@@ -186,7 +186,7 @@ fn focus_window(ui: &Ui, input: &str) {
     };
     let page = event
         .window
-        .map_or_else(|| app_page(event.app), WorkspacePage::Explorer);
+        .map_or_else(|| app_page(event.app), WorkspacePage::Files);
     if ui.state.with(|s| {
         visible(s)
             && s.epoch == event.epoch
@@ -200,48 +200,67 @@ fn focus_window(ui: &Ui, input: &str) {
     }
 }
 
-const APPS: [WorkspacePage; 6] = [
+pub(super) const APP_LAUNCHERS: [WorkspacePage; 9] = [
     WorkspacePage::Terminal,
-    WorkspacePage::Resources,
-    WorkspacePage::Software,
-    WorkspacePage::Explorer(0),
+    WorkspacePage::Monitor,
+    WorkspacePage::AppCenter,
+    WorkspacePage::Files(0),
     WorkspacePage::Code,
+    WorkspacePage::Browser,
     WorkspacePage::Settings,
+    WorkspacePage::Docker,
+    WorkspacePage::Player,
 ];
 
 pub(super) fn available_apps(s: &State) -> Vec<WorkspacePage> {
-    let mut apps = APPS.to_vec();
-    #[cfg(windows)]
-    apps.insert(APPS.len() - 1, WorkspacePage::Browser);
-    if s.server_apps.applications.docker {
-        apps.push(WorkspacePage::Docker);
-    }
-    apps
+    APP_LAUNCHERS
+        .into_iter()
+        .filter(|page| match page {
+            WorkspacePage::Browser => cfg!(windows),
+            WorkspacePage::Docker => s.server_apps.applications.docker,
+            _ => true,
+        })
+        .collect()
 }
-fn app_label(page: WorkspacePage) -> &'static str {
+pub(super) fn app_label(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "Docker",
-        WorkspacePage::Explorer(_) => "资源管理器",
+        WorkspacePage::Files(_) => "资源管理器",
         WorkspacePage::Code => "Code",
-        WorkspacePage::Video => "Video player",
+        WorkspacePage::Player => "Player",
         WorkspacePage::Browser => "Web browser",
         WorkspacePage::Terminal => "终端",
-        WorkspacePage::Resources => "Monitor",
-        WorkspacePage::Software => "Software store",
+        WorkspacePage::Monitor => "Monitor",
+        WorkspacePage::AppCenter => "App Center",
         WorkspacePage::Settings => "Settings",
         _ => "Desktop",
     }
 }
 
+fn launcher_page(s: &State, page: WorkspacePage) -> WorkspacePage {
+    if page == WorkspacePage::Files(0) {
+        s.workbench
+            .files
+            .current()
+            .map_or(page, WorkspacePage::Files)
+    } else {
+        page
+    }
+}
+
+pub(super) fn can_close_app(s: &State, page: WorkspacePage) -> bool {
+    !s.system_task_running && (page != WorkspacePage::Code || s.code.pending.is_empty())
+}
+
 fn window_class(page: WorkspacePage) -> String {
-    match page.explorer_id() {
+    match page.files_window_id() {
         Some(id) => format!("files-window-{id}"),
         None => app_class(page).into(),
     }
 }
 
 fn window_mut(s: &mut State, page: WorkspacePage, app: DesktopApp) -> &mut DesktopWindow {
-    if let Some(id) = page.explorer_id().filter(|id| *id != 0) {
+    if let Some(id) = page.files_window_id().filter(|id| *id != 0) {
         s.workbench.files.layout_mut(id)
     } else {
         s.workbench.windows.entry(app).or_default()
@@ -251,13 +270,13 @@ fn window_mut(s: &mut State, page: WorkspacePage, app: DesktopApp) -> &mut Deskt
 fn app_class(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "app-docker",
-        WorkspacePage::Explorer(_) => "app-explorer",
+        WorkspacePage::Files(_) => "app-files",
         WorkspacePage::Code => "app-code",
-        WorkspacePage::Video => "app-video",
+        WorkspacePage::Player => "app-player",
         WorkspacePage::Browser => "app-browser",
         WorkspacePage::Terminal => "app-terminal",
-        WorkspacePage::Resources => "app-resources",
-        WorkspacePage::Software => "app-software",
+        WorkspacePage::Monitor => "app-monitor",
+        WorkspacePage::AppCenter => "app-center",
         WorkspacePage::Settings => "app-settings",
         _ => "app-desktop",
     }
@@ -266,12 +285,12 @@ fn app_class(page: WorkspacePage) -> &'static str {
 fn app_icon(page: WorkspacePage) -> Icon {
     match page {
         WorkspacePage::Terminal => Icon::Terminal,
-        WorkspacePage::Resources => Icon::Monitor,
-        WorkspacePage::Software => Icon::Store,
+        WorkspacePage::Monitor => Icon::Monitor,
+        WorkspacePage::AppCenter => Icon::AppCenter,
         WorkspacePage::Settings => Icon::Settings,
-        WorkspacePage::Explorer(_) => Icon::Folder,
+        WorkspacePage::Files(_) => Icon::Folder,
         WorkspacePage::Code => Icon::Code,
-        WorkspacePage::Video => Icon::Play,
+        WorkspacePage::Player => Icon::Play,
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         _ => Icon::Grid,
@@ -297,7 +316,7 @@ pub(super) fn select_tab(s: &mut State, tab: Tab) {
     s.workspace_page = match tab {
         Tab::Home => WorkspacePage::Desktop,
         Tab::Desktop => s.workbench.desktop_page,
-        Tab::Files => WorkspacePage::Files,
+        Tab::TransferFiles => WorkspacePage::TransferFiles,
     };
 }
 
@@ -322,6 +341,9 @@ pub(super) fn owns_dialog(s: &State) -> bool {
             s.dialog,
             Some(
                 Dialog::SoftwareInstall
+                    | Dialog::OpenVideo
+                    | Dialog::FileAssociation { .. }
+                    | Dialog::OpenWith { .. }
                     | Dialog::SoftwareAction(..)
                     | Dialog::DesktopTask(..)
                     | Dialog::ScriptRefresh(_, _, true)
@@ -332,13 +354,14 @@ pub(super) fn owns_dialog(s: &State) -> bool {
                     | Dialog::DockerConfigure
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess
-                    | Dialog::ExplorerColor { .. }
-                    | Dialog::RenameFile { remote: true }
+                    | Dialog::CustomizeFolder { .. }
+                    | Dialog::FilesSettings
                     | Dialog::FileProperties
                     | Dialog::Trash { remote: true }
                     | Dialog::FileColumns { remote: true }
                     | Dialog::DeleteFiles { remote: true, .. }
                     | Dialog::TransferProgress(_)
+                    | Dialog::FilesDownload { .. }
                     | Dialog::TransferDefaults
                     | Dialog::TransferConflict
             )
@@ -351,8 +374,8 @@ pub(super) fn select_app(s: &mut State, page: WorkspacePage) {
         return;
     }
     select_tab(s, Tab::Desktop);
-    if let Some(id) = page.explorer_id() {
-        explorer_tabs::focus(s, id);
+    if let Some(id) = page.files_window_id() {
+        files_tabs::focus(s, id);
     }
     s.workbench.open_window(page);
     s.workspace_page = page;
@@ -366,8 +389,8 @@ fn front_window(s: &mut State) {
     }
     s.workbench.desktop_page = page;
     if s.workbench.active == Tab::Desktop {
-        if let Some(id) = page.explorer_id() {
-            explorer_tabs::focus(s, id);
+        if let Some(id) = page.files_window_id() {
+            files_tabs::focus(s, id);
         }
         observability::metrics_leave(s);
         s.terminal.menu = None;
@@ -383,8 +406,8 @@ pub(super) fn remove_window(s: &mut State, page: WorkspacePage) {
     s.workbench.stack.retain(|&open| open != page);
     s.workbench.desktop_restore.retain(|&open| open != page);
     s.workbench.slots.remove(&page);
-    if let Some(id) = page.explorer_id() {
-        explorer_tabs::remove(s, id);
+    if let Some(id) = page.files_window_id() {
+        files_tabs::remove(s, id);
     }
     front_window(s);
 }
@@ -463,11 +486,11 @@ impl Ui {
         self.docker_enter();
         self.terminal_enter();
         self.observability_enter();
-        self.store_enter();
-        self.explorer_enter();
+        self.app_center_enter();
+        self.files_enter();
         if self.state.with(|s| {
             visible(s)
-                && s.workspace_page.is_explorer()
+                && s.workspace_page.is_files()
                 && s.sftp_available
                 && s.remote_request == 0
                 && !s.remote_ready
@@ -478,7 +501,7 @@ impl Ui {
         network_ui::enter(self);
         if self.state.with(|s| {
             navigation::workspace_visible(s)
-                && s.workspace_page == WorkspacePage::Software
+                && s.workspace_page == WorkspacePage::AppCenter
                 && s.software.environment.is_none()
                 && s.software.pending.is_none()
         }) {
@@ -487,21 +510,20 @@ impl Ui {
     }
 
     pub(super) fn open_desktop_app(&self, page: WorkspacePage) {
-        let page = if page == WorkspacePage::Explorer(0) {
-            self.state.with(|s| {
-                s.workbench
-                    .files
-                    .current()
-                    .map_or(page, WorkspacePage::Explorer)
-            })
-        } else {
-            page
-        };
+        let page = self.state.with(|s| launcher_page(s, page));
         self.focus_desktop_app(page);
     }
 
+    pub(super) fn close_desktop_launcher(&self, page: WorkspacePage) {
+        if let Some(target) = self.state.with(|s| {
+            (launcher_running(s, page) && can_close_app(s, page)).then(|| launcher_page(s, page))
+        }) {
+            self.close_desktop_app(target);
+        }
+    }
+
     pub(super) fn focus_desktop_app(&self, page: WorkspacePage) {
-        if page.is_explorer()
+        if page.is_files()
             && self
                 .state
                 .with(|s| s.workspace_page != page && s.file_pending.is_some())
@@ -568,7 +590,7 @@ impl Ui {
             window.maximized = !window.maximized;
             true
         });
-        if changed && page.explorer_id().is_none_or(|id| id == 0) {
+        if changed && page.files_window_id().is_none_or(|id| id == 0) {
             self.remember_desktop_layout();
         }
     }
@@ -585,7 +607,7 @@ impl Ui {
             crate::code_terminal::close_all(self);
             self.state.revise(|s| s.code = Default::default());
         }
-        if page == WorkspacePage::Video {
+        if page == WorkspacePage::Player {
             self.player.stop(self);
         }
         #[cfg(windows)]
@@ -711,20 +733,16 @@ pub(super) fn launcher_running(s: &State, page: WorkspacePage) -> bool {
     s.workbench
         .apps
         .iter()
-        .any(|open| *open == page || (page.is_explorer() && open.is_explorer()))
+        .any(|open| *open == page || (page.is_files() && open.is_files()))
 }
 
 fn launcher_active(s: &State, page: WorkspacePage) -> bool {
-    s.workspace_page == page || (page.is_explorer() && s.workspace_page.is_explorer())
+    s.workspace_page == page || (page.is_files() && s.workspace_page.is_files())
 }
 
 pub(super) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
     let state = ui.state;
-    let label = if page == WorkspacePage::Video && !dock {
-        "Player"
-    } else {
-        app_label(page)
-    };
+    let label = app_label(page);
     sapid::button()
         .class(state.map(move |s| {
             format!(
@@ -757,14 +775,16 @@ pub(super) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
 }
 
 fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
-    let files = page.explorer_id();
+    let files = page.files_window_id();
     let state = ui.state;
     let minimize = ui.clone();
     let maximize = ui.clone();
     let close = ui.clone();
     let add_tab = ui.clone();
+    let files_settings = ui.clone();
     let window_drop = ui.clone();
-    let title = if page == WorkspacePage::Video {
+    let browse_video = ui.clone();
+    let title = if page == WorkspacePage::Player {
         text().content(state.map(|s| {
             s.video
                 .as_ref()
@@ -777,32 +797,24 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let tools = match page {
         WorkspacePage::Terminal => fragment(terminal::header(ui.clone())),
         WorkspacePage::Code => fragment(code_workbench::title_tools(ui.clone())),
-        WorkspacePage::Video => {
-            let browse = ui.clone();
-            fragment(when(state.map(|s| s.video.is_some()), move || {
-                let browse = browse.clone();
-                icon_action("Open video", Icon::Folder)
-                    .on_press(move || browse.player.browse(&browse))
-            }))
-        }
-        WorkspacePage::Explorer(id) => fragment((
-            explorer_ui::sidebar_toggle(ui.clone()),
-            explorer_tabs::tab_strip(ui.clone(), id),
+        WorkspacePage::Files(id) => fragment((
+            files_ui::sidebar_toggle(ui.clone()),
+            files_tabs::tab_strip(ui.clone(), id),
         )),
-        WorkspacePage::Resources => fragment(monitor_ui::window_tools(ui.clone())),
+        WorkspacePage::Monitor => fragment(monitor_ui::window_tools(ui.clone())),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone())),
         _ => fragment(()),
     };
     let content = match page {
         WorkspacePage::Terminal => fragment(terminal::page(ui)),
-        WorkspacePage::Explorer(id) => fragment(explorer_tabs::window_content(ui, id)),
-        WorkspacePage::Resources => fragment(monitor_ui::page(ui)),
-        WorkspacePage::Software => fragment(software::page(ui)),
+        WorkspacePage::Files(id) => fragment(files_tabs::window_content(ui, id)),
+        WorkspacePage::Monitor => fragment(monitor_ui::page(ui)),
+        WorkspacePage::AppCenter => fragment(app_center_ui::page(ui)),
         WorkspacePage::Settings => fragment(server_apps_ui::settings(ui)),
         WorkspacePage::Docker => fragment(docker_ui::page(ui)),
         WorkspacePage::Code => fragment(code_workbench::page(ui)),
-        WorkspacePage::Video => fragment(video_player::panel(ui)),
+        WorkspacePage::Player => fragment(video_player::panel(ui)),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::page(ui)),
         _ => fragment(()),
@@ -810,7 +822,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let mut window = col();
     if let Some(id) = files {
         window = window.on(glory::render::EventKind::Drag, move |event| {
-            explorer_tabs::drop_on_window(&window_drop, Some(id), event);
+            files_tabs::drop_on_window(&window_drop, Some(id), event);
         });
     }
     window
@@ -834,8 +846,8 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         }))
         .fill((
             row()
-                .class(if page.is_explorer() {
-                    "desktop-window-titlebar explorer-titlebar"
+                .class(if page.is_files() {
+                    "desktop-window-titlebar files-titlebar"
                 } else {
                     "desktop-window-titlebar"
                 })
@@ -846,15 +858,27 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     title.class("desktop-window-title"),
                     tools,
                     row().class("desktop-window-actions").fill((
+                        when(page == WorkspacePage::Player, move || {
+                            let ui = browse_video.clone();
+                            icon_action("Open video", Icon::OpenVideo)
+                                .class("icon-button player-open-video")
+                                .on_press(move || ui.player.browse(&ui))
+                        }),
                         when(files.is_some(), move || {
                             let ui = add_tab.clone();
                             icon_action("New tab", Icon::Plus)
                                 .class("icon-button files-new-tab")
                                 .on_press(move || {
                                     if let Some(id) = files {
-                                        explorer_tabs::new_tab(&ui, id);
+                                        files_tabs::new_tab(&ui, id);
                                     }
                                 })
+                        }),
+                        when(files.is_some(), move || {
+                            let ui = files_settings.clone();
+                            icon_action("Files settings", Icon::Settings)
+                                .class("icon-button files-settings")
+                                .on_press(move || ui.open_dialog(Dialog::FilesSettings))
                         }),
                         icon_action("Minimize window", Icon::WindowMinimize)
                             .class("icon-button window-minimize")
@@ -870,10 +894,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                             .on_press(move || maximize.toggle_window_maximize(page)),
                         close_action("Close application")
                             .class("icon-button window-close")
-                            .enabled(state.map(move |s| {
-                                !s.system_task_running
-                                    && (page != WorkspacePage::Code || s.code.pending.is_empty())
-                            }))
+                            .enabled(state.map(move |s| can_close_app(s, page)))
                             .on_press(move || close.close_desktop_app(page)),
                     )),
                 )),
@@ -956,6 +977,7 @@ fn dock_clock(state: Cage<State>) -> impl Widget {
                 .content(""),
             text().class("desktop-panel-time").content(""),
             text().class("desktop-panel-date").content(""),
+            text().class("desktop-clock-tooltip").content(""),
         ))
 }
 
@@ -1003,7 +1025,7 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
                         focus_window(&focus, &value);
                     }
                 }),
-            explorer_tabs::bridge(ui.clone()),
+            files_tabs::bridge(ui.clone()),
             text().class("desktop-motion-state").content(state.map(|s| {
                 let shown = visible(s);
                 let windows: Vec<_> = s
@@ -1016,7 +1038,7 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
                         let layout = s.workbench.window(page);
                         Some(serde_json::json!({
                             "id": app,
-                            "window": page.explorer_id(),
+                            "window": page.files_window_id(),
                             "class": window_class(page),
                             "order": index + 1,
                             "slot": s.workbench.slots.get(&page).copied().unwrap_or_default(),
@@ -1055,7 +1077,7 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
             col()
                 .class("desktop-canvas")
                 .on(glory::render::EventKind::Drag, move |event| {
-                    explorer_tabs::drop_on_window(&desktop_drop, None, event);
+                    files_tabs::drop_on_window(&desktop_drop, None, event);
                 })
                 .name(i18n::bind("Desktop"))
                 .focus(FocusMode::Programmatic)
@@ -1086,14 +1108,7 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
                         .fill(desktop_customization_ui::launchers(ui.clone(), false)),
                     app_windows(ui.clone()),
                     col()
-                        .class(state.map(|s| {
-                            if desktop_customization_ui::panel_mode(s) {
-                                "desktop-dock-zone dock-panel-zone"
-                            } else {
-                                "desktop-dock-zone"
-                            }
-                            .to_owned()
-                        }))
+                        .class(state.map(desktop_customization_ui::dock_zone_class))
                         .fill(
                             row()
                                 .class(state.map(desktop_customization_ui::dock_class))
@@ -1111,20 +1126,9 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
                                             .on_press(move || show_desktop.toggle_show_desktop()),
                                         text().class("desktop-dock-divider").content(""),
                                     )),
-                                    row().class("desktop-dock-apps").fill((
+                                    row().class("desktop-dock-apps").fill(
                                         desktop_customization_ui::launchers(ui.clone(), true),
-                                        when(
-                                            state.map(|s| {
-                                                s.workbench.apps.contains(&WorkspacePage::Video)
-                                            }),
-                                            {
-                                                let ui = ui.clone();
-                                                move || {
-                                                    launcher(ui.clone(), WorkspacePage::Video, true)
-                                                }
-                                            },
-                                        ),
-                                    )),
+                                    ),
                                     when(
                                         state.map(desktop_customization_ui::panel_mode),
                                         move || dock_clock(state),

@@ -243,10 +243,21 @@ pub fn volume(session: &RemoteSession, name: &str) -> Result<VolumeDetails> {
     ensure!(row.name == name, "Docker volume identity changed");
     Ok(row)
 }
+/// How many of the newest log lines can be read; the first is the default.
+pub const LOG_LINES: [u16; 3] = [200, 500, 1000];
+
 pub fn logs_command(id: &str) -> Result<String> {
+    logs_command_with_tail(id, LOG_LINES[0])
+}
+
+fn logs_command_with_tail(id: &str, lines: u16) -> Result<String> {
     ensure!(id_valid(id), "Invalid container ID");
+    ensure!(
+        LOG_LINES.contains(&lines),
+        "Unsupported number of log lines"
+    );
     Ok(format!(
-        "# arcnix:docker:logs\n{PREFIX}\narcnix_docker container logs --timestamps --tail 200 {id} 2>&1"
+        "# arcnix:docker:logs\n{PREFIX}\narcnix_docker container logs --timestamps --tail {lines} {id} 2>&1"
     ))
 }
 /// The container's stdout and stderr in the order Docker wrote them.
@@ -255,8 +266,13 @@ pub fn logs_command(id: &str) -> Result<String> {
 /// one pipe keeps their order. Output is shown, not parsed, so it is decoded
 /// lossily rather than rejected for invalid UTF-8.
 pub fn logs(session: &RemoteSession, id: &str) -> Result<String> {
+    logs_with_tail(session, id, LOG_LINES[0])
+}
+
+/// Read one snapshot with a supported tail length from [`LOG_LINES`].
+pub fn logs_with_tail(session: &RemoteSession, id: &str, lines: u16) -> Result<String> {
     let output = check(
-        execute_lossy(session, &logs_command(id)?, LIMIT)?,
+        execute_lossy(session, &logs_command_with_tail(id, lines)?, LIMIT)?,
         merged_failure,
     )?;
     Ok(output.stdout)
@@ -365,7 +381,11 @@ mod tests {
         let id = "a".repeat(64);
         let command = logs_command(&id).unwrap();
         assert!(command.ends_with(&format!("--tail 200 {id} 2>&1")));
+        assert!(logs_command_with_tail(&id, 1000).unwrap().contains("--tail 1000 "));
         assert!(logs_command("a; id").is_err());
+        for lines in [0, 199, 1001, u16::MAX] {
+            assert!(logs_command_with_tail(&id, lines).is_err());
+        }
         let output = |stdout: &str, stderr: &str| crate::CommandOutput {
             stdout: stdout.into(),
             stderr: stderr.into(),

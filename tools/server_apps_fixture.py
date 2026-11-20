@@ -6,6 +6,7 @@ import time
 import base64
 import re
 import hashlib
+import tempfile
 import threading
 from pathlib import Path
 
@@ -49,6 +50,83 @@ def apply_task(server,record):
 
 
 _sync_lock = threading.Lock()
+_desktop_header = b'arcnix-desktop-v1\n'
+
+
+def desktop_settings_dir(legacy):
+    # A regular pointer models the production symlink on Windows hosts that
+    # cannot create symbolic links without Developer Mode.
+    try:
+        revision = legacy.with_name('.desktop.fixture-current').read_text(encoding='ascii')
+    except FileNotFoundError:
+        live = legacy.with_name('desktop')
+        return live if live.is_dir() else None
+    return legacy.parent / 'desktop-revisions' / revision
+
+
+def read_desktop_settings(legacy):
+    directory = desktop_settings_dir(legacy)
+    if directory is None:
+        return json.loads(legacy.read_bytes()) if legacy.exists() else {}
+    def load(path):
+        return json.loads(path.read_bytes()) if path.exists() else {}
+    prefs = load(directory / 'system.json')
+    appearance = load(directory / 'preferences/desktop.json')
+    appearance['dock'] = load(directory / 'apps/dock.json')
+    prefs['appearance'] = appearance
+    windows = {}
+    for path in (directory / 'apps').glob('*.json'):
+        if path.stem == 'dock':
+            continue
+        value = load(path)
+        if 'window' in value:
+            windows['browser' if path.stem == 'web_browser' else path.stem] = value['window']
+        if path.stem in ('files', 'terminal'):
+            prefs[path.stem] = value.get('settings', {})
+        elif path.stem == 'web_browser':
+            prefs['browser_bookmarks'] = value.get('settings', {}).get('bookmarks', [])
+        elif path.stem == 'monitor':
+            interval = value.get('settings', {}).get('resource_interval_seconds')
+            if interval is not None:
+                prefs['resource_interval_seconds'] = interval
+    prefs['windows'] = windows
+    return prefs
+
+
+def desktop_packet(legacy, paths, update=None):
+    directory = desktop_settings_dir(legacy)
+    if directory is None:
+        return legacy.read_bytes() if legacy.exists() else None
+    packet = bytearray(_desktop_header)
+    for path in paths:
+        file = directory / path
+        if update and path == update[0]:
+            data = update[1]
+        else:
+            data = file.read_bytes() if file.exists() else b''
+        packet.extend(f'{len(data)}\n'.encode('ascii'))
+        packet.extend(data)
+    return bytes(packet)
+
+
+def publish_desktop(legacy, paths, data):
+    assert data.startswith(_desktop_header)
+    revisions = legacy.parent / 'desktop-revisions'
+    revisions.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix='generation.', dir=revisions))
+    offset = len(_desktop_header)
+    for path in paths:
+        end = data.index(b'\n', offset)
+        size = int(data[offset:end])
+        offset = end + 1
+        target = directory / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data[offset:offset + size])
+        offset += size
+    assert offset == len(data)
+    temporary = legacy.with_name('.desktop.fixture-next')
+    temporary.write_text(directory.name, encoding='ascii')
+    os.replace(temporary, legacy.with_name('.desktop.fixture-current'))
 
 
 def reply(server, channel, command):
@@ -119,6 +197,51 @@ def reply(server, channel, command):
     if marker == '# arcnix:apps:discover':
         return send('ARCNIX_APPS_V1\n' + ('docker\ncompose\n' if seed.exists() else '') + ('snap\n' if (root/'software-snap-enabled').exists() else '') + ('tmux\n' if (root/'tmux-enabled').exists() else ''))
     preferences = root / 'home' / server.username / '.arcnix' / 'desktop.json'
+    if marker.startswith('# arcnix:desktop:domains:'):
+        paths = re.search(r"^domains='([^']+)'$", command, re.M)[1].split()
+        if (root / 'sync-offline').exists():
+            return send(status=1, error='Fixture sync interrupted')
+        if marker.endswith(':read'):
+            with _sync_lock:
+                current = desktop_packet(preferences, paths)
+            return send(b'M\n' if current is None else b'F\n' + current)
+        data = bytearray()
+        while chunk := channel.recv(65536):
+            data.extend(chunk)
+        if (root / 'desktop-write-denied').exists():
+            return send(status=1, error='Permission denied writing desktop preferences')
+        if marker.endswith(':file'):
+            base, expected, path = re.search(
+                r"^publish_file '([^']+)' '([^']+)' '([^']+)'$", command, re.M).groups()
+            payload_hash = re.search(r"^prepare_file '([^']+)'$", command, re.M)[1]
+            assert path in paths
+        else:
+            base, expected = re.search(r"^publish_commit '([^']+)' '([^']+)'$", command, re.M).groups()
+            path = None
+            payload_hash = expected
+        assert hashlib.sha256(data).hexdigest() == payload_hash
+        with _sync_lock:
+            snapshot = desktop_packet(preferences, paths)
+            current = hashlib.sha256(snapshot).hexdigest() if snapshot is not None else 'missing'
+            if current == expected:
+                result = 'OK\n'
+            elif current != base:
+                result = 'STALE\n'
+            else:
+                if path is None:
+                    publish_desktop(preferences, paths, data)
+                else:
+                    next_packet = desktop_packet(preferences, paths, (path, data))
+                    assert hashlib.sha256(next_packet).hexdigest() == expected
+                    target = desktop_settings_dir(preferences) / path
+                    temporary = target.with_suffix('.stage')
+                    temporary.write_bytes(data)
+                    os.replace(temporary, target)
+                if (root / 'trace-task-queries').exists():
+                    with (root/'desktop-writes.jsonl').open('a') as out:
+                        out.write(json.dumps(read_desktop_settings(preferences))+'\n')
+                result = 'OK\n'
+        return send(result)
     if marker.startswith('# arcnix:sync:'):
         client = re.search(r'^child ([0-9a-f]{32})$', command, re.M)
         target = (preferences.parent / 'browser' / 'profiles' / client[1] / 'cookies.enc'
@@ -162,28 +285,6 @@ def reply(server, channel, command):
     if marker == '# arcnix:desktop:wallpapers':
         (preferences.parent / 'wallpapers').mkdir(parents=True, exist_ok=True)
         return send(f'/home/{server.username}/.arcnix/wallpapers')
-    if marker == '# arcnix:desktop:read':
-        return send(preferences.read_text() if preferences.exists() else 'null\n')
-    if marker == '# arcnix:desktop:write':
-        if (root / 'desktop-write-denied').exists():
-            return send(status=1, error='Permission denied writing desktop preferences')
-        line = next(line for line in command.splitlines() if 'base64 -d > "$arcnix_temp"' in line)
-        value = json.loads(base64.b64decode(shlex.split(line)[2]))
-        if (root/'trace-task-queries').exists():
-            with (root/'desktop-writes.jsonl').open('a') as out:out.write(json.dumps(value)+'\n')
-        assert value['version'] == 1 and value['theme'] in ['System', 'Light', 'Dark']
-        preferences.parent.mkdir(parents=True, exist_ok=True)
-        temporary = preferences.with_suffix('.tmp')
-        temporary.write_text(json.dumps(value))
-        # Windows readers can briefly deny replacement while tests inspect JSON.
-        for attempt in range(40):
-            try:
-                os.replace(temporary, preferences)
-                break
-            except PermissionError:
-                if attempt == 39:raise
-                time.sleep(.025)
-        return send('ARCNIX_DESKTOP_SAVED_V1\n')
     for record in list(server.hosted_tasks.values()):
         server.task_finished(record)
     if marker == '# arcnix:disks:read':
@@ -240,11 +341,12 @@ def reply(server, channel, command):
         if (root / 'docker-slow').exists():
             time.sleep(1.2)
         stdout, stderr = container.get('logs', ''), container.get('stderr_logs', '')
+        tail = int(arguments[arguments.index('--tail') + 1])
         if merged:
             # Docker keeps both streams in one timestamped log, so a shared pipe receives them in time order.
             lines = stdout.splitlines(keepends=True) + stderr.splitlines(keepends=True)
-            return send(''.join(sorted(lines, key=lambda line: line.split(' ', 1)[0])))
-        return send(stdout, error=stderr)
+            return send(''.join(sorted(lines, key=lambda line: line.split(' ', 1)[0])[-tail:]))
+        return send(''.join(stdout.splitlines(keepends=True)[-tail:]), error=''.join(stderr.splitlines(keepends=True)[-tail:]))
     if (root / 'docker-action-failed').exists():
         return send(status=1, error='Docker fixture operation failed')
     if kind in ['start', 'restart', 'stop']:
