@@ -240,11 +240,12 @@ def reply(server, channel, command):
         if (root / 'docker-slow').exists():
             time.sleep(1.2)
         stdout, stderr = container.get('logs', ''), container.get('stderr_logs', '')
+        tail = int(arguments[arguments.index('--tail') + 1])
         if merged:
             # Docker keeps both streams in one timestamped log, so a shared pipe receives them in time order.
             lines = stdout.splitlines(keepends=True) + stderr.splitlines(keepends=True)
-            return send(''.join(sorted(lines, key=lambda line: line.split(' ', 1)[0])))
-        return send(stdout, error=stderr)
+            return send(''.join(sorted(lines, key=lambda line: line.split(' ', 1)[0])[-tail:]))
+        return send(''.join(stdout.splitlines(keepends=True)[-tail:]), error=''.join(stderr.splitlines(keepends=True)[-tail:]))
     if (root / 'docker-action-failed').exists():
         return send(status=1, error='Docker fixture operation failed')
     if kind in ['start', 'restart', 'stop']:

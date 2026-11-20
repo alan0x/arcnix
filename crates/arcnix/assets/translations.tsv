@@ -2184,7 +2184,8 @@ Docker 操作已完成	Docker operation completed
 CPU 限制	CPU limit
 内存限制（MiB）	Memory limit (MiB)
 容器配置	Container configuration
-按需读取最后 200 行，包含容器标准输出和错误输出，并显示终端颜色。	Last 200 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process.
+按需读取最后 200、500 或 1000 行，包含容器标准输出和错误输出，并显示终端颜色。	The last 200, 500 or 1000 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process.
+行数	Lines
 发布映射显示宿主机地址和端口。没有宿主机绑定的暴露端口不会发布；host 网络直接使用服务器网络。修改端口或挂载需要重建容器。	Published mappings show host addresses and ports. Exposed ports without a host binding are not published. Host networking uses the server network directly. Changing mappings or mounts requires recreating the container.
 重启策略可填 no、always、unless-stopped 或 on-failure[:重试次数]。CPU 和内存填 0 表示不限。设置应用到当前容器，Compose 重建时可能覆盖。	Restart policy: no, always, unless-stopped or on-failure[:retries]. CPU and memory limits use 0 for unlimited. Changes apply to this container; Compose may replace them when it recreates the container.
 Docker {} · {} 个容器 · {} 个卷	Docker {} · {} containers · {} volumes
