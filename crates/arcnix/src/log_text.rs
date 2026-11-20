@@ -142,6 +142,34 @@ pub(crate) fn view_spans(class: &'static str, spans: &[LogSpan]) -> impl Widget 
     )
 }
 
+/// One program's output with its terminal colors; colors carry across lines.
+pub(crate) fn output_spans(text: &str) -> Vec<LogSpan> {
+    let mut spans = Spans::default();
+    spans.output_lines(text);
+    spans.finish()
+}
+
+/// `text` as the items of [`output_view`]: none when it is empty, so the block
+/// stays empty.
+pub(crate) fn shown(text: String) -> Vec<String> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![text]
+    }
+}
+
+/// A block of program output with its terminal colors. The block stays in
+/// place, so updates keep the scroll position, and its spans are rebuilt only
+/// when the text changes, not on every state change.
+pub(crate) fn output_view(class: &'static str, text: Bond<Vec<String>>) -> impl Widget {
+    view().class(class).fill(
+        each(text)
+            .key(Clone::clone)
+            .children(|item| view_spans("log-text", &output_spans(&item.value.get_untracked()))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +218,16 @@ mod tests {
         spans.reset();
         spans.output("d");
         assert_eq!(parts(&spans.finish()), [("kept d", "")]);
+    }
+
+    #[test]
+    fn output_keeps_colors_across_its_lines() {
+        assert_eq!(
+            parts(&output_spans("\x1b[33mstep 1\nstep 2\x1b[0m\ndone\n")),
+            [("step 1\nstep 2\n", "ansi ansi-fg-3"), ("done\n", "")]
+        );
+        assert!(shown(String::new()).is_empty());
+        assert_eq!(shown("x".into()), ["x"]);
     }
 
     #[test]
