@@ -211,7 +211,7 @@ def reply(server, channel, command):
     if not seed.exists():
         return send(status=127, error='Docker is not installed')
     if (root / 'docker-denied').exists():
-        return fail(1, 'permission denied connecting to the Docker socket')
+        return fail(1, 'permission denied connecting to the Docker socket at unix:///var/run/docker.sock')
     data = json.loads(seed.read_text())
     kind = marker.rsplit(':', 1)[-1]
     if kind == 'snapshot':

@@ -125,18 +125,13 @@ fn selected(s: &State) -> Option<Container> {
 /// which usually means the SSH account is not in the docker group.
 fn socket_hint(error: &str, user: &str) -> Option<String> {
     let error = error.to_lowercase();
-    let socket = [
-        "docker.sock",
-        "docker daemon",
-        "docker api",
-        "docker socket",
-    ]
-    .iter()
-    .any(|name| error.contains(name));
-    // A rootless daemon's socket belongs to the account, so group membership is not the fix.
-    (error.contains("permission denied") && socket && !error.contains("/run/user/")).then(|| {
+    let system_socket = ["unix:///var/run/docker.sock", "unix:///run/docker.sock"]
+        .iter()
+        .any(|endpoint| error.contains(endpoint));
+    (system_socket && error.contains("permission denied") && !user.is_empty()).then(|| {
+        let user = arcnix_core::remote_tasks::quote(user);
         i18n::translate(&format!(
-            "This SSH account cannot use the Docker socket. On the server, run `sudo usermod -aG docker {user}`, then reconnect so the new group applies. Members of the docker group have root-equivalent access to the server."
+            "This SSH account cannot use the Docker socket. On the server, run `sudo usermod -aG docker -- {user}`, then reconnect so the new group applies. Members of the docker group have root-equivalent access to the server."
         ))
     })
 }
@@ -146,7 +141,7 @@ fn hint(s: &State) -> Option<String> {
         .servers
         .iter()
         .find(|p| Some(&p.id) == s.selected.as_ref())
-        .map_or("$USER", |p| p.username.as_str());
+        .map(|p| p.username.as_str())?;
     socket_hint(&s.docker.error, user)
 }
 fn actionable(s: &State) -> bool {
@@ -995,16 +990,27 @@ mod tests {
             "Docker command failed (1): Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/version\": dial unix /var/run/docker.sock: connect: permission denied",
         ] {
             let hint = socket_hint(error, "deploy").unwrap();
-            assert!(hint.contains("sudo usermod -aG docker deploy"), "{hint}");
+            assert!(
+                hint.contains("sudo usermod -aG docker -- 'deploy'"),
+                "{hint}"
+            );
         }
         for error in [
             "",
             "Docker command failed (1): No such container",
             "Docker command failed (1): open /srv/data: permission denied",
             "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///run/user/1000/docker.sock",
+            "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///home/deploy/custom-runtime/docker.sock",
         ] {
             assert_eq!(socket_hint(error, "deploy"), None, "{error}");
         }
+        let error =
+            "permission denied connecting to the Docker socket at unix:///var/run/docker.sock";
+        let hint = socket_hint(error, "o'neil").unwrap();
+        assert!(
+            hint.contains("sudo usermod -aG docker -- 'o'\\''neil'"),
+            "{hint}"
+        );
     }
     #[test]
     fn logs_keep_colors_and_mute_docker_timestamps() {

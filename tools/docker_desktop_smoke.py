@@ -206,7 +206,7 @@ def main():
             denied.touch()
             page.get_by_role('button', name='Refresh Docker', exact=True).click()
             expect(page.locator('.docker-error')).to_contain_text('permission denied')
-            expect(page.locator('.docker-error-hint')).to_contain_text('sudo usermod -aG docker ')
+            expect(page.locator('.docker-error-hint')).to_contain_text("sudo usermod -aG docker -- 'arcnix'")
             expect(page.locator('.docker-error-hint')).to_contain_text('root-equivalent')
             expect(page.locator('.docker-container-actions').get_by_role('button', name='Restart', exact=True)).to_be_disabled()
             denied.unlink()
