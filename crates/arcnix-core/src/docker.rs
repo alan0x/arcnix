@@ -381,7 +381,11 @@ mod tests {
         let id = "a".repeat(64);
         let command = logs_command(&id).unwrap();
         assert!(command.ends_with(&format!("--tail 200 {id} 2>&1")));
-        assert!(logs_command_with_tail(&id, 1000).unwrap().contains("--tail 1000 "));
+        assert!(
+            logs_command_with_tail(&id, 1000)
+                .unwrap()
+                .contains("--tail 1000 ")
+        );
         assert!(logs_command("a; id").is_err());
         for lines in [0, 199, 1001, u16::MAX] {
             assert!(logs_command_with_tail(&id, lines).is_err());
