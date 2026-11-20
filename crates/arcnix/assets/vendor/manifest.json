@@ -26,5 +26,19 @@
     "integrity": "sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==",
     "source": "https://registry.npmjs.org/markdown-it/-/markdown-it-15.0.3.tgz",
     "license": "MIT"
+  },
+  {
+    "name": "@phosphor-icons/core",
+    "version": "2.1.1",
+    "integrity": "sha512-v4ARvrip4qBCImOE5rmPUylOEK4iiED9ZyKjcvzuezqMaiRASCHKcRIuvvxL/twvLpkfnEODCOJp5dM4eZilxQ==",
+    "source": "https://registry.npmjs.org/@phosphor-icons/core/-/core-2.1.1.tgz",
+    "license": "MIT"
+  },
+  {
+    "name": "prettier",
+    "version": "3.10.1",
+    "integrity": "sha512-70vp3ZUYoPlFbF9uiTdXHUUCGEIp7d4+6p+8DYbkm2jP7x/3i/paXVF6dopSI3zd/CEitrZN1rc4i85xWmmXlg==",
+    "source": "https://registry.npmjs.org/prettier/-/prettier-3.10.1.tgz",
+    "license": "MIT"
   }
 ]

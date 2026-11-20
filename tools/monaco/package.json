@@ -34,6 +34,7 @@
     "@codingame/monaco-vscode-working-copy-service-override": "39.0.5",
     "@codingame/monaco-vscode-yaml-default-extension": "39.0.5",
     "esbuild": "0.28.2",
-    "markdown-it": "15.0.3"
+    "markdown-it": "15.0.3",
+    "prettier": "3.10.1"
   }
 }

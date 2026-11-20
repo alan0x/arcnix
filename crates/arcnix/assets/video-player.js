@@ -60,6 +60,50 @@ document.addEventListener('loadstart', event => {
     }
     new MutationObserver(sync).observe(document, {subtree:true, childList:true, characterData:true});
 })();
+
+(() => {
+    const playbackTimers = new WeakMap();
+    const pictureClicks = new WeakMap();
+    function feedback(video, symbol, settled = '') {
+        const indicator = video.closest('.remote-player-screen')?.querySelector('.player-feedback');
+        if (!indicator) return;
+        clearTimeout(playbackTimers.get(video));
+        indicator.dataset.symbol = symbol;
+        if (symbol === settled) return;
+        playbackTimers.set(video, setTimeout(() => {
+            if (video.isConnected) indicator.dataset.symbol = settled;
+        }, 420));
+    }
+
+    document.addEventListener('click', event => {
+        const video = event.target;
+        if (!video.matches?.('.remote-player-screen video') || event.button !== 0 || !event.detail || !video.readyState) return;
+        // The WebView retargets some clicks in the built-in controls to the video.
+        if (event.clientY >= video.getBoundingClientRect().bottom - 64) return;
+        // Leave a short interval for a double-click to maximize the window.
+        clearTimeout(pictureClicks.get(video));
+        if (event.detail !== 1) return;
+        pictureClicks.set(video, setTimeout(() => {
+            if (!video.isConnected) return;
+            if (video.paused) video.play().catch(() => feedback(video, 'play', 'play'));
+            else video.pause();
+        }, 220));
+    }, true);
+
+    document.addEventListener('play', event => {
+        if (event.target.matches?.('.remote-player-screen video')) feedback(event.target, 'play');
+    }, true);
+    document.addEventListener('pause', event => {
+        if (event.target.matches?.('.remote-player-screen video') && !event.target.ended) feedback(event.target, 'pause', 'play');
+    }, true);
+    document.addEventListener('ended', event => {
+        if (event.target.matches?.('.remote-player-screen video')) feedback(event.target, 'play', 'play');
+    }, true);
+    document.addEventListener('loadstart', event => {
+        if (event.target.matches?.('.remote-player-screen video')) feedback(event.target, '');
+    }, true);
+})();
+
 function maximizeVideoWindow(event) {
     if (!event.target.matches?.('.remote-player-screen video')) return;
     event.preventDefault();
@@ -78,6 +122,11 @@ document.addEventListener('contextmenu', event => {
 document.addEventListener('loadedmetadata', event => {
     const video = event.target;
     if (video.matches?.('.remote-player-screen video')) {
+        const bridge = video.closest('.remote-player')?.querySelector('.player-opened-input');
+        if (bridge) {
+            bridge.value = new URL(video.currentSrc).pathname;
+            bridge.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         video.play().catch(() => {});
     }
 }, true);

@@ -105,7 +105,7 @@ def package(binary, target, tag, output, version):
         for name in ("LICENSE", "README.md", "README.zh-CN.md"):
             shutil.copy2(ROOT / name, staging / name)
         vendor = ROOT / "crates/arcnix/assets/vendor"
-        for name in ("xterm", "addon-fit"):
+        for name in ("xterm", "addon-fit", "phosphor"):
             licenses = staging / "LICENSES" / name
             licenses.mkdir(parents=True)
             shutil.copy2(vendor / name / "LICENSE", licenses / "LICENSE")

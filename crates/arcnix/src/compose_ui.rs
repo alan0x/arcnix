@@ -102,7 +102,7 @@ pub(super) fn projects(ui: Ui) -> impl Widget {
    btn("Apply…",move||apply.compose_action(compose_apps::Action::Apply)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
    btn("Stop project…",move||stop.compose_action(compose_apps::Action::Stop)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
    btn("Restart project…",move||restart.compose_action(compose_apps::Action::Restart)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
-   text_action("Open folder",Icon::Folder).enabled(state.map(|s|s.sftp_available&&selected(s).is_some())).on_press(move||{let path=state.with(|s|s.compose.projects.as_ref().and_then(|v|selected(s).map(|p|format!("{}/{}",v.root,p.definition.name))));if let Some(path)=path{folder.open_desktop_app(WorkspacePage::Explorer(0));file_browser::navigate(&folder,true,path);}}),
+   text_action("Open folder",Icon::Folder).enabled(state.map(|s|s.sftp_available&&selected(s).is_some())).on_press(move||{let path=state.with(|s|s.compose.projects.as_ref().and_then(|v|selected(s).map(|p|format!("{}/{}",v.root,p.definition.name))));if let Some(path)=path{folder.open_desktop_app(WorkspacePage::Files(0));file_browser::navigate(&folder,true,path);}}),
    btn("Compose file",move||state.revise(|s|s.compose.preview = !s.compose.preview)),
   )),
   when(state.map(|s|s.compose.preview),move||text().class("compose-preview").selectable(true).content(state.map(|s|selected(s).map(|p|p.yaml).unwrap_or_default()))),

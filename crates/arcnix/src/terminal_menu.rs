@@ -1,4 +1,6 @@
 //! Application-owned terminal menus; actions remain bound to their session.
+use arcnix_core::desktop_shortcuts::Action as Shortcut;
+
 use super::*;
 
 #[derive(Clone)]
@@ -40,7 +42,7 @@ fn action(
     context: Cage<Context>,
     kind: &'static str,
     label: &'static str,
-    shortcut: &'static str,
+    shortcut: Option<Shortcut>,
 ) -> impl Widget {
     let state = ui.state;
     sapid::button()
@@ -60,7 +62,14 @@ fn action(
             text()
                 .class("terminal-menu-label")
                 .content(i18n::bind(label)),
-            text().class("terminal-menu-shortcut").content(shortcut),
+            text()
+                .class("terminal-menu-shortcut")
+                .content(state.map(move |s| {
+                    shortcut
+                        .and_then(|action| server_apps_ui::current(s).shortcuts.binding(action))
+                        .unwrap_or_default()
+                        .to_owned()
+                })),
         ))
         .on_press(move || {
             let identity = context.with(|context| context.identity.clone());
@@ -98,21 +107,33 @@ pub(super) fn menu(ui: Ui) -> impl Widget {
                 .fill((
                     when(context.map(|context| !context.tab), move || {
                         col().class("terminal-menu-group").fill((
-                            action(surface.clone(), context, "copy", "Copy", "Ctrl+Shift+C"),
-                            action(surface.clone(), context, "paste", "Paste", "Ctrl+Shift+V"),
+                            action(
+                                surface.clone(),
+                                context,
+                                "copy",
+                                "Copy",
+                                Some(Shortcut::TerminalCopy),
+                            ),
+                            action(
+                                surface.clone(),
+                                context,
+                                "paste",
+                                "Paste",
+                                Some(Shortcut::TerminalPaste),
+                            ),
                             action(
                                 surface.clone(),
                                 context,
                                 "select_all",
                                 "Select all",
-                                "Ctrl+Shift+A",
+                                Some(Shortcut::TerminalSelectAll),
                             ),
                             action(
                                 surface.clone(),
                                 context,
                                 "clear",
                                 "Clear display",
-                                "Ctrl+Shift+L",
+                                Some(Shortcut::TerminalClear),
                             ),
                             text().class("menu-divider").content(""),
                         ))
@@ -122,23 +143,46 @@ pub(super) fn menu(ui: Ui) -> impl Widget {
                         context,
                         "new_tab",
                         "New terminal tab",
-                        "Ctrl+Shift+T",
+                        Some(Shortcut::TerminalNewTab),
                     ),
                     when(context.map(|context| context.id > 0), {
                         let ui = ui.clone();
                         move || {
                             col().class("terminal-menu-group").fill((
-                                action(ui.clone(), context, "rename", "Rename tab", ""),
-                                action(ui.clone(), context, "close", "Close tab", "Ctrl+Shift+W"),
+                                action(ui.clone(), context, "rename", "Rename tab", None),
+                                action(
+                                    ui.clone(),
+                                    context,
+                                    "close",
+                                    "Close tab",
+                                    Some(Shortcut::TerminalCloseTab),
+                                ),
                             ))
                         }
                     }),
-                    when(state.map(|s| s.terminal.session_count() > 1), || {
-                        row().class("terminal-menu-hint").fill((
-                            text().content(i18n::bind("Switch tabs")),
-                            text().class("terminal-menu-shortcut").content("Ctrl+Tab"),
-                        ))
-                    }),
+                    when(
+                        state.map(|s| {
+                            s.terminal.session_count() > 1
+                                && server_apps_ui::current(s)
+                                    .shortcuts
+                                    .binding(Shortcut::TerminalNextTab)
+                                    .is_some()
+                        }),
+                        move || {
+                            row().class("terminal-menu-hint").fill((
+                                text().content(i18n::bind("Switch tabs")),
+                                text()
+                                    .class("terminal-menu-shortcut")
+                                    .content(state.map(|s| {
+                                        server_apps_ui::current(s)
+                                            .shortcuts
+                                            .binding(Shortcut::TerminalNextTab)
+                                            .unwrap_or_default()
+                                            .to_owned()
+                                    })),
+                            ))
+                        },
+                    ),
                 )),
         ))
     })

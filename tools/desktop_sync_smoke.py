@@ -4,6 +4,7 @@ import shutil
 import time
 
 from desktop_browser_smoke import site
+from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, eventually, executable, expect
 
 
@@ -45,9 +46,17 @@ def main():
         dropped = peer.root / 'sync-offline'
         home = peer.root / 'home' / config['config']['servers'][0]['username']
         shared = home / '.arcnix' / 'desktop.json'
+        long_bookmarks = [
+            {'title': f'Saved page {i}', 'url': f'https://example.com/{i}?query=' + 'a' * 3800}
+            for i in range(20)
+        ]
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text(json.dumps({'version': 1, 'theme': 'System', 'browser_bookmarks': long_bookmarks},
+                                     separators=(',', ':')), encoding='utf-8')
+        assert shared.stat().st_size > 64 * 1024
 
         def remote():
-            return json.loads(shared.read_text(encoding='utf-8')) if shared.exists() else {}
+            return read_desktop_settings(shared)
 
         with Desktop(out / 'a', config, binary=binaries[0], extra_env=env) as a, Desktop(
             out / 'b', config, binary=binaries[1], extra_env=env, runtime=a.runtime,
@@ -79,6 +88,7 @@ def main():
             expect(b_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             eventually(lambda: json.loads(pending(a, 'cookies.json').read_text())['pending']['dirty'])
             assert pending(a, 'desktop.json') and pending(b, 'desktop.json')
+            assert pending(a, 'desktop.json').stat().st_size > 64 * 1024
             assert remote().get('theme') == 'System'
 
             # Both clients now retry against the same remote account.
@@ -106,6 +116,11 @@ def main():
             eventually(lambda: pending(a, 'desktop.json') is None and pending(b, 'desktop.json') is None)
             assert remote()['resource_interval_seconds'] == 5
             assert any(v['url'].endswith('/sync/start') for v in remote()['browser_bookmarks'])
+            assert all(bookmark in remote()['browser_bookmarks'] for bookmark in long_bookmarks)
+            directory = desktop_settings_dir(shared)
+            assert (directory / 'system.json').read_text(encoding='utf-8').startswith('{\n  "version": 1,\n')
+            assert (directory / 'apps/web_browser.json').stat().st_size > 64 * 1024
+            assert json.loads(shared.read_bytes())['theme'] == 'System'
 
             # Save an edit while SSH is unavailable, and exit before it can be acknowledged.
             dropped.touch()
@@ -128,8 +143,9 @@ def main():
             visit(browser(a), endpoint + '/sync/check', 'Updated session cookie restored')
             b.connect()
             eventually(lambda: remote().get('theme') == 'Dark' and pending(b, 'desktop.json') is None, timeout=30)
+            assert all(bookmark in remote()['browser_bookmarks'] for bookmark in long_bookmarks)
             visit(browser(b), endpoint + '/sync/check', 'No session cookie')
-    print('Desktop and bookmark sharing, conflict resolution, restart retry, encrypted Cookie restore and isolation passed.')
+    print('Desktop settings over 64 KiB, conflict resolution, restart retry, encrypted Cookie restore and isolation passed.')
 
 
 if __name__ == '__main__':

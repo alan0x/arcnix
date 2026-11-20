@@ -1,4 +1,5 @@
 """Verify Files tabs and floating window moves with a real SFTP workspace."""
+import json
 import re
 import time
 
@@ -12,14 +13,38 @@ def main():
     with Peer(out / 'peer') as peer:
         (peer.root / 'Projects').mkdir()
         (peer.root / 'Projects/notes.txt').write_text('original', encoding='utf-8')
+        (peer.root / '.private').mkdir()
+        (peer.root / '.env').touch()
         with Desktop(out / 'desktop', peer.config([peer.profile('Files tabs')], local)) as app:
             page = app.page
             app.connect()
             app.application('Files')
-            windows = page.locator('.app-explorer.desktop-window:not(.hidden)')
-            active = page.locator('.app-explorer.desktop-window.active')
+            windows = page.locator('.app-files.desktop-window:not(.hidden)')
+            active = page.locator('.app-files.desktop-window.active')
             root = active.locator('.files-tab-select')
             expect(root).to_have_text('/')
+            hidden_dir = app.file('.private')
+            dotfile = app.file('.env')
+            dotfile.click()
+            page.keyboard.press('F2')
+            rename = active.locator('.file-inline-name')
+            expect(rename).to_be_focused()
+            assert rename.evaluate('e => e.selectionStart === 0 && e.selectionEnd === e.value.length')
+            rename.press('Escape')
+            expect(rename).to_have_count(0)
+            expect(dotfile).to_be_focused()
+            page.keyboard.press('Control+h')
+            expect(dotfile).to_have_count(0)
+            expect(hidden_dir).to_have_count(0)
+            assert not json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['show_hidden_files']
+            active.locator('.files-new-tab + .files-settings').click()
+            settings = page.get_by_role('dialog', name='Files settings')
+            expect(settings.get_by_role('button', name='Hide hidden files')).to_have_class(re.compile('active'))
+            settings.get_by_role('button', name='Show hidden files').click()
+            settings.get_by_role('button', name='Done').click()
+            expect(dotfile).to_be_visible()
+            expect(hidden_dir).to_be_visible()
+            assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['show_hidden_files']
             active.get_by_role('button', name='Projects', exact=True).click(button='right')
             app.action('Open in new tab')
             expect(root).to_have_text(['/', 'Projects'])
@@ -69,7 +94,7 @@ def main():
             expect(windows).to_have_count(2)
             expect(active.locator('.files-tab-select')).to_have_text('Projects')
             expect(note).to_be_visible()
-            inactive = page.locator('.app-explorer.desktop-window:not(.hidden):not(.active)')
+            inactive = page.locator('.app-files.desktop-window:not(.hidden):not(.active)')
             expect(inactive.locator('.files-tab-select')).to_have_text('/')
             target = inactive.locator('.files-tab-select').bounding_box()
             drag(active.locator('.files-tab-select'), target['x'] + 6, target['y'] + target['height'] / 2)
@@ -81,7 +106,7 @@ def main():
             expect(active.locator('.files-tab')).to_have_count(3)
             page.keyboard.press('Control+w')
             expect(active.locator('.files-tab')).to_have_count(2)
-            active.locator('.explorer-sidebar').get_by_role('button', name='Trash', exact=True).click()
+            active.locator('.files-sidebar').get_by_role('button', name='Trash', exact=True).click()
             expect(active.locator('.trash-panel')).to_be_visible()
             active.locator('.trash-panel').click(button='right')
             expect(page.locator('.file-context-menu')).to_have_count(0)
@@ -91,7 +116,7 @@ def main():
             app.file('notes.txt').click(button='right')
             app.action('Move to Trash')
             expect(app.file('notes.txt')).to_have_count(0)
-            active.locator('.explorer-sidebar').get_by_role('button', name='Trash', exact=True).click()
+            active.locator('.files-sidebar').get_by_role('button', name='Trash', exact=True).click()
             row = active.locator('.trash-item').filter(has_text='/Projects/notes.txt')
             menu = page.get_by_role('menu', name='Trash', exact=True)
             target = row.get_by_role('group', name='/Projects/notes.txt', exact=True)
@@ -107,13 +132,20 @@ def main():
             menu.get_by_role('menuitem', name='Restore', exact=True).click()
             expect(row).to_have_count(0)
             assert (peer.root / 'Projects/notes.txt').read_text(encoding='utf-8') == 'original'
-            active.locator('.explorer-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
+            active.locator('.files-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
             actions = active.get_by_role('button', name='Remote file actions', exact=True)
             actions.click()
             menu = active.locator('.file-actions-menu')
             expect(menu.get_by_role('button', name='Transfer defaults')).to_have_count(0)
-            expect(menu.locator('.menu-divider')).to_have_count(3)
-    print('Files tab navigation, detach, merge, shortcuts, Trash menus and restore passed.')
+            groups = menu.locator(':scope > .file-menu-group')
+            expect(groups).to_have_count(5)
+            expect(groups.nth(0).get_by_role('button')).to_have_text(['Paste', 'New folder', 'New file'])
+            expect(groups.nth(1).get_by_role('button')).to_have_text(['Copy directory path', 'Refresh'])
+            expect(groups.nth(2).get_by_role('button')).to_have_text(['Terminal here'])
+            expect(groups.nth(3).locator('.file-color-swatch')).to_have_count(8)
+            expect(groups.nth(3).get_by_role('button', name='Customize Folder…', exact=True)).to_be_visible()
+            expect(groups.nth(4).get_by_role('button')).to_have_text(['Detailed list', 'Icon grid', 'Visible columns', 'Select all'])
+    print('Files tab navigation, detach, merge, shortcuts, hidden files settings, Trash menus and restore passed.')
 
 
 if __name__ == '__main__':

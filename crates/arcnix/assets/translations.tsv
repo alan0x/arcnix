@@ -378,6 +378,8 @@ SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问�
 隐藏文件	Hidden files
 显示隐藏文件	Show hidden files
 隐藏隐藏文件	Hide hidden files
+切换隐藏文件显示	Toggle hidden files
+文件设置	Files settings
 监控	Monitoring
 资源刷新间隔	Resource refresh interval
 每 3 秒	Every 3 seconds
@@ -1556,6 +1558,9 @@ APT 降级或版本比较无效，请重新核对计划	APT downgrade or invalid
 导出下载失败	Export download failed
 本地 ZIP 路径	Local ZIP path
 下载目录	Download directory
+本机文件夹	Local folder
+请选择一个已存在的本机目录。	Choose an existing local directory.
+连接已变化，请重新拖放这些项目。	The connection changed. Drag the items again.
 刷新导出清单	Refresh export inventory
 下载 ZIP	Download ZIP
 {} 个数据文件 · {}	{} data files · {}
@@ -2127,7 +2132,7 @@ Docker	Docker
 已保存到服务器	Saved on server
 检测到 Docker	Docker detected
 未检测到 Docker	Docker not detected
-为当前 SSH 用户保存到 ~/.arcnix/desktop.json。跟随应用使用客户端主题，其他服务器和用户各自保存设置。	Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings.
+为当前 SSH 用户保存到 ~/.arcnix/desktop/。跟随应用使用客户端主题，其他服务器和用户各自保存设置。	Saved under ~/.arcnix/desktop/ for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings.
 容器	Containers
 卷	Volumes
 端口	Ports
@@ -2272,7 +2277,7 @@ Snap 权限模式	Snap confinement
 经典模式的 Snap 可以像传统软件一样访问宿主机，仅在发布者要求且你信任软件时启用。	Classic snaps have traditional host access. Enable only when the publisher requires it and you trust the package.
 右键提供复制、粘贴、清空及标签操作。Ctrl+Shift+C 复制，Ctrl+Shift+V 粘贴。安装 tmux 时，断开后会话、目录和画面由服务器保留；否则仅恢复标签与布局。关闭标签会分离 tmux，输入 exit 结束其中的 shell。	Right-click for copy, paste, clear and tab actions. Ctrl+Shift+C copies; Ctrl+Shift+V pastes. When tmux is installed, the server keeps the session, working directory and screen after disconnect; otherwise only tabs and layout are restored. Closing a tab detaches tmux; exit ends its shell.
 版本	Version
-应用商店	Software store
+应用中心	App Center
 发现	Discover
 服务器常用应用	SERVER ESSENTIALS
 为服务器添加好用的工具	Build your server workspace
@@ -2369,8 +2374,8 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 位置	Locations
 文件系统	Filesystem
 收藏文件夹	Favorite folders
-资源管理器侧栏	Explorer sidebar
-切换资源管理器侧栏	Toggle Explorer sidebar
+资源管理器侧栏	Files sidebar
+切换资源管理器侧栏	Toggle Files sidebar
 收藏当前文件夹	Add current folder to favorites
 取消收藏当前文件夹	Remove current folder from favorites
 打开收藏 {p}	Open favorite {p}
@@ -2392,6 +2397,53 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 暂无标记项目	No tagged items
 返回文件夹	Back to folder
 清除标签	Clear tag
+制作副本	Duplicate
+创建替身	Make Alias
+打开替身	Open alias
+压缩	Compress
+文件操作已完成	File operation completed
+自定义文件夹…	Customize Folder…
+自定义文件夹	Customize Folder
+文件夹图标	Folder icon
+文件元数据	Files metadata
+清理失效条目	Clean up missing entries
+清理已不存在路径的收藏、颜色标签和自定义图标。回收站里可恢复项目的配置会保留。	Remove favorites, color tags and custom icons for missing paths. Items in Trash are kept for restoration.
+正在检查文件条目…	Checking Files entries…
+没有需要清理的失效条目	No missing Files entries to remove
+已清理 {0} 个失效路径的设置	Cleaned up {0} missing Files paths
+已保留 {0} 个无法检查的路径	Kept {0} paths that could not be checked
+无法检查文件条目	Could not check Files entries
+搜索图标	Search icons
+搜索图标…	Search icons…
+图标风格	Icon style
+线框	Outline
+实心	Filled
+没有匹配的图标	No matching icons
+文件与办公	Files & work
+媒体与设计	Media & design
+存储与传输	Storage & transfers
+开发与系统	Development & systems
+个人	Personal
+任务清单	Task list
+耳机	Headphones
+演示文稿	Presentation
+游戏	Games
+云端	Cloud
+硬盘	Drive
+钥匙	Key
+缺陷	Bug
+爱心	Heart
+地点	Location
+旅行	Travel
+教育	Education
+植物	Plant
+宠物	Pets
+购物	Shopping
+恢复默认图标	Restore default icon
+照片	Photos
+音乐	Music
+归档	Archive
+工作	Work
 文件颜色	File color
 文件颜色…	File color…
 收藏或取消收藏	Toggle favorite
@@ -2399,11 +2451,14 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 壁纸	Wallpaper
 程序坞	Dock
 显示服务器信息	Show server info
-显示 Arcnix 图标	Show Arcnix shortcuts
+Arcnix 快捷方式	Arcnix shortcuts
 重置桌面图标	Reset desktop icons
 隐藏桌面图标	Hide desktop shortcut
 保留在程序坞	Keep in Dock
 从程序坞移除	Remove from Dock
+已固定的应用	Pinned apps
+显示窗口	Show window
+关闭窗口	Close window
 用作壁纸	Use as wallpaper
 刷新桌面	Refresh desktop
 打开桌面文件夹	Open Desktop folder
@@ -2411,6 +2466,10 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 关闭菜单	Close menu
 程序坞图标大小	Dock icon size
 程序坞样式	Dock style
+程序坞位置	Dock position
+左侧	Left side
+右侧	Right side
+底部	Bottom
 程序坞行为	Dock behavior
 桌面布局	Desktop layout
 内置壁纸	Built-in wallpapers
@@ -2418,6 +2477,7 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 面板模式	Panel mode
 应用图标对齐	App icon alignment
 靠左	Align left
+靠上	Align top
 居中	Center icons
 本地时间	Local time
 服务器时间	Server time
@@ -2425,7 +2485,6 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 小	Small
 中	Medium
 大	Large
-悬停放大图标	Magnify Dock icons
 自动隐藏程序坞	Automatically hide Dock
 重置程序坞	Reset Dock
 极光	Aurora
@@ -2473,13 +2532,26 @@ Markdown 预览过大，可切换到源码查看。	Markdown preview is too larg
 修改快捷键	Change shortcut
 修改快捷键：{label}	Change shortcut: {label}
 禁用快捷键：{label}	Disable shortcut: {label}
+恢复默认快捷键：{label}	Restore default: {label}
+焦点移到下一项	Move focus forward
+焦点移到上一项	Move focus backward
+切换到下一终端标签页	Next tab
+切换到上一终端标签页	Previous tab
+向上移动一项	Move up
+向下移动一项	Move down
+用空格激活当前控件	Activate focused control with Space
+向左移动／折叠文件夹	Move left / collapse folder
+向右移动／展开文件夹	Move right / expand folder
+选择第一项	Select first entry
+选择最后一项	Select last entry
+点击快捷键并按下新组合即可保存。Esc 取消。	Click a shortcut and press the new keys to save. Esc cancels.
+点击快捷键并按下新组合即可保存。Esc 取消。Alt+Tab、Win+L 等 Windows 快捷键由系统处理。	Click a shortcut and press the new keys to save. Esc cancels. Windows shortcuts such as Alt+Tab and Win+L are handled by the system.
+此快捷键由 Windows 保留。	This shortcut is reserved by Windows.
+请使用 Ctrl、Alt 或 Meta 加受支持的按键，或使用功能键。	Use Ctrl, Alt or Meta with a supported key, or use a function key.
 按下快捷键…	Press shortcut…
 未设置	Unassigned
-恢复默认快捷键	Restore shortcut defaults
 此快捷键已被使用。	This shortcut is already in use.
 不支持此快捷键。	Unsupported shortcut.
-请用 Ctrl、Alt 或 Meta 搭配字母、数字、功能键或导航键。	Use Ctrl, Alt or Meta with a letter, number, function key or navigation key.
-点击快捷键并按下新的组合键，按 Esc 取消。请用 Ctrl、Alt 或 Meta 搭配字母、数字、功能键或导航键。	Click a shortcut and press the new keys. Esc cancels. Use Ctrl, Alt or Meta with a letter, number, function key or navigation key.
 Docker 显示发布和暴露的端口。使用主机网络的容器直接使用服务器监听端口，可在「监控 → 进程 → 端口详情」查看。	Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details.
 上传详情	Upload details
 下载详情	Download details
@@ -2552,7 +2624,6 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 暂停播放	Pause playback
 播放位置	Playback position
 音量	Volume
-视频播放器	Video player
 播放器	Player
 打开视频	Open video
 上一级文件夹	Parent folder
@@ -2587,5 +2658,44 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 关闭文件标签页	Close file tab
 文件标签页	File tabs
 在新标签页中打开	Open in new tab
+在新窗口中打开	Open in new window
+新建窗口	New Window
+复制当前文件窗口	Duplicate current Files window
+打开文件窗口	Open a Files window
+图片	Pictures
 原路径	Original path
 删除时间	Date deleted
+打开	Open
+打开方式…	Open with…
+打开方式	Open with
+选择其他应用	Choose another app
+用 Player 打开	Open in Player
+用浏览器打开	Open in Browser
+仅打开一次	Open once
+设为默认并打开	Set as default and open
+默认应用	Default apps
+为每种远程文件扩展名选择默认应用。	Choose a default app for each remote file extension.
+文件扩展名	File extension
+输入扩展名，例如 .html 或 .webm。	Enter an extension such as .html or .webm.
+请输入有效的文件扩展名。	Enter a valid file extension.
+询问使用哪个应用	Ask which app to use
+恢复推荐的默认应用	Restore suggested default
+搜索扩展名	Search extensions
+添加扩展名	Add extension
+没有匹配的扩展名。	No matching extensions.
+默认打开应用	Default app
+其他应用	Other apps
+文件关联	File association
+可用应用	Available apps
+此扩展名还没有关联应用。	No apps associated with this extension.
+内置支持	Built-in support
+手动添加	Added manually
+曾打开过	Opened before
+设为默认	Use as default
+移除关联	Remove association
+添加其他应用	Add another app
+管理远程文件各扩展名的默认应用和其他打开方式。	Manage default and alternative apps for remote file extensions.
+请关闭一个网页标签页后再打开新标签页	Close a web tab before opening another
+HTML 预览 · 脚本和外部资源已停用	HTML preview · Scripts and external resources are disabled
+无法播放此视频，请检查连接和视频编码。	Could not play this video. Check the connection and video codec.
+Player 无法识别受支持的视频格式	Player could not identify a supported video format

@@ -236,7 +236,7 @@ impl Host {
         if let Some(surface) = &mut self.surface {
             let visible = self.ui.state.with(|s| {
                 server_desktop::visible(s)
-                    && s.workbench.window_visible(WorkspacePage::Video)
+                    && s.workbench.window_visible(WorkspacePage::Player)
                     && s.dialog.is_none()
                     && native(s).is_some_and(|p| p.commands.is_some())
             });
@@ -339,32 +339,42 @@ fn receive(ui: &Ui, serial: u64, event: Event) {
         Event::Focus | Event::Maximize => {
             if ui.state.with(|s| {
                 server_desktop::visible(s)
-                    && s.workbench.window_visible(WorkspacePage::Video)
+                    && s.workbench.window_visible(WorkspacePage::Player)
                     && s.dialog.is_none()
             }) {
-                ui.open_desktop_app(WorkspacePage::Video);
+                ui.open_desktop_app(WorkspacePage::Player);
                 if matches!(event, Event::Maximize) {
                     ui.toggle_desktop_maximize();
                 }
             }
         }
-        event => ui.state.revise(|s| {
-            if let Some(video) = &mut s.video
-                && let Some(p) = &mut video.native
-            {
+        event => {
+            let opened = ui.state.revise(|s| {
+                let Some(video) = &mut s.video else {
+                    return false;
+                };
+                let Some(p) = &mut video.native else {
+                    return false;
+                };
                 match event {
                     Event::State(transport) => {
+                        let opened = !p.transport.loaded && transport.loaded;
                         p.transport = transport;
                         video.status.clear();
+                        opened
                     }
                     Event::Failed(error) => {
                         p.commands = None;
                         p.transport = Default::default();
                         video.status = error;
+                        false
                     }
-                    _ => {}
+                    _ => false,
                 }
+            });
+            if opened {
+                ui.player.opened(ui, serial);
             }
-        }),
+        }
     }
 }

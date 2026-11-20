@@ -31,10 +31,13 @@ fn again(error: &ssh2::Error) -> bool {
     error.code() == ErrorCode::Session(-37)
 }
 
+pub(crate) const DIRECTORY_LIMIT: usize = 16 * 1024;
+pub(crate) const SESSION_ID_LIMIT: usize = 80;
+
 pub fn validate_directory(directory: &str) -> Result<()> {
     ensure!(
         directory.starts_with('/')
-            && directory.len() <= 16_384
+            && directory.len() <= DIRECTORY_LIMIT
             && !directory.chars().any(char::is_control),
         "Terminal directory must be absolute, at most 16 KiB, and contain no control characters"
     );
@@ -52,7 +55,7 @@ fn directory_command(directory: &str) -> Result<String> {
 pub fn validate_session(session: &str) -> Result<()> {
     ensure!(
         !session.is_empty()
-            && session.len() <= 80
+            && session.len() <= SESSION_ID_LIMIT
             && session.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'),
         "Invalid persistent terminal session"
     );

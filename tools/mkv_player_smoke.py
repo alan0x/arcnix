@@ -31,6 +31,20 @@ def native_window(pid):
     return found[0] if found else None
 
 
+def click_picture(surface):
+    user = ctypes.windll.user32
+    user.FindWindowExW.restype = wintypes.HWND
+    user.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    picture = user.FindWindowExW(surface, None, 'mpv', None)
+    assert picture
+    bounds = wintypes.RECT()
+    assert user.GetClientRect(picture, ctypes.byref(bounds))
+    center = ((bounds.bottom // 2) << 16) | (bounds.right // 2)
+    assert user.PostMessageW(picture, 0x0201, 1, center)  # WM_LBUTTONDOWN
+    assert user.PostMessageW(picture, 0x0202, 0, center)  # WM_LBUTTONUP
+
+
 def run(preview=False, binary=None, read_delay=.003):
     out = ROOT / 'artifacts' / ('manual-preview' if preview else 'mkv-smoke') / f'mkv-{time.time_ns()}'
     local = out / 'local'
@@ -62,12 +76,12 @@ def run(preview=False, binary=None, read_delay=.003):
             else:
                 app.connect()
                 app.workspace('Files')
-            player = page.locator('.desktop-window.app-video')
+            player = page.locator('.desktop-window.app-player')
             if not preview:
                 watch_player_scrollbars(page)
                 app.file('invalid.mkv').click(button='right')
-                app.action('Play')
-                expect(player.locator('.remote-player-status')).to_contain_text('MKV playback failed', timeout=20000)
+                app.action('Open with'); app.action('Player')
+                expect(player.locator('.remote-player-status')).to_contain_text('Video playback failed', timeout=20000)
                 player.locator('.window-close').click()
                 expect(player).to_have_count(0)
                 app.workspace('Transfer files')
@@ -88,7 +102,10 @@ def run(preview=False, binary=None, read_delay=.003):
             size = mkv.stat().st_size
             first = sum(length for _, length in reads())
             assert 0 < first < size/4
-            player.locator('.mpv-play').click()
+            if preview:
+                player.locator('.mpv-play').click()
+            else:
+                click_picture(hwnd)
             eventually(lambda: media()['paused'])
             if preview:
                 print(f'MKV preview ready: {app.process.pid} {out}', flush=True)
@@ -135,7 +152,7 @@ def run(preview=False, binary=None, read_delay=.003):
                 finally:
                     ctypes.windll.gdi32.DeleteObject(region)
             eventually(clipped)
-            app.application('Video player')
+            app.application('Player')
             player.locator('.window-minimize').click()
             eventually(lambda: not user.IsWindowVisible(hwnd))
             app.workspace('Transfer files')
@@ -143,7 +160,7 @@ def run(preview=False, binary=None, read_delay=.003):
             app.file('folder').dblclick()
             expect(app.file('hello.txt')).to_be_visible(timeout=2500)
             browse = time.monotonic() - started
-            app.application('Video player')
+            app.application('Player')
             eventually(lambda: user.IsWindowVisible(hwnd))
             page.get_by_role('button',name='Disconnect',exact=True).click()
             expect(player).to_have_count(0)

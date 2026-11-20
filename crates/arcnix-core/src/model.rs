@@ -174,6 +174,8 @@ pub struct AppSettings {
     pub download_conflict: Option<ExistingFileAction>,
     #[serde(default = "default_transfer_concurrency")]
     pub transfer_concurrency: u8,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub file_associations: crate::file_associations::Associations,
 }
 impl AppSettings {
     pub const RESOURCE_INTERVALS: [u64; 4] = [3, 5, 10, 30];
@@ -195,6 +197,7 @@ impl Default for AppSettings {
             upload_conflict: None,
             download_conflict: None,
             transfer_concurrency: default_transfer_concurrency(),
+            file_associations: Default::default(),
         }
     }
 }

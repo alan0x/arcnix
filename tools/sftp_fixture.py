@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import sys
 import tempfile
 import threading
@@ -1468,10 +1469,13 @@ class DelayedHandle(paramiko.SFTPHandle):
 class Files(paramiko.SFTPServerInterface):
     # Windows cannot represent Linux mode bits; retain them for protocol tests.
     modes = {}
+    aliases = {}
 
     @classmethod
     def attributes(cls, path):
         attributes = paramiko.SFTPAttributes.from_stat(path.lstat())
+        if str(path) in cls.aliases:
+            attributes.st_mode = stat.S_IFLNK | 0o777
         if str(path) in cls.modes:
             attributes.st_mode = (attributes.st_mode & ~0o7777) | cls.modes[str(path)]
         return attributes
@@ -1488,11 +1492,20 @@ class Files(paramiko.SFTPServerInterface):
         self.root = Path(root).resolve()
         self.transport = server.transport
 
-    def path(self, path):
+    def raw_path(self, path):
         target = (self.root / path.lstrip("/")).resolve()
         if not target.is_relative_to(self.root):
             raise PermissionError(errno.EACCES, "Outside test root")
         return target
+
+    def path(self, path):
+        target = self.raw_path(path)
+        for _ in range(32):
+            alias = self.aliases.get(str(target))
+            if alias is None:
+                return target
+            target = self.raw_path(alias)
+        raise OSError(errno.ELOOP, "Too many links")
 
     def canonicalize(self, path):
         if path == "/__fixture_disconnect__":
@@ -1542,7 +1555,23 @@ class Files(paramiko.SFTPServerInterface):
     def lstat(self, path):
         try:
             if "fixture-slow-" in path: time.sleep(.08)
-            return self.attributes(self.path(path))
+            return self.attributes(self.raw_path(path))
+        except OSError as exc:
+            return self.error(exc)
+
+    def symlink(self, target_path, path):
+        try:
+            self.raw_path(target_path)
+            link = self.raw_path(path)
+            link.touch(exist_ok=False)
+            self.aliases[str(link)] = target_path
+            return paramiko.SFTP_OK
+        except OSError as exc:
+            return self.error(exc)
+
+    def readlink(self, path):
+        try:
+            return self.aliases.get(str(self.raw_path(path)), paramiko.SFTP_NO_SUCH_FILE)
         except OSError as exc:
             return self.error(exc)
 
@@ -1571,8 +1600,10 @@ class Files(paramiko.SFTPServerInterface):
             return paramiko.SFTP_PERMISSION_DENIED
         try:
             if "fixture-slow-" in path: time.sleep(.08)
-            self.path(path).unlink()
-            self.modes.pop(str(self.path(path)), None)
+            target = self.raw_path(path)
+            target.unlink()
+            self.modes.pop(str(target), None)
+            self.aliases.pop(str(target), None)
             return paramiko.SFTP_OK
         except OSError as exc:
             return self.error(exc)
@@ -1599,11 +1630,15 @@ class Files(paramiko.SFTPServerInterface):
         if oldpath == '/fixture-trash-denied.txt':
             return paramiko.SFTP_PERMISSION_DENIED
         try:
-            target = self.path(newpath)
+            target = self.raw_path(newpath)
             if target.exists():
                 return paramiko.SFTP_FAILURE
-            self.path(oldpath).rename(target)
-            self.moved(self.path(oldpath), target)
+            source = self.raw_path(oldpath)
+            source.rename(target)
+            self.moved(source, target)
+            alias = self.aliases.pop(str(source), None)
+            if alias is not None:
+                self.aliases[str(target)] = alias
             return paramiko.SFTP_OK
         except OSError as exc:
             return self.error(exc)
