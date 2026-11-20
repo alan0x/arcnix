@@ -417,7 +417,7 @@ impl Ui {
         }
         self.state.revise(|s| s.terminal = Default::default());
     }
-    fn terminal_new_tab(&self, source: u64) {
+    pub(super) fn terminal_new_tab(&self, source: u64) {
         let directory = self.state.with(|s| {
             if s.terminal.id == source {
                 s.terminal.directory.clone()

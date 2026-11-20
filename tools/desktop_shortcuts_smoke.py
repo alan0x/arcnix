@@ -3,6 +3,7 @@ import re
 import json
 import time
 
+from server_apps_fixture import read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
 
@@ -12,13 +13,15 @@ def main():
     with Peer(out / 'peer') as peer, Desktop(
         out / 'desktop', peer.config([peer.profile('Shortcut test')], out),
     ) as app:
+        (peer.root / '.shortcut-example').touch()
+        (peer.root / 'shortcut-test.txt').write_text('initial', encoding='utf-8')
         page = app.page
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
 
         def bindings():
-            return json.loads(preferences.read_text()).get('shortcuts', {})
+            return read_desktop_settings(preferences).get('shortcuts', {})
 
         def settings():
             app.application('Settings')
@@ -60,7 +63,7 @@ def main():
         page.keyboard.press('Control+Shift+ArrowUp')
         expect(page.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
         page.keyboard.press('Control+Shift+ArrowDown')
-        expect(page.locator('.desktop-window.app-resources')).to_be_hidden()
+        expect(page.locator('.desktop-window.app-monitor')).to_be_hidden()
         title('Terminal')
         page.keyboard.press('Control+Tab')
         title('Monitor')
@@ -152,10 +155,59 @@ def main():
         )).to_contain_text('Unassigned')
         page.keyboard.press('Control+l')
         expect(exit_fullscreen).to_be_visible()
-        panel.get_by_role('button', name='Restore shortcut defaults', exact=True).click()
+        panel.get_by_role('button', name='Restore defaults', exact=True).click()
         eventually(lambda: not bindings())
         page.keyboard.press('Control+Shift+F')
         expect(exit_fullscreen).to_have_count(0)
+        expect(page.get_by_text('Saved on server', exact=True)).to_have_count(0)
+        focus = record('Move focus forward', 'Control+Alt+j')
+        expect(focus).to_be_focused()
+        page.keyboard.press('Tab')
+        expect(focus).to_be_focused()
+        page.keyboard.press('Control+Alt+j')
+        expect(focus).not_to_be_focused()
+        panel.get_by_role('button', name='Restore default: Move focus forward', exact=True).click()
+        record('Minimize window', 'Meta+l')
+        expect(panel.locator('.desktop-shortcut-error')).to_have_text('This shortcut is reserved by Windows.')
+        record('Open tab', 'Control+Shift+w')
+        expect(panel.locator('.desktop-shortcut-error')).to_have_text('This shortcut is already in use.')
+        record('Open tab', 'Control+Shift+y')
+        eventually(lambda: bindings().get('terminal_new_tab') == 'Ctrl+Shift+Y')
+        app.application('Terminal')
+        terminal_input = page.locator('.terminal-surface .xterm-helper-textarea')
+        terminal_input.focus()
+        terminal_tabs = page.locator('.terminal-tab')
+        count = terminal_tabs.count()
+        page.keyboard.press('Control+Shift+y')
+        expect(terminal_tabs).to_have_count(count + 1)
+        panel = settings()
+        panel.get_by_role('button', name='Restore default: Open tab', exact=True).click()
+        eventually(lambda: 'terminal_new_tab' not in bindings())
+        expect(panel.get_by_role('button', name='Change shortcut: Open tab')).to_contain_text('Ctrl+Shift+T')
+        expect(panel.get_by_role('button', name='Restore default: Open tab', exact=True)).to_have_count(0)
+        record('Toggle hidden files', 'Control+Shift+h')
+        eventually(lambda: bindings().get('files_hidden') == 'Ctrl+Shift+H')
+        app.application('Files')
+        hidden = app.file('.shortcut-example')
+        expect(hidden).to_be_visible()
+        page.keyboard.press('Control+Shift+h')
+        expect(hidden).to_have_count(0)
+        page.keyboard.press('Control+Shift+h')
+        expect(hidden).to_be_visible()
+        settings()
+        record('Save', 'Control+Alt+s')
+        eventually(lambda: bindings().get('code_save') == 'Ctrl+Alt+S')
+        app.application('Files')
+        app.file('shortcut-test.txt').dblclick()
+        editor = app.replace_code('saved using a remapped shortcut\n')
+        editor.press('Control+s')
+        page.wait_for_timeout(300)
+        assert (peer.root / 'shortcut-test.txt').read_text(encoding='utf-8') == 'initial'
+        editor.press('Control+Alt+s')
+        eventually(lambda: (peer.root / 'shortcut-test.txt').read_text(encoding='utf-8') == 'saved using a remapped shortcut\n')
+        record_button = settings()
+        record_button.get_by_role('button', name='Restore defaults', exact=True).click()
+        eventually(lambda: not bindings())
         app.screenshot('desktop-shortcuts.png')
         assert not errors, errors
         print('Desktop About, Ctrl+Tab in maximized and fullscreen modes, terminal focus, recording and persistence passed.')

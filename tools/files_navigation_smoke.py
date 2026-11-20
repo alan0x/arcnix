@@ -1,14 +1,15 @@
-"""Verify Explorer locations, committed navigation history and inline search."""
+"""Verify Files locations, committed navigation history and inline search."""
 from datetime import datetime, timedelta
 import json
 import os
 import time
 
 from desktop_fixture import Desktop, Peer, ROOT, expect
+from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 
 
 def main():
-    out = ROOT / 'artifacts/explorer-navigation' / f'run-{time.time_ns()}'
+    out = ROOT / 'artifacts/files-navigation' / f'run-{time.time_ns()}'
     out.mkdir(parents=True)
     with Peer(out / 'peer') as peer:
         home = peer.root / 'home/arcnix'
@@ -28,9 +29,9 @@ def main():
             page.on('pageerror', lambda error: errors.append(str(error)))
             app.connect()
             app.application('Files')
-            explorer = page.locator('.desktop-window.app-explorer.active')
-            sidebar = explorer.locator('.explorer-sidebar')
-            pathbar = explorer.locator('.pathbar')
+            files = page.locator('.desktop-window.app-files.active')
+            sidebar = files.locator('.files-sidebar')
+            pathbar = files.locator('.pathbar')
             crumb = pathbar.locator('.breadcrumb.current')
             back = pathbar.get_by_role('button', name='Back', exact=True)
             forward = pathbar.get_by_role('button', name='Forward', exact=True)
@@ -93,12 +94,12 @@ def main():
             expect(app.file('notes-old.PDF')).to_be_visible()
             expect(app.file('floorplan.png')).to_have_count(0)
             pathbar.get_by_role('button', name='Search filters', exact=True).click()
-            options = explorer.locator('.explorer-search-options')
+            options = files.locator('.files-search-options')
             options.get_by_role('button', name='PDF', exact=True).click()
             expect(app.file('notes-today.txt')).to_have_count(0)
             expect(app.file('notes-old.PDF')).to_be_visible()
             options.get_by_role('button', name='Today', exact=True).click()
-            expect(explorer.locator('.file-empty')).to_contain_text('No matching items')
+            expect(files.locator('.file-empty')).to_contain_text('No matching items')
             options.get_by_role('button', name='Yesterday', exact=True).click()
             expect(app.file('notes-old.PDF')).to_be_visible()
             options.get_by_role('button', name='Reset filters', exact=True).click()
@@ -106,9 +107,9 @@ def main():
             expect(query).to_have_value('notes')
 
             page.set_viewport_size(dict(width=900, height=650))
-            popup, window = options.bounding_box(), explorer.bounding_box()
+            popup, window = options.bounding_box(), files.bounding_box()
             assert popup['x'] >= window['x'] and popup['x'] + popup['width'] <= window['x'] + window['width']
-            app.screenshot('explorer-search-filters.png')
+            app.screenshot('files-search-filters.png')
             width = query.bounding_box()['width']
             assert width >= 100, width
             page.keyboard.press('Escape')
@@ -122,15 +123,16 @@ def main():
             page.set_viewport_size(dict(width=1440, height=980))
             go('Home', '/home/arcnix')
             app.file('Documents').click(button='right')
-            menu = explorer.locator('.file-context-menu')
-            expect(menu.get_by_role('button', name='Folder color…', exact=True)).to_be_visible()
+            menu = files.locator('.file-context-menu')
+            expect(menu.locator('.file-color-menu').get_by_role('button', name='Red', exact=True)).to_be_visible()
+            expect(menu.get_by_role('button', name='Customize Folder…', exact=True)).to_be_visible()
             expect(menu.get_by_role('button', name='Terminal here', exact=True)).to_be_enabled()
             menu.evaluate("""element => {
-                window.explorerMenuChanges = [];
+                window.filesMenuChanges = [];
                 const observer = new MutationObserver(records => {
                     for (const record of records) {
                         for (const node of [...record.addedNodes, ...record.removedNodes]) {
-                            if (node.textContent.trim()) window.explorerMenuChanges.push(node.textContent);
+                            if (node.textContent.trim()) window.filesMenuChanges.push(node.textContent);
                         }
                     }
                 });
@@ -139,19 +141,26 @@ def main():
             # Confirm a real periodic settings read occurred while the menu was open.
             settings = home / '.arcnix/desktop.json'
             settings.parent.mkdir(exist_ok=True)
-            preferences = json.loads(settings.read_text(encoding='utf-8')) if settings.exists() else {
+            preferences = read_desktop_settings(settings) or {
                 'version': 1, 'theme': 'System',
             }
-            preferences.setdefault('explorer', {})['favorites'] = ['/home/arcnix/Documents']
-            settings.write_text(json.dumps(preferences), encoding='utf-8')
-            favorite = sidebar.locator('.explorer-favorite-row button[aria-label="Open favorite /home/arcnix/Documents"]')
+            preferences.setdefault('files', {})['favorites'] = ['/home/arcnix/Documents']
+            directory = desktop_settings_dir(settings)
+            if directory is None:
+                settings.write_text(json.dumps(preferences), encoding='utf-8')
+            else:
+                path = directory / 'apps/files.json'
+                files = json.loads(path.read_bytes())
+                files['settings'] = preferences['files']
+                path.write_text(json.dumps(files), encoding='utf-8')
+            favorite = sidebar.locator('.files-favorite-row button[aria-label="Open favorite /home/arcnix/Documents"]')
             expect(favorite).to_be_visible(timeout=22000)
-            expect(menu.get_by_role('button', name='Folder color…', exact=True)).to_be_enabled()
-            assert page.evaluate('window.explorerMenuChanges') == []
+            expect(menu.get_by_role('button', name='Customize Folder…', exact=True)).to_be_enabled()
+            assert page.evaluate('window.filesMenuChanges') == []
             page.keyboard.press('Escape')
             expect(menu).to_have_count(0)
             assert not errors, errors
-    print('Explorer navigation, search filters and menu stability during settings sync passed.')
+    print('Files navigation, search filters and menu stability during settings sync passed.')
 
 
 if __name__ == '__main__':

@@ -4,8 +4,9 @@ use arcnix_core::{desktop_customization, docker, server_apps, sync};
 pub enum Action {
     Discover,
     Clock,
-    ExplorerLocations,
-    ExplorerItem(String),
+    FileLocations,
+    FileItem(String),
+    CheckDesktopPaths(Vec<String>),
     DesktopItems,
     ReadWallpaper(String),
     ImportWallpaper(std::path::PathBuf),
@@ -33,8 +34,12 @@ pub enum Action {
 pub enum Reply {
     Applications(server_apps::Applications),
     Clock(server_apps::ClockSample),
-    ExplorerLocations(Vec<arcnix_core::remote::ExplorerLocation>),
-    ExplorerItem(arcnix_core::permissions::Metadata),
+    FileLocations(Vec<arcnix_core::remote::FileLocation>),
+    FileItem(arcnix_core::permissions::Metadata),
+    MissingDesktopPaths {
+        paths: Vec<String>,
+        unchecked: usize,
+    },
     DesktopItems(desktop_customization::DesktopItems),
     Wallpaper(desktop_customization::WallpaperImage),
     SoftwareInventory(arcnix_core::software_catalog::Inventory),
@@ -69,8 +74,12 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::Processes => Reply::Processes(arcnix_core::processes::read(session)?),
         Action::Discover => Reply::Applications(server_apps::discover(session)?),
         Action::Clock => Reply::Clock(server_apps::clock(session)?),
-        Action::ExplorerLocations => Reply::ExplorerLocations(session.explorer_locations()?),
-        Action::ExplorerItem(path) => Reply::ExplorerItem(session.file_metadata(&path)?),
+        Action::FileLocations => Reply::FileLocations(session.file_locations()?),
+        Action::FileItem(path) => Reply::FileItem(session.file_metadata(&path)?),
+        Action::CheckDesktopPaths(paths) => {
+            let (paths, unchecked) = session.find_missing_desktop_paths(paths)?;
+            Reply::MissingDesktopPaths { paths, unchecked }
+        }
         Action::DesktopItems => Reply::DesktopItems(desktop_customization::items(session)?),
         Action::ReadWallpaper(path) => {
             Reply::Wallpaper(desktop_customization::read_wallpaper(session, &path)?)

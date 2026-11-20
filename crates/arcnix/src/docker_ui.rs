@@ -664,7 +664,7 @@ fn ports(ui: Ui) -> impl Widget {
                         monitor_ui::set_section(s, monitor_ui::Section::Processes);
                         processes_ui::show_port_details(s, true);
                     });
-                    listeners.open_desktop_app(WorkspacePage::Resources);
+                    listeners.open_desktop_app(WorkspacePage::Monitor);
                 }),
             help_ui::tip("Docker ports", "Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details."),
         )),

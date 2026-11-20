@@ -56,6 +56,49 @@ struct PageView {
     pending_url: Option<String>,
 }
 
+struct HtmlView {
+    serial: u64,
+    view: WebView,
+    viewport: Option<Viewport>,
+}
+
+fn html_child(window: &NativeWindow, source: Arc<str>) -> Result<WebView> {
+    const URL: &str = "http://arcnixpreview.localhost/index.html";
+    // Remote HTML has neither the main shell's origin nor its IPC bridge.
+    // A sandboxed response permits inline formatting while blocking scripts,
+    // forms, frames, and network subresources.
+    let started = std::cell::Cell::new(false);
+    let view = WebViewBuilder::new()
+        .with_visible(false)
+        .with_focused(false)
+        .with_incognito(true)
+        .with_custom_protocol("arcnixpreview".into(), move |_, request| {
+            let response = wry::http::Response::builder();
+            if request.method() == "GET" && request.uri().path_and_query().is_some_and(|p| p.as_str() == "/index.html") {
+                response
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(std::borrow::Cow::Owned(source.as_bytes().to_vec()))
+                    .expect("valid HTML preview response")
+            } else {
+                response.status(404).body(std::borrow::Cow::Borrowed(&[][..])).expect("valid error response")
+            }
+        })
+        .with_navigation_handler(move |url| url == "about:blank" || (url == URL && !started.replace(true)))
+        .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+        .with_permission_handler(|_| wry::PermissionResponse::Deny)
+        .with_download_started_handler(|_, _| false)
+        .with_url(URL)
+        .build_as_child(window)?;
+    unsafe {
+        view.webview()
+            .Settings()?
+            .SetAreDefaultContextMenusEnabled(false)?;
+    }
+    Ok(view)
+}
+
 pub(super) struct Host {
     ui: Ui,
     directory: PathBuf,
@@ -75,6 +118,7 @@ pub(super) struct Host {
     last_capture: Option<Instant>,
     retiring: bool,
     exiting: bool,
+    html_preview: Option<HtmlView>,
 }
 
 enum BrowserEvent {
@@ -163,6 +207,7 @@ impl Host {
             last_capture: None,
             retiring: false,
             exiting: false,
+            html_preview: None,
         }
     }
 
@@ -172,6 +217,7 @@ impl Host {
 
     pub fn close(&mut self) {
         self.ui.close_web_browser();
+        self.html_preview = None;
         self.reset();
     }
 
@@ -420,6 +466,61 @@ impl Host {
         {
             let _ = page.view.set_visible(false);
         }
+        self.hide_html_preview();
+    }
+
+    fn hide_html_preview(&mut self) {
+        if let Some(preview) = &mut self.html_preview
+            && preview.viewport.take().is_some()
+        {
+            let _ = preview.view.set_visible(false);
+        }
+    }
+
+    fn sync_html_preview(&mut self, window: &NativeWindow) {
+        let state = self.ui.state;
+        let Some((id, serial, source, viewport)) = state.with(web_browser::html_viewport) else {
+            self.hide_html_preview();
+            if !state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) {
+                self.html_preview = None;
+            }
+            return;
+        };
+        if let Some((id, _)) = self.current.take()
+            && let Some(page) = self.views.get(&id)
+        {
+            let _ = page.view.set_visible(false);
+        }
+        if self
+            .html_preview
+            .as_ref()
+            .is_none_or(|preview| preview.serial != serial)
+        {
+            self.html_preview = None;
+            match html_child(window, source) {
+                Ok(view) => {
+                    self.html_preview = Some(HtmlView {
+                        serial,
+                        view,
+                        viewport: None,
+                    })
+                }
+                Err(error) => {
+                    self.tab_error(id, format!("{error:#}"));
+                    return;
+                }
+            }
+        }
+        let preview = self.html_preview.as_mut().expect("HTML preview created");
+        if preview.viewport.as_ref() != Some(&viewport) {
+            if let Err(error) = position(&preview.view, &viewport) {
+                self.hide_html_preview();
+                self.html_preview = None;
+                self.tab_error(id, format!("{error:#}"));
+                return;
+            }
+            preview.viewport = Some(viewport);
+        }
     }
 
     pub fn poll(&mut self, window: &NativeWindow) {
@@ -427,6 +528,7 @@ impl Host {
         if self.exiting {
             return;
         }
+        self.sync_html_preview(window);
         let connection = self.ui.state.with(|s| {
             if !s.connected || !s.workbench.apps.contains(&WorkspacePage::Browser) {
                 return None;

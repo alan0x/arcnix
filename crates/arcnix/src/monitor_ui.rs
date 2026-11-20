@@ -102,7 +102,7 @@ impl Section {
 }
 
 pub(super) fn active(s: &State) -> Option<Section> {
-    (s.workspace_page == WorkspacePage::Resources && navigation::workspace_visible(s))
+    (s.workspace_page == WorkspacePage::Monitor && navigation::workspace_visible(s))
         .then_some(s.metrics.section)
 }
 

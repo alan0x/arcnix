@@ -148,8 +148,8 @@ pub(super) fn open(ui: &Ui, remote: bool, path: &str) {
     if ui.state.with(|s| {
         s.dialog.is_some()
             || !navigation::workspace_visible(s)
-            || !(s.workspace_page == WorkspacePage::Files
-                || (remote && s.workspace_page.is_explorer()))
+            || !(s.workspace_page == WorkspacePage::TransferFiles
+                || (remote && s.workspace_page.is_files()))
     }) {
         return;
     }
@@ -315,22 +315,32 @@ pub(super) fn deleted(
             .as_ref()
             .is_some_and(|d| d.cancel.load(Ordering::Relaxed))
     });
-    let current = ui.state.revise(|s| {
+    let (current, removed) = ui.state.revise(|s| {
         let current = s
             .deletion
             .as_ref()
             .is_none_or(|d| d.epoch == s.epoch || !d.remote);
         s.deletion = None;
         s.file_pending = None;
-        if matches!(s.dialog, Some(Dialog::DeleteFiles { .. })) {
-            s.dialog = None;
-        }
+        let removed = if matches!(s.dialog, Some(Dialog::DeleteFiles { .. })) {
+            match s.dialog.take() {
+                Some(Dialog::DeleteFiles { targets, .. })
+                    if remote && current && result.is_ok() =>
+                {
+                    targets
+                }
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         s.dialog_error.clear();
         if current {
             file_browser::clear_selection(s, remote);
         }
-        current
+        (current, removed)
     });
+    files_ui::check_permanently_deleted(ui, &removed);
     match result {
         Ok(count) => ui.log(format!("已删除 {count} 个项目")),
         Err(message) if canceled => ui.log(format!("删除已停止：{message}")),
@@ -346,7 +356,7 @@ pub(super) fn deleted(
 }
 pub(super) fn desktop_menu_open(s: &State) -> bool {
     server_desktop::visible(s)
-        && s.workspace_page.is_explorer()
+        && s.workspace_page.is_files()
         && s.file_menu == Some(true)
         && s.dialog.is_none()
 }
@@ -362,8 +372,351 @@ pub(super) fn desktop_menu_dismiss(ui: Ui) -> impl Widget {
     })
 }
 
+fn regular_file(s: &State) -> Option<String> {
+    if s.file_menu != Some(true) {
+        return None;
+    }
+    single(s, true)
+        .filter(|file| !file.is_dir && !file.is_symlink)
+        .map(|file| file.path)
+}
+
+fn menu_group(content: impl IntoChildren) -> impl Widget {
+    col().class("file-menu-group").fill(content)
+}
+
+fn open_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
+    when(
+        state.map(move |s| {
+            has_item(s, remote)
+                && single(s, remote).is_some_and(|f| {
+                    (remote && s.workspace_page.is_files()) || !f.is_symlink && (remote || f.is_dir)
+                })
+        }),
+        move || {
+            let folder = ui.clone();
+            let new_tab = ui.clone();
+            menu_group((
+                when(
+                    state.map(move |s| {
+                        remote
+                            && s.workspace_page.is_files()
+                            && single(s, true).is_some_and(|file| file.is_symlink)
+                    }),
+                    {
+                        let ui = ui.clone();
+                        move || {
+                            let open = ui.clone();
+                            action(&ui, true, "Open alias", one, move || {
+                                if let Some(entry) = state.with(|s| single(s, true)) {
+                                    file_actions::open_alias(&open, &entry.path);
+                                }
+                            })
+                        }
+                    },
+                ),
+                when(remote, {
+                    let ui = ui.clone();
+                    move || file_open::menu(ui.clone(), regular_file, close)
+                }),
+                when(
+                    state
+                        .map(move |s| single(s, remote).is_some_and(|f| f.is_dir && !f.is_symlink)),
+                    move || {
+                        let open = folder.clone();
+                        action(&folder, remote, "打开文件夹", one, move || {
+                            if let Some(file) = open.state.with(|s| single(s, remote)) {
+                                file_browser::activate(&open, remote, &file.path);
+                            }
+                        })
+                    },
+                ),
+                when(
+                    state.map(move |s| {
+                        remote
+                            && s.workspace_page.is_files()
+                            && single(s, true).is_some_and(|f| f.is_dir && !f.is_symlink)
+                    }),
+                    move || {
+                        let tab = new_tab.clone();
+                        let window = new_tab.clone();
+                        fragment((
+                            action(&new_tab, true, "Open in new tab", one, move || {
+                                if let Some((id, path)) = state.with(|s| {
+                                    Some((
+                                        s.workspace_page.files_window_id()?,
+                                        single(s, true)?.path,
+                                    ))
+                                }) {
+                                    files_tabs::open_tab(&tab, id, Some(path));
+                                }
+                            }),
+                            action(&new_tab, true, "Open in new window", one, move || {
+                                if let Some(file) = state.with(|s| single(s, true)) {
+                                    files_tabs::new_window(
+                                        &window,
+                                        files_tabs::WindowStart::Directory(file.path),
+                                    );
+                                }
+                            }),
+                        ))
+                    },
+                ),
+            ))
+        },
+    )
+}
+
+fn edit_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
+    let rename = ui.clone();
+    menu_group((
+        when(state.map(move |s| remote && s.workspace_page.is_files()), {
+            let ui = ui.clone();
+            move || {
+                fragment(
+                    [
+                        ("复制", file_actions::copy as fn(&Ui), false),
+                        ("Duplicate", file_actions::duplicate, true),
+                        ("Make Alias", file_actions::make_alias, true),
+                        ("Compress", file_actions::compress, true),
+                    ]
+                    .into_iter()
+                    .map(|(label, run, writes)| {
+                        let changed = ui.clone();
+                        let enabled = state.map(move |s| {
+                            file_actions::has_selection(s)
+                                && (!writes || file_actions::available(s))
+                        });
+                        sapid::button()
+                            .class("menu-item")
+                            .label(i18n::bind(label))
+                            .enabled(enabled)
+                            .on_press(move || {
+                                close(&changed);
+                                run(&changed);
+                            })
+                    })
+                    .collect::<Vec<_>>(),
+                )
+            }
+        }),
+        when(state.map(move |s| remote && s.workspace_page.is_files()), {
+            let ui = ui.clone();
+            move || paste_action(ui.clone())
+        }),
+        action(
+            &ui,
+            remote,
+            "重命名",
+            file_browser::can_rename,
+            move || file_browser::begin_rename(&rename, remote),
+        ),
+    ))
+}
+
+fn paste_action(ui: Ui) -> impl Widget {
+    let paste = ui.clone();
+    action(
+        &ui,
+        true,
+        "Paste",
+        |s, _| file_actions::can_paste(s),
+        move || file_actions::paste(&paste),
+    )
+}
+
+fn item_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
+    let transfer = ui.clone();
+    let rename = ui.clone();
+    let copy = ui.clone();
+    let info = ui.clone();
+    menu_group((
+        when(!remote, {
+            let ui = ui.clone();
+            move || {
+                let transfer = transfer.clone();
+                action(
+                    &ui,
+                    false,
+                    "上传",
+                    |s, _| {
+                        file_browser::transfer_ready(s)
+                            && !file_browser::selected_entries(s, false).is_empty()
+                    },
+                    move || transfer.transfer(TransferDirection::Upload),
+                )
+            }
+        }),
+        when(
+            state.map(move |s| !remote || !s.workspace_page.is_files()),
+            move || {
+                let ui = rename.clone();
+                action(
+                    &rename,
+                    remote,
+                    "重命名",
+                    file_browser::can_rename,
+                    move || file_browser::begin_rename(&ui, remote),
+                )
+            },
+        ),
+        action(&ui, remote, "复制所选路径", any, move || {
+            copy_paths(&copy, remote, false)
+        }),
+        action(&ui, remote, "属性", any, move || {
+            properties(&info, remote)
+        }),
+        when(remote, move || terminal_action(ui.clone())),
+    ))
+}
+
+fn remote_tools(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    when(
+        state.map(|s| !has_item(s, true) && terminal_directory(s).is_some()),
+        move || menu_group(terminal_action(ui.clone())),
+    )
+}
+
+fn directory_menu(s: &State, remote: bool) -> bool {
+    !s.file_context
+        .as_ref()
+        .is_some_and(|target| target.remote == remote && target.item)
+}
+
+fn directory_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
+    let folder = ui.clone();
+    let file = ui.clone();
+    let copy = ui.clone();
+    let refresh = ui.clone();
+    let trash = ui.clone();
+    fragment((
+        menu_group((
+            when(
+                state.map(move |s| remote && s.workspace_page.is_files() && !has_item(s, remote)),
+                {
+                    let ui = ui.clone();
+                    move || paste_action(ui.clone())
+                },
+            ),
+            action(
+                &ui,
+                remote,
+                "新建文件夹",
+                file_browser::can_create,
+                move || file_browser::create(&folder, remote, true),
+            ),
+            action(
+                &ui,
+                remote,
+                "新建文件",
+                file_browser::can_create,
+                move || file_browser::create(&file, remote, false),
+            ),
+        )),
+        menu_group((
+            action(
+                &ui,
+                remote,
+                "复制当前目录路径",
+                workspace::ready,
+                move || copy_paths(&copy, remote, true),
+            ),
+            action(
+                &ui,
+                remote,
+                "刷新",
+                |s, r| !r || (s.connected && s.sftp_available && !s.system_task_running),
+                move || refresh.refresh(remote),
+            ),
+            when(
+                state.map(move |s| !remote || !s.workspace_page.is_files()),
+                move || {
+                    let open = trash.clone();
+                    action(&trash, remote, "打开回收站", available, move || {
+                        trash_ui::open(&open, remote)
+                    })
+                },
+            ),
+        )),
+    ))
+}
+
+fn view_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
+    let columns = ui.clone();
+    let defaults = ui.clone();
+    menu_group((
+        when(
+            state.map(move |s| remote && s.workspace_page.is_files() && s.file_context.is_none()),
+            {
+                let ui = ui.clone();
+                move || {
+                    fragment((
+                        action(&ui, remote, "详细列表", workspace::ready, move || {
+                            state.revise(|s| file_browser::set_icons(s, remote, false));
+                        }),
+                        action(&ui, remote, "平铺图标", workspace::ready, move || {
+                            state.revise(|s| file_browser::set_icons(s, remote, true));
+                        }),
+                    ))
+                }
+            },
+        ),
+        action(
+            &ui,
+            remote,
+            "显示列",
+            |s, _| s.file_pending.is_none(),
+            move || file_columns::open(&columns, remote),
+        ),
+        when(state.map(|s| !s.workspace_page.is_files()), move || {
+            let open = defaults.clone();
+            action(
+                &defaults,
+                remote,
+                "Transfer defaults",
+                |s, _| s.file_pending.is_none() && s.selected.is_some(),
+                move || open.open_dialog(Dialog::TransferDefaults),
+            )
+        }),
+        action(
+            &ui,
+            remote,
+            "全选",
+            |s, r| !file_browser::entries(s, r).is_empty(),
+            move || {
+                state.revise(|s| {
+                    let paths = file_browser::entries(s, remote)
+                        .into_iter()
+                        .map(|f| f.path)
+                        .collect();
+                    if remote {
+                        s.remote_selection = paths;
+                    } else {
+                        s.local_selection = paths;
+                    }
+                })
+            },
+        ),
+        when(state.map(move |s| has_item(s, remote)), move || {
+            action(&ui, remote, "清空选择", any, move || {
+                state.revise(|s| file_browser::clear_selection(s, remote))
+            })
+        }),
+    ))
+}
+
 pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
     let state = ui.state;
+    let item = state.map(move |s| has_item(s, remote));
+    let directory = state.map(move |s| directory_menu(s, remote));
+    let tools = ui.clone();
+    let remove = ui.clone();
     col()
         .class(state.map(move |s| {
             if s.file_menu != Some(remote) {
@@ -382,342 +735,39 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
             "本地文件操作"
         }))
         .fill((
-            when(state.map(move |s| has_item(s, remote)), {
+            open_actions(ui.clone(), remote),
+            when(
+                state.map(move |s| remote && s.workspace_page.is_files() && has_item(s, remote)),
+                {
+                    let ui = ui.clone();
+                    move || edit_actions(ui.clone(), remote)
+                },
+            ),
+            when(item.clone(), {
                 let ui = ui.clone();
-                move || {
-                    let open = ui.clone();
-                    let transfer = ui.clone();
-                    let rename = ui.clone();
-                    let copy = ui.clone();
-                    let info = ui.clone();
-                    let delete = ui.clone();
-                    let recycle = ui.clone();
-                    col().class("file-menu-group").fill((
-                        when(
-                            state.map(move |s| {
-                                remote
-                                    && single(s, true).is_some_and(|f| {
-                                        !f.is_dir
-                                            && !f.is_symlink
-                                            && video_player::supports(&f.path)
-                                    })
-                            }),
-                            {
-                                let play = ui.clone();
-                                move || {
-                                    action(&play, true, "播放", one, {
-                                        let ui = play.clone();
-                                        move || {
-                                            if let Some(file) = ui.state.with(|s| single(s, true)) {
-                                                ui.player.open(&ui, &file.path);
-                                            }
-                                        }
-                                    })
-                                }
-                            },
-                        ),
-                        when(
-                            state.map(move |s| {
-                                single(s, remote).is_some_and(|f| f.is_dir && !f.is_symlink)
-                            }),
-                            {
-                                let open = open.clone();
-                                move || {
-                                    action(&open, remote, "打开文件夹", one, {
-                                        let open = open.clone();
-                                        move || {
-                                            if let Some(file) =
-                                                open.state.with(|s| single(s, remote))
-                                            {
-                                                file_browser::activate(&open, remote, &file.path);
-                                            }
-                                        }
-                                    })
-                                }
-                            },
-                        ),
-                        when(
-                            state.map(move |s| {
-                                remote
-                                    && s.workspace_page.is_explorer()
-                                    && single(s, true).is_some_and(|f| f.is_dir && !f.is_symlink)
-                            }),
-                            {
-                                let ui = ui.clone();
-                                move || {
-                                    let open = ui.clone();
-                                    action(&ui, true, "Open in new tab", one, move || {
-                                        if let Some((id, path)) = open.state.with(|s| {
-                                            Some((
-                                                s.workspace_page.explorer_id()?,
-                                                single(s, true)?.path,
-                                            ))
-                                        }) {
-                                            explorer_tabs::open_tab(&open, id, Some(path));
-                                        }
-                                    })
-                                }
-                            },
-                        ),
-                        when(remote, {
-                            let terminal = ui.clone();
-                            move || terminal_action(terminal.clone())
-                        }),
-                        action(
-                            &ui,
-                            remote,
-                            if remote { "下载" } else { "上传" },
-                            |s, r| {
-                                s.connected
-                                    && s.sftp_available
-                                    && s.local_ready
-                                    && s.remote_ready
-                                    && !file_browser::selected_entries(s, r).is_empty()
-                            },
-                            move || {
-                                transfer.transfer(if remote {
-                                    TransferDirection::Download
-                                } else {
-                                    TransferDirection::Upload
-                                })
-                            },
-                        ),
-                        action(&ui, remote, "重命名", one, move || {
-                            workspace::begin_rename(&rename, remote)
-                        }),
-                        when(
-                            state.map(move |s| {
-                                remote
-                                    && single(s, remote).is_some_and(|f| !f.is_dir && !f.is_symlink)
-                            }),
-                            {
-                                let edit = ui.clone();
-                                move || {
-                                    let open = edit.clone();
-                                    action(
-                                        &edit,
-                                        true,
-                                        "Open in Code",
-                                        |s, _| code_workbench::available(s),
-                                        move || {
-                                            if let Some(file) = open.state.with(|s| single(s, true))
-                                            {
-                                                code_workbench::open(&open, &file.path);
-                                            }
-                                        },
-                                    )
-                                }
-                            },
-                        ),
-                        action(&ui, remote, "复制所选路径", any, move || {
-                            copy_paths(&copy, remote, false)
-                        }),
-                        action(&ui, remote, "属性", any, move || {
-                            properties(&info, remote)
-                        }),
-                        fragment((
-                            text().class("menu-divider").content(""),
-                            action(&ui, remote, "移入回收站", can_delete, move || {
-                                trash_ui::move_items(&recycle, remote)
-                            }),
-                            action(&ui, remote, "永久删除", can_delete, move || {
-                                begin_delete(&delete, remote)
-                            }),
-                            text().class("menu-divider").content(""),
-                        )),
-                    ))
-                }
+                move || item_actions(ui.clone(), remote)
             }),
-            when(state.map(move |s| remote && !has_item(s, remote)), {
-                let terminal = ui.clone();
-                move || terminal_action(terminal.clone())
-            }),
-            when(
-                state.map(move |s| !remote || !s.workspace_page.is_explorer()),
-                {
-                    let ui = ui.clone();
-                    move || {
-                        action(&ui, remote, "打开回收站", available, {
-                            let ui = ui.clone();
-                            move || trash_ui::open(&ui, remote)
-                        })
-                    }
-                },
-            ),
-            when(
-                state.map(move |s| {
-                    !s.workspace_page.is_explorer()
-                        || !s
-                            .file_context
-                            .as_ref()
-                            .is_some_and(|c| c.item && c.remote == remote)
-                }),
-                {
-                    let ui = ui.clone();
-                    move || {
-                        fragment((
-                            action(&ui, remote, "新建文件", file_browser::can_create, {
-                                let ui = ui.clone();
-                                move || file_browser::create(&ui, remote, false)
-                            }),
-                            action(&ui, remote, "新建文件夹", file_browser::can_create, {
-                                let ui = ui.clone();
-                                move || file_browser::create(&ui, remote, true)
-                            }),
-                            when(state.map(|s| s.workspace_page.is_explorer()), || {
-                                text().class("menu-divider").content("")
-                            }),
-                        ))
-                    }
-                },
-            ),
-            when(
-                state.map(move |s| remote && explorer_ui::item_target(s).is_some()),
-                {
-                    let ui = ui.clone();
-                    move || {
-                        let tag = ui.clone();
-                        let favorite = ui.clone();
-                        fragment((
-                            action(
-                                &ui,
-                                remote,
-                                "Toggle favorite",
-                                |s, _| explorer_ui::item_target(s).is_some(),
-                                move || {
-                                    if let Some((path, _)) =
-                                        favorite.state.with(explorer_ui::item_target)
-                                    {
-                                        favorite.toggle_explorer_favorite(path);
-                                    }
-                                },
-                            ),
-                            fragment(
-                                [("Folder color…", true), ("File color…", false)]
-                                    .into_iter()
-                                    .map(|(label, directory)| {
-                                        let ui = tag.clone();
-                                        when(
-                                            state.map(move |s| {
-                                                explorer_ui::item_target(s)
-                                                    .is_some_and(|(_, is_dir)| is_dir == directory)
-                                            }),
-                                            move || {
-                                                let tag = ui.clone();
-                                                action(
-                                                    &ui,
-                                                    remote,
-                                                    label,
-                                                    |s, _| explorer_ui::item_target(s).is_some(),
-                                                    move || {
-                                                        if let Some((path, directory)) =
-                                                            tag.state.with(explorer_ui::item_target)
-                                                        {
-                                                            tag.open_dialog(
-                                                                Dialog::ExplorerColor {
-                                                                    path,
-                                                                    directory,
-                                                                },
-                                                            );
-                                                        }
-                                                    },
-                                                )
-                                            },
-                                        )
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ),
-                            text().class("menu-divider").content(""),
-                        ))
-                    }
-                },
-            ),
-            when(
-                state.map(move |s| {
-                    remote && s.workspace_page.is_explorer() && s.file_context.is_none()
-                }),
-                {
-                    let ui = ui.clone();
-                    move || {
-                        let list = ui.clone();
-                        let grid = ui.clone();
-                        fragment((
-                            action(&ui, remote, "详细列表", workspace::ready, move || {
-                                list.state
-                                    .revise(|s| file_browser::set_icons(s, remote, false));
-                            }),
-                            action(&ui, remote, "平铺图标", workspace::ready, move || {
-                                grid.state
-                                    .revise(|s| file_browser::set_icons(s, remote, true));
-                            }),
-                        ))
-                    }
-                },
-            ),
-            fragment((
-                action(&ui, remote, "复制当前目录路径", workspace::ready, {
-                    let ui = ui.clone();
-                    move || copy_paths(&ui, remote, true)
-                }),
-                action(&ui, remote, "显示列", |s, _| s.file_pending.is_none(), {
-                    let ui = ui.clone();
-                    move || file_columns::open(&ui, remote)
-                }),
-                when(state.map(|s| !s.workspace_page.is_explorer()), {
-                    let ui = ui.clone();
-                    move || {
-                        action(
-                            &ui,
-                            remote,
-                            "Transfer defaults",
-                            |s, _| s.file_pending.is_none() && s.selected.is_some(),
-                            {
-                                let ui = ui.clone();
-                                move || ui.open_dialog(Dialog::TransferDefaults)
-                            },
-                        )
-                    }
-                }),
-                action(
-                    &ui,
-                    remote,
-                    "刷新",
-                    |s, r| !r || (s.connected && s.sftp_available && !s.system_task_running),
-                    {
-                        let ui = ui.clone();
-                        move || ui.refresh(remote)
-                    },
-                ),
-                text().class("menu-divider").content(""),
-            )),
-            action(
-                &ui,
-                remote,
-                "全选",
-                |s, r| !file_browser::entries(s, r).is_empty(),
-                {
-                    let ui = ui.clone();
-                    move || {
-                        ui.state.revise(|s| {
-                            let paths = file_browser::entries(s, remote)
-                                .into_iter()
-                                .map(|f| f.path)
-                                .collect();
-                            if remote {
-                                s.remote_selection = paths
-                            } else {
-                                s.local_selection = paths
-                            }
-                        })
-                    }
-                },
-            ),
-            action(&ui, remote, "清空选择", any, {
+            when(directory.clone(), {
                 let ui = ui.clone();
-                move || {
-                    ui.state
-                        .revise(|s| file_browser::clear_selection(s, remote))
-                }
+                move || directory_actions(ui.clone(), remote)
+            }),
+            when(remote, move || remote_tools(tools.clone())),
+            when(remote, {
+                let ui = ui.clone();
+                move || files_ui::appearance_menu(ui.clone(), files_ui::item_target, close, true)
+            }),
+            when(directory, move || view_actions(ui.clone(), remote)),
+            when(item, move || {
+                let recycle = remove.clone();
+                let delete = remove.clone();
+                menu_group((
+                    action(&remove, remote, "移入回收站", can_delete, move || {
+                        trash_ui::move_items(&recycle, remote)
+                    }),
+                    action(&remove, remote, "永久删除", can_delete, move || {
+                        begin_delete(&delete, remote)
+                    }),
+                ))
             }),
         ))
 }

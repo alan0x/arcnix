@@ -1,5 +1,5 @@
 (() => {
-    const windowSelector = '.desktop-window.app-explorer:not(.hidden)';
+    const windowSelector = '.desktop-window.app-files:not(.hidden)';
     const number = element => Number(element.textContent);
     const windowId = window => number(window.querySelector('.files-window-id'));
     const tabId = tab => number(tab.querySelector('.files-tab-id'));
@@ -15,13 +15,17 @@
 
     document.addEventListener('keydown', event => {
         const active = document.querySelector(windowSelector + '.active');
-        if (!active?.offsetWidth || active.closest('[inert]') || event.altKey || event.repeat) return;
-        if ((!event.ctrlKey && !event.metaKey) || event.shiftKey) return;
+        if (!active?.offsetWidth || active.closest('[inert]') || event.repeat || event.isComposing) return;
         let gesture;
-        if (event.key.toLowerCase() === 't') gesture = {kind: 'new', window: windowId(active)};
-        if (event.key.toLowerCase() === 'w') {
-            const tab = active.querySelector('.files-tab.selected');
-            if (tab) gesture = {kind: 'close', window: windowId(active), tab: tabId(tab)};
+        if (arcnixKeys.matches(event, 'files_hidden', 'Ctrl+H')
+            && !event.target.closest?.('input, textarea, select, [contenteditable]')) {
+            gesture = {kind: 'toggle_hidden', window: windowId(active)};
+        } else if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+            if (event.key.toLowerCase() === 't') gesture = {kind: 'new', window: windowId(active)};
+            if (event.key.toLowerCase() === 'w') {
+                const tab = active.querySelector('.files-tab.selected');
+                if (tab) gesture = {kind: 'close', window: windowId(active), tab: tabId(tab)};
+            }
         }
         if (!gesture) return;
         event.preventDefault();

@@ -5,7 +5,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use glory::wry::shell::AssetSource;
@@ -223,7 +223,66 @@ impl Client<'_> {
                 && value != 0
         }
     }
+
+    fn toggle_playback(&self) -> Result<()> {
+        if self.flag(c"eof-reached") {
+            self.command(&["seek", "0", "absolute"])?;
+            self.command(&["set", "pause", "no"])
+        } else {
+            self.command(&["cycle", "pause"])
+        }
+    }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Indicator {
+    Play,
+    Pause,
+}
+
+fn show_indicator(
+    client: &Client<'_>,
+    icon: Option<Indicator>,
+    displayed: &mut Option<(Indicator, i32, i32)>,
+) {
+    let next = icon.and_then(|icon| {
+        let width = client.number(c"osd-width")? as i32;
+        let height = client.number(c"osd-height")? as i32;
+        (width > 0 && height > 0).then_some((icon, width, height))
+    });
+    if *displayed == next {
+        return;
+    }
+    *displayed = next;
+    let Some((icon, width, height)) = next else {
+        let _ = client.command(&["osd-overlay", "1", "none", ""]);
+        return;
+    };
+    let (x, y) = (width / 2, height / 2);
+    let shape = match icon {
+        Indicator::Play => "m 3 0 l 23 12 3 24",
+        Indicator::Pause => "m 3 0 l 9 0 9 24 3 24 m 15 0 l 21 0 21 24 15 24",
+    };
+    let overlay = format!(
+        r"{{\an7\pos({},{})\bord0\shad0\1c&H101010&\1a&H48&\p1}}m 28 0 b 43 0 56 13 56 28 56 43 43 56 28 56 13 56 0 43 0 28 0 13 13 0 28 0",
+        x - 28,
+        y - 28
+    );
+    let glyph = format!(
+        r"{{\an7\pos({},{})\bord0\shad0\1c&HFFFFFF&\1a&H00&\p1}}{shape}",
+        x - 12,
+        y - 12,
+    );
+    let _ = client.command(&[
+        "osd-overlay",
+        "1",
+        "ass-events",
+        &format!("{overlay}\n{glyph}"),
+        &width.to_string(),
+        &height.to_string(),
+    ]);
+}
+
 pub(super) fn run(
     hwnd: usize,
     source: Arc<Source>,
@@ -231,6 +290,9 @@ pub(super) fn run(
     report: impl Fn(Event),
 ) -> Result<()> {
     let api = unsafe { Api::load()? };
+    let demuxer = source
+        .native_demuxer()
+        .context("Missing native video format")?;
     // Declaration order ensures callbacks cannot outlive this stable address.
     let userdata = Arc::new(Input {
         source,
@@ -253,7 +315,6 @@ pub(super) fn run(
         ("sub-auto", "no"),
         ("audio-file-auto", "no"),
         ("ytdl", "no"),
-        ("demuxer", "mkv"),
         ("keep-open", "yes"),
         ("cache", "yes"),
         ("cache-on-disk", "no"),
@@ -265,6 +326,17 @@ pub(super) fn run(
         let (key, val) = (CString::new(name)?, CString::new(value)?);
         api.check(unsafe { (api.option)(handle, key.as_ptr(), val.as_ptr()) })
             .with_context(|| format!("mpv option {name}"))?;
+    }
+    let (kind, format) = if demuxer == "mkv" {
+        (c"mkv", None)
+    } else {
+        (c"lavf", Some(CString::new(demuxer)?))
+    };
+    api.check(unsafe { (api.option)(handle, c"demuxer".as_ptr(), kind.as_ptr()) })?;
+    if let Some(format) = format {
+        api.check(unsafe {
+            (api.option)(handle, c"demuxer-lavf-format".as_ptr(), format.as_ptr())
+        })?;
     }
     api.check(unsafe { (api.init)(handle) })?;
     api.check(unsafe {
@@ -278,7 +350,9 @@ pub(super) fn run(
     client.command(&["define-section","arcnix","MBTN_LEFT script-message arcnix-play\nMBTN_LEFT_DBL script-message arcnix-maximize\nf script-message arcnix-maximize","force"])?;
     client.command(&["enable-section", "arcnix"])?;
     client.command(&["loadfile", URI.to_str()?])?;
-    let mut previous = None;
+    let mut previous: Option<Transport> = None;
+    let mut indicator = None;
+    let mut feedback_until = None;
     let mut loaded = false;
     while userdata.source.current() {
         if let Some(error) = userdata.failure.get() {
@@ -291,7 +365,7 @@ pub(super) fn run(
                 7 => {
                     let end = unsafe { &*event.data.cast::<EndFile>() };
                     if end.reason == 4 {
-                        api.check(end.error).context("MKV playback failed")?;
+                        api.check(end.error).context("Video playback failed")?;
                     }
                 }
                 8 => loaded = true, // MPV_EVENT_FILE_LOADED
@@ -302,7 +376,9 @@ pub(super) fn run(
                             b"arcnix-maximize" => report(Event::Maximize),
                             b"arcnix-play" => {
                                 report(Event::Focus);
-                                client.command(&["cycle", "pause"])?;
+                                if loaded {
+                                    client.toggle_playback()?;
+                                }
                             }
                             _ => {}
                         }
@@ -319,17 +395,24 @@ pub(super) fn run(
                 paused: client.flag(c"pause"),
                 volume: client.number(c"volume").unwrap_or(100.),
             };
+            let now = Instant::now();
+            if previous.is_some_and(|previous| previous.paused != transport.paused) {
+                feedback_until = Some(now + Duration::from_millis(420));
+            }
+            let flashing = feedback_until.is_some_and(|until| now < until);
+            let feedback = match (transport.paused, flashing) {
+                (true, true) => Some(Indicator::Pause),
+                (true, false) | (false, true) => Some(Indicator::Play),
+                (false, false) => None,
+            };
+            show_indicator(&client, feedback, &mut indicator);
             if previous != Some(transport) {
                 previous = Some(transport);
                 report(Event::State(transport));
             }
         }
         match commands.recv_timeout(Duration::from_millis(150)) {
-            Ok(Command::Toggle) if client.flag(c"eof-reached") => {
-                client.command(&["seek", "0", "absolute"])?;
-                client.command(&["set", "pause", "no"])?;
-            }
-            Ok(Command::Toggle) => client.command(&["cycle", "pause"])?,
+            Ok(Command::Toggle) => client.toggle_playback()?,
             Ok(Command::Seek(seconds)) => {
                 client.command(&["seek", &seconds.to_string(), "absolute+exact"])?
             }

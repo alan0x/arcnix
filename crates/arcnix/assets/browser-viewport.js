@@ -30,7 +30,7 @@ function observeNativeSurface(app) {
             watched.clear();
             return;
         }
-        const surface = browser.querySelector(app === 'video' ? '.remote-player-screen' : '.browser-surface');
+        const surface = browser.querySelector(app === 'player' ? '.remote-player-screen' : '.browser-surface');
         const commandButton = app === 'code' ? browser.querySelector('.code-quick-open') : null;
         const menuSlot = app === 'code' ? browser.querySelector('.code-menu-slot') : null;
         const canvas = browser.closest('.desktop-canvas');
@@ -90,7 +90,7 @@ function observeNativeSurface(app) {
 }
 observeNativeSurface('browser');
 observeNativeSurface('code');
-observeNativeSurface('video');
+observeNativeSurface('player');
 (() => {
     document.addEventListener('keydown', event => {
         const code = event.target.closest?.('.desktop-window.app-code.active');

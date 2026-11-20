@@ -75,6 +75,7 @@ impl RemoteHistory {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct TabSnapshot {
     path: String,
     ready: bool,
@@ -83,8 +84,8 @@ pub(super) struct TabSnapshot {
     pane: PaneState,
     history: RemoteHistory,
     icons: bool,
-    tag: Option<explorer_ui::TagFilter>,
-    search: explorer_search::Search,
+    tag: Option<files_ui::TagFilter>,
+    search: files_search::Search,
     trash: bool,
 }
 
@@ -101,16 +102,60 @@ impl TabSnapshot {
         }
     }
 
-    pub(super) fn preview_entries(&self) -> Vec<FileEntry> {
+    pub(super) fn preview_entries(&self, show_hidden: bool) -> Vec<FileEntry> {
         if self.trash || !self.ready {
             Vec::new()
         } else {
-            self.entries.iter().take(100).cloned().collect()
+            self.entries
+                .iter()
+                .filter(|entry| show_hidden || !entry.name.starts_with('.'))
+                .take(100)
+                .cloned()
+                .collect()
         }
+    }
+
+    pub(super) fn directory(&self) -> Option<&str> {
+        (self.ready && !self.trash && self.tag.is_none()).then_some(self.path.as_str())
+    }
+
+    pub(super) fn entries(&self) -> &[FileEntry] {
+        &self.entries
+    }
+
+    pub(super) fn trash(&self) -> bool {
+        self.trash
+    }
+
+    pub(super) fn tag(&self) -> Option<files_ui::TagFilter> {
+        self.tag
+    }
+
+    pub(super) fn refresh_entries(&mut self, entries: &[FileEntry]) {
+        self.entries = entries.to_vec();
+        self.selection
+            .retain(|path| entries.iter().any(|entry| &entry.path == path));
+        self.pane = PaneState::default();
+    }
+
+    pub(super) fn dragged_entries(&self, path: &str) -> Vec<arcnix_core::deletion::Target> {
+        if !self
+            .entries
+            .iter()
+            .any(|entry| entry.path == path && !entry.is_symlink)
+        {
+            return Vec::new();
+        }
+        let multiple = self.selection.contains(path);
+        self.entries
+            .iter()
+            .filter(|entry| entry.path == path || multiple && self.selection.contains(&entry.path))
+            .map(arcnix_core::deletion::Target::from)
+            .collect()
     }
 }
 
-fn tab_title(path: &str, trash: bool, tag: Option<explorer_ui::TagFilter>) -> String {
+fn tab_title(path: &str, trash: bool, tag: Option<files_ui::TagFilter>) -> String {
     if trash {
         i18n::translate("回收站")
     } else if let Some(tag) = tag {
@@ -128,7 +173,7 @@ pub(super) fn live_tab_title(s: &State) -> String {
     tab_title(
         &s.remote_path,
         s.workbench.files.trash,
-        s.server_apps.explorer_tag,
+        s.server_apps.files_tag,
     )
 }
 
@@ -144,8 +189,8 @@ pub(super) fn capture_tab(s: &State) -> TabSnapshot {
         pane,
         history: s.file_browser.remote_history.clone(),
         icons: s.file_browser.remote_icons,
-        tag: s.server_apps.explorer_tag,
-        search: s.server_apps.explorer_search.clone(),
+        tag: s.server_apps.files_tag,
+        search: s.server_apps.files_search.clone(),
         trash: s.workbench.files.trash,
     }
 }
@@ -158,9 +203,9 @@ pub(super) fn restore_tab(s: &mut State, tab: &TabSnapshot) {
     s.file_browser.remote.clone_from(&tab.pane);
     s.file_browser.remote_history.clone_from(&tab.history);
     s.file_browser.remote_icons = tab.icons;
-    s.server_apps.explorer_tag = tab.tag;
-    s.server_apps.explorer_search.clone_from(&tab.search);
-    s.server_apps.explorer_open_pending = None;
+    s.server_apps.files_tag = tab.tag;
+    s.server_apps.files_search.clone_from(&tab.search);
+    s.server_apps.files_open_pending = None;
     s.workbench.files.trash = tab.trash;
     s.remote_request = 0;
     s.file_browser.cancel_drag();
@@ -172,8 +217,8 @@ pub(super) fn fresh_tab(s: &mut State) {
     s.remote_selection.clear();
     s.remote_ready = false;
     s.remote_request = 0;
-    s.server_apps.explorer_search = Default::default();
-    s.server_apps.explorer_open_pending = None;
+    s.server_apps.files_search = Default::default();
+    s.server_apps.files_open_pending = None;
 }
 
 #[derive(Clone)]
@@ -412,11 +457,11 @@ fn desktop_listing(s: &State, remote: bool) -> bool {
 }
 
 fn search_is_open(s: &State, remote: bool) -> bool {
-    desktop_listing(s, remote) && explorer_search::current(s).open
+    desktop_listing(s, remote) && files_search::current(s).open
 }
 
 fn sorted(s: &State, remote: bool, entries: &[FileEntry]) -> Vec<FileEntry> {
-    let search = search_is_open(s, remote).then(|| explorer_search::current(s));
+    let search = search_is_open(s, remote).then(|| files_search::current(s));
     let (query, sort, descending) = if remote {
         let query = if desktop_listing(s, remote) {
             search.map_or("", |search| search.query.trim())
@@ -427,7 +472,7 @@ fn sorted(s: &State, remote: bool, entries: &[FileEntry]) -> Vec<FileEntry> {
     } else {
         (s.local_filter.as_str(), s.local_sort, s.local_desc)
     };
-    let range = search.and_then(explorer_search::Search::date_range);
+    let range = search.and_then(files_search::Search::date_range);
     visible(entries, query, sort, descending)
         .into_iter()
         .filter(|f| s.config.settings.show_hidden_files || !f.name.starts_with('.'))
@@ -512,7 +557,7 @@ fn drag_ready(s: &State) -> bool {
         && s.navigation == navigation::Page::Servers
         && matches!(
             s.workspace_page,
-            WorkspacePage::Files | WorkspacePage::Explorer(_)
+            WorkspacePage::TransferFiles | WorkspacePage::Files(_)
         )
 }
 
@@ -558,8 +603,8 @@ fn begin_drag(ui: &Ui, remote: bool, target: &str, id: u64) {
     });
 }
 
-fn drop_transfer(ui: &Ui, remote: bool, id: u64) {
-    let source = ui.state.revise(|s| {
+fn take_transfer_drag(ui: &Ui, remote: bool, id: u64) -> Option<FileDrag> {
+    ui.state.revise(|s| {
         let source = s.file_browser.drag.take()?;
         // Bind the gesture to both listings and the SSH session. A refresh,
         // navigation or reconnect during a drag must never retarget a transfer.
@@ -573,8 +618,11 @@ fn drop_transfer(ui: &Ui, remote: bool, id: u64) {
             && source.remote_request == s.remote_request
             && drag_ready(s))
         .then_some(source)
-    });
-    if let Some(source) = source {
+    })
+}
+
+fn drop_transfer(ui: &Ui, remote: bool, id: u64) {
+    if let Some(source) = take_transfer_drag(ui, remote, id) {
         ui.transfer_entries(
             if source.remote {
                 TransferDirection::Download
@@ -617,12 +665,14 @@ enum GestureKind {
     DragStart,
     DragEnd,
     TransferDrop,
-    ExplorerDownload,
+    FilesDownload,
     Context,
     Rename,
     Delete,
     DeletePermanently,
     CopyPaths,
+    CopyFiles,
+    PasteFiles,
     Properties,
     Refresh,
     EditPath,
@@ -689,13 +739,13 @@ pub(super) fn select(ui: &Ui, remote: bool, target: &str, toggle: bool, range: b
 pub(super) fn navigate(ui: &Ui, remote: bool, target: String) {
     ui.state.revise(|s| {
         if remote {
-            if s.workspace_page.is_explorer() {
+            if s.workspace_page.is_files() {
                 s.workbench.files.trash = false;
             }
             s.file_browser.remote_history.requested = None;
             s.remote_path = target;
-            s.server_apps.explorer_tag = None;
-            s.server_apps.explorer_open_pending = None;
+            s.server_apps.files_tag = None;
+            s.server_apps.files_open_pending = None;
         } else {
             s.local_path = target;
         }
@@ -705,7 +755,7 @@ pub(super) fn navigate(ui: &Ui, remote: bool, target: String) {
 
 pub(super) fn remote_listed(s: &mut State, path: &str) {
     if s.file_browser.remote_history.record(path) {
-        s.server_apps.explorer_search = Default::default();
+        s.server_apps.files_search = Default::default();
     }
 }
 
@@ -725,9 +775,9 @@ fn history_button(ui: Ui, backwards: bool) -> impl Widget {
         Icon::ChevronRight,
     )
     .class(if backwards {
-        "icon-button explorer-history-back"
+        "icon-button files-history-back"
     } else {
-        "icon-button explorer-history-forward"
+        "icon-button files-history-forward"
     })
     .enabled(state.map(move |s| {
         workspace::ready(s, true) && s.file_browser.remote_history.neighbor(backwards).is_some()
@@ -743,8 +793,8 @@ fn history_button(ui: Ui, backwards: bool) -> impl Widget {
             };
             history.requested = Some(index);
             s.remote_path = history.paths[index].clone();
-            s.server_apps.explorer_tag = None;
-            s.server_apps.explorer_open_pending = None;
+            s.server_apps.files_tag = None;
+            s.server_apps.files_open_pending = None;
             true
         });
         if changed {
@@ -753,21 +803,19 @@ fn history_button(ui: Ui, backwards: bool) -> impl Widget {
     })
 }
 pub(super) fn open_remote_file(ui: &Ui, path: &str) {
-    if video_player::supports(path) {
-        ui.player.open(ui, path);
-    } else {
-        code_workbench::open(ui, path);
-    }
+    file_open::open(ui, path);
 }
 
 pub(super) fn activate(ui: &Ui, remote: bool, target: &str) {
-    let entry = ui.state.with(|s| {
-        entries(s, remote)
-            .into_iter()
-            .find(|f| f.path == target && !f.is_symlink)
-    });
+    let entry = ui
+        .state
+        .with(|s| entries(s, remote).into_iter().find(|f| f.path == target));
     if let Some(entry) = entry {
-        if entry.is_dir {
+        if entry.is_symlink {
+            if remote {
+                file_actions::open_alias(ui, &entry.path);
+            }
+        } else if entry.is_dir {
             navigate(ui, remote, entry.path);
         } else {
             select(ui, remote, &entry.path, false, false);
@@ -837,6 +885,26 @@ pub(super) fn can_create(s: &State, remote: bool) -> bool {
         && s.file_pending.is_none()
         && (!remote || !s.system_task_running)
         && s.file_browser.pane(remote).mutation.is_none()
+}
+
+pub(super) fn can_rename(s: &State, remote: bool) -> bool {
+    s.dialog.is_none() && can_create(s, remote) && selected_entries(s, remote).len() == 1
+}
+
+pub(super) fn begin_rename(ui: &Ui, remote: bool) {
+    ui.state.revise(|s| {
+        if !can_rename(s, remote) {
+            return;
+        }
+        let Some(entry) = selected_entries(s, remote).into_iter().next() else {
+            return;
+        };
+        let pane = s.file_browser.pane_mut(remote);
+        if pane.edit_path.as_ref() != Some(&entry.path) {
+            pane.edit_path = Some(entry.path);
+            pane.name_error.clear();
+        }
+    });
 }
 
 pub(super) fn create(ui: &Ui, remote: bool, directory: bool) {
@@ -1006,30 +1074,22 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
             }
         }),
         GestureKind::TransferDrop => drop_transfer(ui, remote, event.drag_id),
-        GestureKind::ExplorerDownload => {
-            if remote && ui.state.with(|s| s.workspace_page.is_explorer()) {
-                drop_transfer(ui, false, event.drag_id);
+        GestureKind::FilesDownload => {
+            if remote
+                && ui.state.with(|s| s.workspace_page.is_files())
+                && let Some(source) = take_transfer_drag(ui, false, event.drag_id)
+            {
+                files_transfer::choose_download(ui, source.entries);
             }
         }
         GestureKind::Context => file_context::open(ui, remote, &event.path),
         GestureKind::Delete => trash_ui::move_items(ui, remote),
         GestureKind::DeletePermanently => file_context::begin_delete(ui, remote),
-        GestureKind::Rename => {
-            if ui.state.with(|s| {
-                workspace::ready(s, remote)
-                    && (!remote || !s.system_task_running)
-                    && (if remote {
-                        &s.remote_selection
-                    } else {
-                        &s.local_selection
-                    })
-                    .len()
-                        == 1
-            }) {
-                workspace::begin_rename(ui, remote);
-            }
-        }
+        GestureKind::Rename => begin_rename(ui, remote),
         GestureKind::CopyPaths => file_context::copy_paths(ui, remote, false),
+        GestureKind::CopyFiles if remote => file_actions::copy(ui),
+        GestureKind::PasteFiles if remote => file_actions::paste(ui),
+        GestureKind::CopyFiles | GestureKind::PasteFiles => (),
         GestureKind::Properties => file_context::properties(ui, remote),
         GestureKind::Refresh => {
             if ui
@@ -1044,7 +1104,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
                 && s.dialog.is_none()
                 && matches!(
                     s.workspace_page,
-                    WorkspacePage::Files | WorkspacePage::Explorer(_)
+                    WorkspacePage::TransferFiles | WorkspacePage::Files(_)
                 )
                 && (!remote || s.connected && s.sftp_available)
             {
@@ -1065,7 +1125,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
     }
 }
 
-pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
+pub(super) fn listing(ui: Ui, remote: bool, files: bool) -> impl Widget {
     let state = ui.state;
     let input_ui = ui.clone();
     col()
@@ -1112,6 +1172,9 @@ pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                                 }
                                 if !entry.entry.is_symlink {
                                     class.push_str(" file-draggable");
+                                    if entry.entry.is_dir {
+                                        class.push_str(" files-directory-row");
+                                    }
                                 }
                                 class
                             }))
@@ -1157,10 +1220,10 @@ pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                                 sapid::button()
                                     .class(state.map(move |s| {
                                         let file = entry.get();
-                                        if explorer
+                                        if files
                                             && !file.entry.is_symlink
                                             && let Some(tag) =
-                                                explorer_ui::tag_class(s, &file.entry.path)
+                                                files_ui::tag_class(s, &file.entry.path)
                                         {
                                             format!("file-name file-tagged {tag}")
                                         } else {
@@ -1171,8 +1234,14 @@ pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                                     .label("")
                                     .fill((
                                         text()
-                                            .class(entry.map(|r| {
-                                                if r.entry.is_dir {
+                                            .class(state.map(move |s| {
+                                                let file = entry.get().entry;
+                                                if files && file.is_dir && !file.is_symlink
+                                                    && let Some(class) = files_ui::folder_icon_class(s, &file.path)
+                                                {
+                                                    return format!("action-glyph file-entry-icon file-folder-symbol folder-custom-mark {class}");
+                                                }
+                                                if file.is_dir {
                                                     "action-glyph file-entry-icon glyph-folder"
                                                 } else {
                                                     "action-glyph file-entry-icon glyph-file"
@@ -1195,7 +1264,14 @@ pub(super) fn listing(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                                     }),
                                     move || {
                                         input()
-                                            .class("file-inline-name")
+                                            .class(entry.map(|r| {
+                                                if r.entry.is_dir {
+                                                    "file-inline-name"
+                                                } else {
+                                                    "file-inline-name file-inline-stem"
+                                                }
+                                                .to_owned()
+                                            }))
                                             .name(i18n::bind("新名称"))
                                             .value(entry.get().entry.name)
                                     },
@@ -1318,7 +1394,7 @@ fn breadcrumbs(path: &str, remote: bool) -> Vec<Crumb> {
 }
 fn begin_path_edit(s: &mut State, remote: bool) {
     if search_is_open(s, remote) {
-        s.server_apps.explorer_search = Default::default();
+        s.server_apps.files_search = Default::default();
     }
     if !s.file_browser.pane(remote).editing {
         let current = path(s, remote).to_owned();
@@ -1331,7 +1407,7 @@ fn begin_path_edit(s: &mut State, remote: bool) {
 pub(super) fn pathbar(
     ui: Ui,
     remote: bool,
-    explorer: bool,
+    files: bool,
     trailing: impl IntoChildren,
 ) -> impl Widget {
     let state = ui.state;
@@ -1347,13 +1423,13 @@ pub(super) fn pathbar(
     let options_ui = ui.clone();
     let enabled = state.map(move |s| !remote || s.connected && s.sftp_available);
     row().class("pathbar").fill((
-        when(explorer, move || {
-            row().class("explorer-history").fill((
+        when(files, move || {
+            row().class("files-history").fill((
                 history_button(history_ui.clone(), true),
                 history_button(history_ui.clone(), false),
             ))
         }),
-        when(!explorer, move || {
+        when(!files, move || {
             let up_ui = up_ui.clone();
             icon_action(
                 if remote {
@@ -1391,7 +1467,7 @@ pub(super) fn pathbar(
             row()
                 .class(state.map(move |s| {
                     if s.file_browser.pane(remote).editing
-                        || (explorer && explorer_search::current(s).open)
+                        || (files && files_search::current(s).open)
                     {
                         "breadcrumbs hidden"
                     } else {
@@ -1468,12 +1544,12 @@ pub(super) fn pathbar(
                     }
                 }),
             when(
-                state.map(move |s| explorer && explorer_search::current(s).open),
-                move || explorer_search::field(search_ui.clone()),
+                state.map(move |s| files && files_search::current(s).open),
+                move || files_search::field(search_ui.clone()),
             ),
         )),
-        when(explorer, move || explorer_ui::favorite_button(ui.clone())),
-        when(!explorer, move || {
+        when(files, move || files_ui::favorite_button(ui.clone())),
+        when(!files, move || {
             icon_action(
                 if remote {
                     "编辑远程路径"
@@ -1530,9 +1606,7 @@ pub(super) fn pathbar(
         .enabled(state.map(move |s| !remote || s.connected && s.sftp_available))
         .on_press(move || refresh_ui.refresh(remote)),
         fragment(trailing),
-        when(explorer, move || {
-            explorer_search::options(options_ui.clone())
-        }),
+        when(files, move || files_search::options(options_ui.clone())),
     ))
 }
 
