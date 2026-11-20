@@ -506,9 +506,13 @@ fn edit_actions(ui: Ui, remote: bool) -> impl Widget {
             let ui = ui.clone();
             move || paste_action(ui.clone())
         }),
-        action(&ui, remote, "重命名", file_browser::can_rename, move || {
-            file_browser::begin_rename(&rename, remote)
-        }),
+        action(
+            &ui,
+            remote,
+            "重命名",
+            file_browser::can_rename,
+            move || file_browser::begin_rename(&rename, remote),
+        ),
     ))
 }
 
@@ -739,11 +743,11 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                     move || edit_actions(ui.clone(), remote)
                 },
             ),
-            when(item.clone(), {
+            when(item, {
                 let ui = ui.clone();
                 move || item_actions(ui.clone(), remote)
             }),
-            when(directory.clone(), {
+            when(directory, {
                 let ui = ui.clone();
                 move || directory_actions(ui.clone(), remote)
             }),

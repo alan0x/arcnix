@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Style {

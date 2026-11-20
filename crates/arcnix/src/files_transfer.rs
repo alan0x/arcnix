@@ -253,11 +253,7 @@ fn receive(s: &mut State, packet: Packet) -> Result<bool> {
         return Ok(false);
     }
 
-    let batch = s
-        .files_uploads
-        .pending
-        .as_mut()
-        .context("No active drop")?;
+    let batch = s.files_uploads.pending.as_mut().context("No active drop")?;
     ensure!(
         batch.id == packet.id
             && batch.epoch == s.epoch

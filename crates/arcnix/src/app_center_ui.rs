@@ -120,7 +120,10 @@ fn installed(s: &State, app: App) -> bool {
 }
 fn badge(app: App) -> impl Widget {
     text()
-        .class(format!("app-center-app-icon app-center-color-{}", app.color))
+        .class(format!(
+            "app-center-app-icon app-center-color-{}",
+            app.color
+        ))
         .content(app.mark)
 }
 
@@ -190,7 +193,10 @@ pub(super) fn event(
     serial: u64,
     result: std::result::Result<server_apps_worker::Reply, String>,
 ) -> Option<std::result::Result<server_apps_worker::Reply, String>> {
-    if !ui.state.with(|s| s.software.app_center.pending == Some(serial)) {
+    if !ui
+        .state
+        .with(|s| s.software.app_center.pending == Some(serial))
+    {
         return Some(result);
     }
     ui.state.revise(|s| {
@@ -227,9 +233,11 @@ fn card(ui: Ui, app: App) -> impl Widget {
             ))
             .on_press(move || detail.app_center_details(app.id)),
         row().class("app-center-card-footer").fill((
-            text().class("app-center-installed-badge").content(i18n::bind(
-                state.map(move |s| if installed(s, app) { "Installed" } else { "" }.to_owned()),
-            )),
+            text()
+                .class("app-center-installed-badge")
+                .content(i18n::bind(state.map(move |s| {
+                    if installed(s, app) { "Installed" } else { "" }.to_owned()
+                }))),
             btn("Install…", move || install.install_catalog_app(app.id))
                 .class("button app-center-install-button")
                 .enabled(state.map(|s| s.connected && !scripts_ui::busy(s))),
@@ -263,15 +271,21 @@ fn discover(ui: Ui) -> impl Widget {
                 ))
             },
         ),
-        when(state.map(|s| s.software.app_center.compose_only), move || {
-            row().class("app-center-context-filter").fill((
-                text().content(i18n::bind("Compose-compatible applications")),
-                text_action("Show all applications", Icon::Clear).on_press({
-                    let all = all.clone();
-                    move || all.state.revise(|s| s.software.app_center.compose_only = false)
-                }),
-            ))
-        }),
+        when(
+            state.map(|s| s.software.app_center.compose_only),
+            move || {
+                row().class("app-center-context-filter").fill((
+                    text().content(i18n::bind("Compose-compatible applications")),
+                    text_action("Show all applications", Icon::Clear).on_press({
+                        let all = all.clone();
+                        move || {
+                            all.state
+                                .revise(|s| s.software.app_center.compose_only = false)
+                        }
+                    }),
+                ))
+            },
+        ),
         row().class("app-center-categories").fill((
             sapid::button()
                 .class("button compact")
@@ -286,7 +300,8 @@ fn discover(ui: Ui) -> impl Widget {
                             .class("button compact")
                             .label(i18n::bind(category.label()))
                             .pressed(
-                                state.map(move |s| s.software.app_center.category == Some(category)),
+                                state
+                                    .map(move |s| s.software.app_center.category == Some(category)),
                             )
                             .on_press(move || {
                                 state.revise(|s| s.software.app_center.category = Some(category))
@@ -339,7 +354,9 @@ fn installed_page(ui: Ui) -> impl Widget {
             sapid::checkbox()
                 .label(i18n::bind("Show all system packages"))
                 .checked(state.map(|s| s.software.app_center.all_packages))
-                .on_checked_change(move |v| state.revise(|s| s.software.app_center.all_packages = v)),
+                .on_checked_change(move |v| {
+                    state.revise(|s| s.software.app_center.all_packages = v)
+                }),
             icon_action("Refresh installed applications", Icon::Refresh)
                 .enabled(state.map(|s| s.connected && s.software.app_center.pending.is_none()))
                 .on_press(move || refresh.app_center_refresh()),
@@ -348,9 +365,8 @@ fn installed_page(ui: Ui) -> impl Widget {
             state.map(|s| s.software.app_center.pending.is_some()),
             move || text().class("subtle").content(i18n::bind("Loading…")),
         ),
-        col()
-            .class("app-center-inventory-list")
-            .fill(each(state.map(items)).key(Item::key).children(move |item| {
+        col().class("app-center-inventory-list").fill(
+            each(state.map(items)).key(Item::key).children(move |item| {
                 let value = item.value;
                 let install = ui.clone();
                 let remove = ui.clone();
@@ -413,7 +429,8 @@ fn installed_page(ui: Ui) -> impl Widget {
                         })
                     }),
                 ))
-            })),
+            }),
+        ),
         when(
             state.map(|s| {
                 s.software.app_center.pending.is_none()

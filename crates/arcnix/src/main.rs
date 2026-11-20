@@ -21,8 +21,8 @@ mod desktop_shortcuts_ui;
 mod diagnostics_ui;
 mod disks_ui;
 mod docker_ui;
-mod file_browser;
 mod file_actions;
+mod file_browser;
 mod file_columns;
 mod file_context;
 mod file_open;
@@ -38,6 +38,7 @@ mod help_ui;
 mod i18n;
 mod icons;
 mod installation_ui;
+mod log_text;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod monitor_ui;

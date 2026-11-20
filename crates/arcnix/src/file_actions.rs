@@ -1,7 +1,8 @@
+use std::result::Result;
+
 use arcnix_core::remote::FileAction;
 use arcnix_core::server_apps::FolderColor;
 use serde::Deserialize;
-use std::result::Result;
 
 use super::*;
 

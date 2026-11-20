@@ -19,6 +19,7 @@ struct View {
     sudo: String,
     pending: bool,
     snapshot: Option<arcnix_core::system_logs::LogSnapshot>,
+    snapshot_serial: u64,
     received: Option<u64>,
     error: String,
 }
@@ -85,6 +86,7 @@ impl Ui {
                 sudo: String::new(),
                 pending: false,
                 snapshot: None,
+                snapshot_serial: 0,
                 received: None,
                 error: String::new(),
             });
@@ -175,6 +177,7 @@ pub(super) fn event(
             match result {
                 Ok(result) => {
                     v.snapshot = Some(result.snapshot);
+                    v.snapshot_serial = serial;
                     v.received = result.received;
                     v.error.clear();
                 }
@@ -183,20 +186,34 @@ pub(super) fn event(
         }
     });
 }
-fn text_snapshot(snapshot: &arcnix_core::system_logs::LogSnapshot) -> String {
-    snapshot
-        .entries
-        .iter()
-        .map(|row| {
-            format!(
-                "{} {}\n{}",
+/// Each entry's time and unit above its message, with the message's terminal
+/// colors. Colors never carry from one entry into the next.
+fn log_spans(snapshot: &arcnix_core::system_logs::LogSnapshot) -> Vec<crate::log_text::LogSpan> {
+    let mut spans = crate::log_text::Spans::default();
+    if snapshot.entries.is_empty() {
+        spans.plain(
+            &i18n::translate("No journal entries returned for this selection"),
+            "",
+        );
+    }
+    for (index, row) in snapshot.entries.iter().enumerate() {
+        if index > 0 {
+            spans.newline();
+            spans.newline();
+        }
+        spans.plain(
+            &format!(
+                "{} {}",
                 row.timestamp.as_deref().unwrap_or(""),
-                row.unit.as_deref().unwrap_or(""),
-                row.message
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+                row.unit.as_deref().unwrap_or("")
+            ),
+            "",
+        );
+        spans.newline();
+        spans.reset();
+        spans.output_lines(&row.message);
+    }
+    spans.finish()
 }
 fn periods(context: &Context) -> Vec<(JournalPeriod, &'static str)> {
     let mut periods = Vec::new();
@@ -233,8 +250,53 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
             text().class("subtle diagnostic-log-state").content(state.map(|s|s.diagnostics.logs.view.as_ref().map(|v|if v.pending{i18n::translate("Reading service logs…")}else if let Some(snapshot)=&v.snapshot{format!("{} · {}{}",snapshot.entries.len(),formatting::timestamp(v.received),if v.error.is_empty(){String::new()}else{format!(" · {}",i18n::translate("Showing the previous log snapshot"))})}else{i18n::translate("No log snapshot yet")}).unwrap_or_default())),
             text().class(state.map(|s|if s.diagnostics.logs.view.as_ref().is_none_or(|v|v.error.is_empty()){"hidden"}else{"form-error diagnostic-log-error"}.to_owned())).content(state.map(|s|s.diagnostics.logs.view.as_ref().map(|v|v.error.clone()).unwrap_or_default())),
             text().class("observability-warning diagnostic-log-warnings").content(state.map(|s|s.diagnostics.logs.view.as_ref().and_then(|v|v.snapshot.as_ref()).map(|v|v.warnings.join("\n")).unwrap_or_default())),
-            text().class("system-log-output diagnostic-log-output").selectable(true).content(state.map(|s|s.diagnostics.logs.view.as_ref().and_then(|v|v.snapshot.as_ref()).map(|snapshot|if snapshot.entries.is_empty(){i18n::translate("No journal entries returned for this selection")}else{text_snapshot(snapshot)}).unwrap_or_default())),
+            // The scrolling block stays; its spans are rebuilt for a new reply or language.
+            view().class("system-log-output diagnostic-log-output").fill(each(state.map(|s|s.diagnostics.logs.view.as_ref().filter(|v|v.snapshot.is_some()).map(|v|(v.snapshot_serial,s.config.settings.language as u8)).into_iter().collect::<Vec<_>>())).key(Clone::clone).children(move|_|crate::log_text::view_spans("log-text",&state.with_untracked(|s|s.diagnostics.logs.view.as_ref().and_then(|v|v.snapshot.as_ref()).map(log_spans).unwrap_or_default())))),
         )),(btn("Close",move||close.close_dialog()),btn("Read service logs",move||read.read_diagnostic_service_logs()).class("button primary").enabled(state.map(|s|s.diagnostics.logs.view.as_ref().is_some_and(|v|!v.pending&&available(s,&v.context))))))
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use arcnix_core::system_logs::{LogEntry, LogSnapshot, LogSource};
+
+    use super::*;
+
+    #[test]
+    fn entries_keep_their_layout_and_their_own_colors() {
+        let entry = |time: &str, message: &str| LogEntry {
+            timestamp: Some(time.into()),
+            unit: Some("web.service".into()),
+            priority: Some(3),
+            message: message.into(),
+        };
+        let snapshot = LogSnapshot {
+            source: LogSource::Journal,
+            entries: vec![entry("09:00", "\x1b[31mfailed"), entry("09:01", "retry")],
+            warnings: Vec::new(),
+        };
+        let spans = log_spans(&snapshot);
+        let parts: Vec<_> = spans
+            .iter()
+            .map(|s| (s.text.as_str(), s.class.as_str()))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                ("09:00 web.service\n", ""),
+                ("failed\n", "ansi ansi-fg-1"),
+                ("\n09:01 web.service\nretry", ""),
+            ]
+        );
+        let empty = LogSnapshot {
+            entries: Vec::new(),
+            ..snapshot
+        };
+        let text: String = log_spans(&empty).into_iter().map(|s| s.text).collect();
+        assert_eq!(
+            text,
+            i18n::translate("No journal entries returned for this selection")
+        );
+    }
 }
