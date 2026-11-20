@@ -121,6 +121,34 @@ fn selected(s: &State) -> Option<Container> {
         .find(|c| c.id == s.docker.selected)
         .cloned()
 }
+/// Advice for the CLI's error when it may not use the system Docker socket,
+/// which usually means the SSH account is not in the docker group.
+fn socket_hint(error: &str, user: &str) -> Option<String> {
+    let error = error.to_lowercase();
+    let socket = [
+        "docker.sock",
+        "docker daemon",
+        "docker api",
+        "docker socket",
+    ]
+    .iter()
+    .any(|name| error.contains(name));
+    // A rootless daemon's socket belongs to the account, so group membership is not the fix.
+    (error.contains("permission denied") && socket && !error.contains("/run/user/")).then(|| {
+        i18n::translate(&format!(
+            "This SSH account cannot use the Docker socket. On the server, run `sudo usermod -aG docker {user}`, then reconnect so the new group applies. Members of the docker group have root-equivalent access to the server."
+        ))
+    })
+}
+fn hint(s: &State) -> Option<String> {
+    let user = s
+        .config
+        .servers
+        .iter()
+        .find(|p| Some(&p.id) == s.selected.as_ref())
+        .map_or("$USER", |p| p.username.as_str());
+    socket_hint(&s.docker.error, user)
+}
 fn actionable(s: &State) -> bool {
     ready(s) && s.docker.error.is_empty() && selected(s).is_some()
 }
@@ -812,6 +840,17 @@ pub(super) fn page(ui: Ui) -> impl Widget {
         text()
             .class("docker-error error")
             .content(state.map(|s| s.docker.error.clone())),
+        text()
+            .class(state.map(|s| {
+                if hint(s).is_some() {
+                    "docker-error-hint hint"
+                } else {
+                    "hidden"
+                }
+                .to_owned()
+            }))
+            .selectable(true)
+            .content(state.map(|s| hint(s).unwrap_or_default())),
         when(
             state.map(|s| {
                 s.docker.view > 0
@@ -949,6 +988,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn socket_permission_errors_suggest_the_docker_group() {
+        for error in [
+            "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///var/run/docker.sock",
+            "Docker command failed (1): Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/version\": dial unix /var/run/docker.sock: connect: permission denied",
+        ] {
+            let hint = socket_hint(error, "deploy").unwrap();
+            assert!(hint.contains("sudo usermod -aG docker deploy"), "{hint}");
+        }
+        for error in [
+            "",
+            "Docker command failed (1): No such container",
+            "Docker command failed (1): open /srv/data: permission denied",
+            "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///run/user/1000/docker.sock",
+        ] {
+            assert_eq!(socket_hint(error, "deploy"), None, "{error}");
+        }
+    }
     #[test]
     fn logs_keep_colors_and_mute_docker_timestamps() {
         let logs = "2026-11-18T09:15:02.123456789Z \x1b[32mINFO\x1b[0m ready\r\n2026-11-18T09:15:03.000000000Z plain\n";

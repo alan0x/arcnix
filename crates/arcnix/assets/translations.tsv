@@ -2157,6 +2157,7 @@ CPU 为进程启动以来的平均占用，内存为常驻集大小（RSS）。�
 配置容器	Configure container
 最近日志	Recent logs
 暂无日志	No logs
+当前 SSH 账号无法使用 Docker 套接字。请在服务器上运行 `sudo usermod -aG docker {}`，然后重新连接以使新组生效。docker 组成员拥有等同 root 的服务器权限。	This SSH account cannot use the Docker socket. On the server, run `sudo usermod -aG docker {}`, then reconnect so the new group applies. Members of the docker group have root-equivalent access to the server.
 详情	Details
 端口绑定	Port bindings
 挂载	Mounts
