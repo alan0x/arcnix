@@ -798,7 +798,7 @@ fn recent_tasks(ui: Ui) -> impl Widget {
                             fragment((text().class("script-code task-stop-report").selectable(true).content(t.map(move|t|task_records_ui::stop_report(&t.output,&stop_id,&stop_revision,stop_description.as_ref()))),
                             text().class("script-code drill-report").selectable(true).content(t.map(move|t|if has_drill {crate::recovery_ui::summary(&t.output,&drill_id,&drill_revision,Some(&t.id),drill_description.as_ref(),t.exit_code,matches!(t.status,Status::Succeeded|Status::Failed))}else{String::new()})))),
 
-                            text().class("script-code task-output").selectable(true).content(t.map(move|t|if has_stops {arcnix_core::task_stops::human_log(&t.output)}else if has_installation {arcnix_core::installers::human_log(&t.output)}else if has_drill {arcnix_core::recovery_drills::human_log(&t.output)}else{t.output.clone()})),
+                            crate::log_text::output_view("script-code task-output",t.map(move|t|crate::log_text::shown(if has_stops {arcnix_core::task_stops::human_log(&t.output)}else if has_installation {arcnix_core::installers::human_log(&t.output)}else if has_drill {arcnix_core::recovery_drills::human_log(&t.output)}else{t.output.clone()}))),
                             text().class("subtle").content(t.map(|t|t.exit_code.map(|code|format!("Exit code: {code}")).unwrap_or_default())),
                         ))
                     }))
@@ -913,10 +913,10 @@ fn desktop_task(ui: Ui, id: String) -> impl Widget {
                                 exit_code,
                             )
                         })),
-                    text()
-                        .class("script-code task-output")
-                        .selectable(true)
-                        .content(target.map(desktop_output)),
+                    crate::log_text::output_view(
+                        "script-code task-output",
+                        target.map(|t| crate::log_text::shown(desktop_output(t))),
+                    ),
                     when(
                         state.map(move |s| {
                             !busy(s) && task_refresh_ui::queryable(s, &queryable, &target.get())
