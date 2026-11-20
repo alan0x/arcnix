@@ -21,7 +21,10 @@ def main():
         for number in range(28):
             (home_desktop / f'sample-{number:02}.txt').write_text('sample', encoding='utf-8')
         (peer.root / 'plain.txt').write_text('plain text from SSH', encoding='utf-8')
-        with Desktop(out / 'desktop', peer.config([peer.profile('Editor fixture')], local)) as app:
+        config = peer.config([
+            peer.profile('Editor fixture'), dict(peer.profile('Offline'), port=9),
+        ], local)
+        with Desktop(out / 'desktop', config) as app:
             p = app.page
             errors = []
             p.on('pageerror', lambda error: errors.append(str(error)))
@@ -55,6 +58,13 @@ def main():
             code.get_by_role('treeitem', name='plain.txt', exact=True).dblclick()
             expect(code.locator('.view-lines')).to_contain_text('plain text from SSH')
             app.replace_code('unsaved plain draft')
+            p.locator('.host-select').filter(has_text='Offline').click()
+            expect(p.locator('.server-overview')).to_contain_text('Offline')
+            expect(p.locator('.desktop-window.app-code')).to_be_hidden()
+            p.locator('.host-select').filter(has_text='Editor fixture').click()
+            expect(p.locator('.desktop-window.app-code.active')).to_be_visible()
+            expect(p.locator('.connection-state')).to_have_text('SSH connected')
+            expect(code.locator('.view-lines:visible').first).to_contain_text('unsaved plain draft')
             p.locator('.desktop-window.active .window-minimize').click()
             p.locator('.desktop-dock-home').click()
             shortcuts.get_by_role('button', name='Notes.md', exact=True).click()
@@ -80,7 +90,7 @@ def main():
             expect(window).to_have_count(0)
             assert (peer.root/'plain.txt').read_text() == 'plain text from SSH'
             assert not errors, errors
-    print(json.dumps(dict(output=str(out),checks=['Desktop icon columns', 'Desktop file opens alongside working tree tab', 'Markdown formatting and escaped HTML', 'Dirty draft survives minimize and tab switch', 'Discard confirmation']),indent=2))
+    print(json.dumps(dict(output=str(out),checks=['Desktop icon columns', 'Desktop file opens alongside working tree tab', 'Markdown formatting and escaped HTML', 'Dirty draft survives switching servers, minimizing, and switching tabs', 'Discard confirmation']),indent=2))
 
 
 if __name__ == '__main__':

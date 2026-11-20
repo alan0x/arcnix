@@ -25,6 +25,13 @@ pub(super) fn forget(s: &mut State) {
 fn available(s: &State) -> bool {
     !s.connecting
         && !s.system_task_running
+        && !s.parked.values().any(|p| {
+            p.connecting
+                || p.system_task_running
+                || p.file_pending.is_some()
+                || p.code.dirty
+                || !p.code.pending.is_empty()
+        })
         && !scripts_ui::busy(s)
         && s.scripts.refreshing.is_empty()
         && s.file_pending.is_none()
@@ -206,14 +213,20 @@ impl Ui {
         });
         match result {
             Ok(restored) => {
-                self.disconnect();
+                if self.state.with(|s| s.selected.is_some()) {
+                    self.switch_session(None);
+                }
+                let parked = self
+                    .state
+                    .with(|s| s.parked.keys().cloned().collect::<Vec<_>>());
+                for key in parked {
+                    self.discard_parked(&key);
+                }
                 self.forget_changed_credentials(&restored.config);
                 formatting::configure(restored.config.settings.display);
                 i18n::set_language(restored.config.settings.language);
                 self.state.revise(|s| {
                     s.config = restored.config;
-                    s.selected = None;
-                    s.reconnect_on_return.clear();
                     s.group = None;
                     s.search.clear();
                     s.collapsed_groups.clear();

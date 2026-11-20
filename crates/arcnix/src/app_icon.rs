@@ -1,39 +1,112 @@
 //! Native window presentation for the server desktop.
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::task::Waker;
 
-use glory::prelude::Cage;
 use glory::wry::shell::{Fullscreen, NativeLifecycle, NativeWindow, ShellError};
 
-use super::desktop_customization_ui::{WallpaperAssets, wallpaper_asset};
+use super::{Ui, WorkspacePage, code_native, desktop_customization_ui::wallpaper_asset};
 
 pub(super) struct DesktopWindow {
-    pub state: Cage<super::State>,
-    pub fullscreen: bool,
-    pub wallpapers: Arc<WallpaperAssets>,
+    ui: Ui,
+    fullscreen: bool,
+    wake: Option<Waker>,
+    epoch: Option<u64>,
+    code: HashMap<u64, code_native::Host>,
     #[cfg(windows)]
-    pub browser: super::web_browser_native::Host,
+    browsers: HashMap<u64, super::web_browser_native::Host>,
     #[cfg(windows)]
-    pub video: super::mpv_native::Host,
-    pub code: super::code_native::Host,
+    video: super::mpv_native::Host,
+    #[cfg(windows)]
+    exiting: bool,
+}
+
+impl DesktopWindow {
+    pub(super) fn new(ui: Ui) -> Self {
+        Self {
+            #[cfg(windows)]
+            video: super::mpv_native::Host::new(ui.clone()),
+            ui,
+            fullscreen: false,
+            wake: None,
+            epoch: None,
+            code: HashMap::new(),
+            #[cfg(windows)]
+            browsers: HashMap::new(),
+            #[cfg(windows)]
+            exiting: false,
+        }
+    }
 }
 
 impl NativeLifecycle for DesktopWindow {
     fn poll(&mut self, window: &NativeWindow) -> Result<bool, ShellError> {
-        let fullscreen = self.state.with(super::server_desktop::fullscreen);
-        self.wallpapers.show(self.state.with(wallpaper_asset));
+        let state = self.ui.state;
+        let fullscreen = state.with(super::server_desktop::fullscreen);
+        self.ui.wallpapers.show(state.with(wallpaper_asset));
+        self.ui.player.sync_surface(&self.ui);
         if self.fullscreen != fullscreen {
             window.set_fullscreen(
                 fullscreen.then(|| Fullscreen::Borderless(window.current_monitor())),
             );
             self.fullscreen = fullscreen;
         }
-        self.code.poll(window);
+        let (epoch, live, code_open) = state.with(|s| {
+            (
+                s.connected.then_some(s.epoch),
+                s.connected_epochs(),
+                s.workbench.apps.contains(&WorkspacePage::Code),
+            )
+        });
+        if self.epoch != epoch {
+            if let Some(old) = self.epoch {
+                if let Some(code) = self.code.get_mut(&old) {
+                    code.hide();
+                }
+                #[cfg(windows)]
+                if let Some(browser) = self.browsers.get_mut(&old) {
+                    browser.hide();
+                }
+            }
+            self.epoch = epoch;
+        }
+        self.code.retain(|epoch, _| live.contains(epoch));
+        if let Some(epoch) = epoch {
+            if code_open {
+                self.code
+                    .entry(epoch)
+                    .or_insert_with(|| {
+                        let mut code = code_native::Host::new(self.ui.clone());
+                        code.wake = self.wake.clone();
+                        code
+                    })
+                    .poll(window);
+            } else if let Some(mut code) = self.code.remove(&epoch) {
+                code.poll(window);
+            }
+        }
         #[cfg(windows)]
         {
-            self.browser.poll(window);
             self.video.poll(window);
-            if self.browser.exit_ready() {
-                return Ok(true);
+            if self.exiting {
+                return Ok(self
+                    .browsers
+                    .values_mut()
+                    .all(|browser| browser.exit_ready()));
+            }
+            self.browsers.retain(|epoch, _| live.contains(epoch));
+            if let Some(epoch) = epoch {
+                if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) {
+                    self.browsers.entry(epoch).or_insert_with(|| {
+                        let mut browser = super::web_browser_native::Host::new(self.ui.clone());
+                        if let Some(wake) = &self.wake {
+                            browser.set_wake(wake.clone());
+                        }
+                        browser
+                    });
+                }
+                if let Some(browser) = self.browsers.get_mut(&epoch) {
+                    browser.poll(window);
+                }
             }
         }
         Ok(false)
@@ -41,13 +114,20 @@ impl NativeLifecycle for DesktopWindow {
 
     #[cfg(windows)]
     fn close_requested(&mut self, _window: &NativeWindow) -> Result<bool, ShellError> {
-        Ok(self.browser.close_requested())
+        self.exiting = true;
+        let mut ready = true;
+        for browser in self.browsers.values_mut() {
+            ready &= browser.close_requested();
+        }
+        Ok(ready)
     }
 
     fn closed(&mut self, _window: &NativeWindow) {
-        self.wallpapers.show(None);
+        self.ui.wallpapers.show(None);
         #[cfg(windows)]
-        self.browser.close();
+        for browser in self.browsers.values_mut() {
+            browser.close();
+        }
     }
 
     #[cfg(not(windows))]
@@ -56,14 +136,13 @@ impl NativeLifecycle for DesktopWindow {
         _window: &NativeWindow,
         wake: &std::task::Waker,
     ) -> Result<(), ShellError> {
-        self.code.wake = Some(wake.clone());
+        self.wake = Some(wake.clone());
         Ok(())
     }
 
     #[cfg(windows)]
     fn opened(&mut self, window: &NativeWindow, wake: &std::task::Waker) -> Result<(), ShellError> {
-        self.browser.set_wake(wake.clone());
-        self.code.wake = Some(wake.clone());
+        self.wake = Some(wake.clone());
         use glory::wry::shell::NativeWindowExtWindows;
         use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;

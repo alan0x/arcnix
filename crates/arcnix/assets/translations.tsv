@@ -548,6 +548,7 @@ Ctrl+C 中断 · Ctrl+Shift+C 复制 · Ctrl+Shift+V 粘贴	Ctrl+C interrupt · 
 你的服务器工作台	Your server workbench
 通过 SSH 连接，无需远程 Agent。	Connect over SSH. No remote agent needed.
 一个活动连接	One active connection
+{} 个活动连接	{} active connections
 当前没有活动连接	No active connections
 你的工作空间	YOUR WORKSPACE
 服务器管理，轻松有序。	Your servers. Within reach.

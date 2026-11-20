@@ -85,7 +85,6 @@ pub enum Action {
         paused: Arc<AtomicBool>,
         policy: Option<arcnix_core::transfer::ConflictAction>,
     },
-    TransferConcurrency(u8),
     #[cfg(windows)]
     StartBrowserProxy(Arc<BrowserProxyControl>),
     #[cfg(windows)]
@@ -292,7 +291,14 @@ fn create_named_entry(
     anyhow::bail!("No available name")
 }
 
+#[cfg(test)]
 pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
+    start_with_limiter(Arc::new(crate::transfer_worker::Limiter::default()))
+}
+
+pub(super) fn start_with_limiter(
+    limiter: Arc<crate::transfer_worker::Limiter>,
+) -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
     let (tx, rx) = mpsc::channel::<Request>();
     let (events, receive) = async_channel::bounded(128);
     let (local_tx, local_rx) = mpsc::channel::<Request>();
@@ -445,7 +451,8 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
         }
     });
     thread::spawn(move || {
-        let mut transfers = crate::transfer_worker::Pool::new(events.clone(), generation.clone());
+        let mut transfers =
+            crate::transfer_worker::Pool::with_limiter(events.clone(), generation.clone(), limiter);
         let mut pending: Option<PendingConnection> = None;
         let mut session: Option<RemoteSession> = None;
         let mut saved_login: Option<(crate::ssh_credentials::Key, zeroize::Zeroizing<String>)> =
@@ -616,10 +623,6 @@ pub fn start() -> (mpsc::Sender<Request>, async_channel::Receiver<Response>) {
                 } else {
                     send(Update::BrowserProxy(Err("Connect a server first".into())));
                 }
-                continue;
-            }
-            if let Action::TransferConcurrency(limit) = action {
-                transfers.set_limit(limit);
                 continue;
             }
             if let Action::ServerApps(action) = action {

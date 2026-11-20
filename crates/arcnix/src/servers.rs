@@ -501,16 +501,10 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                 text().class("host-address").content(i18n::bind(state.map(
                                     move |s| {
                                         let p = value.get();
-                                        let status = if s.selected.as_deref() == Some(&p.id)
-                                            && s.connected
-                                        {
-                                            " · 已连接"
-                                        } else if s.selected.as_deref() == Some(&p.id)
-                                            && s.connecting
-                                        {
-                                            " · 连接中"
-                                        } else {
-                                            ""
+                                        let status = match s.server_connection(&p.id) {
+                                            (true, _) => " · 已连接",
+                                            (_, true) => " · 连接中",
+                                            _ => "",
                                         };
                                         let status = i18n::translate(status);
                                         format!("{}@{}:{}{status}", p.username, p.host, p.port)
@@ -552,27 +546,22 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                     sapid::button()
                                         .class("menu-item")
                                         .label(i18n::bind(state.map(move |s| {
-                                            if s.selected.as_deref() == Some(&value.get().id)
-                                                && s.connected
-                                            {
-                                                "断开连接"
-                                            } else if s.selected.as_deref() == Some(&value.get().id)
-                                                && s.connecting
-                                            {
-                                                "取消连接"
-                                            } else {
-                                                "连接服务器"
+                                            match s.server_connection(&value.get().id) {
+                                                (true, _) => "断开连接",
+                                                (_, true) => "取消连接",
+                                                _ => "连接服务器",
                                             }
-                                            .to_string()
+                                            .to_owned()
                                         })))
                                         .enabled(state.map(|s| !s.system_task_running))
                                         .on_press(move || {
                                             let id = value.get().id;
                                             if connect.state.with(|s| {
-                                                s.selected.as_ref() == Some(&id)
-                                                    && (s.connected || s.connecting)
+                                                let (connected, connecting) =
+                                                    s.server_connection(&id);
+                                                connected || connecting
                                             }) {
-                                                connect.disconnect();
+                                                connect.disconnect_server(id);
                                             } else {
                                                 connect.select_server(id, true);
                                             }
@@ -831,8 +820,13 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         let same = save
                             .state
                             .with(|s| s.selected.as_ref() == Some(&profile.id));
-                        if same && !labels_only {
-                            save.disconnect();
+                        let select = same || save.state.with(|s| !s.connected && !s.connecting);
+                        if !labels_only {
+                            if same {
+                                save.disconnect();
+                            } else {
+                                save.discard_parked(&Some(profile.id.clone()));
+                            }
                         }
                         save.state.revise(|s| {
                             s.config = config;
@@ -843,24 +837,22 @@ fn server_dialog(ui: Ui) -> impl Widget {
                             }
                             s.search.clear();
                             if !labels_only {
-                                s.reconnect_on_return.remove(&profile.id);
                                 s.jobs.retain(|j| {
                                     j.server_id != profile.id
                                         || j.status == TransferStatus::Completed
                                 });
                             }
-                            // Creating another site must not interrupt an active SSH
-                            // session; disconnected workspaces can select the saved site.
-                            if (same && !labels_only) || (!s.connected && !s.connecting) {
+                            if same {
                                 s.file_split =
-                                    profile.file_pane_ratio.unwrap_or(500) as f64 / 1000.0;
-                                s.reconnect_on_return.remove(&profile.id);
-                                s.selected = Some(profile.id);
+                                    f64::from(profile.file_pane_ratio.unwrap_or(500)) / 1000.0;
                             }
                             s.dialog = None;
                             s.dialog_error.clear();
                             s.notice.clear();
                         });
+                        if select && !same {
+                            save.select_server(profile.id, false);
+                        }
                     }
                     Err(error) => save.state.revise(|s| s.dialog_error = format!("{error:#}")),
                 }
@@ -1178,7 +1170,10 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
                         let affected = state
                             .with(|s| s.selected.as_ref().is_some_and(|id| removed.contains(id)));
                         if affected {
-                            confirm.disconnect();
+                            confirm.switch_session(None);
+                        }
+                        for id in &removed {
+                            confirm.discard_parked(&Some(id.clone()));
                         }
                         state.revise(|s| {
                             s.config = config;
@@ -1188,11 +1183,6 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
                                     s.group = None;
                                 }
                             }
-                            if affected {
-                                s.selected = None;
-                                s.file_split = 0.5;
-                            }
-                            s.reconnect_on_return.retain(|id| !removed.contains(id));
                             s.jobs.retain(|j| !removed.contains(&j.server_id));
                             s.dialog = None;
                             s.notice.clear();

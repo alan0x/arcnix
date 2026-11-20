@@ -3,7 +3,7 @@
 mod engine;
 mod runtime;
 
-use std::sync::mpsc;
+use std::{collections::HashMap, sync::mpsc};
 
 use anyhow::{Context, Result};
 use glory::wry::shell::{NativeWindow, NativeWindowExtWindows};
@@ -61,9 +61,7 @@ pub(super) fn bridge(ui: Ui) -> impl Widget {
                     if let glory::prelude::Event::ValueChanged { value, .. } = event
                         && value.len() < 8192
                         && let Ok(v) = serde_json::from_str::<Viewport>(&value)
-                        && v.area.is_none_or(native_viewport::BoxPx::valid)
-                        && v.clip.len() <= 32
-                        && v.clip.iter().all(|b| b.valid())
+                        && v.valid()
                         && state.with(|s| s.epoch == v.epoch)
                     {
                         port.revise(|current| *current = Some(v));
@@ -138,7 +136,8 @@ impl Surface {
                     area.height(),
                     SWP_NOACTIVATE,
                 )?;
-                let visible = web_browser_native::install_region(self.hwnd, area, &v.clip)?;
+                let visible =
+                    web_browser_native::install_region(self.hwnd, area, v.frame, &v.clip)?;
                 let _ = ShowWindow(self.hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
             } else {
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
@@ -151,6 +150,7 @@ impl Surface {
 pub(super) struct Host {
     ui: Ui,
     surface: Option<Surface>,
+    parked: HashMap<u64, Surface>,
     retired: Vec<Surface>,
 }
 impl Host {
@@ -158,27 +158,52 @@ impl Host {
         Self {
             ui,
             surface: None,
+            parked: HashMap::new(),
             retired: Vec::new(),
         }
     }
     pub fn poll(&mut self, window: &NativeWindow) {
-        let wanted = self.ui.state.with(|s| {
-            s.video
+        let (wanted, parked) = self.ui.state.with(|s| {
+            let wanted = s
+                .video
                 .as_ref()
                 .filter(|v| v.native.is_some() && s.connected)
-                .map(|v| v.serial)
+                .map(|v| v.serial);
+            let parked = s
+                .parked
+                .values()
+                .filter(|session| session.connected)
+                .filter_map(|session| session.video.as_ref().map(|v| v.serial))
+                .collect::<Vec<_>>();
+            (wanted, parked)
         });
         if self
             .surface
             .as_ref()
             .is_some_and(|view| Some(view.serial) != wanted)
-            && let Some(retired) = self.surface.take()
+            && let Some(mut surface) = self.surface.take()
         {
-            unsafe {
-                let _ = ShowWindow(retired.hwnd, SW_HIDE);
+            let _ = surface.position(None);
+            if parked.contains(&surface.serial) {
+                self.parked.insert(surface.serial, surface);
+            } else {
+                self.retired.push(surface);
             }
-            self.retired.push(retired);
         }
+        if self.surface.is_none()
+            && let Some(serial) = wanted
+        {
+            self.surface = self.parked.remove(&serial);
+        }
+        self.parked.retain(|serial, surface| {
+            if parked.contains(serial) || !surface.worker.is_finished() {
+                return true;
+            }
+            unsafe {
+                let _ = DestroyWindow(surface.hwnd);
+            }
+            false
+        });
         // HWNDs belong to the UI thread. Wait for mpv to detach without
         // joining a decoder or blocking an interaction on SSH teardown.
         self.retired.retain(|surface| {
@@ -215,7 +240,11 @@ impl Host {
                     && s.dialog.is_none()
                     && native(s).is_some_and(|p| p.commands.is_some())
             });
-            let layout = visible.then(|| self.ui.player.viewport.get()).flatten();
+            let epoch = self.ui.state.with(|s| s.epoch);
+            let layout = visible
+                .then(|| self.ui.player.viewport.get())
+                .flatten()
+                .filter(|v| v.epoch == epoch);
             if let Err(error) = surface.position(layout) {
                 unsafe {
                     let _ = ShowWindow(surface.hwnd, SW_HIDE);
@@ -237,7 +266,22 @@ impl Host {
             .scope
             .spawn(async move {
                 while let Ok(event) = reports.recv().await {
-                    receive(&ui, serial, event);
+                    if ui
+                        .state
+                        .with(|s| s.video.as_ref().is_some_and(|v| v.serial == serial))
+                    {
+                        receive(&ui, serial, event);
+                    } else if !matches!(event, Event::Focus | Event::Maximize) {
+                        let key = ui.state.with(|s| {
+                            s.parked
+                                .iter()
+                                .find(|(_, p)| p.video.as_ref().is_some_and(|v| v.serial == serial))
+                                .map(|(key, _)| key.clone())
+                        });
+                        if let Some(key) = key {
+                            ui.with_parked(&key, || receive(&ui, serial, event));
+                        }
+                    }
                 }
             })
             .context("Cannot attach playback events")?;

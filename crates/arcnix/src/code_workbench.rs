@@ -296,9 +296,7 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                 if let Event::ValueChanged { value, .. } = event
                     && value.len() < 8192
                     && let Ok(v) = serde_json::from_str::<native_viewport::Viewport>(&value)
-                    && v.clip.len() <= 32
-                    && v.area.is_none_or(native_viewport::BoxPx::valid)
-                    && v.clip.iter().all(|b| b.valid())
+                    && v.valid()
                     && state.with(|s| s.epoch == v.epoch && s.code.viewport.as_ref() != Some(&v))
                 {
                     state.revise(|s| s.code.viewport = Some(v));

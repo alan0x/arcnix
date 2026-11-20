@@ -79,8 +79,8 @@ pub struct DesktopWindow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WindowBounds {
-    pub x: u32,
-    pub y: u32,
+    pub x: i32,
+    pub y: i32,
     pub width: u32,
     pub height: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,8 +97,8 @@ pub struct WindowWorkArea {
 impl WindowBounds {
     pub fn validate(self) -> Result<()> {
         ensure!(
-            self.x <= 32768
-                && self.y <= 32768
+            (-32768..=32768).contains(&self.x)
+                && (-32768..=32768).contains(&self.y)
                 && (1..=32768).contains(&self.width)
                 && (1..=32768).contains(&self.height)
                 && self.reference.is_none_or(|area| {

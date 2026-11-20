@@ -84,8 +84,12 @@ def main():
                 hit = p.evaluate('([x,y])=>document.elementFromPoint(x,y)?.className',[x,y])
                 if 'edge-' in locator.evaluate('node=>node.className'):
                     assert 'desktop-resize-handle' in hit, (box,hit,bounds())
+                drag_from(x, y, dx, dy, cancel)
+
+            def drag_from(x, y, dx, dy, cancel=False):
+                p.mouse.move(x, y)
                 p.mouse.down()
-                p.mouse.move(x + dx, y + dy, steps=6)
+                p.mouse.move(x + dx, y + dy, steps=12)
                 if cancel:
                     p.keyboard.press('Escape')
                 p.mouse.up()
@@ -101,11 +105,17 @@ def main():
             def projected(window, reference):
                 area = work_area()
                 result = {}
-                for axis, size in [('x', 'width'), ('y', 'height')]:
+                title_height = p.locator('.desktop-window.active .desktop-window-titlebar').bounding_box()['height']
+                horizontal = min(64, window['width'], area['width'])
+                vertical = min(18, title_height, area['height'])
+                for axis, size, lower, upper in [
+                    ('x', 'width', horizontal - min(window['width'], area['width']), area['width'] - horizontal),
+                    ('y', 'height', vertical - title_height, area['height'] - vertical),
+                ]:
                     center_fraction = (window[axis] - reference[axis] + window[size] / 2) / reference[size]
                     result[size] = min(window[size], area[size])
                     offset = center_fraction * area[size] - result[size] / 2
-                    result[axis] = area[axis] + min(max(0, offset), area[size] - result[size])
+                    result[axis] = area[axis] + min(max(lower, offset), upper)
                 return same(bounds(), result)
 
             app.connect()
@@ -290,6 +300,47 @@ def main():
             assert (home / 'Desktop/desktop-file.txt').is_file()
             assert prefs()['explorer']['colors'][desktop_path] == 'purple'
             assert prefs()['explorer']['colors'][file_path] == 'blue'
+            area = work_area()
+            original = bounds()
+            titlebar = p.locator('.desktop-window.active .desktop-window-titlebar')
+            drag(titlebar.locator('.desktop-window-mark'),
+                 area['x'] - original['x'] - original['width'] + 25,
+                 area['y'] - original['y'] - 55)
+            top_left = bounds()
+            assert top_left['x'] < area['x'] and top_left['y'] < area['y'], top_left
+            assert abs(top_left['x'] + top_left['width'] - area['x'] - 64) <= 2, top_left
+            assert abs(top_left['y'] + titlebar.bounding_box()['height'] - area['y'] - 19) <= 2, top_left
+            eventually(lambda: prefs()['windows']['explorer']['bounds']['x'] < 0
+                       and prefs()['windows']['explorer']['bounds']['y'] < 0)
+            assert not p.evaluate('([x,y]) => !!document.elementFromPoint(x,y)?.closest(".desktop-window")',
+                                  [area['x'] - 4, area['y'] + 8])
+            app.screenshot('outside-top-left.png')
+
+            app.stop()
+            app.launch()
+            p = app.page
+            p.on('pageerror', lambda error: errors.append(str(error)))
+            app.connect()
+            app.application('Files')
+            settled()
+            eventually(lambda: same(bounds(), top_left))
+            # The titlebar padding at the far end remains draggable even when the
+            # app title and the start of the bar are clipped by the desktop.
+            drag_from(top_left['x'] + top_left['width'] - 13, area['y'] + 9,
+                      original['x'] - top_left['x'], original['y'] - top_left['y'])
+            eventually(lambda: same(bounds(), original))
+            max_x = area['x'] + area['width'] - 64
+            max_y = area['y'] + area['height'] - 18
+            drag_from(original['x'] + 13, original['y'] + 20,
+                      max_x - original['x'] + 12, max_y - original['y'] + 12)
+            bottom_right = bounds()
+            assert abs(bottom_right['x'] - max_x) <= 2, (original, bottom_right, max_x, max_y)
+            assert abs(bottom_right['y'] - max_y) <= 2, bottom_right
+            assert bottom_right['x'] + bottom_right['width'] > area['x'] + area['width'], bottom_right
+            assert bottom_right['y'] + bottom_right['height'] > area['y'] + area['height'], bottom_right
+            drag_from(bottom_right['x'] + 13, bottom_right['y'] + 11,
+                      original['x'] - bottom_right['x'], original['y'] - bottom_right['y'])
+            eventually(lambda: same(bounds(), original))
             app.settings('General')
             p.get_by_role('button', name='简体中文', exact=True).click()
             app.servers()
@@ -297,6 +348,7 @@ def main():
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Eight resize handles, captured titlebar movement and Escape cancellation',
+        'All four desktop edges clip floating windows while a titlebar grip stays reachable, including after restart',
         'Independent window geometry across apps, reopen, resize, maximize and client restart',
         'Native monitor fullscreen with Escape restoring the original OS window',
         'Breadcrumb double-click editing and single-click navigation',

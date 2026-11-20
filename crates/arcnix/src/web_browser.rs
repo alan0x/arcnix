@@ -494,10 +494,7 @@ fn geometry(ui: &Ui, input: &str) {
     let Ok(viewport) = serde_json::from_str::<Viewport>(input) else {
         return;
     };
-    if !viewport.area.is_none_or(BoxPx::valid)
-        || viewport.clip.len() > 32
-        || !viewport.clip.iter().all(|area| area.valid())
-    {
+    if !viewport.valid() {
         return;
     }
     if ui.state.with(|s| {

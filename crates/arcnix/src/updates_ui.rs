@@ -94,6 +94,10 @@ fn idle(s: &State) -> bool {
     }
     !s.connected
         && !s.connecting
+        && !s
+            .parked
+            .values()
+            .any(|p| p.connected || p.connecting || p.file_pending.is_some())
         && !s.system_task_running
         && !scripts_ui::busy(s)
         && s.scripts.refreshing.is_empty()

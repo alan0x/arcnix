@@ -111,7 +111,8 @@ pub(super) fn change_page(s: &mut State, page: Page, _source: &'static str) {
 }
 
 pub(super) fn workspace_visible(s: &State) -> bool {
-    s.navigation == Page::Servers
+    !s.background
+        && s.navigation == Page::Servers
         && s.connected
         && s.workbench.active != server_desktop::Tab::Home
         && s.workspace_page != WorkspacePage::Desktop
@@ -268,20 +269,17 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                 .content(i18n::bind("通过 SSH 连接，无需远程 Agent。")),
             text()
                 .class(state.map(|s| {
-                    if s.connected {
+                    if s.active_connections() > 0 {
                         "session-indicator online"
                     } else {
                         "session-indicator"
                     }
                     .to_owned()
                 }))
-                .content(i18n::bind(state.map(|s| {
-                    if s.connected {
-                        "一个活动连接"
-                    } else {
-                        "当前没有活动连接"
-                    }
-                    .to_owned()
+                .content(i18n::bind(state.map(|s| match s.active_connections() {
+                    0 => "当前没有活动连接".to_owned(),
+                    1 => "一个活动连接".to_owned(),
+                    count => format!("{count} 个活动连接"),
                 }))),
         )),
     ))

@@ -12,10 +12,10 @@ function observeNativeSurface(app) {
         const { left, top, right, bottom } = element.getBoundingClientRect();
         const scale = window.devicePixelRatio || 1;
         const box = {
-            left: Math.round(Math.max(0, left) * scale),
-            top: Math.round(Math.max(0, top) * scale),
-            right: Math.round(Math.min(innerWidth, right) * scale),
-            bottom: Math.round(Math.min(innerHeight, bottom) * scale),
+            left: Math.round(left * scale),
+            top: Math.round(top * scale),
+            right: Math.round(right * scale),
+            bottom: Math.round(bottom * scale),
         };
         return box.left < box.right && box.top < box.bottom ? box : null;
     }
@@ -50,7 +50,11 @@ function observeNativeSurface(app) {
                 watched.add(node);
             }
         }
-        const area = browser.closest('[inert]') ? null : rect(surface);
+        const desktop = rect(canvas);
+        const surfaceBox = rect(surface);
+        const area = desktop && surfaceBox && !browser.closest('[inert]')
+            && surfaceBox.right > desktop.left && surfaceBox.left < desktop.right
+            && surfaceBox.bottom > desktop.top && surfaceBox.top < desktop.bottom ? surfaceBox : null;
         const commandCenter = area && rect(commandButton);
         const top = commandCenter?.top ?? area?.top;
         const rank = Number(getComputedStyle(browser).zIndex) || 0;
@@ -62,7 +66,7 @@ function observeNativeSurface(app) {
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom
         ).slice(0, 32) : [];
         const epoch = Number(browser.querySelector('.browser-epoch').textContent);
-        const serialized = JSON.stringify({epoch, area, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
+        const serialized = JSON.stringify({epoch, area, frame: desktop, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
         if (bridge !== previousInput || serialized !== previous) {
             previousInput = bridge;
             previous = serialized;

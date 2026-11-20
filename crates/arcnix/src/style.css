@@ -334,7 +334,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   position: relative;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
   background: radial-gradient(ellipse at 94% 8%, #413e8d66, transparent 52%),
     radial-gradient(ellipse at 85% 100%, #156573a8, transparent 60%),
     linear-gradient(133deg, #1c3151, #111e36 52%, #142d46);
@@ -1269,6 +1269,8 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .desktop-window-titlebar { max-width: var(--desktop-work-width, 100%); user-select: none; touch-action: none; cursor: default; }
 .desktop-window-titlebar button, .desktop-window-titlebar input { cursor: auto; }
+/* Leave room to grab either end of a partially visible titlebar. */
+.desktop-window[data-window-overhang] > .desktop-window-titlebar { padding-inline: 16px; }
 .desktop-window[data-window-dragging] { user-select: none; }
 .desktop-resize-handle { position: absolute; z-index: 1; touch-action: none; }
 .desktop-window.maximized .desktop-resize-handle { display: none; }

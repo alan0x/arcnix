@@ -6,15 +6,22 @@ pub(super) fn tick(ui: &Ui) {
     if let Some(error) = ui.logger.error() {
         ui.state.revise(|s| s.settings.log_error = error);
     }
+    keepalive(ui);
+}
+
+pub(super) fn keepalive_seconds(config: &AppConfig, server: Option<&str>) -> u32 {
+    config
+        .servers
+        .iter()
+        .find(|p| Some(p.id.as_str()) == server)
+        .and_then(|p| p.connection)
+        .unwrap_or(config.settings.connection)
+        .keepalive_seconds
+}
+
+pub(super) fn keepalive(ui: &Ui) {
     let due = ui.state.revise(|s| {
-        let seconds = s
-            .config
-            .servers
-            .iter()
-            .find(|p| Some(&p.id) == s.selected.as_ref())
-            .and_then(|p| p.connection)
-            .unwrap_or(s.config.settings.connection)
-            .keepalive_seconds;
+        let seconds = keepalive_seconds(&s.config, s.selected.as_deref());
         if seconds == 0
             || !s.connected
             || s.keepalive_pending

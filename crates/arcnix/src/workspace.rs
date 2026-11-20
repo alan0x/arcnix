@@ -547,8 +547,7 @@ fn pause_button(ui: Ui, job: Cage<TransferJob>, paused: bool) -> impl Widget {
         let job = job.get();
         active_job(&job)
             && !s
-                .cancels
-                .get(&job.id)
+                .transfer_cancel(&job.id)
                 .is_some_and(|c| c.load(Ordering::Relaxed))
     }))
     .on_press(move || {
@@ -780,7 +779,7 @@ fn queue(ui: Ui, direction: Option<TransferDirection>) -> impl Widget {
                                 .on_press(move || {
                                     cancel.state.revise(|s| {
                                         let id = job.get().id;
-                                        if let Some(token) = s.cancels.get(&id) {
+                                        if let Some(token) = s.transfer_cancel(&id) {
                                             token.store(true, Ordering::Relaxed);
                                         }
                                         if let Some(j) = s.jobs.iter_mut().find(|j| j.id == id)

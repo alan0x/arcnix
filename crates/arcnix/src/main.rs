@@ -210,133 +210,223 @@ impl WorkspacePage {
     }
 }
 
-#[derive(Clone)]
-struct State {
-    config: AppConfig,
-    selected: Option<String>,
-    // Connected servers left by switching. Consume the entry on return.
-    reconnect_on_return: HashSet<String>,
-    group: Option<String>,
-    collapsed_groups: HashSet<String>,
-    search: String,
-    editor: ServerProfile,
-    server_editor_original: Option<ServerProfile>,
-    server_tags: String,
-    server_editor_tab: u8,
-    dialog: Option<Dialog>,
-    dialog_error: String,
-    host_menu: Option<String>,
-    group_menu: Option<String>,
-    file_menu: Option<bool>,
-    file_context: Option<file_context::Target>,
-    file_pending: Option<u64>,
-    trash: [trash_ui::Bin; 2],
-    deletion: Option<file_context::Deletion>,
-    unassigned_columns: FileColumnSettings,
-    properties: Option<file_properties::Editor>,
-    code: code_workbench::Runtime,
-    video: Option<video_player::Playback>,
-    updates: updates_ui::UpdateState,
-    import_pending: Option<u64>,
-    activity_tab: u8,
-    activity_open: bool,
-    local_filter_open: bool,
-    remote_filter_open: bool,
-    notice: String,
-    group_name: String,
-    port: String,
-    secret: String,
-    remember_ssh_credential: bool,
-    connecting_with_saved_credential: bool,
-    /// The current attempt started without the credential dialog; a failure
-    /// reopens it so the user can still enter a passphrase.
-    connect_prompt_skipped: bool,
-    connected: bool,
-    sftp_available: bool,
-    connecting: bool,
-    keepalive_at: std::time::Instant,
-    keepalive_pending: bool,
-    fingerprint: Option<String>,
-    sync_scope: Option<String>,
-    epoch: u64,
-    request_serial: u64,
-    local_request: u64,
-    remote_request: u64,
-    local_filter: String,
-    remote_filter: String,
-    local_sort: Sort,
-    remote_sort: Sort,
-    local_desc: bool,
-    remote_desc: bool,
-    queue_paused: bool,
-    queue_filter: u8,
-    import_path: String,
-    local_path: String,
-    remote_path: String,
-    local_ready: bool,
-    remote_ready: bool,
-    local: Vec<FileEntry>,
-    remote: Vec<FileEntry>,
-    local_selection: HashSet<String>,
-    remote_selection: HashSet<String>,
-    file_browser: file_browser::BrowserState,
-    terminal: terminal::TerminalState,
-    name: String,
-    jobs: Vec<TransferJob>,
-    cancels: HashMap<String, Arc<AtomicBool>>,
-    transfer_pauses: HashMap<String, Arc<AtomicBool>>,
-    explorer_uploads: explorer_transfer::Uploads,
-    inflight_transfers: HashSet<String>,
-    logs: String,
-    workspace_page: WorkspacePage,
-    workbench: server_desktop::Workbench,
-    #[cfg(windows)]
-    web_browser: web_browser::Browser,
-    server_apps: server_apps_ui::DesktopState,
-    docker: docker_ui::DockerState,
-    disks: disks_ui::DiskState,
-    compose: compose_ui::ComposeState,
-    install: software_install_ui::InstallState,
-    navigation: navigation::Page,
-    settings_section: navigation::SettingsSection,
-    unread_notifications: usize,
-    software: software::SoftwareState,
-    operations: operations::OperationsState,
-    scripts: scripts_ui::ScriptsState,
-    task_records: task_records_ui::RecordState,
-    deleted_files: deleted_files_ui::DeletedFilesState,
-    tcp_listeners: tcp_listeners_ui::TcpListenersState,
-    record_storage: record_maintenance_ui::StorageState,
-    cleanup_reports: cleanup_records_ui::ReportsState,
-    backups: backups_ui::BackupState,
-    diagnostics: diagnostics_ui::DiagnosticsState,
-    metrics: observability::MetricState,
-    ports: resource_ports_ui::PortState,
-    system_logs: observability::LogsState,
-    system_task_running: bool,
-    settings: settings::SettingsState,
-    system_dark: bool,
-    file_split: f64,
-    transfer_conflict: Option<transfer_ui::PendingConflict>,
-    transfer_conflicts: std::collections::VecDeque<transfer_ui::PendingConflict>,
-    transfer_details: HashMap<String, transfer_details::Details>,
-    batch_ids: HashMap<String, String>,
-    queue_rules: HashMap<(String, TransferDirection), arcnix_core::transfer::ConflictAction>,
-    session_rules: HashMap<TransferDirection, arcnix_core::transfer::ConflictAction>,
-    transfer_now: std::time::Instant,
-    transfer_meters: HashMap<String, transfer_progress::Meter>,
-    transfer_summaries: HashMap<String, arcnix_core::transfer::TransferSummary>,
+// Keep the active workspace fields directly on State so existing bindings
+// can borrow them together. The same list defines what moves with a server.
+macro_rules! define_state {
+    (
+        |$config:ident, $local_path:ident, $notice:ident|
+        session { $($(#[$session_attr:meta])* $field:ident: $ty:ty = $value:expr,)* }
+        shared { $($shared:ident: $shared_ty:ty = $shared_value:expr,)* }
+    ) => {
+        #[derive(Clone)]
+        struct State {
+            $($(#[$session_attr])* $field: $ty,)*
+            $($shared: $shared_ty,)*
+        }
+
+        #[derive(Clone)]
+        struct ServerSession {
+            $($(#[$session_attr])* $field: $ty,)*
+        }
+
+        impl State {
+            fn new($config: AppConfig, $local_path: String, $notice: String) -> Self {
+                Self {
+                    $($(#[$session_attr])* $field: $value,)*
+                    $($shared: $shared_value,)*
+                }
+            }
+
+            fn swap_session(&mut self, session: &mut ServerSession) {
+                $($(#[$session_attr])* std::mem::swap(&mut self.$field, &mut session.$field);)*
+            }
+        }
+
+        impl ServerSession {
+            fn new($local_path: String) -> Self {
+                let $notice = String::new();
+                Self { $($(#[$session_attr])* $field: $value,)* }
+            }
+        }
+    };
 }
+
+define_state! {
+    |config, local_path, notice|
+    session {
+        selected: Option<String> = None,
+        dialog: Option<Dialog> = None,
+        dialog_error: String = String::new(),
+        file_menu: Option<bool> = None,
+        file_context: Option<file_context::Target> = None,
+        file_pending: Option<u64> = None,
+        trash: [trash_ui::Bin; 2] = Default::default(),
+        deletion: Option<file_context::Deletion> = None,
+        properties: Option<file_properties::Editor> = None,
+        code: code_workbench::Runtime = Default::default(),
+        video: Option<video_player::Playback> = None,
+        video_picker: Option<video_player::Directory> = None,
+        activity_tab: u8 = 0,
+        activity_open: bool = true,
+        local_filter_open: bool = false,
+        remote_filter_open: bool = false,
+        notice: String = notice,
+        secret: String = String::new(),
+        remember_ssh_credential: bool = false,
+        connecting_with_saved_credential: bool = false,
+        connect_prompt_skipped: bool = false,
+        connected: bool = false,
+        sftp_available: bool = false,
+        connecting: bool = false,
+        keepalive_at: std::time::Instant = std::time::Instant::now(),
+        keepalive_pending: bool = false,
+        fingerprint: Option<String> = None,
+        sync_scope: Option<String> = None,
+        epoch: u64 = 0,
+        local_request: u64 = 0,
+        remote_request: u64 = 0,
+        local_filter: String = String::new(),
+        remote_filter: String = String::new(),
+        local_sort: Sort = Sort::Name,
+        remote_sort: Sort = Sort::Name,
+        local_desc: bool = false,
+        remote_desc: bool = false,
+        queue_paused: bool = false,
+        local_path: String = local_path,
+        remote_path: String = ".".into(),
+        local_ready: bool = false,
+        remote_ready: bool = false,
+        local: Vec<FileEntry> = vec![],
+        remote: Vec<FileEntry> = vec![],
+        local_selection: HashSet<String> = HashSet::new(),
+        remote_selection: HashSet<String> = HashSet::new(),
+        file_browser: file_browser::BrowserState = Default::default(),
+        terminal: terminal::TerminalState = Default::default(),
+        name: String = String::new(),
+        cancels: HashMap<String, Arc<AtomicBool>> = HashMap::new(),
+        explorer_uploads: explorer_transfer::Uploads = Default::default(),
+        workspace_page: WorkspacePage = WorkspacePage::Desktop,
+        workbench: server_desktop::Workbench = Default::default(),
+        #[cfg(windows)]
+        web_browser: web_browser::Browser = Default::default(),
+        server_apps: server_apps_ui::DesktopState = Default::default(),
+        docker: docker_ui::DockerState = Default::default(),
+        disks: disks_ui::DiskState = Default::default(),
+        compose: compose_ui::ComposeState = Default::default(),
+        install: software_install_ui::InstallState = Default::default(),
+        software: software::SoftwareState = Default::default(),
+        operations: operations::OperationsState = Default::default(),
+        metrics: observability::MetricState = Default::default(),
+        ports: resource_ports_ui::PortState = Default::default(),
+        system_logs: observability::LogsState = Default::default(),
+        system_task_running: bool = false,
+        file_split: f64 = 0.5,
+        transfer_conflict: Option<transfer_ui::PendingConflict> = None,
+        transfer_conflicts: std::collections::VecDeque<transfer_ui::PendingConflict> = Default::default(),
+        queue_rules: HashMap<(String, TransferDirection), arcnix_core::transfer::ConflictAction> = HashMap::new(),
+        session_rules: HashMap<TransferDirection, arcnix_core::transfer::ConflictAction> = HashMap::new(),
+        worker: Option<(u64, Sender<Request>)> = None,
+    }
+    shared {
+        config: AppConfig = config,
+        group: Option<String> = None,
+        collapsed_groups: HashSet<String> = HashSet::new(),
+        search: String = String::new(),
+        editor: ServerProfile = ServerProfile::default(),
+        server_editor_original: Option<ServerProfile> = None,
+        server_tags: String = String::new(),
+        server_editor_tab: u8 = 0,
+        host_menu: Option<String> = None,
+        group_menu: Option<String> = None,
+        unassigned_columns: FileColumnSettings = FileColumnSettings::default(),
+        updates: updates_ui::UpdateState = Default::default(),
+        import_pending: Option<u64> = None,
+        group_name: String = String::new(),
+        port: String = "22".into(),
+        request_serial: u64 = 0,
+        queue_filter: u8 = 0,
+        import_path: String = String::new(),
+        jobs: Vec<TransferJob> = vec![],
+        transfer_pauses: HashMap<String, Arc<AtomicBool>> = HashMap::new(),
+        inflight_transfers: HashSet<String> = HashSet::new(),
+        logs: String = String::new(),
+        navigation: navigation::Page = Default::default(),
+        settings_section: navigation::SettingsSection = Default::default(),
+        unread_notifications: usize = 0,
+        scripts: scripts_ui::ScriptsState = Default::default(),
+        task_records: task_records_ui::RecordState = Default::default(),
+        deleted_files: deleted_files_ui::DeletedFilesState = Default::default(),
+        tcp_listeners: tcp_listeners_ui::TcpListenersState = Default::default(),
+        record_storage: record_maintenance_ui::StorageState = Default::default(),
+        cleanup_reports: cleanup_records_ui::ReportsState = Default::default(),
+        backups: backups_ui::BackupState = Default::default(),
+        diagnostics: diagnostics_ui::DiagnosticsState = Default::default(),
+        settings: settings::SettingsState = Default::default(),
+        system_dark: bool = true,
+        transfer_details: HashMap<String, transfer_details::Details> = Default::default(),
+        batch_ids: HashMap<String, String> = HashMap::new(),
+        transfer_now: std::time::Instant = std::time::Instant::now(),
+        transfer_meters: HashMap<String, transfer_progress::Meter> = HashMap::new(),
+        transfer_summaries: HashMap<String, arcnix_core::transfer::TransferSummary> = HashMap::new(),
+        parked: HashMap<Option<String>, ServerSession> = HashMap::new(),
+        next_epoch: u64 = 0,
+        background: bool = false,
+    }
+}
+impl State {
+    fn advance_epoch(&mut self) {
+        self.next_epoch += 1;
+        self.epoch = self.next_epoch;
+    }
+
+    fn connected_epochs(&self) -> Vec<u64> {
+        let mut epochs = self
+            .parked
+            .values()
+            .filter(|session| session.connected)
+            .map(|session| session.epoch)
+            .collect::<Vec<_>>();
+        if self.connected {
+            epochs.push(self.epoch);
+        }
+        epochs.sort_unstable();
+        epochs
+    }
+
+    fn active_connections(&self) -> usize {
+        usize::from(self.connected) + self.parked.values().filter(|s| s.connected).count()
+    }
+
+    fn transfer_cancel(&self, id: &str) -> Option<&Arc<AtomicBool>> {
+        self.cancels.get(id).or_else(|| {
+            self.parked
+                .values()
+                .find_map(|session| session.cancels.get(id))
+        })
+    }
+
+    fn server_connection(&self, id: &str) -> (bool, bool) {
+        if self.selected.as_deref() == Some(id) {
+            (self.connected, self.connecting)
+        } else {
+            self.parked
+                .get(&Some(id.to_owned()))
+                .map(|session| (session.connected, session.connecting))
+                .unwrap_or_default()
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Ui {
     player: video_player::Player,
     wallpapers: Arc<desktop_customization_ui::WallpaperAssets>,
     update_controller: Arc<updates_ui::Controller>,
+    transfer_limiter: Arc<transfer_worker::Limiter>,
     batch_controller: Rc<std::cell::RefCell<Option<batch_worker::Controller>>>,
     batch_events: async_channel::Sender<batch_worker::Event>,
     logger: Rc<client_logs::Logger>,
     state: Cage<State>,
-    tx: Sender<Request>,
     store: Rc<ConfigStore>,
     writable: Cage<bool>,
     scope: Scope,
@@ -393,6 +483,9 @@ impl Ui {
             if s.selected.as_deref() == Some(server_id) {
                 s.session_rules.clear();
                 s.queue_rules.clear();
+            } else if let Some(session) = s.parked.get_mut(&Some(server_id.to_owned())) {
+                session.session_rules.clear();
+                session.queue_rules.clear();
             }
             s.host_menu = None;
         });
@@ -400,69 +493,131 @@ impl Ui {
         self.log("该服务器的文件冲突处理已恢复为全局默认设置");
     }
     fn select_server(&self, id: String, connect_now: bool) {
-        if self
-            .state
-            .with(|s| s.system_task_running && s.selected.as_ref() != Some(&id))
-        {
+        if self.state.with(|s| {
+            s.selected.as_ref() != Some(&id)
+                && (s.system_task_running || !s.config.servers.iter().any(|p| p.id == id))
+        }) {
             return;
         }
-        let mut reconnect = false;
         if self.state.with(|s| s.selected.as_ref() != Some(&id)) {
-            reconnect = self.state.revise(|s| {
-                if s.connected
-                    && let Some(current) = &s.selected
-                {
-                    s.reconnect_on_return.insert(current.clone());
-                }
-                s.reconnect_on_return.remove(&id)
-            });
-            self.disconnect();
-            self.state.revise(|s| {
-                s.file_split = s
-                    .config
-                    .servers
-                    .iter()
-                    .find(|p| p.id == id)
-                    .and_then(|p| p.file_pane_ratio)
-                    .unwrap_or(500) as f64
-                    / 1000.0;
-                s.selected = Some(id);
-                s.workspace_page = WorkspacePage::Desktop;
-                s.workbench = Default::default();
-                s.server_apps = Default::default();
-                s.docker = Default::default();
-                s.disks = Default::default();
-                s.compose = Default::default();
-                s.install = Default::default();
-                if let Some(profile) = s
-                    .config
-                    .servers
-                    .iter()
-                    .find(|p| Some(&p.id) == s.selected.as_ref())
-                {
-                    let location = if profile.locations.remember_paths {
-                        profile.locations.last_local.as_ref()
-                    } else {
-                        None
-                    }
-                    .or(profile.locations.local_directory.as_ref())
-                    .or(s.config.local_directory.as_ref());
-                    if let Some(path) = location {
-                        s.local_path = local_display(path);
-                    }
-                }
-            });
-            self.refresh(false);
+            self.switch_session(Some(id));
         }
         self.state.revise(|s| {
             navigation::change_page(s, navigation::Page::Servers, "select-server");
-            s.host_menu = None;
-            s.group_menu = None;
+            dismiss_menus(s);
         });
-        self.observability_enter();
-        self.terminal_enter();
-        if connect_now || reconnect {
+        self.desktop_enter();
+        if connect_now && self.state.with(|s| !s.connected && !s.connecting) {
             self.request_connect();
+        }
+    }
+
+    fn switch_session(&self, target: Option<String>) {
+        let fresh = self.state.revise(|s| {
+            let saved = s.parked.remove(&target);
+            let fresh = saved.is_none();
+            let mut incoming = saved.unwrap_or_else(|| {
+                let profile = s
+                    .config
+                    .servers
+                    .iter()
+                    .find(|p| Some(&p.id) == target.as_ref());
+                let location = profile
+                    .and_then(|p| {
+                        p.locations
+                            .remember_paths
+                            .then_some(p.locations.last_local.as_ref())
+                            .flatten()
+                            .or(p.locations.local_directory.as_ref())
+                    })
+                    .or(s.config.local_directory.as_ref());
+                let mut session = ServerSession::new(
+                    location
+                        .map(|path| local_display(path))
+                        .unwrap_or_else(|| s.local_path.clone()),
+                );
+                session.file_split =
+                    f64::from(profile.and_then(|p| p.file_pane_ratio).unwrap_or(500)) / 1000.0;
+                session.selected = target;
+                session
+            });
+            observability::metrics_leave(s);
+            s.terminal.menu = None;
+            s.file_context = None;
+            s.file_menu = None;
+            s.file_browser.cancel_drag();
+            s.swap_session(&mut incoming);
+            s.code.viewport = None;
+            #[cfg(windows)]
+            {
+                s.web_browser.viewport = None;
+            }
+            s.parked.insert(incoming.selected.clone(), incoming);
+            fresh
+        });
+        if fresh {
+            self.refresh(false);
+        }
+    }
+
+    // Replies run synchronously on the UI thread. Restore the selected
+    // workspace before the renderer processes the queued state changes.
+    fn with_parked(&self, key: &Option<String>, run: impl FnOnce()) {
+        let Some(mut session) = self.state.revise(|s| {
+            let mut session = s.parked.remove(key)?;
+            s.swap_session(&mut session);
+            s.background = true;
+            Some(session)
+        }) else {
+            return;
+        };
+        run();
+        self.state.revise(|s| {
+            s.swap_session(&mut session);
+            s.parked.insert(key.clone(), session);
+            s.background = false;
+        });
+    }
+
+    fn tick_parked(&self) {
+        let due = self.state.with(|s| {
+            s.parked
+                .iter()
+                .filter_map(|(key, session)| {
+                    if !session.connected
+                        || session.keepalive_pending
+                        || session.system_task_running
+                        || session.file_pending.is_some()
+                        || !session.cancels.is_empty()
+                    {
+                        return None;
+                    }
+                    let seconds = preferences_ui::keepalive_seconds(&s.config, key.as_deref());
+                    (seconds > 0 && session.keepalive_at.elapsed().as_secs() >= u64::from(seconds))
+                        .then(|| key.clone())
+                })
+                .collect::<Vec<_>>()
+        });
+        for key in due {
+            self.with_parked(&key, || preferences_ui::keepalive(self));
+        }
+    }
+
+    fn discard_parked(&self, key: &Option<String>) {
+        if self
+            .state
+            .with(|s| s.parked.get(key).is_some_and(|p| p.worker.is_some()))
+        {
+            self.with_parked(key, || self.disconnect());
+        }
+        self.state.revise(|s| s.parked.remove(key));
+    }
+
+    fn disconnect_server(&self, id: String) {
+        if self.state.with(|s| s.selected.as_ref() == Some(&id)) {
+            self.disconnect();
+        } else {
+            self.with_parked(&Some(id), || self.disconnect());
         }
     }
     fn save_file_split(&self, ratio: f64) {
@@ -521,7 +676,12 @@ impl Ui {
             });
         }
         self.state.revise(|s| {
-            if s.file_pending.is_some() || s.import_pending.is_some() {
+            if s.file_pending.is_some() || (!s.background && s.import_pending.is_some()) {
+                return;
+            }
+            if s.background {
+                s.dialog = None;
+                s.dialog_error.clear();
                 return;
             }
             backups_ui::dismiss(s);
@@ -582,7 +742,7 @@ impl Ui {
             s.dialog = None;
             s.dialog_error.clear();
         });
-        if self.state.with(|s| s.dialog.is_none())
+        if self.state.with(|s| !s.background && s.dialog.is_none())
             && let Some(id) = self.shell_focus.get()
         {
             let _ = self.scope.action(glory::render::Action::Focus(id));
@@ -646,12 +806,36 @@ impl Ui {
         });
     }
     fn send(&self, action: Action) -> u64 {
-        let (epoch, serial) = self.state.revise(|s| {
+        let (epoch, serial, worker, server) = self.state.revise(|s| {
             s.request_serial += 1;
-            (s.epoch, s.request_serial)
+            (
+                s.epoch,
+                s.request_serial,
+                s.worker.clone(),
+                s.selected.clone(),
+            )
         });
-        if self
-            .tx
+        let tx = if let Some((_, tx)) = worker {
+            tx
+        } else {
+            let (tx, rx) = worker::start_with_limiter(self.transfer_limiter.clone());
+            let ui = self.clone();
+            if self
+                .scope
+                .spawn(async move {
+                    while let Ok(response) = rx.recv().await {
+                        ui.route_worker_response(&server, serial, response);
+                    }
+                })
+                .is_err()
+            {
+                self.log("后台任务已停止");
+                return serial;
+            }
+            self.state.revise(|s| s.worker = Some((serial, tx.clone())));
+            tx
+        };
+        if tx
             .send(Request {
                 epoch,
                 serial,
@@ -662,6 +846,146 @@ impl Ui {
             self.log("后台任务已停止");
         }
         serial
+    }
+
+    fn route_worker_response(
+        &self,
+        server: &Option<String>,
+        worker_id: u64,
+        response: worker::Response,
+    ) {
+        let finished = if let Update::Finished(id, _) = &response.update {
+            self.state.revise(|s| s.inflight_transfers.remove(id))
+        } else {
+            false
+        };
+        let (active, parked) = self.state.with(|s| {
+            (
+                s.worker.as_ref().is_some_and(|(id, _)| *id == worker_id),
+                s.parked
+                    .get(server)
+                    .and_then(|session| session.worker.as_ref())
+                    .is_some_and(|(id, _)| *id == worker_id),
+            )
+        });
+        if active {
+            self.worker_response(response);
+        } else if parked {
+            self.with_parked(server, || self.worker_response(response));
+        }
+        if finished {
+            self.schedule();
+        }
+    }
+
+    #[rustfmt::skip]
+    fn worker_response(&self, response: worker::Response) {
+        let state = self.state;
+        let events = self;
+        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Trash{..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){return;}
+        match response.update {
+            Update::Video(result)=>events.player.ready(events,response.serial,result),
+            Update::Alive=>state.revise(|s|s.keepalive_pending=false),
+            Update::ServerApps(result)=>server_apps_ui::event(events,response.serial,result),
+            Update::Operations(event)=>operations::event(events,response.serial,event),
+            Update::Terminal(event)=>terminal::update(events,event),
+            Update::Fingerprint(fingerprint)=>{
+                let known=state.with(|s|s.config.servers.iter().find(|p|Some(&p.id)==s.selected.as_ref()).and_then(|p|s.config.trusted_fingerprint(&p.host,p.port)).map(str::to_owned));
+                if known.as_ref().is_some_and(|f|f!=&fingerprint){
+                    events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
+                }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
+            }
+            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
+                #[cfg(windows)]
+                if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
+                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
+            Update::Disconnected=>events.log("连接已断开"),
+            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());}if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
+            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
+            Update::Children{remote:true,result,..} if events.player.awaiting_directory(events, response.serial) =>
+                events.player.listed(events,result),
+            Update::Children{remote,parent,result}=>file_browser::accept_children(events,remote,parent,response.serial,result),
+            Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){if remote{state.revise(file_browser::remote_browse_failed);}events.error(format!("读取目录失败：{message}"));}},
+            #[cfg(windows)]
+            Update::BrowserProxy(result)=>web_browser::proxy_event(events,response.serial,result),
+            #[cfg(windows)]
+            Update::BrowserDiagnosis(diagnosis)=>web_browser::diagnosis_event(events,response.serial,diagnosis),
+            #[cfg(windows)]
+            Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(events,response.serial,result),
+            Update::ConnectionLost(message)=>{
+                events.player.close(events);
+                #[cfg(windows)]
+                events.close_web_browser();operations::connection_lost(events);terminal::disconnected(events);software::on_connection_lost(events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.explorer_uploads.abort();for (id,c) in &s.cancels{c.store(true,Ordering::Relaxed);s.transfer_pauses.remove(id);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if Some(&j.server_id)==s.selected.as_ref() && j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+            Update::TransferConflict(id,info,reply)=>transfer_ui::show(events,id,info,reply),
+            Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
+            Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
+            Update::TransferReport(id,summary)=>{events.log(format!("传输结果：写入 {} 个文件，跳过 {} 个文件",summary.transferred_files,summary.skipped_files));state.revise(|s|{s.transfer_summaries.insert(id,summary);});},
+            Update::Progress(id,done,total,actual)=>state.revise(|s|{s.transfer_now=std::time::Instant::now();if let Some(m)=s.transfer_meters.get_mut(&id){m.observe(actual,s.transfer_now);}
+                if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.transferred_bytes=done;job.total_bytes=total;}}),
+            Update::Finished(id,result)=>{
+                transfer_ui::finished(events,&id);
+                if let Err(error)=&result{events.log(format!("传输未完成：{error}"));}
+                state.revise(|s|{
+                    s.transfer_now=std::time::Instant::now();
+                    if let Some(m)=s.transfer_meters.get_mut(&id){m.finish(s.transfer_now);}
+                    s.transfer_pauses.remove(&id);
+                    let cancelled=s.cancels.remove(&id).is_some_and(|c|c.load(Ordering::Relaxed));
+                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();s.explorer_uploads.finish(&id,&status);transfer_details::finish(s,&id,&status);}
+                });
+                if state.with(|s|s.cancels.is_empty()) {events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}}
+            }
+            Update::Created{remote,name,directory}=>{
+                events.log(match (remote,directory) {
+                    (true,true)=>"远程目录已创建", (true,false)=>"远程文件已创建",
+                    (false,true)=>"本地目录已创建", (false,false)=>"本地文件已创建",
+                });
+                file_browser::refresh_changed_entry(events,remote,response.serial,file_browser::NewEntryFocus::Edit(name));
+            }
+            Update::Renamed{remote,name}=>{
+                events.log(if remote {"远程文件已重命名"} else {"本地文件已重命名"});
+                if state.with(|s|s.file_pending==Some(response.serial) && s.dialog==Some(Dialog::RenameFile{remote})){
+                    state.revise(|s|{s.file_pending=None;s.dialog=None;s.dialog_error.clear();s.notice.clear();});
+                    events.refresh(remote);
+                }else{
+                    file_browser::refresh_changed_entry(events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
+                }
+            }
+            Update::Trash{remote,result}=>trash_ui::completed(events,response.serial,remote,result),
+            Update::Deleted{remote,result}=>file_context::deleted(events,response.serial,remote,result),
+            Update::DeletionProgress(progress)=>file_context::deletion_progress(events,response.serial,progress),
+            Update::FileMetadata(result)=>file_properties::metadata(events,response.serial,result),
+            Update::Permissions(result)=>file_properties::finished(events,response.serial,result),
+            Update::CodeFile(reply)=>code_workbench::reply(events,response.serial,reply),
+            Update::Error(message)=>{
+                if file_browser::mutation_failed(events,response.serial,&message) {return;}
+                let pending=state.with(|s|s.file_pending==Some(response.serial)||(!s.background&&s.import_pending==Some(response.serial)));
+                if pending {state.revise(|s|{if s.file_pending==Some(response.serial){s.file_pending=None;}if s.import_pending==Some(response.serial){s.import_pending=None;}s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
+                else {events.error(format!("错误：{message}"));}
+            },
+            Update::ConnectionError(message)=>events.connection_failed(Some(&format!("连接失败：{message}")),false),
+            Update::CredentialPrompt(detail)=>events.connection_failed(detail,true),
+            Update::CredentialNotice(message)=>events.error(message),
+            Update::Metrics(result)=>observability::metrics_event(events,response.serial,result),
+            Update::Ports(result)=>resource_ports_ui::event(events,response.serial,result),
+            Update::PortTerminated(result)=>resource_ports_ui::terminated(events,response.serial,result),
+            Update::LogCapabilities(result)=>observability::logs_capabilities_event(events,response.serial,result),
+            Update::SystemLogs(result)=>observability::logs_event(events,response.serial,result),
+            Update::PackageEnvironment(result)=>software::event(events,response.serial,software::Event::Environment(result)),
+            Update::PackageList(result)=>software::event(events,response.serial,software::Event::Packages(result)),
+            Update::Imported(report)=>{
+                let warning_count=report.warnings.len();
+                for warning in &report.warnings {events.log(format!("SSH 配置导入：{warning}"));}
+                let result=state.with(|s|{let (config,imported,skipped)=import_profiles(&s.config,report.servers)?;anyhow::ensure!(events.writable.get(),"配置读取失败，禁止覆盖");events.store.save(&config)?;Ok::<_,anyhow::Error>((config,imported,skipped))});
+                state.revise(|s|s.import_pending=None);
+                match result {
+                    Ok((config,imported,skipped))=>{
+                        let summary=format!("导入完成：新增 {imported} 台，跳过 {skipped} 台重复站点；{warning_count} 条提示");
+                        state.revise(|s|{s.config=config;s.dialog=None;s.dialog_error.clear();s.notice=if warning_count==0{String::new()}else{format!("{summary}。{}",report.warnings[0])};});events.log(summary);
+                    },
+                    Err(e)=>{state.revise(|s|s.dialog_error=format!("导入失败：{e:#}"));events.log(format!("导入失败：{e:#}"));}
+                }
+            }
+        }
     }
     fn retry(&self, id: Option<String>) {
         if !self.state.with(|s| s.connected) {
@@ -747,7 +1071,7 @@ impl Ui {
             #[cfg(windows)]
             self.close_web_browser();
             self.state.revise(|s| {
-                s.epoch += 1;
+                s.advance_epoch();
                 s.cancels.clear();
                 s.connected = false;
                 s.connecting = true;
@@ -809,13 +1133,14 @@ impl Ui {
             self.close_dialog();
         }
         self.state.revise(|s| {
-            s.epoch += 1;
+            s.advance_epoch();
             s.terminal = Default::default();
             s.cancels.clear();
             s.connected = false;
             s.sftp_available = false;
             s.sync_scope = None;
             s.connecting = false;
+            s.keepalive_pending = false;
             s.fingerprint = None;
             s.secret.clear();
             s.remember_ssh_credential = false;
@@ -852,26 +1177,33 @@ impl Ui {
     fn cancel_all(&self) {
         self.state.revise(|s| {
             s.transfer_now = std::time::Instant::now();
-            for m in s.transfer_meters.values_mut() {
-                m.finish(s.transfer_now);
-            }
-            s.transfer_pauses.clear();
+
             s.explorer_uploads.abort();
-            for c in s.cancels.values() {
-                c.store(true, Ordering::Relaxed);
+            for (id, cancel) in &s.cancels {
+                cancel.store(true, Ordering::Relaxed);
+                s.transfer_pauses.remove(id);
+                if let Some(meter) = s.transfer_meters.get_mut(id) {
+                    meter.finish(s.transfer_now);
+                }
             }
             for j in &mut s.jobs {
-                if matches!(j.status, TransferStatus::Queued | TransferStatus::Running) {
+                if Some(&j.server_id) == s.selected.as_ref()
+                    && matches!(j.status, TransferStatus::Queued | TransferStatus::Running)
+                {
                     j.status = TransferStatus::Cancelled;
                 }
             }
             let cancelled: Vec<_> = s
                 .jobs
                 .iter()
-                .filter(|job| job.status == TransferStatus::Cancelled)
+                .filter(|job| {
+                    Some(&job.server_id) == s.selected.as_ref()
+                        && job.status == TransferStatus::Cancelled
+                })
                 .map(|job| job.id.clone())
                 .collect();
             for id in cancelled {
+                s.transfer_pauses.remove(&id);
                 transfer_details::finish(s, &id, &TransferStatus::Cancelled);
             }
             s.transfer_conflict = None;
@@ -1052,7 +1384,31 @@ impl Ui {
     }
     fn schedule(&self) {
         let limit = self.state.with(|s| s.config.settings.transfer_concurrency);
-        self.send(Action::TransferConcurrency(limit));
+        self.transfer_limiter.set_limit(limit);
+        self.schedule_session(limit);
+        let parked = self.state.with(|s| {
+            if s.background {
+                return Vec::new();
+            }
+            s.parked
+                .iter()
+                .filter_map(|(key, session)| {
+                    (session.connected
+                        && !session.queue_paused
+                        && s.jobs.iter().any(|job| {
+                            job.status == TransferStatus::Queued
+                                && Some(&job.server_id) == key.as_ref()
+                        }))
+                    .then(|| key.clone())
+                })
+                .collect::<Vec<_>>()
+        });
+        for key in parked {
+            self.with_parked(&key, || self.schedule_session(limit));
+        }
+    }
+
+    fn schedule_session(&self, limit: u8) {
         let next = self.state.revise(|s| {
             let mut next = Vec::new();
             if s.system_task_running
@@ -1070,7 +1426,7 @@ impl Ui {
                         && !workspace::transfer_paused(s, &job.id)
                         && Some(&job.server_id) == s.selected.as_ref()
                         && !s.jobs.iter().any(|active| {
-                            s.cancels.contains_key(&active.id)
+                            s.inflight_transfers.contains(&active.id)
                                 && transfer_worker::overlap(job, active)
                         })
                 });
@@ -1231,8 +1587,10 @@ fn file_task_busy(s: &State) -> bool {
         && (s.deletion.is_some() || s.properties.as_ref().is_some_and(|p| p.is_running()))
 }
 fn dismiss_menus(s: &mut State) {
-    s.host_menu = None;
-    s.group_menu = None;
+    if !s.background {
+        s.host_menu = None;
+        s.group_menu = None;
+    }
     s.file_menu = None;
 }
 /// Shows `dialog` in place of any open menu. Callers check [`file_task_busy`].
@@ -1577,6 +1935,9 @@ fn app(ui: Ui) -> impl Widget {
             }
         })
         .fill((
+            text().class("terminal-workspace-epochs hidden").content(
+                state.map(|s| serde_json::to_string(&s.connected_epochs()).unwrap_or_default()),
+            ),
             input()
                 .class("system-theme-input hidden")
                 .value("")
@@ -1768,7 +2129,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .local_directory
         .clone()
         .unwrap_or(std::env::current_dir()?);
-    let (tx, rx) = worker::start();
     let (update_controller, update_rx) = updates_ui::start()?;
     formatting::configure(config.settings.display);
     let logger = Rc::new(client_logs::Logger::new(store.path()));
@@ -1776,129 +2136,21 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     window.renderer().enable_local_media();
     let scope = window.app().scope();
     i18n::init(scope, config.settings.language);
-    let state = scope.cage(State {
+    let state = scope.cage(State::new(
         config,
-        selected: None,
-        reconnect_on_return: HashSet::new(),
-        group: None,
-        collapsed_groups: HashSet::new(),
-        search: String::new(),
-        editor: ServerProfile::default(),
-        server_editor_tab: 0,
-        server_editor_original: None,
-        server_tags: String::new(),
-        dialog: None,
-        dialog_error: String::new(),
-        host_menu: None,
-        group_menu: None,
-        file_menu: None,
-        file_context: None,
-        file_pending: None,
-        trash: Default::default(),
-        deletion: None,
-        unassigned_columns: FileColumnSettings::default(),
-        properties: None,
-        code: Default::default(),
-        video: None,
-        updates: Default::default(),
-        import_pending: None,
-        activity_tab: 0,
-        activity_open: true,
-        local_filter_open: false,
-        remote_filter_open: false,
-        notice: error.clone().unwrap_or_default(),
-        group_name: String::new(),
-        port: "22".into(),
-        secret: String::new(),
-        remember_ssh_credential: false,
-        connecting_with_saved_credential: false,
-        connect_prompt_skipped: false,
-        connected: false,
-        sftp_available: false,
-        connecting: false,
-        keepalive_at: std::time::Instant::now(),
-        keepalive_pending: false,
-        fingerprint: None,
-        sync_scope: None,
-        epoch: 0,
-        request_serial: 0,
-        local_request: 0,
-        remote_request: 0,
-        local_filter: String::new(),
-        remote_filter: String::new(),
-        local_sort: Sort::Name,
-        remote_sort: Sort::Name,
-        local_desc: false,
-        remote_desc: false,
-        queue_paused: false,
-        queue_filter: 0,
-        import_path: String::new(),
-        local_path: local_display(&path),
-        remote_path: ".".into(),
-        local_ready: false,
-        remote_ready: false,
-        local: vec![],
-        remote: vec![],
-        local_selection: HashSet::new(),
-        remote_selection: HashSet::new(),
-        file_browser: Default::default(),
-        terminal: Default::default(),
-        name: String::new(),
-        jobs: vec![],
-        cancels: HashMap::new(),
-        transfer_pauses: HashMap::new(),
-        explorer_uploads: Default::default(),
-        inflight_transfers: HashSet::new(),
-        logs: String::new(),
-        workspace_page: WorkspacePage::Desktop,
-        workbench: Default::default(),
-        #[cfg(windows)]
-        web_browser: Default::default(),
-        server_apps: Default::default(),
-        docker: Default::default(),
-        disks: Default::default(),
-        compose: Default::default(),
-        install: Default::default(),
-        navigation: Default::default(),
-        settings_section: Default::default(),
-        unread_notifications: 0,
-        software: Default::default(),
-        operations: Default::default(),
-        scripts: Default::default(),
-        task_records: Default::default(),
-        deleted_files: Default::default(),
-        tcp_listeners: Default::default(),
-        record_storage: Default::default(),
-        cleanup_reports: Default::default(),
-        backups: Default::default(),
-        diagnostics: Default::default(),
-        metrics: Default::default(),
-        ports: Default::default(),
-        system_logs: Default::default(),
-        system_task_running: false,
-        settings: Default::default(),
-        system_dark: true,
-        file_split: 0.5,
-        transfer_conflict: None,
-        transfer_conflicts: Default::default(),
-        transfer_details: Default::default(),
-        batch_ids: HashMap::new(),
-        queue_rules: HashMap::new(),
-        session_rules: HashMap::new(),
-        transfer_now: std::time::Instant::now(),
-        transfer_meters: HashMap::new(),
-        transfer_summaries: HashMap::new(),
-    });
+        local_display(&path),
+        error.clone().unwrap_or_default(),
+    ));
     let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
         player: video_player::Player::new(window.renderer().clone(), scope),
         wallpapers: Arc::new(desktop_customization_ui::WallpaperAssets::default()),
         update_controller,
+        transfer_limiter: Default::default(),
         batch_controller: Rc::new(std::cell::RefCell::new(None)),
         batch_events,
         logger,
         state,
-        tx,
         store,
         writable: scope.cage(error.is_none()),
         scope: scope.clone(),
@@ -1957,118 +2209,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             browser_cookies::tick(&polling);
             polling.transfer_tick();
             preferences_ui::tick(&polling);
+            polling.tick_parked();
             updates_ui::tick(&polling);
         }
     })?;
-    let events = ui.clone();
-    scope.spawn(async move {while let Ok(response)=rx.recv().await {
-        if let Update::Finished(id, _)=&response.update { state.revise(|s|{s.inflight_transfers.remove(id);}); }
-        if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Trash{..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){continue;}
-        match response.update {
-            Update::Video(result)=>events.player.ready(&events,response.serial,result),
-            Update::Alive=>state.revise(|s|s.keepalive_pending=false),
-            Update::ServerApps(result)=>server_apps_ui::event(&events,response.serial,result),
-            Update::Operations(event)=>operations::event(&events,response.serial,event),
-            Update::Terminal(event)=>terminal::update(&events,event),
-            Update::Fingerprint(fingerprint)=>{
-                let known=state.with(|s|s.config.servers.iter().find(|p|Some(&p.id)==s.selected.as_ref()).and_then(|p|s.config.trusted_fingerprint(&p.host,p.port)).map(str::to_owned));
-                if known.as_ref().is_some_and(|f|f!=&fingerprint){
-                    events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
-                }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
-            }
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
-                #[cfg(windows)]
-                if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
-                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
-            Update::Disconnected=>events.log("连接已断开"),
-            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){continue;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);s.config.local_directory=Some(path.clone());if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
-            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){continue;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
-            Update::Children{remote:true,result,..} if events.player.awaiting_directory(response.serial) =>
-                events.player.listed(&events,result),
-            Update::Children{remote,parent,result}=>file_browser::accept_children(&events,remote,parent,response.serial,result),
-            Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){if remote{state.revise(file_browser::remote_browse_failed);}events.error(format!("读取目录失败：{message}"));}},
-            #[cfg(windows)]
-            Update::BrowserProxy(result)=>web_browser::proxy_event(&events,response.serial,result),
-            #[cfg(windows)]
-            Update::BrowserDiagnosis(diagnosis)=>web_browser::diagnosis_event(&events,response.serial,diagnosis),
-            #[cfg(windows)]
-            Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(&events,response.serial,result),
-            Update::ConnectionLost(message)=>{
-                events.player.close(&events);
-                #[cfg(windows)]
-                events.close_web_browser();operations::connection_lost(&events);terminal::disconnected(&events);software::on_connection_lost(&events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.transfer_pauses.clear();s.explorer_uploads.abort();for c in s.cancels.values(){c.store(true,Ordering::Relaxed);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
-            Update::TransferConflict(id,info,reply)=>transfer_ui::show(&events,id,info,reply),
-            Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
-            Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
-            Update::TransferReport(id,summary)=>{events.log(format!("传输结果：写入 {} 个文件，跳过 {} 个文件",summary.transferred_files,summary.skipped_files));state.revise(|s|{s.transfer_summaries.insert(id,summary);});},
-            Update::Progress(id,done,total,actual)=>state.revise(|s|{s.transfer_now=std::time::Instant::now();if let Some(m)=s.transfer_meters.get_mut(&id){m.observe(actual,s.transfer_now);}
-                if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.transferred_bytes=done;job.total_bytes=total;}}),
-            Update::Finished(id,result)=>{
-                transfer_ui::finished(&events,&id);
-                if let Err(error)=&result{events.log(format!("传输未完成：{error}"));}
-                state.revise(|s|{
-                    s.transfer_now=std::time::Instant::now();
-                    if let Some(m)=s.transfer_meters.get_mut(&id){m.finish(s.transfer_now);}
-                    s.transfer_pauses.remove(&id);
-                    let cancelled=s.cancels.remove(&id).is_some_and(|c|c.load(Ordering::Relaxed));
-                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();s.explorer_uploads.finish(&id,&status);transfer_details::finish(s,&id,&status);}
-                });
-                if state.with(|s|s.cancels.is_empty()) {events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}}
-                events.schedule();
-            }
-            Update::Created{remote,name,directory}=>{
-                events.log(match (remote,directory) {
-                    (true,true)=>"远程目录已创建", (true,false)=>"远程文件已创建",
-                    (false,true)=>"本地目录已创建", (false,false)=>"本地文件已创建",
-                });
-                file_browser::refresh_changed_entry(&events,remote,response.serial,file_browser::NewEntryFocus::Edit(name));
-            }
-            Update::Renamed{remote,name}=>{
-                events.log(if remote {"远程文件已重命名"} else {"本地文件已重命名"});
-                if state.with(|s|s.file_pending==Some(response.serial) && s.dialog==Some(Dialog::RenameFile{remote})){
-                    state.revise(|s|{s.file_pending=None;s.dialog=None;s.dialog_error.clear();s.notice.clear();});
-                    events.refresh(remote);
-                }else{
-                    file_browser::refresh_changed_entry(&events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
-                }
-            }
-            Update::Trash{remote,result}=>trash_ui::completed(&events,response.serial,remote,result),
-            Update::Deleted{remote,result}=>file_context::deleted(&events,response.serial,remote,result),
-            Update::DeletionProgress(progress)=>file_context::deletion_progress(&events,response.serial,progress),
-            Update::FileMetadata(result)=>file_properties::metadata(&events,response.serial,result),
-            Update::Permissions(result)=>file_properties::finished(&events,response.serial,result),
-            Update::CodeFile(reply)=>code_workbench::reply(&events,response.serial,reply),
-            Update::Error(message)=>{
-                if file_browser::mutation_failed(&events,response.serial,&message) {continue;}
-                let pending=state.with(|s|s.file_pending==Some(response.serial)||s.import_pending==Some(response.serial));
-                if pending {state.revise(|s|{s.file_pending=None;s.import_pending=None;s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
-                else {events.error(format!("错误：{message}"));}
-            },
-            Update::ConnectionError(message)=>events.connection_failed(Some(&format!("连接失败：{message}")),false),
-            Update::CredentialPrompt(detail)=>events.connection_failed(detail,true),
-            Update::CredentialNotice(message)=>events.error(message),
-            Update::Metrics(result)=>observability::metrics_event(&events,response.serial,result),
-            Update::Ports(result)=>resource_ports_ui::event(&events,response.serial,result),
-            Update::PortTerminated(result)=>resource_ports_ui::terminated(&events,response.serial,result),
-            Update::LogCapabilities(result)=>observability::logs_capabilities_event(&events,response.serial,result),
-            Update::SystemLogs(result)=>observability::logs_event(&events,response.serial,result),
-            Update::PackageEnvironment(result)=>software::event(&events,response.serial,software::Event::Environment(result)),
-            Update::PackageList(result)=>software::event(&events,response.serial,software::Event::Packages(result)),
-            Update::Imported(report)=>{
-                let warning_count=report.warnings.len();
-                for warning in &report.warnings {events.log(format!("SSH 配置导入：{warning}"));}
-                let result=state.with(|s|{let (config,imported,skipped)=import_profiles(&s.config,report.servers)?;anyhow::ensure!(events.writable.get(),"配置读取失败，禁止覆盖");events.store.save(&config)?;Ok::<_,anyhow::Error>((config,imported,skipped))});
-                state.revise(|s|s.import_pending=None);
-                match result {
-                    Ok((config,imported,skipped))=>{
-                        let summary=format!("导入完成：新增 {imported} 台，跳过 {skipped} 台重复站点；{warning_count} 条提示");
-                        state.revise(|s|{s.config=config;s.dialog=None;s.dialog_error.clear();s.notice=if warning_count==0{String::new()}else{format!("{summary}。{}",report.warnings[0])};});events.log(summary);
-                    },
-                    Err(e)=>{state.revise(|s|s.dialog_error=format!("导入失败：{e:#}"));events.log(format!("导入失败：{e:#}"));}
-                }
-            }
-        }
-    }})?;
     // Locale bindings patch the existing document. Remounting it would retire
     // live button identities while their browser activations are still queued.
     window.mount(app(ui.clone()))?;
@@ -2080,16 +2224,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     shell.run(
         window,
         Config {
-            native: Some(Box::new(app_icon::DesktopWindow {
-                state,
-                fullscreen: false,
-                wallpapers: wallpapers.clone(),
-                #[cfg(windows)]
-                browser: web_browser_native::Host::new(ui.clone()),
-                #[cfg(windows)]
-                video: mpv_native::Host::new(ui.clone()),
-                code: code_native::Host::new(ui.clone()),
-            })),
+            native: Some(Box::new(app_icon::DesktopWindow::new(ui.clone()))),
             asset_provider: Some(Arc::new(video_player::Assets {
                 wallpapers,
                 player: ui.player.source.clone(),

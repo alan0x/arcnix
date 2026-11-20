@@ -3,7 +3,6 @@
 (() => {
     let engine = null, scheduled = false, token = 0, pending = null, queue = [];
     const engines = new Map();
-    const MAX_SESSIONS = 8;
     const handledKeys = new WeakSet();
     let terminalMenu = null;
     function metadata() {
@@ -126,9 +125,6 @@
             detach();
             engine=engines.get(key)||null;
             if(!engine){
-                // Rust owns the same limit. Keep the browser cache bounded even
-                // if malformed metadata ever includes an extra session.
-                while(engines.size>=MAX_SESSIONS)dispose(engines.values().next().value);
                 engine=make(metadata,surface);
                 fit();
                 emit({kind:"ready",columns:engine.term.cols,rows:engine.term.rows});
@@ -319,13 +315,15 @@
     function scan() {
         scheduled=false;
         const source=document.querySelector(".terminal-state"),surface=document.querySelector(".terminal-surface");
-        if(!source||!surface)return;
+        const epochs=JSON.parse(document.querySelector(".terminal-workspace-epochs")?.textContent || "[]");
+        for(const current of engines.values())if(!epochs.includes(current.epoch))dispose(current);
+        if(!source||!surface){detach();return;}
         let metadata;
         try{metadata=JSON.parse(source.textContent);}catch(_){return;}
         token=Math.max(token,metadata.input_ack||0);
         const sessions=Array.isArray(metadata.sessions)?metadata.sessions:[metadata.id];
         const valid=new Set(sessions.map(id=>`${metadata.epoch}:${id}`));
-        for(const current of engines.values())if(!valid.has(current.key))dispose(current);
+        for(const current of engines.values())if(current.epoch===metadata.epoch && !valid.has(current.key))dispose(current);
         if(!metadata.id){
             detach();
             placeContext();

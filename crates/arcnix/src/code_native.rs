@@ -24,15 +24,14 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
     let mut port = viewport.clone();
     let body = port.area.context("Missing Code content bounds")?;
     let slot = port.command_center.filter(|slot| {
-        slot.valid()
-            && slot.top < body.top
+        slot.top < body.top
             && slot.bottom <= body.top
             && slot.left >= body.left
             && slot.right <= body.right
     });
     let menu = port
         .menu_slot
-        .filter(|m| m.valid() && m.left >= body.left && slot.is_some_and(|s| m.right <= s.left));
+        .filter(|m| m.left >= body.left && slot.is_some_and(|s| m.right <= s.left));
     if let Some(slot) = slot {
         // Expose only the native menu and the active picker in the host titlebar.
         port.area = Some(BoxPx {
@@ -76,7 +75,14 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
 #[cfg(not(windows))]
 fn position(view: &WebView, viewport: &native_viewport::Viewport, _picker: bool) -> Result<()> {
     use wry::dpi::{PhysicalPosition, PhysicalSize};
-    let area = viewport.area.context("Missing Code content bounds")?;
+    let Some(area) = viewport
+        .area
+        .zip(viewport.frame)
+        .and_then(|(area, frame)| area.intersect(frame))
+    else {
+        view.set_visible(false)?;
+        return Ok(());
+    };
     view.set_bounds(wry::Rect {
         position: PhysicalPosition::new(area.left, area.top).into(),
         size: PhysicalSize::new(area.width() as u32, area.height() as u32).into(),
@@ -212,6 +218,12 @@ impl Host {
             .with_url(format!("{ORIGIN}/index.html"))
             .build_as_child(window)?;
         Ok(view)
+    }
+    pub fn hide(&mut self) {
+        if let Some(view) = &self.view {
+            let _ = view.set_visible(false);
+        }
+        self.bounds = None;
     }
     pub fn poll(&mut self, window: &NativeWindow) {
         let epoch = self.ui.state.with(|s| {

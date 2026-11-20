@@ -302,7 +302,10 @@ pub(super) fn select_tab(s: &mut State, tab: Tab) {
 }
 
 pub(super) fn visible(s: &State) -> bool {
-    s.navigation == navigation::Page::Servers && s.connected && s.workbench.active == Tab::Desktop
+    !s.background
+        && s.navigation == navigation::Page::Servers
+        && s.connected
+        && s.workbench.active == Tab::Desktop
 }
 
 pub(super) fn fullscreen(s: &State) -> bool {
@@ -451,7 +454,7 @@ impl Ui {
         self.desktop_enter();
     }
 
-    fn desktop_enter(&self) {
+    pub(super) fn desktop_enter(&self) {
         self.close_desktop_menu();
         if self.state.with(visible) {
             self.refresh_desktop_items(false);

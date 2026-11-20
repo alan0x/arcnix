@@ -414,6 +414,14 @@ impl Host {
         }
     }
 
+    pub fn hide(&mut self) {
+        if let Some((id, _)) = self.current.take()
+            && let Some(page) = self.views.get(&id)
+        {
+            let _ = page.view.set_visible(false);
+        }
+    }
+
     pub fn poll(&mut self, window: &NativeWindow) {
         self.drain_events();
         if self.exiting {
@@ -1014,34 +1022,42 @@ fn web_error(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> &'static str {
     }
 }
 
-fn overlap(a: BoxPx, b: BoxPx) -> Option<BoxPx> {
-    let bounds = BoxPx {
-        left: a.left.max(b.left),
-        top: a.top.max(b.top),
-        right: a.right.min(b.right),
-        bottom: a.bottom.min(b.bottom),
-    };
-    (bounds.width() > 0 && bounds.height() > 0).then_some(bounds)
-}
-
 pub(super) fn position(view: &WebView, viewport: &Viewport) -> Result<()> {
     let area = viewport.area.context("Missing browser content bounds")?;
     view.set_bounds(Rect {
         position: PhysicalPosition::new(area.left, area.top).into(),
         size: PhysicalSize::new(area.width() as u32, area.height() as u32).into(),
     })?;
-    view.set_visible(install_region(view.hwnd(), area, &viewport.clip)?)?;
+    view.set_visible(install_region(
+        view.hwnd(),
+        area,
+        viewport.frame,
+        &viewport.clip,
+    )?)?;
     Ok(())
 }
 
-pub(super) fn install_region(window: HWND, area: BoxPx, occlusion: &[BoxPx]) -> Result<bool> {
+pub(super) fn install_region(
+    window: HWND,
+    area: BoxPx,
+    frame: Option<BoxPx>,
+    occlusion: &[BoxPx],
+) -> Result<bool> {
+    let Some(exposed) = frame.and_then(|frame| area.intersect(frame)) else {
+        return Ok(false);
+    };
     // SetWindowRgn takes ownership of the assigned region. Temporary regions
     // remain ours and are released whether or not the operation succeeds.
     unsafe {
-        let region = CreateRectRgn(0, 0, area.width(), area.height());
+        let region = CreateRectRgn(
+            exposed.left - area.left,
+            exposed.top - area.top,
+            exposed.right - area.left,
+            exposed.bottom - area.top,
+        );
         ensure!(!region.is_invalid(), "Unable to clip the browser view");
         let mut visible = true;
-        for rect in occlusion.iter().filter_map(|rect| overlap(area, *rect)) {
+        for rect in occlusion.iter().filter_map(|rect| exposed.intersect(*rect)) {
             let cover = CreateRectRgn(
                 rect.left - area.left,
                 rect.top - area.top,

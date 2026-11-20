@@ -63,9 +63,21 @@ struct Capacity {
     limit: usize,
     destinations: HashSet<String>,
 }
-struct Limiter {
+pub(super) struct Limiter {
     state: Mutex<Capacity>,
     changed: Condvar,
+}
+impl Default for Limiter {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(Capacity {
+                active: 0,
+                limit: 5,
+                destinations: HashSet::new(),
+            }),
+            changed: Condvar::new(),
+        }
+    }
 }
 struct Permit<'a> {
     limiter: &'a Limiter,
@@ -82,6 +94,11 @@ impl Drop for Permit<'_> {
     }
 }
 impl Limiter {
+    pub(super) fn set_limit(&self, limit: u8) {
+        self.state.lock().unwrap().limit = usize::from(limit.clamp(1, WORKERS as u8));
+        self.changed.notify_all();
+    }
+
     fn acquire(&self, run: &Run, destination: Option<String>) -> Result<Permit<'_>> {
         let mut state = self.state.lock().unwrap();
         loop {
@@ -270,26 +287,38 @@ impl Task {
     }
 }
 pub(super) struct Pool {
-    tx: mpsc::SyncSender<Task>,
+    tx: OnceLock<mpsc::SyncSender<Task>>,
     limiter: Arc<Limiter>,
     generation: Arc<AtomicU64>,
     events: async_channel::Sender<Response>,
     access: Option<Arc<Credentials>>,
 }
 impl Pool {
+    #[cfg(test)]
     pub fn new(events: async_channel::Sender<Response>, generation: Arc<AtomicU64>) -> Self {
+        Self::with_limiter(events, generation, Arc::new(Limiter::default()))
+    }
+
+    pub fn with_limiter(
+        events: async_channel::Sender<Response>,
+        generation: Arc<AtomicU64>,
+        limiter: Arc<Limiter>,
+    ) -> Self {
+        Self {
+            tx: OnceLock::new(),
+            limiter,
+            generation,
+            events,
+            access: None,
+        }
+    }
+
+    fn start_workers(&self) -> mpsc::SyncSender<Task> {
         let (tx, rx) = mpsc::sync_channel::<Task>(WORKERS * 2);
         let rx = Arc::new(Mutex::new(rx));
-        let limiter = Arc::new(Limiter {
-            state: Mutex::new(Capacity {
-                active: 0,
-                limit: 5,
-                destinations: HashSet::new(),
-            }),
-            changed: Condvar::new(),
-        });
         for _ in 0..WORKERS {
-            let (rx, limiter, generation) = (rx.clone(), limiter.clone(), generation.clone());
+            let (rx, limiter, generation) =
+                (rx.clone(), self.limiter.clone(), self.generation.clone());
             std::thread::spawn(move || {
                 let mut connection: Option<(Arc<Credentials>, RemoteSession)> = None;
                 loop {
@@ -438,13 +467,7 @@ impl Pool {
                 }
             });
         }
-        Self {
-            tx,
-            limiter,
-            generation,
-            events,
-            access: None,
-        }
+        tx
     }
     pub fn attach(
         &mut self,
@@ -467,9 +490,9 @@ impl Pool {
             access.revoked.store(true, Ordering::Release);
         }
     }
+    #[cfg(test)]
     pub fn set_limit(&self, limit: u8) {
-        self.limiter.state.lock().unwrap().limit = usize::from(limit.clamp(1, WORKERS as u8));
-        self.limiter.changed.notify_all();
+        self.limiter.set_limit(limit);
     }
     pub fn submit(
         &self,
@@ -521,7 +544,7 @@ impl Pool {
             }),
             failure: Mutex::new(None),
         });
-        let tx = self.tx.clone();
+        let tx = self.tx.get_or_init(|| self.start_workers()).clone();
         std::thread::spawn(move || {
             let result = run_job(&tx, &run);
             run.send(Update::Finished(

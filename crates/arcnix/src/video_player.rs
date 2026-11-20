@@ -9,6 +9,7 @@ use glory::wry::{LocalMedia, MediaKind, Renderer};
 
 use super::*;
 mod picker;
+pub(super) use picker::Directory;
 
 const EXTENSIONS: &[&str] = if cfg!(all(windows, target_arch = "x86_64")) {
     &["MP4", "MKV"]
@@ -166,27 +167,28 @@ pub(super) struct Playback {
     pub(super) serial: u64,
     pub(super) title: String,
     active: Arc<AtomicBool>,
+    source: Option<Arc<Source>>,
     pub(super) status: String,
     #[cfg(windows)]
     pub(super) native: Option<crate::mpv_native::Playback>,
 }
 #[derive(Clone)]
 pub(super) struct Player {
-    picker: Cage<Option<picker::Directory>>,
     #[cfg(windows)]
     pub viewport: Cage<Option<native_viewport::Viewport>>,
     renderer: Renderer,
     node: Cage<Option<glory::render::NodeId>>,
+    mounted: Rc<std::cell::RefCell<Option<(glory::render::NodeId, u64)>>>,
     pub source: CurrentSource,
 }
 impl Player {
     pub fn new(renderer: Renderer, scope: &Scope) -> Self {
         Self {
-            picker: scope.cage(None),
             #[cfg(windows)]
             viewport: scope.cage(None),
             renderer,
             node: scope.cage(None),
+            mounted: Default::default(),
             source: Default::default(),
         }
     }
@@ -202,6 +204,7 @@ impl Player {
                 serial,
                 title: path.rsplit('/').next().unwrap_or(path).to_owned(),
                 active,
+                source: None,
                 status: i18n::translate("正在打开视频…"),
                 #[cfg(windows)]
                 native: native_format(path).then(Default::default),
@@ -215,65 +218,72 @@ impl Player {
             .revise(|s| server_desktop::remove_window(s, WorkspacePage::Video));
     }
     pub fn stop(&self, ui: &Ui) {
-        self.picker.revise(|picker| *picker = None);
-        if !ui.state.with(|s| s.video.is_some()) {
-            return;
-        }
         ui.state.revise(|s| {
+            s.video_picker = None;
             if let Some(video) = s.video.take() {
                 video.active.store(false, Ordering::Release);
             }
         });
-        self.source.lock().unwrap().take();
-        if let Some(node) = self.node.get() {
-            let _ = self.renderer.set_local_media(node, None);
-        }
     }
+
     pub fn ready(&self, ui: &Ui, serial: u64, result: Result<Arc<Source>, String>) {
-        let Some(title) = ui.state.with(|s| {
-            s.video
-                .as_ref()
-                .filter(|v| v.serial == serial)
-                .map(|v| v.title.clone())
-        }) else {
-            return;
-        };
-        #[cfg(windows)]
-        if native_format(&title) {
-            ui.state.revise(|s| {
-                if let Some(video) = &mut s.video
-                    && let Some(native) = &mut video.native
-                {
-                    match result {
-                        Ok(source) => native.source = Some(source),
-                        Err(error) => video.status = error,
-                    }
-                }
-            });
-            return;
-        }
-        let result = result.and_then(|source| {
-            let node = self.node.get().ok_or("Missing video surface")?;
-            *self.source.lock().unwrap() = Some(source.clone());
-            self.renderer
-                .set_local_media(
-                    node,
-                    Some(LocalMedia {
-                        kind: MediaKind::Video,
-                        path: &source.url,
-                        title: &title,
-                    }),
-                )
-                .map_err(|e| e.to_string())
-        });
-        if result.is_err() {
-            self.source.lock().unwrap().take();
-        }
         ui.state.revise(|s| {
-            if let Some(video) = &mut s.video {
-                video.status = result.err().unwrap_or_default();
+            let Some(video) = s.video.as_mut().filter(|v| v.serial == serial) else {
+                return;
+            };
+            match result {
+                Ok(source) => {
+                    #[cfg(windows)]
+                    if let Some(native) = &mut video.native {
+                        native.source = Some(source);
+                        return;
+                    }
+                    video.source = Some(source);
+                    video.status.clear();
+                }
+                Err(error) => video.status = error,
             }
         });
+    }
+
+    pub(super) fn sync_surface(&self, ui: &Ui) {
+        let next = self.node.get().and_then(|node| {
+            ui.state.with(|s| {
+                let video = s.video.as_ref()?;
+                Some((
+                    node,
+                    video.serial,
+                    video.source.clone()?,
+                    video.title.clone(),
+                ))
+            })
+        });
+        let key = next.as_ref().map(|(node, serial, ..)| (*node, *serial));
+        let mut mounted = self.mounted.borrow_mut();
+        if *mounted == key {
+            return;
+        }
+        if let Some((node, _)) = *mounted {
+            let _ = self.renderer.set_local_media(node, None);
+        }
+        *mounted = key;
+        *self.source.lock().unwrap() = next.as_ref().map(|(_, _, source, _)| source.clone());
+        if let Some((node, serial, source, title)) = next
+            && let Err(error) = self.renderer.set_local_media(
+                node,
+                Some(LocalMedia {
+                    kind: MediaKind::Video,
+                    path: &source.url,
+                    title: &title,
+                }),
+            )
+        {
+            ui.state.revise(|s| {
+                if let Some(video) = s.video.as_mut().filter(|v| v.serial == serial) {
+                    video.status = error.to_string();
+                }
+            });
+        }
     }
 }
 fn empty_player(ui: Ui) -> impl Widget {
@@ -318,7 +328,7 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
         when(state.map(|s| s.video.is_none()), move || {
             empty_player(idle.clone())
         }),
-        when(ui.player.picker.map(Option::is_some), move || {
+        when(state.map(|s| s.video_picker.is_some()), move || {
             picker::panel(listing.clone())
         }),
         #[cfg(windows)]

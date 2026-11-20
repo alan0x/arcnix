@@ -42,7 +42,9 @@ def main():
     samples = {}
 
     with Peer(output / 'peer', io_delay=.01) as peer:
-        config = peer.config([peer.profile('Transfer concurrency')], local)
+        config = peer.config([
+            peer.profile('Transfer concurrency'), peer.profile('Second workspace'),
+        ], local)
         with Desktop(output / 'desktop', config) as app:
             page = app.page
 
@@ -243,7 +245,8 @@ def main():
             expect(app.file('disconnect-tree', remote=False)).to_be_visible()
             disconnecting = run_folder('disconnect-tree', active_screenshot='before-disconnect.png')
             page.get_by_role('button', name='Disconnect', exact=True).click()
-            expect(page.locator('.overview-connect')).to_be_visible()
+            expect(page.locator('.workspace-reconnect')).to_be_visible()
+            expect(page.locator('.connection-state')).to_have_text('SSH disconnected')
             app.connect()
             disconnected = job('disconnect-tree')
             expect(status(disconnected)).to_have_text('Canceled')
@@ -255,6 +258,22 @@ def main():
             assert disconnected.locator(CHILD_ROW).all_text_contents() == frozen
             app.screenshot('disconnected-files-terminal.png')
             checks.append('Disconnecting an active folder makes every child terminal; reconnecting retains stable canceled progress without accepting stale worker updates')
+
+            app.connect(1)
+            page.locator('.host-select').first.click()
+            expect(page.locator('.connection-state')).to_have_text('SSH connected')
+            seed(local / 'background-tree')
+            page.locator('.local-slot').get_by_role('button', name='Refresh local directory', exact=True).click()
+            background = run_folder('background-tree')
+            expect(background.locator(CHILD_STATUS).get_by_text('Transferring', exact=True).first).to_be_visible()
+            page.locator('.host-select').nth(1).click()
+            expect(page.locator('.connection-state')).to_have_text('SSH connected')
+            expect(status(background)).to_have_text('Completed', timeout=60000)
+            assert files(peer.root / 'background-tree') == files(local / 'background-tree')
+            page.locator('.host-select').first.click()
+            expect(page.locator('.connection-state')).to_have_text('SSH connected')
+            expect(status(background)).to_have_text('Completed')
+            checks.append('A running SFTP upload completes while a different connected server is selected')
 
     result = dict(passed=len(checks), checks=checks, output=str(output), concurrency={key: {name: value for name, value in evidence.items() if name != 'samples'} for key, evidence in samples.items() if key != 'layout'})
     (output / 'results.json').write_text(json.dumps(result, indent=2), encoding='utf-8')

@@ -17,7 +17,11 @@ def main():
         (peer.root / 'work').mkdir()
         (peer.root / 'work' / 'example.txt').write_text('remote file')
         (peer.root / 'metrics-fixture.json').write_text('{"trace": true}')
-        config = peer.config([peer.profile('Development'), dict(peer.profile('Offline'), port=9)], local)
+        config = peer.config([
+            peer.profile('Development'),
+            dict(peer.profile('Second server'), initial_remote_path='/work', auth='Password', private_key=None),
+            dict(peer.profile('Offline'), port=9),
+        ], local)
         with Desktop(output / 'desktop', config) as app:
             page = app.page
             errors = []
@@ -128,6 +132,54 @@ def main():
             page.get_by_role('button', name='Toggle maximize', exact=True).click()
             app.screenshot('terminal-light.png')
             checks.append('Terminal DOM and SSH survive Home, minimize, maximize and reopening an existing tab')
+
+            def server(name):
+                return page.locator('.host-select').filter(has_text=name)
+
+            def terminal_epoch():
+                return json.loads(page.locator('.terminal-state').text_content())['epoch']
+
+            first_epoch = terminal_epoch()
+            server('Second server').click()
+            expect(tabs.locator('.workbench-tab-select')).to_have_text(['Home'])
+            expect(server('Development').locator('.host-address')).to_contain_text('Connected')
+            page.locator('.overview-transfer').click()
+            connect = page.get_by_role('dialog', name='Connect to server', exact=True)
+            connect.get_by_role('textbox', name='Password or key passphrase', exact=True).fill('arcnix-test')
+            connect.get_by_role('button', name='Connect', exact=True).click()
+            expect(page.locator('.connection-state')).to_have_text('SSH connected')
+            expect(app.file('example.txt')).to_be_visible()
+            app.application('Terminal')
+            expect(page.locator('.terminal-status')).to_have_text('Interactive SSH')
+            second_epoch = terminal_epoch()
+            assert first_epoch != second_epoch
+            expect(reader).not_to_contain_text('DESKTOP_PRESERVED')
+            keyboard.focus()
+            page.keyboard.type('echo SECOND_SERVER')
+            page.keyboard.press('Enter')
+            expect(reader).to_contain_text('SECOND_SERVER')
+
+            server('Offline').click()
+            expect(tabs.locator('.workbench-tab-select')).to_have_text(['Home'])
+            expect(page.locator('.server-overview')).to_contain_text('Offline')
+            server('Development').click()
+            expect(tabs.locator('.workbench-tab-select')).to_have_text(['Home', 'Transfer files', 'Desktop'])
+            expect(page.locator('.desktop-window.app-terminal.active')).to_be_visible()
+            expect(page.locator('.terminal-status')).to_have_text('Interactive SSH')
+            expect(reader).to_contain_text('DESKTOP_PRESERVED')
+            assert terminal_epoch() == first_epoch
+            assert surface.evaluate('el => el.isConnected')
+            expect(page.get_by_role('dialog')).to_have_count(0)
+
+            server('Second server').click()
+            expect(reader).to_contain_text('SECOND_SERVER')
+            assert terminal_epoch() == second_epoch
+            tab('Transfer files')
+            expect(app.file('example.txt')).to_be_visible()
+            server('Development').click()
+            expect(reader).to_contain_text('DESKTOP_PRESERVED')
+            expect(page.locator('.connection-state')).to_have_text('SSH connected')
+            checks.append('Sidebar switches preserve each server’s live SSH, Desktop, Terminal output, and Transfer files directory')
 
             tab('Transfer files')
             app.file('desktop-transfer.txt', remote=False).click()
@@ -362,7 +414,7 @@ def main():
             page.keyboard.press('Escape')
             checks.append('Light/dark themes, live Chinese localization and 900/1100px layouts render without overflow')
 
-            # Disconnect keeps useful tabs; switching servers resets their scope.
+            # Explicit disconnect affects only its server.
             page.locator('.connection-button').click()
             expect(identity).to_be_hidden()
             expect(page.locator('.workspace-reconnect')).to_be_visible()
@@ -378,11 +430,17 @@ def main():
             expect(page.get_by_role('dialog')).to_have_count(0)
             page.locator('.connection-button').click()
             expect(page.locator('.workspace-reconnect')).to_be_visible()
-            page.locator('.host-select').nth(1).click()
+            server('Offline').click()
             expect(tabs.locator('.workbench-tab-select')).to_have_text(['首页'])
             expect(page.locator('.server-overview')).to_contain_text('Offline')
+            server('Second server').click()
+            expect(page.locator('.connection-state')).to_have_text('SSH 已连接')
+            expect(app.file('example.txt')).to_be_visible()
+            server('Development').click()
+            expect(page.locator('.workspace-reconnect')).to_be_visible()
+            expect(page.locator('.connection-state')).to_have_text('SSH 未连接')
             assert not errors, errors
-            checks.append('Tab switches never connect by themselves; reconnect is explicit; selecting another server clears its tabs and sessions; no browser errors')
+            checks.append('Explicit disconnect and reconnect leave other servers connected; no browser errors')
         profile = dict(peer.profile('SSH only'), username='arcnix-nosftp')
         with Desktop(output / 'without-sftp', peer.config([profile], local)) as app:
             app.connect()
