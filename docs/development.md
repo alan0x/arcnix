@@ -219,7 +219,7 @@ tools/sftp_fixture.py   仅用于回环测试的 SSH/SFTP 服务
 
 ## 界面回归
 
-Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200 行的快照，不跟随或轮询；按终端 SGR 序列显示颜色和粗体等样式（16 色随主题，256 色和真彩色按原值），其他控制序列移除，回车重绘只保留最终内容，时间戳淡化显示，最多渲染 4000 个样式片段。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口同时显示发布与配置映射、未发布的暴露端口；host 网络可跳转现有资源页检查服务器监听。
+Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200、500 或 1000 行（默认 200）的快照，不跟随或轮询，更改行数会重新读取；可按显示出的文字（含时间戳）在本地筛选行，被隐藏的行设置的颜色仍作用于后续行；按终端 SGR 序列显示颜色和粗体等样式（16 色随主题，256 色和真彩色按原值），其他控制序列移除，回车重绘只保留最终内容，时间戳淡化显示，最多渲染 4000 个样式片段。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口同时显示发布与配置映射、未发布的暴露端口；host 网络可跳转现有资源页检查服务器监听。
 
 重启策略和 CPU／内存限制使用 [Docker container update](https://docs.docker.com/reference/cli/docker/container/update/)，只修改当前容器，不改写 Compose 定义；端口和挂载变更需要重建容器。卷详情使用 [volume inspect](https://docs.docker.com/reference/cli/docker/volume/inspect/)，日志使用 [container logs](https://docs.docker.com/reference/cli/docker/container/logs/) 的有限尾部读取。标准输出与错误输出在服务器端合并到同一管道，按 Docker 写出的顺序显示；日志正文中的无效 UTF-8 显示为替换字符，不会使读取失败。
 

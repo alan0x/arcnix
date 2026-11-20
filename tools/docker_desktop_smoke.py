@@ -102,8 +102,20 @@ def main():
             select('web')
             page.locator('.docker-container-actions').get_by_role('button', name='Logs', exact=True).click()
             expect(page.locator('.docker-log-output')).to_contain_text(re.compile(r'fixture web ready.*fixture stderr included.*fixture web after stderr', re.S))
-            page.locator('.docker-log-panel').get_by_role('button', name='Details', exact=True).click()
-            checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded, time-ordered stdout/stderr log snapshots work')
+            log_panel = page.locator('.docker-log-panel')
+            trace = peer.root / 'server-app-queries.jsonl'
+            log_panel.get_by_role('button', name='1000', exact=True).click()
+            expect(log_panel.get_by_role('button', name='1000', exact=True)).to_have_class(re.compile(r'\bactive\b'))
+            eventually(lambda: '--tail 1000 ' in trace.read_text())
+            expect(page.locator('.docker-log-output')).to_contain_text('fixture web after stderr')
+            log_panel.locator('.logs-filter').fill('STDERR')
+            expect(page.locator('.docker-log-output')).to_contain_text('fixture stderr included')
+            expect(page.locator('.docker-log-output')).not_to_contain_text('fixture web ready')
+            log_panel.locator('.logs-filter').fill('no such text')
+            expect(page.locator('.docker-log-output')).to_have_text('No entries match this filter.')
+            log_panel.locator('.logs-filter').fill('')
+            log_panel.get_by_role('button', name='Details', exact=True).click()
+            checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded, time-ordered stdout/stderr log snapshots work, with a line count and a text filter')
 
             def action(name, title, state):
                 page.locator('.docker-container-actions').get_by_role('button', name=name, exact=True).click()
