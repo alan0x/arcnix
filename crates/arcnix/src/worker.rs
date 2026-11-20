@@ -36,6 +36,8 @@ pub enum Action {
         path: String,
         active: Arc<AtomicBool>,
     },
+    #[cfg(windows)]
+    ReadHtml(String),
     CodeFile(crate::code_workbench::FileRequest),
     Keepalive,
     ServerApps(crate::server_apps_worker::Action),
@@ -73,6 +75,8 @@ pub enum Action {
     },
     ImportSshConfig(PathBuf),
     RemoteRename(String, String),
+    ManageRemoteFiles(arcnix_core::remote::FileAction, Vec<String>),
+    ResolveFileAlias(String),
     FileMetadata(String),
     Permissions {
         targets: Vec<arcnix_core::permissions::Target>,
@@ -162,6 +166,8 @@ impl BrowserProxyControl {
 
 pub enum Update {
     Video(Result<Arc<crate::video_player::Source>, String>),
+    #[cfg(windows)]
+    Html(Result<String, String>),
     CodeFile(Result<serde_json::Value, String>),
     #[cfg(windows)]
     BrowserProxy(Result<(u16, String), String>),
@@ -199,6 +205,8 @@ pub enum Update {
         remote: bool,
         name: String,
     },
+    ManagedRemoteFiles(Result<(), String>),
+    FileAlias(Result<(String, bool), String>),
     Trash {
         remote: bool,
         result: Result<Vec<recycle::Item>, String>,
@@ -513,6 +521,26 @@ pub(super) fn start_with_limiter(
                 } else {
                     send(Update::Video(Err("Connect a server first".into())));
                 }
+                continue;
+            }
+            #[cfg(windows)]
+            if let Action::ReadHtml(path) = action {
+                let result = session
+                    .as_ref()
+                    .filter(|_| epoch == active_epoch)
+                    .ok_or_else(|| anyhow::anyhow!("Connect a server first"))
+                    .and_then(|remote| {
+                        remote.read_text(&path, || {
+                            anyhow::ensure!(
+                                generation.load(Ordering::Acquire) == epoch,
+                                "Connection changed"
+                            );
+                            Ok(())
+                        })
+                    })
+                    .map(|document| document.content)
+                    .map_err(|error| format!("{error:#}"));
+                send(Update::Html(result));
                 continue;
             }
             #[cfg(windows)]
@@ -850,6 +878,8 @@ pub(super) fn start_with_limiter(
                 Action::Permissions { .. } => Some(1),
                 Action::FileMetadata(_) => Some(2),
                 Action::CodeFile(_) => Some(3),
+                Action::ManageRemoteFiles(..) => Some(5),
+                Action::ResolveFileAlias(_) => Some(6),
                 _ => None,
             };
             let mut file_completed = false;
@@ -1129,6 +1159,25 @@ pub(super) fn start_with_limiter(
                                     name: to.rsplit('/').next().unwrap_or(&to).to_owned(),
                                 });
                             }
+                            Action::ManageRemoteFiles(action, paths) => {
+                                file_completed = true;
+                                publish_file_result(
+                                    remote.manage_files(action, &paths, || {
+                                        anyhow::ensure!(
+                                            generation.load(Ordering::Acquire) == epoch,
+                                            "Connection changed"
+                                        );
+                                        Ok(())
+                                    }),
+                                    |result| send(Update::ManagedRemoteFiles(result)),
+                                )?;
+                            }
+                            Action::ResolveFileAlias(path) => {
+                                file_completed = true;
+                                publish_file_result(remote.resolve_file_alias(&path), |result| {
+                                    send(Update::FileAlias(result))
+                                })?;
+                            }
                             Action::FileMetadata(path) => {
                                 file_completed = true;
                                 publish_file_result(remote.file_metadata(&path), |result| {
@@ -1201,6 +1250,8 @@ pub(super) fn start_with_limiter(
                                 remote: true,
                                 result: Err(message),
                             },
+                            5 => Update::ManagedRemoteFiles(Err(message)),
+                            6 => Update::FileAlias(Err(message)),
                             _ => Update::FileMetadata(Err(message)),
                         });
                     }

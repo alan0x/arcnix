@@ -5,6 +5,7 @@ import json
 import re
 import time
 
+from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, expect, eventually
 
 
@@ -31,11 +32,13 @@ def main():
         settings_file = home / '.arcnix/desktop.json'
         settings_file.parent.mkdir(exist_ok=True)
         settings_file.write_text(json.dumps({
-            'version': 1, 'theme': 'System', 'appearance': {'wallpaper': 'dunes'},
+            'version': 1, 'theme': 'System',
+            'appearance': {'wallpaper': 'dunes', 'dock': {'magnify': True}},
+            'files': {'folder_icons': {'/home/arcnix/Desktop/Projects': 'projects'}},
         }), encoding='utf-8')
 
         def preferences():
-            return json.loads(settings_file.read_text())['appearance']
+            return read_desktop_settings(settings_file)['appearance']
 
         with Desktop(out / 'desktop', peer.config([peer.profile('Customization fixture')], local)) as app:
             p = app.page
@@ -74,21 +77,30 @@ def main():
 
             def check_dock_selection():
                 active = p.locator('.desktop-dock-app.active')
-                margins = active.evaluate('''button => {
-                    const icon = button.querySelector('.desktop-app-icon');
-                    return [icon.offsetTop, icon.offsetLeft,
-                        button.clientHeight - icon.offsetTop - icon.offsetHeight,
-                        button.clientWidth - icon.offsetLeft - icon.offsetWidth];
+                assert active.evaluate('''button => {
+                    const icon = button.querySelector('.desktop-app-icon').getBoundingClientRect();
+                    const tile = button.getBoundingClientRect();
+                    const dock = button.closest('.desktop-dock').getBoundingClientRect();
+                    const zone = button.closest('.desktop-dock-zone');
+                    const indicator = getComputedStyle(button, '::after');
+                    const margins = [icon.top - tile.top, icon.left - tile.left,
+                        tile.bottom - icon.bottom, tile.right - icon.right];
+                    const left = zone.classList.contains('dock-left');
+                    const right = zone.classList.contains('dock-right');
+                    const center = left ? tile.left + parseFloat(indicator.left)
+                        : right ? tile.right - parseFloat(indicator.right)
+                        : tile.bottom - parseFloat(indicator.bottom);
+                    const target = left ? (dock.left + icon.left) / 2
+                        : right ? (dock.right + icon.right) / 2
+                        : (dock.bottom + icon.bottom) / 2;
+                    const [width, height] = [parseFloat(indicator.width), parseFloat(indicator.height)];
+                    return margins.every(margin => Math.abs(margin / icon.width - .12) < .03)
+                        && Math.abs(center - target) <= 1
+                        && ((left || right) ? height > width : width > height)
+                        && indicator.content !== 'none';
                 }''')
-                assert min(margins) >= 4 and max(margins) - min(margins) <= 1, margins
-                assert active.evaluate('''el => {
-                    const indicator = getComputedStyle(el, '::after');
-                    return indicator.content !== 'none'
-                        && parseFloat(indicator.height) > 0
-                        && parseFloat(indicator.width) > parseFloat(indicator.height)
-                        && indicator.backgroundColor !== 'rgba(0, 0, 0, 0)';
-                }''')
-                assert p.locator('.desktop-dock').evaluate('el => el.scrollWidth <= el.clientWidth')
+                assert p.locator('.desktop-dock').evaluate(
+                    'el => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight')
 
             def check_centered_dock(tray):
                 active = tray.locator('.desktop-dock-app.active')
@@ -98,14 +110,12 @@ def main():
                     const glyph = icon.getBoundingClientRect();
                     const top = icon.offsetTop;
                     const bottom = button.clientHeight - top - icon.offsetHeight;
-                    const indicator = getComputedStyle(button, '::after');
                     return Math.abs(top - bottom) <= 1
-                        && Math.abs((bar.top + bar.bottom - glyph.top - glyph.bottom) / 2) <= 1
-                        && bottom > parseFloat(indicator.bottom) + parseFloat(indicator.height);
+                        && Math.abs((bar.top + bar.bottom - glyph.top - glyph.bottom) / 2) <= 1;
                 }''')
 
             def saved():
-                expect(settings().get_by_text('Saved on server', exact=True)).to_be_visible()
+                expect(settings().locator('.desktop-settings-status')).to_be_empty()
 
             def close_settings():
                 p.locator('.desktop-window.active .window-close').click()
@@ -122,8 +132,25 @@ def main():
 
             app.connect()
             app.workspace('Desktop')
+            bubble = p.locator('.desktop-context-menu')
+            for label in ('Terminal', 'Settings'):
+                launcher = dock_button(label)
+                launcher.click(button='right')
+                expect(bubble).to_have_attribute('data-dock-menu-side', 'above')
+                icon_box = launcher.bounding_box()
+                bubble_box = bubble.bounding_box()
+                assert bubble_box['y'] + bubble_box['height'] < icon_box['y']
+                arrow = float(bubble.evaluate("el => el.style.getPropertyValue('--dock-menu-arrow').slice(0, -2)"))
+                assert abs(bubble_box['x'] + arrow - icon_box['x'] - icon_box['width'] / 2) < 2
+                if label == 'Settings':
+                    app.screenshot('dock-launcher-menu.png')
+                p.keyboard.press('Escape')
+                expect(bubble).to_have_count(0)
             expect(p.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-fjord')
             expect(desktop_button('Projects')).to_be_visible()
+            project_icon = desktop_button('Projects').locator('.folder-icon-outline-projects')
+            expect(project_icon).to_be_visible()
+            assert project_icon.evaluate("icon => getComputedStyle(icon, '::before').maskImage.includes('data:image/svg+xml;base64,')")
             expect(desktop_button('outside-home.txt')).to_have_count(0)
             expect(p.locator('.desktop-wallpaper-address')).to_contain_text('127.0.0.1:')
             check_hover(desktop_button('Monitor'))
@@ -132,15 +159,21 @@ def main():
             p.set_viewport_size(dict(width=900, height=650))
             check_hover(desktop_button(long_name), clipped=True)
             p.set_viewport_size(dict(width=1440, height=980))
-            desktop_button('Software store').click()
+            desktop_button('App Center').click()
             expect(p.locator('.desktop-window:not(.hidden)')).to_be_visible()
+            title = p.locator('.desktop-window.active .desktop-window-titlebar')
+            assert title.evaluate("""element => !element.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true, cancelable: true, button: 2,
+            }))""")
+            title.click(button='right')
+            expect(p.locator('.desktop-context-menu')).to_have_count(0)
             expect(desktop_button('Terminal')).to_be_visible()
             assert p.locator('.desktop-window.active').evaluate('el => el.offsetLeft') == 22
             dock_button('Show desktop').click()
             desktop_button('Projects').click()
             expect(app.file('plan.txt')).to_be_visible()
-            p.locator('.explorer-sidebar').get_by_role('button', name='Desktop', exact=True).click()
-            expect(p.locator('.explorer-titlebar .breadcrumb.current')).to_have_attribute(
+            p.locator('.files-sidebar').get_by_role('button', name='Desktop', exact=True).click()
+            expect(p.locator('.desktop-window.app-files.active .pathbar .breadcrumb.current')).to_have_attribute(
                 'aria-label', '/home/arcnix/Desktop',
             )
             dock_button('Show desktop').click()
@@ -161,13 +194,28 @@ def main():
             settings().get_by_role('button', name='Show server info', exact=True).click()
             saved()
             expect(p.locator('.desktop-wallpaper-copy')).to_have_count(0)
-            settings().get_by_role('button', name='Show Arcnix shortcuts', exact=True).click()
+            shortcuts = settings().locator('.desktop-launcher-choices')
+            monitor = shortcuts.get_by_role('checkbox', name='Monitor', exact=True)
+            terminal = shortcuts.get_by_role('checkbox', name='Terminal', exact=True)
+            expect(monitor).not_to_be_checked()
+            expect(terminal).to_be_checked()
+            terminal.uncheck()
             saved()
             expect(desktop_button('Terminal')).to_have_count(0)
+            expect(desktop_button('Files')).to_be_visible()
+            expect(dock_button('Terminal')).to_be_visible()
             expect(notes).to_be_visible()
+            eventually(lambda: set(preferences()['hidden']) == {'monitor', 'terminal'})
+            monitor.check()
+            saved()
+            expect(desktop_button('Monitor')).to_be_visible()
+            expect(desktop_button('Terminal')).to_have_count(0)
+            eventually(lambda: preferences()['hidden'] == ['terminal'])
             settings().get_by_role('button', name='Reset desktop icons', exact=True).click()
             saved()
             expect(desktop_button('Monitor')).to_be_visible()
+            expect(desktop_button('Terminal')).to_be_visible()
+            expect(terminal).to_be_checked()
             settings().get_by_role('button', name='Wallpaper', exact=True).click()
             expect(settings().locator('.wallpaper-choice')).to_have_text(['Fjord', 'Aurora', 'Terracotta'])
             terracotta = settings().get_by_role('button', name='Terracotta', exact=True)
@@ -213,9 +261,8 @@ def main():
             menu('Dock settings').click()
             settings().get_by_role('button', name='Large', exact=True).click()
             saved()
-            expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-large dock-magnify')
-            settings().get_by_role('button', name='Magnify Dock icons', exact=True).click()
-            saved()
+            expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-large')
+            expect(settings().get_by_role('button', name='Magnify Dock icons', exact=True)).to_have_count(0)
             settings().get_by_role('button', name='Automatically hide Dock', exact=True).click()
             saved()
             close_settings()
@@ -275,7 +322,8 @@ def main():
             expect(apps).to_have_css('border-top-width', '0px')
             expect(apps).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
             expect(apps).to_have_css('box-shadow', 'none')
-            expect(panel).to_have_css('padding-block', '2px')
+            assert panel.evaluate('''el => Math.abs(parseFloat(getComputedStyle(el).paddingBlockStart)
+                / el.querySelector('.desktop-app-icon').getBoundingClientRect().width - .045) < .01''')
             check_centered_dock(apps)
             assert abs(panel.get_by_role('button', name='Show desktop').bounding_box()['x'] - panel_box['x']) < 15
             p.set_viewport_size(dict(width=760, height=660))
@@ -287,16 +335,24 @@ def main():
             expect(settings()).to_have_css('flex-direction', 'row')
 
             slider = settings().get_by_role('slider', name='Dock icon size', exact=True)
-            for label, pixels in [('Small', 32), ('Medium', 44), ('Large', 54)]:
+            for label, pixels in [('Small', 32), ('Medium', 48), ('Large', 56)]:
                 settings().get_by_role('button', name=label, exact=True).click()
                 saved()
                 expect(slider).to_have_value(str(pixels))
+                check_dock_selection()
             track = slider.bounding_box()
+            for value, x, progress in [(24, 1, '0%'), (64, track['width'] - 1, '100%')]:
+                slider.click(position={'x': x, 'y': track['height'] / 2})
+                expect(slider).to_have_value(str(value))
+                assert slider.evaluate("el => el.style.getPropertyValue('--dock-size-progress')") == progress
+                eventually(lambda: preferences()['dock'].get('icon_size') == value)
+            settings().get_by_role('button', name='Large', exact=True).click()
+            eventually(lambda: 'icon_size' not in preferences()['dock'])
             y = track['y'] + track['height'] / 2
             p.mouse.move(track['x'] + track['width'] * .75, y)
             p.mouse.down()
             p.mouse.move(track['x'] + track['width'] * .9, y, steps=6)
-            custom_pixels = eventually(lambda: value if 54 < (value := int(slider.input_value())) < 64 else None)
+            custom_pixels = eventually(lambda: value if 56 < (value := int(slider.input_value())) < 64 else None)
             assert panel.evaluate("el => el.style.getPropertyValue('--dock-preview')") == f'{custom_pixels}px'
             assert 'icon_size' not in preferences()['dock']
             p.mouse.up()
@@ -304,7 +360,11 @@ def main():
             expect(panel).to_have_class(f'desktop-dock dock-size-{custom_pixels} dock-centered')
             app.screenshot('panel-dock.png')
 
+            saved()
             app.stop()
+            layout_path = desktop_settings_dir(settings_file) / 'preferences/desktop.json'
+            layout = json.loads(layout_path.read_bytes())
+            layout_path.write_text(json.dumps(dict(layout, show_apps=False)), encoding='utf-8')
             app.launch()
             p = app.page
             p.on('pageerror', lambda error: errors.append(str(error)))
@@ -313,6 +373,17 @@ def main():
             expect(p.locator('.dock-panel-zone > .desktop-dock')).to_have_class(f'desktop-dock dock-size-{custom_pixels} dock-centered')
             expect(p.locator('.desktop-panel-time')).not_to_be_empty()
             app.application('Settings')
+            settings().get_by_role('button', name='Desktop', exact=True).click()
+            shortcuts = settings().locator('.desktop-launcher-choices')
+            files_shortcut = shortcuts.get_by_role('checkbox', name='Files', exact=True)
+            expect(files_shortcut).not_to_be_checked()
+            expect(desktop_button('Files')).to_have_count(0)
+            files_shortcut.check()
+            saved()
+            expect(desktop_button('Files')).to_be_visible()
+            expect(desktop_button('Terminal')).to_have_count(0)
+            expect(desktop_button('Settings')).to_have_count(0)
+            eventually(lambda: {'terminal', 'settings', 'docker'} <= set(preferences()['hidden']))
             settings().get_by_role('button', name='Dock', exact=True).click()
             expect(settings().get_by_role('button', name='Center icons', exact=True)).to_have_attribute('aria-pressed', 'true')
             expect(settings().get_by_role('button', name='Show Dock status bar', exact=True)).to_have_count(0)
@@ -332,7 +403,18 @@ def main():
             status_toggle.click()
             saved()
             status = p.locator('.desktop-dock-status')
+
+            def check_clock_inset():
+                assert status.evaluate('''el => {
+                    const dock = el.closest('.desktop-dock');
+                    const frame = dock.getBoundingClientRect();
+                    const home = dock.querySelector('.desktop-dock-home .action-glyph').getBoundingClientRect();
+                    const clock = el.querySelector('.desktop-panel-clock').getBoundingClientRect();
+                    return Math.abs((home.left - frame.left) - (frame.right - clock.right)) <= 2;
+                }''')
+
             expect(status).to_have_css('border-inline-start-style', 'solid')
+            check_clock_inset()
             assert status.evaluate('el => parseFloat(getComputedStyle(el).borderInlineStartWidth) > 0')
             expect(status.locator('.action-glyph')).to_have_count(0)
             expect(status).not_to_contain_text(re.compile(r'\b(?:SSH|SFTP)\b'))
@@ -343,20 +425,15 @@ def main():
             assert status.evaluate('''el => {
                 const time = el.querySelector('.desktop-panel-time').getBoundingClientRect();
                 const date = el.querySelector('.desktop-panel-date').getBoundingClientRect();
-                return date.top > time.top && Math.abs(el.getBoundingClientRect().right - time.right) < 1;
+                return date.top > time.top && Math.abs(date.right - time.right) < 1;
             }''')
             assert preferences()['dock']['floating_status'] is True
-            settings().get_by_role('button', name='Magnify Dock icons', exact=True).click()
-            saved()
             active_dock_button = dock_button('Settings')
+            dock_icon = active_dock_button.locator('.desktop-app-icon')
+            icon_box = dock_icon.bounding_box()
             active_dock_button.hover()
-            eventually(lambda: active_dock_button.evaluate('''button => {
-                const icon = button.querySelector('.desktop-app-icon');
-                const tile = button.getBoundingClientRect();
-                const graphic = icon.getBoundingClientRect();
-                return graphic.width / icon.offsetWidth > 1.19
-                    && Math.abs((tile.top + tile.bottom) - (graphic.top + graphic.bottom)) < 1;
-            }'''))
+            expect(dock_icon).to_have_css('transform', 'none')
+            assert dock_icon.bounding_box() == icon_box
             p.mouse.move(25, 100)
             app.screenshot('floating-dock-status.png')
             settings().get_by_role('button', name='Panel mode', exact=True).click()
@@ -371,6 +448,7 @@ def main():
             p.set_viewport_size(dict(width=680, height=660))
             expect(settings()).to_have_css('flex-direction', 'column')
             check_dock_selection()
+            check_clock_inset()
             assert status.evaluate('el => el.scrollWidth <= el.clientWidth')
             p.set_viewport_size(dict(width=760, height=660))
             tabs = settings().locator('.desktop-settings-tabs')
@@ -385,16 +463,58 @@ def main():
                 if label == 'Wallpaper':
                     expect(preferences_pane.get_by_role('textbox', name='Local image path')).to_be_editable()
                     app.screenshot('compact-wallpaper-settings.png')
+            p.set_viewport_size(dict(width=1440, height=980))
+            settings().get_by_role('button', name='Dock', exact=True).click()
+            expect(settings().get_by_role('button', name='Bottom', exact=True)).to_have_attribute('aria-pressed', 'true')
+            p.locator('.app-settings.active .window-maximize').click()
+            bubble = p.locator('.desktop-context-menu')
+            for edge, menu_side in [('left', 'right'), ('right', 'left')]:
+                settings().get_by_role('button', name=edge.title() + ' side', exact=True).click()
+                zone = p.locator(f'.desktop-dock-zone.dock-{edge}')
+                expect(zone).to_be_visible()
+                eventually(lambda: preferences()['dock'].get('position') == edge)
+                dock = zone.locator('.desktop-dock')
+                expect(dock).to_have_css('flex-direction', 'column')
+                check_dock_selection()
+                side_clock = dock.locator('.desktop-panel-clock')
+                expect(side_clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^\d{2}:\d{2}$'))
+                expect(side_clock.locator('.desktop-panel-date')).to_have_text(re.compile(r'^\d{2}/\d{2}$'))
+                tooltip = side_clock.locator('.desktop-clock-tooltip')
+                expect(tooltip).to_be_hidden()
+                side_clock.hover()
+                expect(tooltip).to_be_visible()
+                expect(tooltip).to_contain_text(re.compile(r'\d{1,2}:\d{2}:\d{2}.*\d{4}.*UTC'))
+                app.screenshot(f'{edge}-dock-clock.png')
+                dock_button('Settings').click(button='right')
+                expect(bubble).to_have_attribute('data-dock-menu-side', menu_side)
+                p.keyboard.press('Escape')
+                expect(bubble).to_have_count(0)
+                dock_box = dock.bounding_box()
+                window_box = p.locator('.app-settings.maximized').bounding_box()
+                if edge == 'left':
+                    assert dock_box['x'] + dock_box['width'] < window_box['x']
+                    dock_button('Settings').drag_to(dock_button('Code'), target_position={'x': 12, 'y': 4})
+                    eventually(lambda: preferences()['dock']['order'][0] == 'settings')
+                else:
+                    assert window_box['x'] + window_box['width'] < dock_box['x']
+            settings().get_by_role('button', name='Panel mode', exact=True).click()
+            expect(p.locator('.dock-right.dock-panel-zone')).to_be_visible()
+            expect(settings().get_by_role('button', name='Align top', exact=True)).to_be_visible()
+            expect(p.locator('.dock-right .desktop-panel-time')).to_have_text(re.compile(r'^\d{2}:\d{2}$'))
+            settings().get_by_role('button', name='Reset Dock', exact=True).click()
+            expect(p.locator('.dock-side-zone')).to_have_count(0)
+            expect(settings().get_by_role('button', name='Bottom', exact=True)).to_have_attribute('aria-pressed', 'true')
             assert not errors, errors
             app.screenshot('restored.png')
     print(json.dumps(dict(output=str(out), checks=[
-        'A default floating window uses the standard inset and can cover shortcuts; login HOME files open in Explorer or Code',
-        'Desktop icon ordering, visibility toggles and reset use the remote preference file',
+        'A default floating window uses the standard inset and can cover shortcuts; login HOME files open in Files or Code',
+        'Desktop shortcut visibility is saved per app, supports context-menu hiding and reset, and preserves other hidden apps when showing one from an older all-hidden layout',
         'Shortcut hover surrounds the icon and label at both desktop sizes and clips long names',
         'Built-in wallpaper, remote SVG and uploaded local PNG render through the WebView',
-        'Dock reorder, size, auto-hide, magnification and unpin survive restart',
+        'Dock reorder, size, auto-hide and unpin survive restart, and hovering leaves icon size unchanged',
         'Full-width panel, server clock, persistent icon alignment, live slider preview and saved custom size',
-        'Equal Dock icon margins, centered magnification and a two-line floating clock that ticks every second',
+        'Proportional icon margins, centered activity indicators and a two-line bottom clock that ticks every second',
+        'Dock position, compact side clocks with full tooltips, inward menus and maximized window clearance',
         'The active Dock icon has a visible underline and all seven Settings pages fit the compact layout',
     ]), indent=2))
 

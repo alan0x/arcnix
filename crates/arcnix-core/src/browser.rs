@@ -10,6 +10,7 @@ use crate::ServerProfile;
 
 pub const URL_LIMIT: usize = 4096;
 pub const BOOKMARK_LIMIT: usize = 32;
+pub(crate) const BOOKMARK_TITLE_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,7 +61,7 @@ pub(crate) fn validate_bookmarks(bookmarks: &[Bookmark]) -> Result<()> {
     for bookmark in bookmarks {
         ensure!(
             !bookmark.title.is_empty()
-                && bookmark.title.len() <= 256
+                && bookmark.title.len() <= BOOKMARK_TITLE_LIMIT
                 && !bookmark.title.chars().any(char::is_control),
             "Invalid bookmark title"
         );

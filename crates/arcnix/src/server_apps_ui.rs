@@ -23,17 +23,17 @@ pub(super) struct DesktopState {
     pub preferences_pending: Option<u64>,
     pub save_pending: Option<u64>,
     pub preferences_error: String,
-    pub saved: bool,
     writing: Option<DesktopPreferences>,
     pending: Option<Pending<DesktopPreferences>>,
     conflict: Option<(DesktopPreferences, Vec<String>)>,
     sync_after: Option<Instant>,
     journal_error: bool,
-    pub explorer_locations: Option<Vec<arcnix_core::remote::ExplorerLocation>>,
-    pub explorer_locations_pending: Option<u64>,
-    pub explorer_tag: Option<explorer_ui::TagFilter>,
-    pub explorer_open_pending: Option<explorer_ui::ItemRequest>,
-    pub explorer_search: explorer_search::Search,
+    pub files_locations: Option<Vec<arcnix_core::remote::FileLocation>>,
+    pub files_locations_pending: Option<u64>,
+    pub files_tag: Option<files_ui::TagFilter>,
+    pub files_open_pending: Option<files_ui::ItemRequest>,
+    pub files_search: files_search::Search,
+    pub files_cleanup: files_ui::Cleanup,
     pub customization: desktop_customization_ui::Runtime,
     pub network: network_ui::Runtime,
     pub processes: processes_ui::Runtime,
@@ -71,7 +71,7 @@ impl Ui {
         #[cfg(windows)]
         browser_cookies::tick(self);
         if let Some(path) = self.desktop_sync_path() {
-            match sync::load(&path) {
+            match sync::load_desktop_pending(&path) {
                 Ok(pending) => self.state.revise(|s| s.server_apps.pending = pending),
                 Err(error) => self.state.revise(|s| {
                     s.server_apps.journal_error = true;
@@ -165,7 +165,7 @@ impl Ui {
             .desktop_sync_path()
             .ok_or_else(|| anyhow::anyhow!("Missing SSH sync identity"))?;
         if let Some(pending) = pending {
-            sync::save(&path, pending)
+            sync::save_desktop_pending(&path, pending)
         } else {
             match std::fs::remove_file(path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
@@ -224,7 +224,6 @@ impl Ui {
                 s.server_apps.save_pending = Some(serial);
                 s.server_apps.writing = Some(desired);
                 s.server_apps.pending = Some(journal);
-                s.server_apps.saved = false;
             });
         }
     }
@@ -261,7 +260,6 @@ impl Ui {
         self.state.revise(|s| {
             s.server_apps.pending = Some(pending);
             s.server_apps.preferences_error.clear();
-            s.server_apps.saved = false;
             s.server_apps.sync_after = None;
         });
         self.send_desktop_sync();
@@ -359,13 +357,17 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         desktop_customization_ui::event(ui, serial, result);
         return;
     }
+    if files_ui::cleanup_pending(ui, serial) {
+        files_ui::cleanup_completed(ui, serial, result);
+        return;
+    }
     if ui.state.with(|s| {
         s.server_apps
-            .explorer_open_pending
+            .files_open_pending
             .as_ref()
             .is_some_and(|pending| pending.serial == serial)
     }) {
-        explorer_ui::item_opened(ui, result);
+        files_ui::item_opened(ui, result);
         return;
     }
     let kind = ui.state.with(|s| {
@@ -375,7 +377,7 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
             1
         } else if s.server_apps.save_pending == Some(serial) {
             2
-        } else if s.server_apps.explorer_locations_pending == Some(serial) {
+        } else if s.server_apps.files_locations_pending == Some(serial) {
             4
         } else {
             3
@@ -472,9 +474,9 @@ pub(super) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
             }
         }
         (4, reply) => {
-            s.server_apps.explorer_locations_pending = None;
-            s.server_apps.explorer_locations = Some(match reply {
-                Ok(Reply::ExplorerLocations(locations)) => locations,
+            s.server_apps.files_locations_pending = None;
+            s.server_apps.files_locations = Some(match reply {
+                Ok(Reply::FileLocations(locations)) => locations,
                 _ => Vec::new(),
             });
         }
@@ -533,7 +535,6 @@ fn finish_desktop_sync(ui: &Ui, result: std::result::Result<Reply, String>) {
                     ui.state.revise(|s| {
                         s.server_apps.preferences = saved;
                         s.server_apps.pending = newer;
-                        s.server_apps.saved = s.server_apps.pending.is_none();
                         s.server_apps.preferences_error.clear();
                     });
                     ui.send_desktop_sync();
@@ -572,6 +573,22 @@ pub(super) fn settings(ui: Ui) -> impl Widget {
                 let content = match page {
                     SettingsPage::General => fragment(general_settings(ui.clone())),
                     SettingsPage::Network => fragment(network_ui::page(ui.clone())),
+                    SettingsPage::DefaultApps => fragment(
+                        col().class("desktop-settings-pane").fill(
+                            col().class("desktop-settings-card").fill((
+                                text()
+                                    .class("section-title")
+                                    .content(i18n::bind("Default apps")),
+                                text().class("subtle").content(i18n::bind(
+                                    "Manage default and alternative apps for remote file extensions.",
+                                )),
+                                file_open::settings(ui.clone()),
+                                text()
+                                    .class("error")
+                                    .content(state.map(|s| s.settings.error.clone())),
+                            )),
+                        ),
+                    ),
                     SettingsPage::Desktop => fragment(appearance_settings(ui.clone())),
                     SettingsPage::Wallpaper => {
                         fragment(desktop_customization_ui::wallpaper_controls(ui.clone()))
@@ -579,7 +596,7 @@ pub(super) fn settings(ui: Ui) -> impl Widget {
                     SettingsPage::Dock => {
                         fragment(desktop_customization_ui::dock_controls(ui.clone()))
                     }
-                    SettingsPage::Shortcuts => fragment(shortcut_reference(ui.clone())),
+                    SettingsPage::Shortcuts => fragment(desktop_shortcuts_ui::controls(ui.clone())),
                     SettingsPage::About => fragment(settings::about(ui.clone())),
                 };
                 let keep_local = ui.clone();
@@ -587,7 +604,10 @@ pub(super) fn settings(ui: Ui) -> impl Widget {
                 col().class("desktop-preferences").fill((
                     content,
                     when(
-                        !matches!(page, SettingsPage::Network | SettingsPage::About),
+                        !matches!(
+                            page,
+                            SettingsPage::Network | SettingsPage::DefaultApps | SettingsPage::About
+                        ),
                         move || {
                             let keep_local = keep_local.clone();
                             let keep_remote = keep_remote.clone();
@@ -637,8 +657,6 @@ pub(super) fn settings(ui: Ui) -> impl Widget {
                                             && !s.server_apps.preferences_loaded
                                         {
                                             "Loading…"
-                                        } else if s.server_apps.saved {
-                                            "Saved on server"
                                         } else {
                                             ""
                                         }
@@ -687,7 +705,7 @@ fn general_settings(ui: Ui) -> impl Widget {
       col().class("desktop-settings-card").fill((
         row().class("section-heading").fill((
             text().class("section-title").content(i18n::bind("Server desktop")),
-            help_ui::tip("Server desktop settings", "Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
+            help_ui::tip("Server desktop settings", "Saved under ~/.arcnix/desktop/ for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
         )),
         row().class("choice-list").fill((
             text_action("Reload settings", Icon::Refresh)
@@ -713,7 +731,7 @@ fn appearance_settings(ui: Ui) -> impl Widget {
       col().class("desktop-settings-card").fill((
         row().class("section-heading").fill((
             text().class("section-title").content(i18n::bind("Appearance")),
-            help_ui::tip("Desktop settings", "Saved to ~/.arcnix/desktop.json for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
+            help_ui::tip("Desktop settings", "Saved under ~/.arcnix/desktop/ for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
         )),
         row().class("choice-list").fill(fragment(
             [(Theme::System, "Follow application"), (Theme::Light, "Light"), (Theme::Dark, "Dark")]
@@ -735,59 +753,8 @@ fn appearance_settings(ui: Ui) -> impl Widget {
       )),
       col().class("desktop-settings-card").fill((
           text().class("section-title").content(i18n::bind("Desktop layout")),
-          desktop_customization_ui::desktop_controls(ui),
+          desktop_customization_ui::desktop_controls(ui.clone()),
       )),
-    ))
-}
-
-fn shortcut_group(title: &'static str, bindings: &[(&'static str, &'static str)]) -> impl Widget {
-    col()
-        .class("desktop-settings-card desktop-shortcut-group")
-        .fill((
-            text().class("section-title").content(i18n::bind(title)),
-            fragment(
-                bindings
-                    .iter()
-                    .map(|&(label, keys)| {
-                        row().class("desktop-key-binding").fill((
-                            text().content(i18n::bind(label)),
-                            text().class("desktop-key").content(keys),
-                        ))
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        ))
-}
-
-fn shortcut_reference(ui: Ui) -> impl Widget {
-    col().class("desktop-settings-pane").fill((
-        row().class("section-heading").fill((
-            text().class("section-title").content(i18n::bind("Keyboard shortcuts")),
-            help_ui::tip("Keyboard shortcuts", "Use desktop shortcuts from the window title bar or Dock. Terminal keeps its own shortcuts. After switching to Terminal, press Enter to focus its input."),
-        )),
-        desktop_shortcuts_ui::controls(ui),
-        shortcut_group("Desktop", &[
-            ("Move focus", "Tab / Shift+Tab"),
-            ("Activate focused control", "Enter / Space"),
-            ("Exit desktop fullscreen", "Esc"),
-        ]),
-        shortcut_group("Terminal", &[
-            ("Open tab", "Ctrl+Shift+T"),
-            ("Close tab", "Ctrl+Shift+W"),
-            ("Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"),
-            ("Copy", "Ctrl+Shift+C"),
-            ("Copy selection / interrupt", "Ctrl+C"),
-            ("Paste", "Ctrl+Shift+V"),
-            ("Select all", "Ctrl+Shift+A"),
-            ("Clear display", "Ctrl+Shift+L"),
-            ("Context menu", "Shift+F10"),
-        ]),
-        shortcut_group("File explorer", &[
-            ("Edit path", "Ctrl+L"),
-            ("Select all", "Ctrl+A"),
-            ("Browse entries", "↑ ↓ ← → / Home / End"),
-            ("Select focused entry", "Space"),
-        ]),
-        shortcut_group("Code", &[("Save", "Ctrl+S")]),
+      files_ui::cleanup_settings(ui),
     ))
 }

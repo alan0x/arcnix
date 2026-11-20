@@ -1,8 +1,11 @@
 """Exercise the visible Code menus and the embedded SSH terminal over a real connection."""
+import json
 import re
 import time
 
+from desktop_browser_smoke import native_regions
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
+from desktop_windows_smoke import native_bounds, native_window
 
 
 def menu_item(page, title, command):
@@ -28,6 +31,36 @@ def invoke(page, title, command):
     item.click()
 
 
+def check_titlebar_drag(app):
+    page = app.page
+    window = page.locator('.desktop-window.app-code')
+    bridge = window.locator('.browser-viewport-input')
+
+    def menu_hit_region():
+        viewport = json.loads(bridge.input_value())
+        body, menu, command = (viewport[key] for key in ('area', 'menu_slot', 'command_center'))
+        y = (body['top'] - command['top']) // 2
+        # The first menu is in the child HWND. The blank end of its slot is
+        # in the host so it starts a child-window drag.
+        points = [(menu['left'] - body['left'] + 8, y), (menu['right'] - body['left'] - 6, y)]
+        return native_regions(app.process.pid, points) == [[True, False]]
+
+    eventually(menu_hit_region)
+    root = native_window(app.process.pid)
+    before, root_before = window.bounding_box(), native_bounds(root)
+    slot = window.locator('.code-menu-slot').bounding_box()
+    x, y = slot['x'] + slot['width'] - 6, slot['y'] + slot['height'] / 2
+    dx, dy = 46, 28
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + dx, y + dy, steps=8)
+    page.mouse.up()
+    after = window.bounding_box()
+    assert abs(after['x'] - before['x'] - dx) <= 2, (before, after)
+    assert abs(after['y'] - before['y'] - dy) <= 2, (before, after)
+    assert native_bounds(root) == root_before
+
+
 def main():
     out = ROOT / 'artifacts/code-menus' / str(time.time_ns())
     with Peer(out / 'peer') as peer:
@@ -38,11 +71,14 @@ def main():
         profile = peer.profile('Code')
         profile['initial_remote_path'] = '/project'
         with Desktop(out / 'app', peer.config([profile], out)) as app:
+            app.page.set_viewport_size(dict(width=1760, height=980))
+            app.page.emulate_media(reduced_motion='reduce')
             app.connect()
             app.application('Code')
             page = app.code()
             tree = page.get_by_role('treeitem', name='notes.md', exact=True)
             expect(tree).to_be_visible()
+            check_titlebar_drag(app)
             expect(menu_item(page, 'File', 'Save')).to_be_disabled()
             page.keyboard.press('Escape')
             invoke(page, 'File', 'New File')
@@ -89,7 +125,7 @@ def main():
             expect(rows).to_contain_text('BURST COMPLETE', timeout=45000)
             command('exit')
             expect(rows).to_have_count(0)
-            print('Menus, SFTP save, Markdown split preview, SSH session switching, UTF-8 and output flow passed.')
+            print('Titlebar drag, menus, SFTP save, Markdown preview, SSH session switching, UTF-8 and output flow passed.')
 
 
 if __name__ == '__main__':

@@ -13,6 +13,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
+from server_apps_fixture import read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, eventually, executable, expect
 
 
@@ -273,8 +274,8 @@ def main():
             browser.get_by_role('button', name='Bookmarks', exact=True).click()
             bookmark = browser.locator('.browser-bookmark-panel').get_by_role('button', name='Routed second page', exact=True)
             expect(bookmark).to_be_visible()
-            saved = eventually(lambda: next(iter(first.root.rglob('desktop.json')), None))
-            eventually(lambda: bool(json.loads(saved.read_text(encoding='utf-8')).get('browser_bookmarks')))
+            saved = first.root / 'home/arcnix/.arcnix/desktop.json'
+            eventually(lambda: bool(read_desktop_settings(saved).get('browser_bookmarks')))
             bookmark.click()
 
             visit(f'http://127.0.0.1:{port}/loopback', 'Remote loopback')

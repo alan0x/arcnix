@@ -228,6 +228,7 @@ impl ServerProfile {
 impl AppConfig {
     pub fn validate(&self) -> Result<()> {
         self.settings.connection.validate()?;
+        crate::file_associations::validate(&self.settings.file_associations)?;
         ensure!(
             self.backup_evidence.len() <= 512,
             "Too many backup confirmation records"

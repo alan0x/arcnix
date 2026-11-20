@@ -7,6 +7,7 @@ pub(super) struct SettingsState {
     pub log_error: String,
     pub log_directory_draft: Option<String>,
     pub transfer_concurrency_draft: Option<String>,
+    pub file_association_filter: String,
 }
 
 impl Ui {
@@ -77,6 +78,53 @@ pub(super) fn choice(
         .on_press(action)
 }
 
+fn hidden_file_choices(ui: &Ui) -> (sapid::Button, sapid::Button) {
+    let show = ui.clone();
+    let hide = ui.clone();
+    (
+        choice(
+            ui,
+            "Show hidden files",
+            |s| s.config.settings.show_hidden_files,
+            move || show.change_hidden_files(true),
+        ),
+        choice(
+            ui,
+            "Hide hidden files",
+            |s| !s.config.settings.show_hidden_files,
+            move || hide.change_hidden_files(false),
+        ),
+    )
+}
+
+pub(super) fn files_dialog(ui: Ui) -> impl Widget {
+    when(
+        ui.state.map(|s| s.dialog == Some(Dialog::FilesSettings)),
+        move || {
+            let close = ui.clone();
+            modal(
+                ui.clone(),
+                "Files settings",
+                (
+                    text().class("dialog-description").content(i18n::bind(
+                        "Show or hide dotfiles in local and remote file lists.",
+                    )),
+                    row()
+                        .class("choice-list settings-choices")
+                        .fill(hidden_file_choices(&ui)),
+                    text()
+                        .class("dialog-error")
+                        .content(i18n::bind(ui.state.map(|s| s.settings.error.clone()))),
+                ),
+                sapid::button()
+                    .class("button primary")
+                    .label(i18n::bind("完成"))
+                    .on_press(move || close.close_dialog()),
+            )
+        },
+    )
+}
+
 fn section(
     ui: &Ui,
     category: navigation::SettingsSection,
@@ -113,8 +161,6 @@ pub(super) fn page(ui: Ui) -> impl Widget {
     let system = ui.clone();
     let dark = ui.clone();
     let light = ui.clone();
-    let show = ui.clone();
-    let hide = ui.clone();
     let intervals = ui.clone();
     col().class("settings-page").fill((
         feedback(
@@ -175,22 +221,16 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                 navigation::SettingsSection::Files,
                 "Hidden files",
                 "Show or hide dotfiles in local and remote file lists.",
-                (
-                    choice(
-                        &ui,
-                        "Show hidden files",
-                        |s| s.config.settings.show_hidden_files,
-                        move || show.change_hidden_files(true),
-                    ),
-                    choice(
-                        &ui,
-                        "Hide hidden files",
-                        |s| !s.config.settings.show_hidden_files,
-                        move || hide.change_hidden_files(false),
-                    ),
-                ),
+                hidden_file_choices(&ui),
             ),
             preferences_ui::display(ui.clone()),
+            section(
+                &ui,
+                navigation::SettingsSection::Files,
+                "Default apps",
+                "Manage default and alternative apps for remote file extensions.",
+                file_open::settings(ui.clone()),
+            ),
             preferences_ui::transfers(ui.clone()),
             section(
                 &ui,

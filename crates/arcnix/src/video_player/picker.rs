@@ -10,7 +10,20 @@ pub(crate) struct Directory {
 
 impl Player {
     pub(crate) fn browse(&self, ui: &Ui) {
-        self.read_directory(ui, ui.state.with(|s| s.remote_path.clone()));
+        ui.open_dialog(Dialog::OpenVideo);
+        if let Some(path) = ui.state.with(|s| {
+            (s.dialog == Some(Dialog::OpenVideo)).then(|| {
+                s.video
+                    .as_ref()
+                    .and_then(|video| video.path.rsplit_once('/'))
+                    .map_or_else(
+                        || s.remote_path.clone(),
+                        |(parent, _)| if parent.is_empty() { "/" } else { parent }.to_owned(),
+                    )
+            })
+        }) {
+            self.read_directory(ui, path);
+        }
     }
 
     fn read_directory(&self, ui: &Ui, path: String) {
@@ -28,15 +41,12 @@ impl Player {
         });
     }
 
-    fn dismiss_picker(&self, ui: &Ui) {
-        ui.state.revise(|s| s.video_picker = None);
-    }
-
     pub(crate) fn awaiting_directory(&self, ui: &Ui, serial: u64) -> bool {
         ui.state.with(|s| {
-            s.video_picker
-                .as_ref()
-                .is_some_and(|d| d.request == Some(serial))
+            s.dialog == Some(Dialog::OpenVideo)
+                && s.video_picker
+                    .as_ref()
+                    .is_some_and(|d| d.request == Some(serial))
         })
     }
 
@@ -62,16 +72,26 @@ impl Player {
     }
 }
 
-pub(super) fn panel(ui: Ui) -> impl Widget {
+pub(super) fn dialog(ui: Ui) -> impl Widget {
+    when(
+        ui.state.map(|s| s.dialog == Some(Dialog::OpenVideo)),
+        move || {
+            let cancel = ui.clone();
+            modal(
+                ui.clone(),
+                "Open video",
+                panel(ui.clone()),
+                btn("取消", move || cancel.close_dialog()).class("button"),
+            )
+        },
+    )
+}
+
+fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let up = ui.clone();
     let refresh = ui.clone();
-    let close = ui.clone();
     col().class("player-picker").fill((
-        row().class("player-picker-heading").fill((
-            text().content(i18n::bind("Open video")),
-            close_action("Cancel").on_press(move || close.player.dismiss_picker(&close)),
-        )),
         row().class("player-picker-nav").fill((
             icon_action("Parent folder", Icon::Up)
                 .enabled(state.map(|s| s.video_picker.as_ref().is_some_and(|d| d.path != "/")))
@@ -156,8 +176,5 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
                     }
                 })),
         )),
-        text()
-            .class("player-picker-formats")
-            .content(EXTENSIONS.join(" · ")),
     ))
 }

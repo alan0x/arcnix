@@ -19,7 +19,12 @@ const ORIGIN: &str = "http://arcnixcode.localhost";
 const ORIGIN: &str = "arcnixcode://localhost";
 
 #[cfg(windows)]
-fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) -> Result<()> {
+fn position(
+    view: &WebView,
+    viewport: &native_viewport::Viewport,
+    picker: bool,
+    menu_width: Option<i32>,
+) -> Result<()> {
     use native_viewport::BoxPx;
     let mut port = viewport.clone();
     let body = port.area.context("Missing Code content bounds")?;
@@ -43,8 +48,17 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
             bottom: body.top,
             ..body
         };
+        // Keep the full slot for responsive menu layout. Only the part with
+        // menu buttons should intercept clicks in the desktop titlebar.
+        let menu_hit = menu.and_then(|menu| {
+            let width = menu_width.unwrap_or(menu.width()).min(menu.width());
+            (width > 0).then_some(BoxPx {
+                right: menu.left + width,
+                ..menu
+            })
+        });
         let mut left = strip.left;
-        for visible in [menu, picker.then_some(slot)].into_iter().flatten() {
+        for visible in [menu_hit, picker.then_some(slot)].into_iter().flatten() {
             if visible.left > left {
                 port.clip.push(BoxPx {
                     left,
@@ -73,7 +87,12 @@ fn position(view: &WebView, viewport: &native_viewport::Viewport, picker: bool) 
 }
 
 #[cfg(not(windows))]
-fn position(view: &WebView, viewport: &native_viewport::Viewport, _picker: bool) -> Result<()> {
+fn position(
+    view: &WebView,
+    viewport: &native_viewport::Viewport,
+    _picker: bool,
+    _menu_width: Option<i32>,
+) -> Result<()> {
     use wry::dpi::{PhysicalPosition, PhysicalSize};
     let Some(area) = viewport
         .area
@@ -149,7 +168,9 @@ pub(super) struct Host {
     epoch: Option<u64>,
     view: Option<WebView>,
     ready: bool,
+    save_shortcut: Option<String>,
     picker: bool,
+    menu_width: Option<i32>,
     bounds: Option<native_viewport::Viewport>,
 }
 impl Host {
@@ -164,7 +185,9 @@ impl Host {
             epoch: None,
             view: None,
             ready: false,
+            save_shortcut: None,
             picker: false,
+            menu_width: None,
             bounds: None,
         }
     }
@@ -186,17 +209,28 @@ impl Host {
                 "pageBytes": arcnix_core::text_files::PAGE_BYTES,
                 "zh": i18n::translate("Save") == "保存",
                 "dark": server_apps_ui::desktop_dark(s),
+                "saveShortcut": server_apps_ui::current(s).shortcuts.binding(arcnix_core::desktop_shortcuts::Action::CodeSave),
             })
         });
         let tx = self.tx.clone();
         let wake = self.wake.clone().context("Desktop not ready")?;
         let serial = self.serial;
+        let script = format!(
+            "window.arcnixWorkspace={opts};\n{}",
+            include_str!("../assets/shortcut-chords.js")
+        );
+        #[cfg(windows)]
+        let script = format!("{script}\n{}", include_str!("../assets/code-menubar.js"));
+        #[cfg(not(windows))]
+        let script = format!(
+            "{script}\nwindow.addEventListener('contextmenu', event => event.preventDefault(), true);"
+        );
         let view = WebViewBuilder::new()
             .with_visible(false)
             .with_focused(false)
             .with_incognito(true)
             .with_custom_protocol("arcnixcode".into(), |_, req| asset(req))
-            .with_initialization_script(format!("window.arcnixWorkspace={opts};"))
+            .with_initialization_script(script)
             .with_navigation_handler(|url| {
                 url == format!("{ORIGIN}/index.html") || url == "about:blank"
             })
@@ -217,6 +251,22 @@ impl Host {
             })
             .with_url(format!("{ORIGIN}/index.html"))
             .build_as_child(window)?;
+        #[cfg(windows)]
+        {
+            use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings9;
+            use windows::core::Interface;
+            use wry::WebViewExtWindows;
+
+            // The bundled workbench declares a native drag region for its
+            // standalone window. In a child WebView that would drag Arcnix.
+            unsafe {
+                let settings = view.controller().CoreWebView2()?.Settings()?;
+                settings.SetAreDefaultContextMenusEnabled(false)?;
+                if let Ok(settings) = settings.cast::<ICoreWebView2Settings9>() {
+                    settings.SetIsNonClientRegionSupportEnabled(false)?;
+                }
+            }
+        }
         Ok(view)
     }
     pub fn hide(&mut self) {
@@ -245,7 +295,9 @@ impl Host {
             self.view = None;
             self.bounds = None;
             self.ready = false;
+            self.save_shortcut = None;
             self.picker = false;
+            self.menu_width = None;
             self.epoch = epoch;
             self.serial += 1;
             if epoch.is_some() {
@@ -274,6 +326,13 @@ impl Host {
                     layout_changed |= visible != self.picker;
                     self.picker = visible;
                 }
+                Some("menuWidth") => {
+                    if let Some(width) = msg["width"].as_i64().filter(|n| (0..=32768).contains(n)) {
+                        let width = Some(width as i32);
+                        layout_changed |= width != self.menu_width;
+                        self.menu_width = width;
+                    }
+                }
                 Some("error") => self.ui.state.revise(|s| {
                     s.code.error = msg["message"]
                         .as_str()
@@ -285,6 +344,15 @@ impl Host {
                     .state
                     .revise(|s| s.code.dirty = msg["value"] == true),
                 Some("terminal") => crate::code_terminal::request(&self.ui, msg),
+                Some("fileOpened") => {
+                    if let Some(path) = msg["path"].as_str().filter(|path| path.len() <= 4096) {
+                        file_open::remember(
+                            &self.ui,
+                            path,
+                            arcnix_core::file_associations::FileApp::Code,
+                        );
+                    }
+                }
                 Some("focus") => {
                     if self.ui.state.with(|s| {
                         server_desktop::visible(s)
@@ -325,6 +393,21 @@ impl Host {
                 .revise(|s| std::mem::take(&mut s.code.replies));
             let _ = view.evaluate_script(&format!("window.arcnixReply({})", json!(replies)));
         }
+        if self.ready {
+            let shortcut = self.ui.state.with(|s| {
+                server_apps_ui::current(s)
+                    .shortcuts
+                    .binding(arcnix_core::desktop_shortcuts::Action::CodeSave)
+                    .map(str::to_owned)
+            });
+            if self.save_shortcut != shortcut {
+                let _ = view.evaluate_script(&format!(
+                    "window.arcnixSetSaveShortcut({});",
+                    json!(shortcut)
+                ));
+                self.save_shortcut = shortcut;
+            }
+        }
         if self.ui.state.with(|s| !s.code.terminals.events.is_empty()) {
             let events = self
                 .ui
@@ -345,7 +428,10 @@ impl Host {
         }
         if self.ready && self.ui.state.with(|s| !s.code.open.is_empty()) {
             for path in self.ui.state.revise(|s| std::mem::take(&mut s.code.open)) {
-                let _ = view.evaluate_script(&format!("window.arcnixOpen({})", json!(path)));
+                let _ = view.evaluate_script(&format!(
+                    "((path) => window.arcnixOpen(path).then(editor => {{ if (editor) window.ipc.postMessage(JSON.stringify({{op:'fileOpened',path}})); }}))({})",
+                    json!(path)
+                ));
             }
         }
         let next = self.ui.state.with(|s| {
@@ -365,7 +451,7 @@ impl Host {
         });
         if self.bounds != next || layout_changed {
             if let Some(port) = &next {
-                if let Err(error) = position(view, port, self.picker) {
+                if let Err(error) = position(view, port, self.picker, self.menu_width) {
                     self.ui.state.revise(|s| s.code.error = error.to_string());
                 }
             } else {

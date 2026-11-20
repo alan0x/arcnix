@@ -45,6 +45,7 @@ const result = await build({
     'worker.js',
     'grammar-worker.js',
     'search-worker.js',
+    'format-worker.js',
   ],
   outdir: 'out',
   // Font discovery in the optional ligatures addon requires Node.

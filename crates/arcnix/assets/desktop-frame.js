@@ -4,6 +4,15 @@ const desktopFrame = (() => {
     let canvas;
     let dock;
 
+    function dockInsets(canvas) {
+        const zone = canvas.querySelector('.desktop-dock-zone');
+        const insets = {left: 0, right: 0, bottom: 0};
+        if (zone?.classList.contains('dock-left')) insets.left = zone.offsetWidth;
+        else if (zone?.classList.contains('dock-right')) insets.right = zone.offsetWidth;
+        else if (zone) insets.bottom = zone.offsetHeight;
+        return insets;
+    }
+
     function sync() {
         const root = document.documentElement;
         if (!canvas || !root) return;
@@ -13,20 +22,23 @@ const desktopFrame = (() => {
         root.style.setProperty('--desktop-frame-inset', inset.map(n => `${Math.max(0, n)}px`).join(' '));
         root.style.setProperty('--desktop-frame-width', `${box.width}px`);
         root.style.setProperty('--desktop-frame-height', `${box.height}px`);
-        const dockTop = dock?.getBoundingClientRect().top ?? box.bottom;
-        root.style.setProperty('--desktop-dock-clearance', `${Math.min(box.height / 4, Math.max(0, box.bottom - dockTop))}px`);
+        for (const [edge, size] of Object.entries(dockInsets(canvas))) {
+            root.style.setProperty(`--desktop-dock-${edge}`, `${size}px`);
+        }
     }
 
     function sizeDockTiles() {
         if (dock) dock.style.setProperty('--dock-tiles', String(1 + dock.querySelectorAll('.desktop-dock-app').length));
     }
     const dockItems = new MutationObserver(sizeDockTiles);
+    const dockPosition = new MutationObserver(sync);
     const resize = new ResizeObserver(sync);
     function bind() {
         const next = document.querySelector('.desktop-canvas');
         if (next === canvas) return;
         resize.disconnect();
         dockItems.disconnect();
+        dockPosition.disconnect();
         canvas = next;
         dock = canvas?.querySelector('.desktop-dock-zone');
         if (!canvas) return;
@@ -34,6 +46,7 @@ const desktopFrame = (() => {
         if (dock) {
             resize.observe(dock);
             dockItems.observe(dock, {childList: true, subtree: true});
+            dockPosition.observe(dock, {attributes: true, attributeFilter: ['class']});
             sizeDockTiles();
         }
         sync();
@@ -50,5 +63,5 @@ const desktopFrame = (() => {
         return {left: 0, top: 0, right: innerWidth, bottom: innerHeight};
     }
 
-    return {boundsFor};
+    return {boundsFor, dockInsets};
 })();

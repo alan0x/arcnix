@@ -1,4 +1,4 @@
-//! Stages files dropped into the WebView, which supplies bytes without local paths.
+//! Stages files dropped into the WebView and handles Files-to-local-disk drops.
 use std::fs;
 use std::io::Write;
 
@@ -11,6 +11,116 @@ use super::*;
 
 const CHUNK_BYTES: usize = 256 * 1024;
 const MAX_PACKET_BYTES: usize = CHUNK_BYTES.div_ceil(3) * 4 + 1024;
+
+pub(super) fn choose_download(ui: &Ui, entries: Vec<FileEntry>) {
+    if !entries.is_empty() {
+        let (epoch, destination) = ui.state.with(|s| (s.epoch, s.local_path.clone()));
+        ui.open_dialog(Dialog::FilesDownload {
+            epoch,
+            destination,
+            entries,
+        });
+    }
+}
+
+fn finish_download(ui: &Ui) {
+    let Some((ready, destination, entries)) = ui.state.with(|s| match &s.dialog {
+        Some(Dialog::FilesDownload {
+            epoch,
+            destination,
+            entries,
+        }) => Some((
+            *epoch == s.epoch && file_browser::transfer_ready(s),
+            PathBuf::from(destination),
+            entries.clone(),
+        )),
+        _ => None,
+    }) else {
+        return;
+    };
+    if !ready {
+        ui.state
+            .revise(|s| s.dialog_error = "The connection changed. Drag the items again.".into());
+        return;
+    }
+    if !destination.is_absolute() || !destination.is_dir() {
+        ui.state
+            .revise(|s| s.dialog_error = "Choose an existing local directory.".into());
+        return;
+    }
+    ui.close_dialog();
+    ui.transfer_entries_to(TransferDirection::Download, entries, &destination);
+}
+
+pub(super) fn download_dialog(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    when(
+        state.map(|s| matches!(s.dialog, Some(Dialog::FilesDownload { .. }))),
+        move || {
+            let browse = ui.clone();
+            let submit = ui.clone();
+            let enter = ui.clone();
+            let cancel = ui.clone();
+            let destination = state.map(|s| match &s.dialog {
+                Some(Dialog::FilesDownload { destination, .. }) => destination.clone(),
+                _ => String::new(),
+            });
+            modal(
+                ui.clone(),
+                "Download directory",
+                row().class("file-picker-field").fill((
+                    input()
+                        .name(i18n::bind("Local folder"))
+                        .value(destination)
+                        .on(value_changed, move |event| {
+                            if let Event::ValueChanged { value, .. } = event {
+                                state.revise(|s| {
+                                    if let Some(Dialog::FilesDownload { destination, .. }) =
+                                        &mut s.dialog
+                                    {
+                                        *destination = value;
+                                        s.dialog_error.clear();
+                                    }
+                                });
+                            }
+                        })
+                        .on(commit, move |_| finish_download(&enter)),
+                    when(cfg!(windows), move || {
+                        let browse = browse.clone();
+                        btn("Browse…", move || {
+                            let path = PathBuf::from(destination.get());
+                            match file_picker::folder(
+                                Some(&path),
+                                &i18n::translate("Download directory"),
+                            ) {
+                                Ok(Some(path)) => browse.state.revise(|s| {
+                                    if let Some(Dialog::FilesDownload { destination, .. }) =
+                                        &mut s.dialog
+                                    {
+                                        *destination = local_display(&path);
+                                        s.dialog_error.clear();
+                                    }
+                                }),
+                                Ok(None) => {}
+                                Err(error) => {
+                                    browse.state.revise(|s| s.dialog_error = error.to_string())
+                                }
+                            }
+                        })
+                        .class("button browse-button")
+                    }),
+                )),
+                (
+                    btn("取消", move || cancel.close_dialog()),
+                    sapid::button()
+                        .class("button primary")
+                        .label(i18n::bind("下载"))
+                        .on_press(move || finish_download(&submit)),
+                ),
+            )
+        },
+    )
+}
 
 #[derive(Clone, Default)]
 pub(super) struct Uploads {
@@ -117,21 +227,21 @@ enum DropEvent {
 pub(super) fn upload_ready(s: &State) -> bool {
     server_desktop::visible(s)
         && workspace::ready(s, true)
-        && s.server_apps.explorer_tag.is_none()
+        && s.server_apps.files_tag.is_none()
         && s.dialog.is_none()
 }
 
 fn receive(s: &mut State, packet: Packet) -> Result<bool> {
     if let DropEvent::Begin { epoch, request } = packet.event {
         ensure!(
-            s.explorer_uploads.pending.is_none(),
+            s.files_uploads.pending.is_none(),
             "Another drop is being prepared"
         );
         ensure!(
             upload_ready(s) && epoch == s.epoch && request == s.remote_request,
             "Remote folder changed"
         );
-        s.explorer_uploads.pending = Some(Batch {
+        s.files_uploads.pending = Some(Batch {
             id: packet.id,
             epoch,
             server: s.selected.clone().context("No server selected")?,
@@ -143,11 +253,7 @@ fn receive(s: &mut State, packet: Packet) -> Result<bool> {
         return Ok(false);
     }
 
-    let batch = s
-        .explorer_uploads
-        .pending
-        .as_mut()
-        .context("No active drop")?;
+    let batch = s.files_uploads.pending.as_mut().context("No active drop")?;
     ensure!(
         batch.id == packet.id
             && batch.epoch == s.epoch
@@ -194,7 +300,7 @@ fn receive(s: &mut State, packet: Packet) -> Result<bool> {
                 batch.current.is_none() && !batch.files.is_empty(),
                 "Incomplete file drop"
             );
-            let batch = s.explorer_uploads.pending.take().unwrap();
+            let batch = s.files_uploads.pending.take().unwrap();
             let jobs = batch
                 .files
                 .into_iter()
@@ -210,14 +316,14 @@ fn receive(s: &mut State, packet: Packet) -> Result<bool> {
                         transferred_bytes: 0,
                         status: TransferStatus::Queued,
                     };
-                    s.explorer_uploads.staged.insert(id, file.staged);
+                    s.files_uploads.staged.insert(id, file.staged);
                     job
                 })
                 .collect();
             enqueue_transfers(s, jobs);
             return Ok(true);
         }
-        DropEvent::Abort => s.explorer_uploads.abort(),
+        DropEvent::Abort => s.files_uploads.abort(),
     }
     Ok(false)
 }
@@ -235,14 +341,14 @@ fn handle(ui: &Ui, value: String) {
     let result = ui.state.revise(|s| {
         let result = receive(s, packet);
         if result.is_err()
-            && s.explorer_uploads
+            && s.files_uploads
                 .pending
                 .as_ref()
                 .is_some_and(|batch| batch.id == id)
         {
-            s.explorer_uploads.abort();
+            s.files_uploads.abort();
         }
-        s.explorer_uploads.ack = format!("{id}:{serial}:{}", u8::from(result.is_ok()));
+        s.files_uploads.ack = format!("{id}:{serial}:{}", u8::from(result.is_ok()));
         result
     });
     match result {
@@ -257,7 +363,7 @@ pub(super) fn bridge(ui: Ui) -> impl Widget {
     let state = ui.state;
     fragment((
         input()
-            .class("explorer-upload-input hidden")
+            .class("files-upload-input hidden")
             .value("")
             .on(value_changed, move |event| {
                 if let Event::ValueChanged { value, .. } = event {
@@ -265,7 +371,7 @@ pub(super) fn bridge(ui: Ui) -> impl Widget {
                 }
             }),
         text()
-            .class("explorer-upload-ack hidden")
-            .content(state.map(|s| s.explorer_uploads.ack.clone())),
+            .class("files-upload-ack hidden")
+            .content(state.map(|s| s.files_uploads.ack.clone())),
     ))
 }

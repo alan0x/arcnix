@@ -5,7 +5,7 @@ use super::*;
 #[derive(Clone, Default)]
 pub(super) struct Bin {
     items: Vec<Item>,
-    pending: Option<(u64, bool)>,
+    pending: Option<(u64, bool, Option<arcnix_core::deletion::Target>)>,
     confirm: Option<Item>,
     error: String,
 }
@@ -18,7 +18,7 @@ impl Bin {
 
 fn visible(s: &State, remote: bool) -> bool {
     s.dialog == Some(Dialog::Trash { remote })
-        || (remote && server_desktop::visible(s) && explorer_tabs::trash_active(s))
+        || (remote && server_desktop::visible(s) && files_tabs::trash_active(s))
 }
 
 fn available(s: &State, remote: bool) -> bool {
@@ -32,11 +32,18 @@ fn request(ui: &Ui, remote: bool, operation: Operation) {
         return;
     }
     let list = matches!(operation, Operation::List);
+    let purged = match &operation {
+        Operation::Purge(item) if remote => item.payload.clone().map(|mut target| {
+            target.path.clone_from(&item.original);
+            target
+        }),
+        _ => None,
+    };
     let serial = ui.send(Action::Trash { remote, operation });
     ui.state.revise(|s| {
         let bin = &mut s.trash[remote as usize];
         bin.confirm = None;
-        bin.pending = Some((serial, list));
+        bin.pending = Some((serial, list, purged));
         if !list {
             s.file_pending = Some(serial);
         }
@@ -69,6 +76,13 @@ pub(super) fn move_items(ui: &Ui, remote: bool) {
         return;
     }
     let targets = ui.state.with(|s| file_context::targets(s, remote));
+    move_targets(ui, remote, targets);
+}
+
+pub(super) fn move_targets(ui: &Ui, remote: bool, targets: Vec<arcnix_core::deletion::Target>) {
+    if targets.is_empty() {
+        return;
+    }
     request(ui, remote, Operation::Move(targets));
 }
 
@@ -93,13 +107,13 @@ pub(super) fn open(ui: &Ui, remote: bool) {
         if ui.state.with(|s| s.file_pending.is_some()) {
             return;
         }
-        if !ui.state.with(|s| s.workspace_page.is_explorer()) {
-            ui.open_desktop_app(WorkspacePage::Explorer(0));
+        if !ui.state.with(|s| s.workspace_page.is_files()) {
+            ui.open_desktop_app(WorkspacePage::Files(0));
         }
         ui.state.revise(|s| {
             s.workbench.files.trash = true;
-            s.server_apps.explorer_tag = None;
-            s.server_apps.explorer_open_pending = None;
+            s.server_apps.files_tag = None;
+            s.server_apps.files_open_pending = None;
             s.file_context = None;
             s.file_menu = None;
         });
@@ -116,19 +130,21 @@ pub(super) fn completed(
     remote: bool,
     result: std::result::Result<Vec<Item>, String>,
 ) {
-    let list = ui.state.revise(|s| {
+    let completed = ui.state.revise(|s| {
         if s.file_pending == Some(serial) {
             s.file_pending = None;
         }
         let bin = &mut s.trash[remote as usize];
-        let (pending, list) = bin.pending?;
-        if pending != serial {
+        if bin
+            .pending
+            .as_ref()
+            .is_none_or(|(pending, ..)| *pending != serial)
+        {
             return None;
         }
-        bin.pending = None;
-        Some(list)
+        bin.pending.take()
     });
-    let Some(list) = list else {
+    let Some((_, list, purged)) = completed else {
         return;
     };
     match result {
@@ -141,7 +157,12 @@ pub(super) fn completed(
             });
             ui.state.revise(|s| s.trash[remote as usize].items = items);
         }
-        Ok(_) => ui.state.revise(|s| s.trash[remote as usize].error.clear()),
+        Ok(_) => {
+            ui.state.revise(|s| s.trash[remote as usize].error.clear());
+            if let Some(target) = purged {
+                files_ui::check_permanently_deleted(ui, &[target]);
+            }
+        }
         Err(error) => {
             ui.state
                 .revise(|s| s.trash[remote as usize].error = error.clone());
@@ -152,6 +173,9 @@ pub(super) fn completed(
     }
     if !list && (!remote || ui.state.with(|s| s.connected && s.sftp_available)) {
         ui.refresh(remote);
+        if remote {
+            files_tabs::refresh_windows(ui);
+        }
         if remote && ui.state.with(server_desktop::visible) {
             ui.refresh_desktop_items(true);
         }
@@ -165,7 +189,7 @@ pub(super) fn location_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     row().class("trash-location-tools").fill((
         icon_action("Back to folder", Icon::ChevronRight)
-            .class("icon-button explorer-history-back")
+            .class("icon-button files-history-back")
             .on_press(move || {
                 state.revise(|s| {
                     s.workbench.files.trash = false;
@@ -223,13 +247,31 @@ pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                         "SFTP is unavailable"
                     } else if bin.pending.is_some() {
                         "正在处理…"
-                    } else if bin.items.is_empty() && bin.error.is_empty() {
+                    } else if !in_files && bin.items.is_empty() && bin.error.is_empty() {
                         "回收站为空"
                     } else {
                         ""
                     }
                     .to_owned()
                 }))),
+            when(
+                state.map(move |s| {
+                    let bin = &s.trash[remote as usize];
+                    in_files
+                        && (!remote || s.sftp_available)
+                        && bin.pending.is_none()
+                        && bin.items.is_empty()
+                        && bin.error.is_empty()
+                }),
+                || {
+                    col().class("trash-empty").fill((
+                        icons::glyph(Icon::Clear),
+                        text()
+                            .class("trash-empty-title")
+                            .content(i18n::bind("回收站为空")),
+                    ))
+                },
+            ),
             when(
                 state.map(move |s| s.trash[remote as usize].confirm.is_some()),
                 move || {
@@ -295,9 +337,8 @@ pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                                 .name(i18n::bind("回收站"))
                                 .target_name(item.map(display_name))
                                 .enabled(
-                                    state.map(|s| {
-                                        explorer_tabs::trash_active(s) && s.dialog.is_none()
-                                    }),
+                                    state
+                                        .map(|s| files_tabs::trash_active(s) && s.dialog.is_none()),
                                 )
                                 .target(
                                     row().class("trash-file-row").fill((

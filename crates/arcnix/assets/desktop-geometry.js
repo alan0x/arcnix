@@ -4,7 +4,7 @@ const desktopGeometry = (() => {
     const minimumHeight = 260;
     const titlebarWidthToKeep = 64;
     const titlebarHeightToKeep = 18;
-    const controls = 'button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .explorer-search-options, .files-tab';
+    const controls = 'button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .files-search-options, .files-tab';
     const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
     let canvas, layout, gesture, observedArea;
     let lastDragEnd = -Infinity;
@@ -13,10 +13,12 @@ const desktopGeometry = (() => {
 
     function area() {
         const frame = canvas.getBoundingClientRect();
-        const dock = canvas.querySelector('.desktop-dock-zone');
+        const [left, right, bottom] = Object.values(desktopFrame.dockInsets(canvas))
+            .map(size => size ? size + 8 : 0);
         return {
-            width: Math.max(1, Math.floor(frame.width)),
-            height: Math.max(1, Math.floor(dock?.offsetHeight ? dock.offsetTop - 8 : frame.height)),
+            left, right, bottom,
+            width: Math.max(1, Math.floor(frame.width - left - right)),
+            height: Math.max(1, Math.floor(frame.height - bottom)),
         };
     }
 
@@ -48,7 +50,7 @@ const desktopGeometry = (() => {
     }
 
     function preferredBounds(item, limits) {
-        if (!openingAreas.has(item.class)) openingAreas.set(item.class, limits);
+        if (!openingAreas.has(item.class)) openingAreas.set(item.class, {width: limits.width, height: limits.height});
         const opening = openingAreas.get(item.class);
         const bounds = pending.get(item.class)?.bounds ?? item.bounds ?? initialBounds(item, opening);
         return { ...bounds, reference: bounds.reference ?? opening };
@@ -83,9 +85,10 @@ const desktopGeometry = (() => {
     function drawWindows() {
         if (!layout?.shown || !canvas?.offsetWidth || !canvas.offsetHeight) return;
         const limits = area();
-        const workWidth = limits.width + 'px';
-        if (canvas.style.getPropertyValue('--desktop-work-width') !== workWidth) {
-            canvas.style.setProperty('--desktop-work-width', workWidth);
+        for (const edge of ['left', 'right', 'bottom', 'width']) {
+            const property = `--desktop-work-${edge}`;
+            const value = limits[edge] + 'px';
+            if (canvas.style.getPropertyValue(property) !== value) canvas.style.setProperty(property, value);
         }
         for (const item of layout.windows) {
             const element = canvas.querySelector(`.desktop-window.${item.class}:not(.hidden)`);
@@ -96,7 +99,9 @@ const desktopGeometry = (() => {
             if (local && JSON.stringify(item.bounds) !== local.original) pending.delete(item.class);
             const bounds = preferredBounds(item, limits);
             const range = reachable(limits, element.querySelector('.desktop-window-titlebar').offsetHeight);
-            draw(element, item.maximized ? { x: 0, y: 0, ...limits } : place(bounds, limits, range), limits);
+            draw(element, item.maximized
+                ? {x: 0, y: 0, width: limits.width, height: limits.height}
+                : place(bounds, limits, range), limits);
         }
     }
 
@@ -137,14 +142,16 @@ const desktopGeometry = (() => {
         drawWindows();
     }
 
-    const observer = new ResizeObserver(() => {
+    function updateArea() {
         if (!canvas || !layout?.shown) return;
         const current = area();
-        if (observedArea?.width === current.width && observedArea?.height === current.height) return;
+        if (observedArea && Object.keys(current).every(key => current[key] === observedArea[key])) return;
         observedArea = current;
         finish(false);
         drawWindows();
-    });
+    }
+    const observer = new ResizeObserver(updateArea);
+    const dockPosition = new MutationObserver(updateArea);
 
     function sync(next) {
         if (next?.epoch !== layout?.epoch) openingAreas.clear();
@@ -160,11 +167,15 @@ const desktopGeometry = (() => {
         }
         if (nextCanvas !== canvas) {
             observer.disconnect();
+            dockPosition.disconnect();
             observedArea = null;
             if (nextCanvas) {
                 observer.observe(nextCanvas);
                 const dock = nextCanvas.querySelector('.desktop-dock-zone');
-                if (dock) observer.observe(dock);
+                if (dock) {
+                    observer.observe(dock);
+                    dockPosition.observe(dock, {attributes: true, attributeFilter: ['class']});
+                }
             }
         }
         canvas = nextCanvas;
@@ -181,13 +192,15 @@ const desktopGeometry = (() => {
         if (!(target instanceof Element) || !event.isPrimary || ![0, 2].includes(event.button)) return;
         const element = target.closest('.desktop-window:not(.hidden)');
         if (!element) return;
+        if (event.button === 0 && target.closest('.files-inactive-draggable')) return;
         raise(element);
         const item = windowLayout(element);
-        if (event.button !== 0 || gesture || !layout?.shown || !item || item.maximized
+        if (event.button !== 0 || gesture || !layout?.shown || !item
             || element.closest('[inert]') || target.closest(controls)) return;
         const handle = target.closest('.desktop-resize-handle');
         const titlebar = target.closest('.desktop-window-titlebar');
-        if (!handle && !titlebar) return;
+        if (titlebar) canvas.focus({preventScroll: true});
+        if (item.maximized || (!handle && !titlebar)) return;
         const edge = handle ? [...handle.classList].find(name => name.startsWith('edge-'))?.slice(5) : '';
         const limits = area();
         const range = reachable(limits, element.querySelector('.desktop-window-titlebar').offsetHeight);
@@ -203,6 +216,10 @@ const desktopGeometry = (() => {
         // Capture before a fast move reaches the underlying file or desktop content.
         event.preventDefault();
         capture.setPointerCapture(event.pointerId);
+    }, true);
+    document.addEventListener('click', event => {
+        const row = event.target.closest?.('.files-inactive-draggable');
+        if (row) raise(row.closest('.desktop-window:not(.hidden)'));
     }, true);
 
     document.addEventListener('pointermove', event => {
