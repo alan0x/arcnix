@@ -76,7 +76,10 @@ fn discard_magnification<'de, D: serde::Deserializer<'de>>(
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[non_exhaustive]
+#[allow(
+    clippy::manual_non_exhaustive,
+    reason = "The unit field accepts legacy serialized dock settings"
+)]
 pub struct Dock {
     pub order: Vec<DesktopApp>,
     pub unpinned: Vec<DesktopApp>,

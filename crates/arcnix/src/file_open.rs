@@ -737,7 +737,7 @@ fn association_apps(ui: Ui) -> impl Widget {
                             .to_owned()
                         }))),
                 )),
-                when(selected.clone(), || {
+                when(selected, || {
                     text()
                         .class("file-association-default-badge")
                         .content(i18n::bind("Default app"))
@@ -781,7 +781,7 @@ fn association_apps(ui: Ui) -> impl Widget {
                         .content(i18n::bind("Add another app")),
                     row()
                         .class("choice-list")
-                        .fill(each(extras.clone()).key(|app| *app).children(move |item| {
+                        .fill(each(extras).key(|app| *app).children(move |item| {
                             let app = item.value.get();
                             let add = add.clone();
                             text_action(label(app), icon(app)).on_press(move || {
