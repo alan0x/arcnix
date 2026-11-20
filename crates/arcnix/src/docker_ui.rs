@@ -104,9 +104,12 @@ fn selected(s: &State) -> Option<Container> {
 /// which usually means the SSH account is not in the docker group.
 fn socket_hint(error: &str, user: &str) -> Option<String> {
     let error = error.to_lowercase();
-    let system_socket = ["unix:///var/run/docker.sock", "unix:///run/docker.sock"]
-        .iter()
-        .any(|endpoint| error.contains(endpoint));
+    let system_socket = error.split_ascii_whitespace().any(|word| {
+        matches!(
+            word.trim_matches(['\'', '"', ':', ',', '.']),
+            "unix:///var/run/docker.sock" | "unix:///run/docker.sock"
+        )
+    });
     (system_socket && error.contains("permission denied") && !user.is_empty()).then(|| {
         let user = arcnix_core::remote_tasks::quote(user);
         i18n::translate(&format!(
@@ -1014,6 +1017,7 @@ mod tests {
             "Docker command failed (1): open /srv/data: permission denied",
             "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///run/user/1000/docker.sock",
             "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///home/deploy/custom-runtime/docker.sock",
+            "Docker command failed (1): permission denied while trying to connect to the docker API at unix:///var/run/docker.sock-runtime/docker.sock",
         ] {
             assert_eq!(socket_hint(error, "deploy"), None, "{error}");
         }
