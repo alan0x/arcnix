@@ -15,7 +15,7 @@ pub(super) fn files(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let live = state.map(move |s| s.workbench.files.is_live(window));
     col().class("remote-files").fill((
-        when(live.clone(), {
+        when(live, {
             let ui = ui.clone();
             move || {
                 fragment((
