@@ -743,11 +743,11 @@ pub(super) fn menu(ui: Ui, remote: bool) -> impl Widget {
                     move || edit_actions(ui.clone(), remote)
                 },
             ),
-            when(item.clone(), {
+            when(item, {
                 let ui = ui.clone();
                 move || item_actions(ui.clone(), remote)
             }),
-            when(directory.clone(), {
+            when(directory, {
                 let ui = ui.clone();
                 move || directory_actions(ui.clone(), remote)
             }),
