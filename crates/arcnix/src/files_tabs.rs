@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::result::Result;
 use std::sync::Arc;
 
 use arcnix_core::server_apps::DesktopWindow;
@@ -35,9 +36,14 @@ pub(super) struct Windows {
     next_id: u32,
     drag: Option<TabDrag>,
     pub trash: bool,
+    pub clipboard: Vec<String>,
+    refreshes: BTreeMap<u64, String>,
 }
 
 impl Windows {
+    pub(super) fn is_live(&self, id: u32) -> bool {
+        self.live == Some(id)
+    }
     pub(super) fn current(&self) -> Option<u32> {
         self.live.or_else(|| self.windows.keys().next().copied())
     }
@@ -120,15 +126,175 @@ pub(super) fn remove(s: &mut State, id: u32) {
 }
 
 pub(super) fn trash_active(s: &State) -> bool {
-    s.workspace_page.is_explorer() && s.workbench.files.trash
+    s.workspace_page.is_files() && s.workbench.files.trash
 }
 
-fn available(s: &State) -> bool {
+fn snapshot(s: &State, id: u32) -> Option<&file_browser::TabSnapshot> {
+    let window = s.workbench.files.windows.get(&id)?;
+    window
+        .tabs
+        .iter()
+        .find(|tab| tab.id == window.selected)?
+        .saved
+        .as_deref()
+}
+
+pub(super) fn showing_trash(s: &State, id: u32) -> bool {
+    if s.workbench.files.is_live(id) {
+        s.workbench.files.trash
+    } else {
+        snapshot(s, id).is_some_and(file_browser::TabSnapshot::trash)
+    }
+}
+
+pub(super) fn showing_tag(s: &State, id: u32) -> Option<files_ui::TagFilter> {
+    if s.workbench.files.is_live(id) {
+        s.server_apps.files_tag
+    } else {
+        snapshot(s, id)?.tag()
+    }
+}
+
+pub(super) fn directory(s: &State, id: u32) -> Option<&str> {
+    if s.workbench.files.live == Some(id) {
+        (s.remote_ready && !s.workbench.files.trash && s.server_apps.files_tag.is_none())
+            .then_some(s.remote_path.as_str())
+    } else {
+        snapshot(s, id)?.directory()
+    }
+}
+
+pub(super) fn drop_folder(s: &State, id: u32, folder: Option<&str>) -> Option<String> {
+    let directory = directory(s, id)?;
+    let Some(path) = folder else {
+        return Some(directory.to_owned());
+    };
+    let is_folder = |entry: &FileEntry| entry.path == path && entry.is_dir && !entry.is_symlink;
+    let valid = if s.workbench.files.live == Some(id) {
+        file_browser::entries(s, true).iter().any(is_folder)
+    } else {
+        snapshot(s, id)?.entries().iter().any(is_folder)
+    };
+    valid.then(|| path.to_owned())
+}
+
+pub(super) fn dragged_entries(
+    s: &State,
+    id: u32,
+    path: &str,
+) -> Vec<arcnix_core::deletion::Target> {
+    if !s.workbench.files.is_live(id) {
+        return snapshot(s, id)
+            .map(|tab| tab.dragged_entries(path))
+            .unwrap_or_default();
+    }
+    let Some(entry) = file_browser::entries(s, true)
+        .into_iter()
+        .find(|entry| entry.path == path && !entry.is_symlink)
+    else {
+        return Vec::new();
+    };
+    if s.remote_selection.contains(path) {
+        file_context::targets(s, true)
+    } else {
+        vec![arcnix_core::deletion::Target::from(&entry)]
+    }
+}
+
+pub(super) fn refresh_windows(ui: &Ui) {
+    let directories = ui.state.with(|s| {
+        s.workbench
+            .files
+            .windows
+            .iter()
+            .filter(|(id, _)| Some(**id) != s.workbench.files.live)
+            .filter_map(|(id, _)| directory(s, *id).map(str::to_owned))
+            .collect::<std::collections::BTreeSet<_>>()
+    });
+    for path in directories {
+        let serial = ui.send(Action::Children {
+            remote: true,
+            path: path.clone(),
+        });
+        ui.state
+            .revise(|s| s.workbench.files.refreshes.insert(serial, path));
+    }
+}
+
+pub(super) fn awaiting_refresh(ui: &Ui, serial: u64) -> bool {
+    ui.state
+        .with(|s| s.workbench.files.refreshes.contains_key(&serial))
+}
+
+pub(super) fn refreshed(ui: &Ui, serial: u64, path: &str, result: Result<Vec<FileEntry>, String>) {
+    ui.state.revise(|s| {
+        if s.workbench.files.refreshes.remove(&serial).as_deref() != Some(path) {
+            return;
+        }
+        if let Ok(entries) = result {
+            for window in s.workbench.files.windows.values_mut() {
+                for tab in &mut window.tabs {
+                    if let Some(saved) = tab.saved.as_mut()
+                        && saved.directory() == Some(path)
+                    {
+                        Arc::make_mut(saved).refresh_entries(&entries);
+                    }
+                }
+            }
+        }
+    });
+}
+
+pub(super) fn available(s: &State) -> bool {
     server_desktop::visible(s)
         && s.dialog.is_none()
         && s.file_pending.is_none()
         && s.fingerprint.is_none()
         && s.sftp_available
+}
+
+pub(super) enum WindowStart {
+    Current,
+    Default,
+    Directory(String),
+}
+
+pub(super) fn new_window(ui: &Ui, start: WindowStart) {
+    let opened = ui.state.revise(|s| {
+        if !available(s) {
+            return false;
+        }
+        let (saved, path) = match start {
+            WindowStart::Current if s.workspace_page.is_files() => {
+                (Some(Arc::new(file_browser::capture_tab(s))), None)
+            }
+            WindowStart::Current => return false,
+            WindowStart::Default => (
+                None,
+                Some(selected_profile(s).map_or_else(
+                    || s.remote_path.clone(),
+                    |profile| profile.initial_remote_path.clone(),
+                )),
+            ),
+            WindowStart::Directory(path) => (None, Some(path)),
+        };
+        let files = &mut s.workbench.files;
+        let id = files.next();
+        let tab = files.next();
+        files.insert(id, Tab { id: tab, saved });
+        server_desktop::select_app(s, WorkspacePage::Files(id));
+        if let Some(path) = path {
+            file_browser::fresh_tab(s);
+            s.remote_path = path;
+            s.remote.clear();
+            s.server_apps.files_tag = None;
+            s.workbench.files.trash = false;
+        }
+        true
+    });
+    if opened {
+        ui.desktop_enter();
+    }
 }
 
 fn after_change(ui: &Ui) {
@@ -140,7 +306,7 @@ fn after_change(ui: &Ui) {
         trash_ui::enter(ui);
     } else if ui
         .state
-        .with(|s| s.workspace_page.is_explorer() && !s.remote_ready)
+        .with(|s| s.workspace_page.is_files() && !s.remote_ready)
     {
         ui.refresh(true);
     }
@@ -153,11 +319,11 @@ pub(super) fn new_tab(ui: &Ui, id: u32) {
 pub(super) fn open_tab(ui: &Ui, id: u32, path: Option<String>) {
     if !ui
         .state
-        .with(|s| available(s) && s.workbench.window_visible(WorkspacePage::Explorer(id)))
+        .with(|s| available(s) && s.workbench.window_visible(WorkspacePage::Files(id)))
     {
         return;
     }
-    ui.focus_desktop_app(WorkspacePage::Explorer(id));
+    ui.focus_desktop_app(WorkspacePage::Files(id));
     ui.state.revise(|s| {
         save(s);
         let tab = s.workbench.files.next();
@@ -184,7 +350,7 @@ pub(super) fn open_tab(ui: &Ui, id: u32, path: Option<String>) {
 fn select(ui: &Ui, window: u32, tab: u32) {
     if !ui.state.with(|s| {
         available(s)
-            && s.workbench.window_visible(WorkspacePage::Explorer(window))
+            && s.workbench.window_visible(WorkspacePage::Files(window))
             && s.workbench
                 .files
                 .windows
@@ -193,7 +359,7 @@ fn select(ui: &Ui, window: u32, tab: u32) {
     }) {
         return;
     }
-    ui.focus_desktop_app(WorkspacePage::Explorer(window));
+    ui.focus_desktop_app(WorkspacePage::Files(window));
     ui.state.revise(|s| {
         if s.workbench.files.windows[&window].selected != tab {
             save(s);
@@ -229,7 +395,7 @@ fn close(ui: &Ui, id: u32, tab: u32) {
         false
     });
     if empty {
-        ui.finish_desktop_close(WorkspacePage::Explorer(id));
+        ui.finish_desktop_close(WorkspacePage::Files(id));
     }
     after_change(ui);
 }
@@ -239,15 +405,16 @@ fn close(ui: &Ui, id: u32, tab: u32) {
 enum Gesture {
     New { window: u32 },
     Close { window: u32, tab: u32 },
+    ToggleHidden { window: u32 },
 }
 
 fn move_tab(ui: &Ui, source: u32, tab: u32, target: Option<u32>, before: Option<u32>) {
     let moved = ui.state.revise(|s| {
         let files = &s.workbench.files;
-        let source_page = WorkspacePage::Explorer(source);
+        let source_page = WorkspacePage::Files(source);
         if !available(s)
             || !s.workbench.window_visible(source_page)
-            || target.is_some_and(|id| !s.workbench.window_visible(WorkspacePage::Explorer(id)))
+            || target.is_some_and(|id| !s.workbench.window_visible(WorkspacePage::Files(id)))
         {
             return None;
         }
@@ -290,7 +457,7 @@ fn move_tab(ui: &Ui, source: u32, tab: u32, target: Option<u32>, before: Option<
         Some(destination)
     });
     if let Some(id) = moved {
-        ui.focus_desktop_app(WorkspacePage::Explorer(id));
+        ui.focus_desktop_app(WorkspacePage::Files(id));
         after_change(ui);
     }
 }
@@ -303,7 +470,7 @@ fn drag_source(ui: &Ui, window: u32, tab: u32, event: Event) {
             ..
         } => {
             ui.state.revise(|s| {
-                if available(s) && s.workbench.window_visible(WorkspacePage::Explorer(window)) {
+                if available(s) && s.workbench.window_visible(WorkspacePage::Files(window)) {
                     s.workbench.files.drag = Some(TabDrag {
                         from,
                         window,
@@ -416,6 +583,17 @@ pub(super) fn bridge(ui: Ui) -> impl Widget {
                 match gesture {
                     Gesture::New { window } => new_tab(&ui, window),
                     Gesture::Close { window, tab } => close(&ui, window, tab),
+                    Gesture::ToggleHidden { window } => {
+                        if let Some(show) = ui.state.with(|s| {
+                            (server_desktop::visible(s)
+                                && s.workspace_page == WorkspacePage::Files(window)
+                                && s.dialog.is_none()
+                                && s.fingerprint.is_none())
+                            .then_some(!s.config.settings.show_hidden_files)
+                        }) {
+                            ui.change_hidden_files(show);
+                        }
+                    }
                 }
             }
         })
@@ -554,59 +732,72 @@ pub(super) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
 
 pub(super) fn window_content(ui: Ui, id: u32) -> impl Widget {
     let state = ui.state;
-    let live = ui.clone();
     col().class("files-window-content").fill((
         text()
             .class("files-window-id hidden")
             .content(id.to_string()),
-        when(
-            state.map(move |s| s.workbench.files.live == Some(id)),
-            move || {
-                fragment((
-                    file_context::desktop_menu_dismiss(live.clone()),
-                    workspace::explorer(live.clone()),
-                ))
-            },
-        ),
-        when(
-            state.map(move |s| s.workbench.files.live != Some(id)),
-            move || {
-                col().class("files-inactive-preview").fill((
-                    text()
-                        .class("files-inactive-path")
-                        .content(state.map(move |s| {
-                            s.workbench
-                                .files
-                                .windows
-                                .get(&id)
-                                .and_then(|w| w.tabs.iter().find(|t| t.id == w.selected))
-                                .and_then(|t| t.saved.as_ref())
-                                .map(|v| v.location())
-                                .unwrap_or_default()
-                        })),
-                    each(state.map(move |s| {
-                        s.workbench
-                            .files
-                            .windows
-                            .get(&id)
-                            .and_then(|w| w.tabs.iter().find(|t| t.id == w.selected))
-                            .and_then(|t| t.saved.as_ref())
-                            .map(|v| v.preview_entries())
-                            .unwrap_or_default()
-                    }))
-                    .key(|e| e.path.clone())
-                    .children(|e| {
-                        row().class("files-inactive-entry").fill((
-                            icons::glyph(if e.value.get().is_dir {
-                                Icon::Folder
-                            } else {
-                                Icon::File
-                            }),
-                            text().content(e.value.map(|file| file.name.clone())),
-                        ))
-                    }),
-                ))
-            },
-        ),
+        text()
+            .class("files-drop-directory hidden")
+            .content(state.map(move |s| directory(s, id).unwrap_or_default().to_owned())),
+        file_actions::drop_input(ui.clone(), id),
+        workspace::files(ui, id),
     ))
+}
+
+pub(super) fn preview_header(state: Cage<State>, id: u32) -> impl Widget {
+    row()
+        .class("files-window-tools")
+        .fill(
+            text()
+                .class("files-inactive-path")
+                .content(state.map(move |s| {
+                    snapshot(s, id)
+                        .map(|tab| tab.location())
+                        .unwrap_or_default()
+                })),
+        )
+}
+
+pub(super) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
+    col().class("files-inactive-preview").fill(
+        each(state.map(move |s| {
+            snapshot(s, id)
+                .map(|tab| tab.preview_entries(s.config.settings.show_hidden_files))
+                .unwrap_or_default()
+        }))
+        .key(|entry| entry.path.clone())
+        .children(move |entry| {
+            let value = entry.value;
+            row()
+                .name(value.map(|entry| entry.path.clone()))
+                .class(value.map(|entry| {
+                    if entry.is_symlink {
+                        "files-inactive-entry"
+                    } else if entry.is_dir {
+                        "files-inactive-entry files-inactive-draggable files-directory-row"
+                    } else {
+                        "files-inactive-entry files-inactive-draggable"
+                    }
+                    .to_owned()
+                }))
+                .fill((
+                    text()
+                        .class(state.map(move |s| {
+                            let file = value.get();
+                            if file.is_dir {
+                                if !file.is_symlink
+                                    && let Some(class) = files_ui::folder_icon_class(s, &file.path)
+                                {
+                                    return format!("action-glyph folder-custom-mark {class}");
+                                }
+                                "action-glyph glyph-folder".to_owned()
+                            } else {
+                                "action-glyph glyph-file".to_owned()
+                            }
+                        }))
+                        .content(""),
+                    text().content(value.map(|file| file.name.clone())),
+                ))
+        }),
+    )
 }

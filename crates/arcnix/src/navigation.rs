@@ -365,7 +365,7 @@ fn server_landing(ui: Ui) -> impl Widget {
                     )),
                     row().class("workspace-entries").fill((
                         server_desktop::entry(ui.clone(), server_desktop::Tab::Desktop),
-                        server_desktop::entry(ui.clone(), server_desktop::Tab::Files),
+                        server_desktop::entry(ui.clone(), server_desktop::Tab::TransferFiles),
                     )),
                     text()
                         .class("overview-footnote subtle")
@@ -600,13 +600,13 @@ pub(super) fn shell(ui: Ui) -> impl Widget {
                         when(
                             state.map(|s| {
                                 workspace_visible(s)
-                                    && s.workbench.active == server_desktop::Tab::Files
+                                    && s.workbench.active == server_desktop::Tab::TransferFiles
                             }),
                             {
                                 let ui = ui.clone();
                                 move || {
                                     col().class("files-module").fill((
-                                        workspace::files(ui.clone()),
+                                        workspace::transfer_files(ui.clone()),
                                         workspace::activity(ui.clone()),
                                     ))
                                 }

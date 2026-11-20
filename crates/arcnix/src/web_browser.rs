@@ -41,6 +41,14 @@ pub(super) struct Tab {
     pub resources_blocked: bool,
     diagnostic: Option<Diagnostic>,
     forwarding_error: String,
+    html: Option<HtmlPreview>,
+}
+
+#[derive(Clone)]
+struct HtmlPreview {
+    serial: u64,
+    path: String,
+    source: Option<Arc<str>>,
 }
 
 #[derive(Clone)]
@@ -140,6 +148,7 @@ impl Browser {
             resources_blocked: false,
             diagnostic: None,
             forwarding_error: String::new(),
+            html: None,
         });
         self.select(id);
         if let Some(url) = url {
@@ -187,6 +196,7 @@ impl Browser {
 
     fn load_tab(&mut self, id: u64, url: String) {
         let Some(tab) = self.tab_mut(id) else { return };
+        tab.html = None;
         tab.url = url.clone();
         tab.title.clear();
         tab.error = None;
@@ -221,9 +231,25 @@ pub(super) fn native_viewport(s: &State) -> Option<(u64, Viewport)> {
     {
         return None;
     }
+    if s.web_browser.selected()?.html.is_some() {
+        return None;
+    }
     let id = s.web_browser.active?;
     let viewport = s.web_browser.viewport.as_ref()?;
     (viewport.epoch == s.epoch && viewport.area.is_some()).then(|| (id, viewport.clone()))
+}
+
+pub(super) fn html_viewport(s: &State) -> Option<(u64, u64, Arc<str>, Viewport)> {
+    if !shown(s) || s.dialog.is_some() || s.fingerprint.is_some() || !error(s).is_empty() {
+        return None;
+    }
+    let tab = s.web_browser.selected()?;
+    let html = tab.html.as_ref()?;
+    let viewport = s.web_browser.viewport.as_ref()?;
+    if viewport.epoch != s.epoch || viewport.area.is_none() {
+        return None;
+    }
+    Some((tab.id, html.serial, html.source.clone()?, viewport.clone()))
 }
 
 pub(super) fn shown(s: &State) -> bool {
@@ -231,6 +257,41 @@ pub(super) fn shown(s: &State) -> bool {
 }
 
 impl Ui {
+    pub(super) fn open_html_preview(&self, path: &str) {
+        self.open_desktop_app(WorkspacePage::Browser);
+        let id = self.state.revise(|s| {
+            let browser = &mut s.web_browser;
+            if let Some(tab) = browser.selected()
+                && tab.url.is_empty()
+                && tab.html.is_none()
+            {
+                Some(tab.id)
+            } else {
+                browser.add_tab(None)
+            }
+        });
+        let Some(id) = id else {
+            self.error("Close a web tab before opening another");
+            return;
+        };
+        let serial = self.send(Action::ReadHtml(path.to_owned()));
+        self.state.revise(|s| {
+            let browser = &mut s.web_browser;
+            browser.input_error = false;
+            browser.draft.clear();
+            if let Some(tab) = browser.tab_mut(id) {
+                tab.title = arcnix_core::file_associations::filename(path).to_owned();
+                tab.loading = true;
+                tab.error = None;
+                tab.html = Some(HtmlPreview {
+                    serial,
+                    path: path.to_owned(),
+                    source: None,
+                });
+            }
+        });
+    }
+
     pub(super) fn open_web_browser(&self) {
         if self.state.with(|s| s.web_browser.tabs.is_empty()) {
             self.state.revise(|s| {
@@ -444,6 +505,31 @@ impl Ui {
     }
 }
 
+pub(super) fn html_result(ui: &Ui, serial: u64, result: std::result::Result<String, String>) {
+    let opened = ui.state.revise(|s| {
+        let tab = s
+            .web_browser
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.html.as_ref().is_some_and(|html| html.serial == serial))?;
+        let html = tab.html.as_mut()?;
+        tab.loading = false;
+        match result {
+            Ok(source) => {
+                html.source = Some(source.into());
+                Some(html.path.clone())
+            }
+            Err(error) => {
+                tab.error = Some(error);
+                None
+            }
+        }
+    });
+    if let Some(path) = opened {
+        file_open::remember(ui, &path, arcnix_core::file_associations::FileApp::Browser);
+    }
+}
+
 pub(super) fn proxy_event(
     ui: &Ui,
     serial: u64,
@@ -522,7 +608,11 @@ pub(super) fn address_bar(ui: Ui) -> impl Widget {
             .enabled(state.map(|s| s.web_browser.selected().is_some_and(|tab| tab.forward)))
             .on_press(move || forward.browser_command(Command::Forward)),
         when(
-            state.map(|s| s.web_browser.selected().is_some_and(|tab| tab.loading)),
+            state.map(|s| {
+                s.web_browser
+                    .selected()
+                    .is_some_and(|tab| tab.loading && tab.html.is_none())
+            }),
             move || {
                 let stop = stop.clone();
                 icon_action("Stop loading", Icon::Close)
@@ -681,6 +771,11 @@ fn bookmarks(ui: Ui) -> impl Widget {
 fn error(s: &State) -> String {
     if s.web_browser.input_error {
         return i18n::translate("Enter an HTTP or HTTPS address");
+    }
+    if let Some(tab) = s.web_browser.selected()
+        && tab.html.is_some()
+    {
+        return i18n::translate(tab.error.as_deref().unwrap_or_default());
     }
     if let Proxy::Failed(error) = &s.web_browser.proxy {
         return format!(
@@ -891,6 +986,20 @@ pub(super) fn page(ui: Ui) -> impl Widget {
             .class("browser-epoch hidden")
             .content(state.map(|s| s.epoch.to_string())),
         browser_tabs(ui.clone()),
+        when(
+            state.map(|s| {
+                s.web_browser
+                    .selected()
+                    .is_some_and(|tab| tab.html.is_some())
+            }),
+            || {
+                text()
+                    .class("html-preview-notice subtle")
+                    .content(i18n::bind(
+                        "HTML preview · Scripts and external resources are disabled",
+                    ))
+            },
+        ),
         when(state.map(|s| s.web_browser.bookmarks_open), move || {
             bookmarks(ui.clone())
         }),
@@ -1009,7 +1118,7 @@ pub(super) fn page(ui: Ui) -> impl Widget {
                         error(s).is_empty()
                             && s.web_browser
                                 .selected()
-                                .is_none_or(|tab| tab.url.is_empty())
+                                .is_none_or(|tab| tab.url.is_empty() && tab.html.is_none())
                     }),
                     || {
                         col().class("browser-start").fill((

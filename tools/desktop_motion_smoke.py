@@ -16,7 +16,7 @@ def main():
             app.screenshot('desktop-light.png')
             p.set_viewport_size(dict(width=900,height=650))
             dock=p.locator('.desktop-dock').bounding_box()
-            for name in ['Monitor','Software store','Docker']:
+            for name in ['Monitor','App Center','Docker']:
                 tile=p.locator('.desktop-dock').get_by_role('button',name=name,exact=True).locator('.desktop-app-icon')
                 box=tile.bounding_box()
                 assert dock['x']<=box['x'] and box['x']+box['width']<=dock['x']+dock['width']
@@ -60,13 +60,13 @@ def main():
             expect(reader).to_contain_text('Arcnix terminal fixture')
             keyboard.focus();p.keyboard.type('echo MOTION_SESSION_RETAINED');p.keyboard.press('Enter');expect(reader).to_contain_text('MOTION_SESSION_RETAINED')
             surface=p.locator('.terminal-owned-surface').element_handle()
-            launch('Software store');motion('switch',1);expect(p.locator('.store-app-card')).to_have_count(18)
-            expect(p.locator('.desktop-window.active .desktop-window-mark .glyph-store')).to_be_visible()
+            launch('App Center');motion('switch',1);expect(p.locator('.app-center-app-card')).to_have_count(18)
+            expect(p.locator('.desktop-window.active .desktop-window-mark .glyph-app-center')).to_be_visible()
             expect(p.locator('.desktop-shortcuts')).to_be_visible()
             titlebar=p.locator('.desktop-window.active .desktop-window-titlebar').bounding_box()
             actions=p.locator('.desktop-window.active .desktop-window-actions').bounding_box()
             assert 0<=titlebar['x']+titlebar['width']-actions['x']-actions['width']<=16
-            app.screenshot('store-window.png')
+            app.screenshot('app-center-window.png')
             launch('Terminal')
             expect(p.locator('.desktop-window.app-terminal.active')).to_be_visible()
             assert p.evaluate('motionRecords.length') == 2
@@ -87,14 +87,14 @@ def main():
             expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
             p.locator('.desktop-window.active .window-close').click();motion('close',6)
             expect(p.locator('.desktop-window.app-terminal')).to_be_hidden()
-            expect(p.locator('.desktop-window.app-software.active')).to_be_visible()
+            expect(p.locator('.desktop-window.app-center.active')).to_be_visible()
             checks.append('Open, switch, minimize, maximize and close use finite compositor animations; switching/minimizing preserve the terminal DOM and live shell')
             checks.append('Double-clicking blank titlebar space toggles maximize and restore through the same animation, while terminal tabs retain their own action')
 
             launch('Terminal');settled();expect(reader).to_contain_text('Arcnix terminal fixture');expect(reader).not_to_contain_text('MOTION_SESSION_RETAINED')
             p.evaluate('''() => {
                 const dock=document.querySelector('.desktop-dock');
-                dock.querySelector('.app-software').click();
+                dock.querySelector('.app-center').click();
                 dock.querySelector('.app-terminal').click();
                 dock.querySelector('.app-settings').click();
             }''')
@@ -104,7 +104,7 @@ def main():
             expect(p.locator('.desktop-dock .app-settings')).not_to_have_class(re.compile(r'\brunning\b'))
             launch('Terminal');settled();expect(reader).to_contain_text('Arcnix terminal fixture')
             p.evaluate('''() => {
-                document.querySelector('.desktop-dock .app-software').click();
+                document.querySelector('.desktop-dock .app-center').click();
                 document.querySelector('.workbench-tab-select[aria-label="Home"]').click();
             }''')
             expect(p.locator('.server-overview')).to_be_visible();settled();expect(p.locator('.server-desktop')).to_be_hidden()

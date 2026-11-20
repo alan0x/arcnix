@@ -105,12 +105,17 @@
             if(engine?.key!==key)return false;
             if(event.type!=="keydown") return true;
             if(applicationKey(event))return false;
-            const chord=event.ctrlKey||event.metaKey;
-            if(chord && event.key.toLowerCase()==="c" && (event.shiftKey||term.hasSelection())) {
-                event.preventDefault();copy();return false;
+            if (arcnixKeys.matches(event, 'terminal_copy', 'Ctrl+Shift+C')) {
+                event.preventDefault(); copy(); return false;
             }
-            if(chord && event.shiftKey && event.key.toLowerCase()==="v") {
-                event.preventDefault();emit({kind:"paste",id});return false;
+            if (arcnixKeys.matches(event, 'terminal_interrupt', 'Ctrl+C')) {
+                event.preventDefault();
+                if (term.hasSelection()) copy();
+                else term.input('\x03');
+                return false;
+            }
+            if (arcnixKeys.matches(event, 'terminal_paste', 'Ctrl+Shift+V')) {
+                event.preventDefault(); emit({kind:'paste', id}); return false;
             }
             return true;
         });
@@ -221,54 +226,48 @@
             engine.term.input('\x1b');
             handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
         }
-        // Fullscreen Escape also works when hiding its entry button moves focus
-        // to the document. Dialogs and menus retain their own dismissal first.
-        const exitFullscreen=document.querySelector('.desktop-fullscreen-exit');
-        if(event.key==='Escape' && !event.ctrlKey && !event.metaKey && !event.altKey
-            && !event.shiftKey && exitFullscreen?.getClientRects().length
-            && ![...document.querySelectorAll('[role=dialog],.pane-menu')].some(el=>el.getClientRects().length)){
-            handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();
-            exitFullscreen.click();return true;
-        }
         if(event.target.closest('[role=dialog]'))return false;
         const menu=event.target.closest('.terminal-context-menu');
         if(!menu && !terminalModule(event.target))return false;
-        const chord=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
+        const copyKey = arcnixKeys.matches(event, 'terminal_copy', 'Ctrl+Shift+C');
+        const pasteKey = arcnixKeys.matches(event, 'terminal_paste', 'Ctrl+Shift+V');
+        const newTab = arcnixKeys.matches(event, 'terminal_new_tab', 'Ctrl+Shift+T');
+        const closeTab = arcnixKeys.matches(event, 'terminal_close_tab', 'Ctrl+Shift+W');
+        const context = event.key === 'ContextMenu' || arcnixKeys.matches(event, 'terminal_context', 'Shift+F10');
         if(menu){
-            if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+            if(!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey && ['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
                 const items=[...menu.querySelectorAll('.terminal-menu-action:not(:disabled)')].filter(item=>item.getClientRects().length);
                 const index=items.indexOf(event.target.closest('.terminal-menu-action'));
                 const next=event.key==='Home'?0:event.key==='End'?items.length-1:index<0?(event.key==='ArrowUp'?items.length-1:0):(index+(event.key==='ArrowUp'?-1:1)+items.length)%items.length;
                 items[next]?.focus({preventScroll:true});
             } else if(event.key==='Escape'||event.key==='Tab'){
                 dismissContext(true);
-            } else if(chord && event.shiftKey && (key==='c'||key==='v')){
-                menu.querySelector(key==='c'?'.terminal-menu-copy:not(:disabled)':'.terminal-menu-paste:not(:disabled)')?.click();
-            } else if(chord && event.shiftKey && (key==='t'||key==='w')){
-                menu.querySelector(key==='t'?'.terminal-menu-new-tab:not(:disabled)':'.terminal-menu-close-tab:not(:disabled)')?.click();
-            } else if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10'){
+            } else if(copyKey || pasteKey){
+                menu.querySelector(copyKey?'.terminal-menu-copy:not(:disabled)':'.terminal-menu-paste:not(:disabled)')?.click();
+            } else if(newTab || closeTab){
+                menu.querySelector(newTab?'.terminal-menu-new-tab:not(:disabled)':'.terminal-menu-close-tab:not(:disabled)')?.click();
+            } else if(context){
                 // The existing application menu already owns this gesture.
             } else {
                 return shortcutKey(event);
             }
-        } else if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10'){
+        } else if(context){
             if(!openContext(event.target,event,true))return false;
         } else {
             return shortcutKey(event);
         }
         handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
     }
+    const terminalCommands = [
+        ['terminal_next_tab', 'Ctrl+Tab', 'next_tab'],
+        ['terminal_previous_tab', 'Ctrl+Shift+Tab', 'previous_tab'],
+        ['terminal_new_tab', 'Ctrl+Shift+T', 'new_tab'],
+        ['terminal_close_tab', 'Ctrl+Shift+W', 'close_tab'],
+        ['terminal_select_all', 'Ctrl+Shift+A', 'select_all'],
+        ['terminal_clear', 'Ctrl+Shift+L', 'clear'],
+    ];
     function shortcutKey(event) {
-        if(event.altKey || !(event.ctrlKey||event.metaKey))return false;
-        const key=event.key.toLowerCase();
-        let action=null;
-        if(key==='tab')action=event.shiftKey?'previous_tab':'next_tab';
-        else if(event.shiftKey){
-            if(key==='t')action='new_tab';
-            else if(key==='w')action='close_tab';
-            else if(key==='a')action='select_all';
-            else if(key==='l')action='clear';
-        }
+        const action = terminalCommands.find(([id, fallback]) => arcnixKeys.matches(event, id, fallback))?.[2];
         if(!action)return false;
         const state=metadata();
         if(!state)return false;

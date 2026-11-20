@@ -1,8 +1,10 @@
 use std::sync::Mutex;
 
 use arcnix_core::desktop_customization::{
-    self as desktop, Appearance, DesktopItems, Dock, DockSize, Shortcut, Wallpaper, WallpaperImage,
+    self as desktop, Appearance, DesktopItems, Dock, DockPosition, DockSize, Shortcut, Wallpaper,
+    WallpaperImage,
 };
+use arcnix_core::server_apps::DesktopApp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use glory::wry::shell::{AssetProvider, AssetSource};
@@ -29,6 +31,7 @@ pub(super) enum SettingsPage {
     #[default]
     General,
     Network,
+    DefaultApps,
     Desktop,
     Wallpaper,
     Dock,
@@ -184,7 +187,7 @@ impl Ui {
         let entry = self.state.with(|s| find_file(s, name).cloned());
         if let Some(entry) = entry {
             if entry.is_dir {
-                self.open_desktop_app(WorkspacePage::Explorer(0));
+                self.open_desktop_app(WorkspacePage::Files(0));
                 file_browser::navigate(self, true, entry.path);
             } else if !entry.is_symlink {
                 file_browser::open_remote_file(self, &entry.path);
@@ -266,17 +269,12 @@ fn find_file<'a>(s: &'a State, name: &str) -> Option<&'a FileEntry> {
 
 fn desktop_icons(s: &State) -> Vec<Shortcut> {
     let settings = appearance(s);
-    let mut icons = Vec::new();
-    if settings.show_apps {
-        icons.extend(
-            server_desktop::available_apps(s)
-                .into_iter()
-                .chain([WorkspacePage::Video])
-                .filter_map(server_desktop::app_id)
-                .filter(|app| !settings.hidden.contains(app))
-                .map(Shortcut::App),
-        );
-    }
+    let mut icons: Vec<_> = server_desktop::available_apps(s)
+        .into_iter()
+        .filter_map(server_desktop::app_id)
+        .filter(|&app| shortcut_visible(settings, app))
+        .map(Shortcut::App)
+        .collect();
     if let Some(items) = &runtime(s).items {
         icons.extend(
             items
@@ -288,23 +286,74 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
     ordered(icons, &settings.order)
 }
 
+fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
+    prefs.show_apps && !prefs.hidden.contains(&app)
+}
+
+fn set_shortcut_visible(ui: &Ui, app: DesktopApp, visible: bool) {
+    update(ui, |prefs| {
+        if shortcut_visible(prefs, app) == visible {
+            return;
+        }
+        if !prefs.show_apps {
+            // Preserve the old all-hidden setting as individual launcher choices.
+            for app in server_desktop::APP_LAUNCHERS
+                .into_iter()
+                .filter_map(server_desktop::app_id)
+            {
+                if !prefs.hidden.contains(&app) {
+                    prefs.hidden.push(app);
+                }
+            }
+            prefs.show_apps = true;
+        }
+        if visible {
+            prefs.hidden.retain(|&hidden| hidden != app);
+        } else {
+            prefs.hidden.push(app);
+        }
+    });
+}
+
 fn dock_icons(s: &State) -> Vec<Shortcut> {
     let dock = &appearance(s).dock;
     let available = server_desktop::available_apps(s);
     let pinned = available
         .iter()
         .filter_map(|&page| server_desktop::app_id(page))
-        .filter(|app| !dock.unpinned.contains(app))
+        .filter(|&app| dock_pinned(dock, app))
         .collect::<Vec<_>>();
     let mut apps = ordered(pinned, &dock.order);
     apps.extend(
         available
             .into_iter()
-            .filter(|page| s.workbench.apps.contains(page))
+            .filter(|&page| server_desktop::launcher_running(s, page))
             .filter_map(server_desktop::app_id)
-            .filter(|app| dock.unpinned.contains(app)),
+            .filter(|&app| !dock_pinned(dock, app)),
     );
     apps.into_iter().map(Shortcut::App).collect()
+}
+
+fn dock_pinned(dock: &Dock, app: DesktopApp) -> bool {
+    !dock.unpinned.contains(&app) && (app != DesktopApp::Player || dock.order.contains(&app))
+}
+
+fn toggle_dock_pin(ui: &Ui, app: DesktopApp) {
+    update(ui, |prefs| {
+        let dock = &mut prefs.dock;
+        if dock_pinned(dock, app) {
+            if app == DesktopApp::Player {
+                dock.order.retain(|&id| id != app);
+            } else {
+                dock.unpinned.push(app);
+            }
+        } else {
+            dock.unpinned.retain(|&id| id != app);
+            if app == DesktopApp::Player && !dock.order.contains(&app) {
+                dock.order.push(app);
+            }
+        }
+    });
 }
 
 fn ordered<T: Clone + Eq>(mut icons: Vec<T>, order: &[T]) -> Vec<T> {
@@ -340,11 +389,12 @@ pub(super) fn launchers(ui: Ui, dock: bool) -> impl Widget {
             Shortcut::File(name) => {
                 let open = ui.clone();
                 let current = name.clone();
+                let appearance = name.clone();
                 fragment(
                     sapid::button()
                         .class(state.map(move |s| {
                             if find_file(s, &current).is_some_and(|entry| entry.is_dir) {
-                                "desktop-shortcut desktop-file app-explorer"
+                                "desktop-shortcut desktop-file app-files"
                             } else {
                                 "desktop-shortcut desktop-file app-document"
                             }
@@ -352,7 +402,25 @@ pub(super) fn launchers(ui: Ui, dock: bool) -> impl Widget {
                         }))
                         .name(name.clone())
                         .fill((
-                            text().class("desktop-app-icon").content(""),
+                            text()
+                                .class(state.map(move |s| {
+                                    let mut class = "desktop-app-icon".to_owned();
+                                    if let Some(entry) =
+                                        find_file(s, &appearance).filter(|entry| !entry.is_symlink)
+                                    {
+                                        if let Some(tag) = files_ui::tag_class(s, &entry.path) {
+                                            class.push_str(&format!(" desktop-tagged {tag}"));
+                                        }
+                                        if entry.is_dir
+                                            && let Some(icon) =
+                                                files_ui::folder_icon_class(s, &entry.path)
+                                        {
+                                            class.push_str(&format!(" folder-custom-mark {icon}"));
+                                        }
+                                    }
+                                    class
+                                }))
+                                .content(""),
                             text().class("desktop-app-label").content(name.clone()),
                         ))
                         .on_press(move || open.open_desktop_file(&name)),
@@ -422,8 +490,7 @@ pub(super) fn dock_class(s: &State) -> String {
         pixels => format!("dock-size-{pixels}"),
     };
     format!(
-        "desktop-dock {size}{}{}{}{}",
-        if dock.magnify { " dock-magnify" } else { "" },
+        "desktop-dock {size}{}{}{}",
         if dock.auto_hide {
             " dock-auto-hide"
         } else {
@@ -440,6 +507,21 @@ pub(super) fn dock_class(s: &State) -> String {
             ""
         }
     )
+}
+
+pub(super) fn dock_zone_class(s: &State) -> String {
+    let dock = &appearance(s).dock;
+    let position = match dock.position {
+        DockPosition::Left => " dock-side-zone dock-left",
+        DockPosition::Right => " dock-side-zone dock-right",
+        DockPosition::Bottom => "",
+    };
+    let panel = if dock.panel_mode {
+        " dock-panel-zone"
+    } else {
+        ""
+    };
+    format!("desktop-dock-zone{position}{panel}")
 }
 
 pub(super) fn panel_mode(s: &State) -> bool {
@@ -565,16 +647,19 @@ fn gesture(ui: &Ui, value: &str) {
                     prefs.order = icons;
                 }
                 Zone::Dock => {
+                    let Shortcut::App(app) = item else {
+                        return;
+                    };
                     prefs.dock.order = icons
                         .into_iter()
                         .filter_map(|icon| match icon {
-                            Shortcut::App(app) => Some(app),
-                            Shortcut::File(_) => None,
+                            Shortcut::App(id) if id == app || dock_pinned(&prefs.dock, id) => {
+                                Some(id)
+                            }
+                            _ => None,
                         })
                         .collect();
-                    if let Shortcut::App(app) = item {
-                        prefs.dock.unpinned.retain(|id| *id != app);
-                    }
+                    prefs.dock.unpinned.retain(|id| *id != app);
                 }
             });
         }
@@ -593,9 +678,9 @@ pub(super) fn gesture_input(ui: Ui) -> impl Widget {
 
 fn menu_action<F: FnMut(&Ui) + 'static>(
     ui: &Ui,
-    label: &'static str,
+    label: impl Into<Vary<String>>,
     mut action: F,
-) -> impl Widget + use<F> {
+) -> sapid::Button {
     let ui = ui.clone();
     sapid::button()
         .class("menu-item")
@@ -612,6 +697,129 @@ pub(super) fn open_settings(ui: &Ui, page: SettingsPage) {
         s.server_apps.customization.menu = None;
     });
     ui.open_desktop_app(WorkspacePage::Settings);
+}
+
+fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
+    let state = ui.state;
+    let page = server_desktop::app_page(app);
+    let running = state.map(move |s| server_desktop::launcher_running(s, page));
+    let files = page.is_files();
+    let extra = match page {
+        WorkspacePage::Files(_) => fragment(
+            menu_action(&ui, "New Window", |ui| {
+                files_tabs::new_window(ui, files_tabs::WindowStart::Default);
+            })
+            .enabled(state.map(files_tabs::available)),
+        ),
+        WorkspacePage::Terminal => fragment(when(running, {
+            let ui = ui.clone();
+            move || {
+                menu_action(&ui, "New tab", move |ui| {
+                    let id = ui.state.with(|s| s.terminal.id);
+                    ui.open_desktop_app(page);
+                    ui.terminal_new_tab(id);
+                })
+                .enabled(state.map(|s| s.terminal.session_count() < terminal_worker::SESSION_LIMIT))
+            }
+        })),
+        #[cfg(windows)]
+        WorkspacePage::Browser => fragment(when(running, {
+            let ui = ui.clone();
+            move || {
+                menu_action(&ui, "New web tab", move |ui| {
+                    ui.open_desktop_app(page);
+                    ui.state.revise(|s| {
+                        s.web_browser.add_tab(None);
+                    });
+                })
+                .enabled(state.map(|s| s.web_browser.tabs.len() < web_browser::TAB_LIMIT))
+            }
+        })),
+        WorkspacePage::Player => fragment(menu_action(&ui, "Open video", move |ui| {
+            ui.open_desktop_app(page);
+            ui.player.browse(ui);
+        })),
+        _ => fragment(()),
+    };
+    fragment((
+        menu_action(
+            &ui,
+            state.map(move |s| {
+                if server_desktop::launcher_running(s, page) {
+                    "Show window"
+                } else {
+                    "Open"
+                }
+                .to_owned()
+            }),
+            move |ui| ui.open_desktop_app(page),
+        ),
+        extra,
+        when(files, {
+            let ui = ui.clone();
+            move || {
+                let open = ui.clone();
+                fragment((
+                    text().class("menu-divider").content(""),
+                    each(state.map(|s| s.server_apps.files_locations.clone().unwrap_or_default()))
+                        .key(|location| location.name)
+                        .children(move |item| {
+                            let location = item.value.get();
+                            menu_action(&open, location.name, move |ui| {
+                                files_tabs::new_window(
+                                    ui,
+                                    files_tabs::WindowStart::Directory(location.path.clone()),
+                                );
+                            })
+                            .enabled(state.map(files_tabs::available))
+                        }),
+                    menu_action(&ui, "Filesystem", |ui| {
+                        files_tabs::new_window(ui, files_tabs::WindowStart::Directory("/".into()));
+                    })
+                    .enabled(state.map(files_tabs::available)),
+                ))
+            }
+        }),
+        text().class("menu-divider").content(""),
+        menu_action(
+            &ui,
+            state.map(move |s| {
+                if dock_pinned(&appearance(s).dock, app) {
+                    "Remove from Dock"
+                } else {
+                    "Keep in Dock"
+                }
+                .to_owned()
+            }),
+            move |ui| toggle_dock_pin(ui, app),
+        )
+        .enabled(state.map(server_apps_ui::preferences_ready)),
+        if zone == Zone::Desktop {
+            menu_action(&ui, "Hide desktop shortcut", move |ui| {
+                set_shortcut_visible(ui, app, false);
+            })
+            .enabled(state.map(server_apps_ui::preferences_ready))
+        } else {
+            menu_action(&ui, "Dock settings", |ui| {
+                open_settings(ui, SettingsPage::Dock)
+            })
+        },
+        when(running, move || {
+            fragment((
+                text().class("menu-divider").content(""),
+                menu_action(
+                    &ui,
+                    if files {
+                        "Close window"
+                    } else {
+                        "Close application"
+                    },
+                    move |ui| ui.close_desktop_launcher(page),
+                )
+                .enabled(state.map(move |s| server_desktop::can_close_app(s, page))),
+            ))
+        }),
+    ))
 }
 
 pub(super) fn context_menu(ui: Ui) -> impl Widget {
@@ -644,13 +852,12 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                 move |key| {
                     let (zone, item) = key.value.get();
                     let dock = zone == Zone::Dock;
-                    let app = match item {
-                        Some(Shortcut::App(app)) => Some(app),
-                        _ => None,
-                    };
                     let file = match item {
+                        Some(Shortcut::App(app)) => {
+                            return fragment(launcher_menu(ui.clone(), app, zone));
+                        }
                         Some(Shortcut::File(name)) => Some(name),
-                        _ => None,
+                        None => None,
                     };
                     let (directory, wallpaper) = file
                         .as_ref()
@@ -669,12 +876,19 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                             })
                         })
                         .unwrap_or_default();
-                    let unpinned = app.is_some_and(|app| {
-                        state.with(|s| appearance(s).dock.unpinned.contains(&app))
-                    });
-                    let can_pin = app
-                        .is_some_and(|app| server_desktop::app_page(app) != WorkspacePage::Video);
                     fragment((
+                        file_open::menu(
+                            ui.clone(),
+                            {
+                                let file = file.clone();
+                                move |s| {
+                                    let entry = find_file(s, file.as_ref()?)?;
+                                    (!dock && !entry.is_dir && !entry.is_symlink)
+                                        .then(|| entry.path.clone())
+                                }
+                            },
+                            Ui::close_desktop_menu,
+                        ),
                         when(!dock && file.is_some(), {
                             let ui = ui.clone();
                             let name = file.clone().unwrap_or_default();
@@ -693,44 +907,6 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                                     })
                                     .collect::<Vec<_>>();
                                 fragment(buttons)
-                            }
-                        }),
-                        when(!dock && app.is_some(), {
-                            let ui = ui.clone();
-                            move || {
-                                menu_action(&ui, "Hide desktop shortcut", move |ui| {
-                                    if let Some(app) = app {
-                                        update(ui, |prefs| {
-                                            if !prefs.hidden.contains(&app) {
-                                                prefs.hidden.push(app);
-                                            }
-                                        });
-                                    }
-                                })
-                            }
-                        }),
-                        when(can_pin, {
-                            let ui = ui.clone();
-                            move || {
-                                menu_action(
-                                    &ui,
-                                    if unpinned {
-                                        "Keep in Dock"
-                                    } else {
-                                        "Remove from Dock"
-                                    },
-                                    move |ui| {
-                                        if let Some(app) = app {
-                                            update(ui, |prefs| {
-                                                if prefs.dock.unpinned.contains(&app) {
-                                                    prefs.dock.unpinned.retain(|id| *id != app);
-                                                } else {
-                                                    prefs.dock.unpinned.push(app);
-                                                }
-                                            });
-                                        }
-                                    },
-                                )
                             }
                         }),
                         when(directory.is_some(), {
@@ -756,6 +932,19 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                                 })
                             }
                         }),
+                        files_ui::appearance_menu(
+                            ui.clone(),
+                            {
+                                let file = file.clone();
+                                move |s| {
+                                    let entry = find_file(s, file.as_ref()?)?;
+                                    (!dock && !entry.is_symlink)
+                                        .then(|| (entry.path.clone(), entry.is_dir))
+                                }
+                            },
+                            Ui::close_desktop_menu,
+                            false,
+                        ),
                         when(!dock, {
                             let ui = ui.clone();
                             move || {
@@ -783,9 +972,9 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                                                             .as_ref()
                                                             .map(|items| items.path.clone())
                                                     }) {
-                                                        ui.open_desktop_app(
-                                                            WorkspacePage::Explorer(0),
-                                                        );
+                                                        ui.open_desktop_app(WorkspacePage::Files(
+                                                            0,
+                                                        ));
                                                         file_browser::navigate(ui, true, path);
                                                     }
                                                 })
@@ -811,9 +1000,10 @@ pub(super) fn context_menu(ui: Ui) -> impl Widget {
                     .class("desktop-menu-backdrop")
                     .name(i18n::bind("Close menu"))
                     .on_press(move || close.close_desktop_menu()),
-                col()
-                    .class("pane-menu desktop-context-menu")
-                    .fill((coordinates, entries)),
+                col().class("pane-menu desktop-context-menu").fill((
+                    coordinates,
+                    col().class("desktop-context-items").fill(entries),
+                )),
             ))
         },
     )
@@ -830,6 +1020,7 @@ pub(super) fn settings_tabs(ui: Ui) -> impl Widget {
                 (SettingsPage::Desktop, "Desktop", Icon::Grid),
                 (SettingsPage::Wallpaper, "Wallpaper", Icon::File),
                 (SettingsPage::Dock, "Dock", Icon::List),
+                (SettingsPage::DefaultApps, "Default apps", Icon::Folder),
                 (
                     SettingsPage::Shortcuts,
                     "Keyboard shortcuts",
@@ -871,28 +1062,51 @@ fn toggle(
 }
 
 pub(super) fn desktop_controls(ui: Ui) -> impl Widget {
-    row().class("choice-list").fill((
-        toggle(
-            &ui,
-            "Show server info",
-            |p| p.show_server,
-            |p| p.show_server = !p.show_server,
-        ),
-        toggle(
-            &ui,
-            "Show Arcnix shortcuts",
-            |p| p.show_apps,
-            |p| p.show_apps = !p.show_apps,
-        ),
-        text_action("Reset desktop icons", Icon::Refresh)
-            .enabled(ui.state.map(server_apps_ui::preferences_ready))
-            .on_press(move || {
-                update(&ui, |prefs| {
-                    prefs.order.clear();
-                    prefs.hidden.clear();
-                    prefs.show_apps = true;
-                });
-            }),
+    let state = ui.state;
+    let reset = ui.clone();
+    fragment((
+        row().class("choice-list").fill((
+            toggle(
+                &ui,
+                "Show server info",
+                |p| p.show_server,
+                |p| p.show_server = !p.show_server,
+            ),
+            text_action("Reset desktop icons", Icon::Refresh)
+                .enabled(state.map(server_apps_ui::preferences_ready))
+                .on_press(move || {
+                    update(&reset, |prefs| {
+                        prefs.order.clear();
+                        prefs.hidden.clear();
+                        prefs.show_apps = true;
+                    });
+                }),
+        )),
+        text()
+            .class("field-label")
+            .content(i18n::bind("Arcnix shortcuts")),
+        row()
+            .class("desktop-launcher-choices")
+            .name(i18n::bind("Arcnix shortcuts"))
+            .fill(
+                each(state.map(server_desktop::available_apps))
+                    .key(|page| server_desktop::app_id(*page))
+                    .children(move |item| {
+                        let page = item.value.get();
+                        let app = server_desktop::app_id(page).expect("Desktop application");
+                        let label = i18n::bind(server_desktop::app_label(page));
+                        let ui = ui.clone();
+                        sapid::checkbox()
+                            .class("preference-check")
+                            .name(label.clone())
+                            .label(label)
+                            .checked(state.map(move |s| shortcut_visible(appearance(s), app)))
+                            .enabled(state.map(server_apps_ui::preferences_ready))
+                            .on_checked_change(move |visible| {
+                                set_shortcut_visible(&ui, app, visible)
+                            })
+                    }),
+            ),
     ))
 }
 
@@ -903,6 +1117,29 @@ pub(super) fn dock_controls(ui: Ui) -> impl Widget {
     let resize_dock = ui.clone();
     let state = ui.state;
     col().class("desktop-settings-pane").fill((
+        col().class("desktop-settings-card").fill((
+            text()
+                .class("section-title")
+                .content(i18n::bind("Dock position")),
+            row().class("choice-list").fill(fragment(
+                [
+                    (DockPosition::Left, "Left side"),
+                    (DockPosition::Right, "Right side"),
+                    (DockPosition::Bottom, "Bottom"),
+                ]
+                .into_iter()
+                .map(|(position, label)| {
+                    let choose = ui.clone();
+                    sapid::button()
+                        .class("button")
+                        .label(i18n::bind(label))
+                        .pressed(state.map(move |s| appearance(s).dock.position == position))
+                        .enabled(state.map(server_apps_ui::preferences_ready))
+                        .on_press(move || update(&choose, |prefs| prefs.dock.position = position))
+                })
+                .collect::<Vec<_>>(),
+            )),
+        )),
         col().class("desktop-settings-card").fill((
             text()
                 .class("section-title")
@@ -938,7 +1175,17 @@ pub(super) fn dock_controls(ui: Ui) -> impl Widget {
                                     let choose = alignment.clone();
                                     sapid::button()
                                         .class("button")
-                                        .label(i18n::bind(label))
+                                        .label(i18n::bind(state.map(move |s| {
+                                            if !centered
+                                                && appearance(s).dock.position
+                                                    != DockPosition::Bottom
+                                            {
+                                                "Align top"
+                                            } else {
+                                                label
+                                            }
+                                            .to_owned()
+                                        })))
                                         .pressed(state.map(move |s| {
                                             appearance(s).dock.panel_centered == centered
                                         }))
@@ -1020,12 +1267,6 @@ pub(super) fn dock_controls(ui: Ui) -> impl Widget {
             row().class("choice-list").fill((
                 toggle(
                     &ui,
-                    "Magnify Dock icons",
-                    |p| p.dock.magnify,
-                    |p| p.dock.magnify = !p.dock.magnify,
-                ),
-                toggle(
-                    &ui,
                     "Automatically hide Dock",
                     |p| p.dock.auto_hide,
                     |p| p.dock.auto_hide = !p.dock.auto_hide,
@@ -1034,6 +1275,26 @@ pub(super) fn dock_controls(ui: Ui) -> impl Widget {
                     .enabled(state.map(server_apps_ui::preferences_ready))
                     .on_press(move || update(&reset, |prefs| prefs.dock = Dock::default())),
             )),
+        )),
+        col().class("desktop-settings-card").fill((
+            text()
+                .class("section-title")
+                .content(i18n::bind("Pinned apps")),
+            row().class("choice-list").fill(
+                each(state.map(server_desktop::available_apps))
+                    .key(|page| server_desktop::app_id(*page))
+                    .children(move |item| {
+                        let page = item.value.get();
+                        let app = server_desktop::app_id(page).expect("Dock application");
+                        let ui = ui.clone();
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind(server_desktop::app_label(page)))
+                            .pressed(state.map(move |s| dock_pinned(&appearance(s).dock, app)))
+                            .enabled(state.map(server_apps_ui::preferences_ready))
+                            .on_press(move || toggle_dock_pin(&ui, app))
+                    }),
+            ),
         )),
     ))
 }

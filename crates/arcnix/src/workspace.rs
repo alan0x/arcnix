@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn files(ui: Ui) -> impl Widget {
+pub(super) fn transfer_files(ui: Ui) -> impl Widget {
     col().class("files-workspace").fill((
         file_context::task_status(ui.clone()),
         splitter::panes(
@@ -11,49 +11,64 @@ pub(super) fn files(ui: Ui) -> impl Widget {
     ))
 }
 
-pub(super) fn explorer(ui: Ui) -> impl Widget {
+pub(super) fn files(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
-    col().class("remote-explorer").fill((
-        explorer_ui::drag_bridge(ui.clone()),
-        explorer_transfer::bridge(ui.clone()),
-        file_context::task_status(ui.clone()),
-        explorer_tab_tools(ui.clone()),
-        row().class("explorer-body").fill((
-            explorer_ui::sidebar(ui.clone()),
-            when(state.map(explorer_tabs::trash_active), {
-                let ui = ui.clone();
-                move || trash_ui::panel(ui.clone(), true, true)
-            }),
-            col()
-                .class(state.map(|s| {
-                    if explorer_tabs::trash_active(s) || s.server_apps.explorer_tag.is_some() {
-                        "remote-slot explorer-slot hidden"
-                    } else {
-                        "remote-slot explorer-slot"
-                    }
-                    .to_owned()
-                }))
-                .fill(pane(ui.clone(), true, true)),
-            explorer_ui::tag_results(ui),
+    let live = state.map(move |s| s.workbench.files.is_live(window));
+    col().class("remote-files").fill((
+        when(live.clone(), {
+            let ui = ui.clone();
+            move || {
+                fragment((
+                    file_context::desktop_menu_dismiss(ui.clone()),
+                    files_ui::drag_bridge(ui.clone()),
+                    files_transfer::bridge(ui.clone()),
+                    file_context::task_status(ui.clone()),
+                    files_tab_tools(ui.clone()),
+                ))
+            }
+        })
+        .otherwise(move || files_tabs::preview_header(state, window)),
+        row().class("files-body").fill((
+            files_ui::sidebar(ui.clone(), window),
+            when(live, move || {
+                fragment((
+                    when(state.map(files_tabs::trash_active), {
+                        let ui = ui.clone();
+                        move || trash_ui::panel(ui.clone(), true, true)
+                    }),
+                    col()
+                        .class(state.map(|s| {
+                            if files_tabs::trash_active(s) || s.server_apps.files_tag.is_some() {
+                                "remote-slot files-slot hidden"
+                            } else {
+                                "remote-slot files-slot"
+                            }
+                            .to_owned()
+                        }))
+                        .fill(pane(ui.clone(), true, true)),
+                    files_ui::tag_results(ui.clone()),
+                ))
+            })
+            .otherwise(move || files_tabs::preview_body(state, window)),
         )),
     ))
 }
 
-fn explorer_tab_tools(ui: Ui) -> impl Widget {
+fn files_tab_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     let browse = ui.clone();
-    row().class("explorer-window-tools").fill((
-        when(state.map(explorer_tabs::trash_active), move || {
+    row().class("files-window-tools").fill((
+        when(state.map(files_tabs::trash_active), move || {
             trash_ui::location_tools(ui.clone())
         }),
         when(
-            state.map(|s| !explorer_tabs::trash_active(s) && s.server_apps.explorer_tag.is_none()),
+            state.map(|s| !files_tabs::trash_active(s) && s.server_apps.files_tag.is_none()),
             move || {
                 file_browser::pathbar(
                     browse.clone(),
                     true,
                     true,
-                    row().class("explorer-path-actions").fill((
+                    row().class("files-path-actions").fill((
                         file_browser::view_controls(browse.clone(), true),
                         pane_actions(browse.clone(), true, true),
                     )),
@@ -83,19 +98,6 @@ fn selection(s: &mut State, remote: bool) -> &mut HashSet<String> {
     } else {
         &mut s.local_selection
     }
-}
-pub(super) fn begin_rename(ui: &Ui, remote: bool) {
-    if ui.state.with(|s| s.file_pending.is_some()) {
-        return;
-    }
-    ui.state.revise(|s| {
-        s.name = file_browser::entries(s, remote)
-            .iter()
-            .find(|f| selected(s, remote).contains(&f.path))
-            .map(|f| f.name.clone())
-            .unwrap_or_default();
-    });
-    ui.open_dialog(Dialog::RenameFile { remote });
 }
 fn sort_button(
     ui: Ui,
@@ -158,12 +160,12 @@ fn transfer_button(ui: Ui, remote: bool) -> impl Widget {
         })
 }
 
-fn pane_actions(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
+fn pane_actions(ui: Ui, remote: bool, files: bool) -> impl Widget {
     let state = ui.state;
     let filter = ui.clone();
     let menu = ui.clone();
-    let filter = if explorer {
-        fragment(explorer_search::toggle(filter))
+    let filter = if files {
+        fragment(files_search::toggle(filter))
     } else {
         fragment(
             icon_action(
@@ -221,7 +223,7 @@ fn pane_actions(ui: Ui, remote: bool, explorer: bool) -> impl Widget {
                     }
                 })
             }),
-            when(!explorer, move || file_context::menu(ui.clone(), remote)),
+            when(!files, move || file_context::menu(ui.clone(), remote)),
         )),
     ))
 }
@@ -233,9 +235,9 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
     col().class(state.map(move |s| {
         let mut class = if file_browser::icons(s, remote) { "file-pane icons-view" } else { "file-pane details-view" }.to_owned();
         if compact {
-            class.push_str(" explorer-pane");
-            if explorer_transfer::upload_ready(s) {
-                class.push_str(" explorer-upload-ready");
+            class.push_str(" files-pane");
+            if files_transfer::upload_ready(s) {
+                class.push_str(" files-upload-ready");
             }
         }
         if file_browser::transfer_ready(s) {
@@ -391,7 +393,7 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
                 } else if !ready(s, remote) {
                     "输入路径后按 Enter".into()
                 } else if if compact {
-                    explorer_search::current(s).has_filter()
+                    files_search::current(s).has_filter()
                 } else if remote {
                     !s.remote_filter.is_empty()
                 } else {
@@ -404,98 +406,6 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
             }))),
         file_browser::information(ui.clone(), remote),
     ))
-}
-
-pub(super) fn file_dialog(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    when(
-        state.map(|s| matches!(s.dialog, Some(Dialog::RenameFile { .. }))),
-        move || {
-            let remote = ui
-                .state
-                .with(|s| matches!(s.dialog, Some(Dialog::RenameFile { remote: true })));
-            let submit = ui.clone();
-            let enter = ui.clone();
-            let cancel = ui.clone();
-            modal(
-                ui.clone(),
-                "重命名",
-                (
-                    text()
-                        .class("dialog-description")
-                        .content(i18n::bind(state.map(move |s| {
-                            let chosen = selected(s, remote).iter().next();
-                            let directory = chosen.map(|from| {
-                                if remote {
-                                    from.rsplit_once('/')
-                                        .map(
-                                            |(parent, _)| {
-                                                if parent.is_empty() { "/" } else { parent }
-                                            },
-                                        )
-                                        .unwrap_or(".")
-                                        .to_owned()
-                                } else {
-                                    Path::new(from)
-                                        .parent()
-                                        .map(local_display)
-                                        .unwrap_or_else(|| s.local_path.clone())
-                                }
-                            });
-                            if remote {
-                                format!(
-                                    "远程目录：{}",
-                                    directory.as_deref().unwrap_or(&s.remote_path)
-                                )
-                            } else {
-                                format!(
-                                    "本地目录：{}",
-                                    directory.as_deref().unwrap_or(&s.local_path)
-                                )
-                            }
-                        }))),
-                    col().class("field").fill((
-                        text().class("field-label").content(i18n::bind("新名称")),
-                        input()
-                            .name(i18n::bind("新名称"))
-                            .value(state.map(|s| s.name.clone()))
-                            .on(value_changed, move |e| {
-                                if let Event::ValueChanged { value, .. } = e {
-                                    state.revise(|s| {
-                                        s.name = value;
-                                        s.dialog_error.clear();
-                                    });
-                                }
-                            })
-                            .on(commit, move |_| {
-                                if enter.state.with(|s| s.file_pending.is_none()) {
-                                    enter.rename_selected(remote)
-                                }
-                            }),
-                    )),
-                ),
-                (
-                    sapid::button()
-                        .class("button")
-                        .label(i18n::bind("取消"))
-                        .enabled(state.map(|s| s.file_pending.is_none()))
-                        .on_press(move || cancel.close_dialog()),
-                    sapid::button()
-                        .class("button primary")
-                        .label(i18n::bind(state.map(move |s| {
-                            if s.file_pending.is_some() {
-                                "正在处理…"
-                            } else {
-                                "重命名"
-                            }
-                            .to_string()
-                        })))
-                        .enabled(state.map(|s| s.file_pending.is_none()))
-                        .on_press(move || submit.rename_selected(remote)),
-                ),
-            )
-        },
-    )
 }
 
 fn queue_toggle(ui: Ui, paused: bool) -> sapid::ActionIcon {
@@ -623,7 +533,7 @@ fn queue(ui: Ui, direction: Option<TransferDirection>) -> impl Widget {
                             s.jobs.retain(|j| {
                                 matches!(j.status, TransferStatus::Running | TransferStatus::Queued)
                             });
-                            s.explorer_uploads.retain(&s.jobs);
+                            s.files_uploads.retain(&s.jobs);
                             s.transfer_meters
                                 .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
                             s.transfer_details
@@ -914,7 +824,7 @@ pub(super) fn transfer_progress_buttons(ui: Ui) -> impl Widget {
     }
 
     row().class("desktop-transfers").fill((
-        row().class("explorer-download-drop").fill((
+        row().class("files-download-drop").fill((
             icons::glyph(Icon::Download),
             text().content(i18n::bind("拖到此处下载")),
         )),

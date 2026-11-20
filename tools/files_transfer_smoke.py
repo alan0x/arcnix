@@ -1,28 +1,50 @@
-"""Exercise Explorer drag transfers and the shared transfer controls in WebView2."""
+"""Exercise Files drag transfers and the shared transfer controls in WebView2."""
 import re
 import time
 
-from desktop_fixture import Desktop, Peer, ROOT, expect
+from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
+
+
+def drop_to_local(page, row):
+    target = page.locator('.workspace-header .files-download-drop')
+    expect(row).to_be_visible()
+    src = row.bounding_box()
+    x, y = src['x'] + 100, src['y'] + src['height'] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 15, y - 14, steps=5)
+    expect(target).to_be_visible()
+    dest = target.bounding_box()
+    dx, dy = dest['x'] + dest['width'] / 2, dest['y'] + dest['height'] / 2
+    page.mouse.move(dx, dy, steps=12)
+    page.mouse.move(dx + 1, dy, steps=2)
+    page.mouse.up()
+    return page.get_by_role('dialog', name='Download directory', exact=True)
 
 
 def main():
-    out = ROOT / 'artifacts' / 'explorer-transfer' / f'run-{time.time_ns()}'
+    out = ROOT / 'artifacts' / 'files-transfer' / f'run-{time.time_ns()}'
     local = out / 'local'
     incoming = out / 'incoming'
+    destination = out / 'downloaded'
     local.mkdir(parents=True)
     incoming.mkdir()
+    destination.mkdir()
     source = incoming / 'drop 中文.txt'
     payload = bytes(range(256)) * 2200
     source.write_bytes(payload)
 
     with Peer(out / 'peer', io_delay=.012) as peer, Desktop(
-        out / 'desktop', peer.config([peer.profile('Explorer transfers')], local),
+        out / 'desktop', peer.config([peer.profile('Files transfers')], local),
     ) as app:
         download_name = 'download-with-controls.bin'
         download_data = bytes(range(256)) * 32768
         (peer.root / download_name).write_bytes(download_data)
         cancelled_name = 'cancel-paused.bin'
         (peer.root / cancelled_name).write_bytes(download_data)
+        remote_folder = peer.root / 'download-folder'
+        remote_folder.mkdir()
+        (remote_folder / 'nested.txt').write_bytes(b'nested download')
         page = app.page
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -30,9 +52,9 @@ def main():
         app.connect()
         app.workspace('Desktop')
         app.application('Files')
-        pane = page.locator('.explorer-pane')
-        expect(pane).to_have_class(re.compile('explorer-upload-ready'))
-        tools = page.locator('.explorer-window-tools')
+        pane = page.locator('.files-pane')
+        expect(pane).to_have_class(re.compile('files-upload-ready'))
+        tools = page.locator('.files-window-tools')
         for label in ('Transfer files', 'Upload', 'Download'):
             expect(tools.get_by_role('button', name=label, exact=True)).to_have_count(0)
 
@@ -53,20 +75,18 @@ def main():
         expect(upload_dialog.locator('.job-name')).to_contain_text(source.name)
         upload_dialog.get_by_role('button', name='Close', exact=True).click()
 
-        target = page.locator('.workspace-header .explorer-download-drop')
         row = pane.locator('.file-row', has=page.get_by_role('button', name=download_name, exact=True))
-        expect(row).to_be_visible()
-        src = row.bounding_box()
-        x, y = src['x'] + 100, src['y'] + src['height'] / 2
-        page.mouse.move(x, y)
-        page.mouse.down()
-        page.mouse.move(x + 15, y - 14, steps=5)
-        expect(target).to_be_visible()
-        dest = target.bounding_box()
-        dx, dy = dest['x'] + dest['width'] / 2, dest['y'] + dest['height'] / 2
-        page.mouse.move(dx, dy, steps=12)
-        page.mouse.move(dx + 1, dy, steps=2)
-        page.mouse.up()
+        row.click(button='right')
+        expect(page.locator('.file-context-menu').get_by_role('button', name='Download', exact=True)).to_have_count(0)
+        page.keyboard.press('Escape')
+        choose = drop_to_local(page, row)
+        folder = choose.get_by_role('textbox', name='Local folder', exact=True)
+        expect(folder).to_have_value(str(local))
+        folder.fill(str(destination / 'missing'))
+        choose.get_by_role('button', name='Download', exact=True).click()
+        expect(choose).to_contain_text('Choose an existing local directory.')
+        folder.fill(str(destination))
+        choose.get_by_role('button', name='Download', exact=True).click()
         download = page.get_by_role('button', name='Download details', exact=True)
         expect(download).to_be_visible()
         expect(upload).to_be_visible()
@@ -84,7 +104,8 @@ def main():
         app.screenshot('paused-download.png')
         job.get_by_role('button', name='Resume transfer', exact=True).click()
         expect(job.locator('.job-status')).to_have_text('Completed', timeout=25000)
-        assert (local / download_name).read_bytes() == download_data
+        assert (destination / download_name).read_bytes() == download_data
+        assert not (local / download_name).exists()
         dialog.get_by_role('button', name='Close', exact=True).click()
 
         app.workspace('Transfer files')
@@ -117,11 +138,11 @@ def main():
         settings = page.locator('.desktop-window.app-settings')
         settings.locator('.window-minimize').click()
         windows = page.locator('.desktop-window:visible')
-        monitor = page.locator('.desktop-window.app-resources')
+        monitor = page.locator('.desktop-window.app-monitor')
         expect(windows).to_have_count(2)
         expect(monitor).to_have_class(re.compile(r'\bactive\b'))
         bounds = {app: page.locator(f'.desktop-window.app-{app}').bounding_box()
-                  for app in ('explorer', 'resources')}
+                  for app in ('files', 'monitor')}
         show_desktop = page.locator('.desktop-dock-home')
         show_desktop.click()
         expect(windows).to_have_count(0)
@@ -132,8 +153,15 @@ def main():
         expect(settings).to_be_hidden()
         for application, box in bounds.items():
             assert page.locator(f'.desktop-window.app-{application}').bounding_box() == box
+
+        app.application('Files')
+        choose = drop_to_local(page, app.file(remote_folder.name).locator('..'))
+        choose.get_by_role('textbox', name='Local folder', exact=True).fill(str(destination))
+        choose.get_by_role('button', name='Download', exact=True).click()
+        expect(choose).to_have_count(0)
+        eventually(lambda: (destination / remote_folder.name / 'nested.txt').read_bytes() == b'nested download')
         assert not errors, errors
-        print('Explorer WebView file drop, direction-specific pause/resume/cancel and Show Desktop restoration passed.')
+        print('Files WebView file drop, direction-specific pause/resume/cancel and Show Desktop restoration passed.')
 
 
 if __name__ == '__main__':

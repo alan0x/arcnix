@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod ansi;
+mod app_center_ui;
 mod app_icon;
 mod backups_ui;
 mod batch_worker;
@@ -20,15 +21,18 @@ mod desktop_shortcuts_ui;
 mod diagnostics_ui;
 mod disks_ui;
 mod docker_ui;
-mod explorer_search;
-mod explorer_tabs;
-mod explorer_transfer;
-mod explorer_ui;
 mod file_browser;
+mod file_actions;
 mod file_columns;
 mod file_context;
+mod file_open;
 mod file_picker;
 mod file_properties;
+mod files_search;
+mod files_tabs;
+mod files_transfer;
+mod files_ui;
+mod folder_icons;
 mod formatting;
 mod help_ui;
 mod i18n;
@@ -63,7 +67,6 @@ mod servers;
 mod settings;
 mod software;
 mod software_install_ui;
-mod software_store_ui;
 mod splitter;
 mod ssh_credentials;
 mod task_records_ui;
@@ -111,6 +114,15 @@ use worker::{Action, Request, Update};
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
+    OpenVideo,
+    FileAssociation {
+        extension: String,
+        add: bool,
+    },
+    OpenWith {
+        path: String,
+        selected: Option<arcnix_core::file_associations::FileApp>,
+    },
     SoftwareInstall,
     SoftwareAction(arcnix_core::software_install::Action, String),
     DesktopTask(String),
@@ -118,9 +130,8 @@ enum Dialog {
     #[cfg(windows)]
     BrowserForwardingRepair,
     StartupService,
-    ExplorerColor {
+    CustomizeFolder {
         path: String,
-        directory: bool,
     },
     DockerAction,
     DockerConfigure,
@@ -129,15 +140,18 @@ enum Dialog {
     },
     TransferDefaults,
     TransferProgress(TransferDirection),
+    FilesDownload {
+        epoch: u64,
+        destination: String,
+        entries: Vec<FileEntry>,
+    },
     Server,
     Group {
         id: Option<String>,
     },
     Import,
     Connect,
-    RenameFile {
-        remote: bool,
-    },
+    FilesSettings,
     FileProperties,
     FileColumns {
         remote: bool,
@@ -185,29 +199,29 @@ enum Dialog {
 enum WorkspacePage {
     #[default]
     Desktop,
-    Files,
-    Software,
-    Resources,
+    TransferFiles,
+    AppCenter,
+    Monitor,
     Terminal,
-    Explorer(u32),
+    Files(u32),
     Docker,
     Code,
-    Video,
+    Player,
     Browser,
     Settings,
 }
 
 impl WorkspacePage {
-    fn explorer_id(self) -> Option<u32> {
-        if let Self::Explorer(id) = self {
+    fn files_window_id(self) -> Option<u32> {
+        if let Self::Files(id) = self {
             Some(id)
         } else {
             None
         }
     }
 
-    fn is_explorer(self) -> bool {
-        self.explorer_id().is_some()
+    fn is_files(self) -> bool {
+        self.files_window_id().is_some()
     }
 }
 
@@ -305,7 +319,7 @@ define_state! {
         terminal: terminal::TerminalState = Default::default(),
         name: String = String::new(),
         cancels: HashMap<String, Arc<AtomicBool>> = HashMap::new(),
-        explorer_uploads: explorer_transfer::Uploads = Default::default(),
+        files_uploads: files_transfer::Uploads = Default::default(),
         workspace_page: WorkspacePage = WorkspacePage::Desktop,
         workbench: server_desktop::Workbench = Default::default(),
         #[cfg(windows)]
@@ -694,6 +708,9 @@ impl Ui {
             if matches!(s.dialog, Some(Dialog::ScriptImport | Dialog::ScriptExport)) {
                 script_exchange_ui::forget(s);
             }
+            if s.dialog == Some(Dialog::OpenVideo) {
+                s.video_picker = None;
+            }
             cleanup_records_ui::dismiss(s);
             record_maintenance_ui::dismiss(s);
             if s.dialog == Some(Dialog::Connect) {
@@ -886,6 +903,8 @@ impl Ui {
         if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Trash{..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){return;}
         match response.update {
             Update::Video(result)=>events.player.ready(events,response.serial,result),
+            #[cfg(windows)]
+            Update::Html(result)=>web_browser::html_result(events,response.serial,result),
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
             Update::ServerApps(result)=>server_apps_ui::event(events,response.serial,result),
             Update::Operations(event)=>operations::event(events,response.serial,event),
@@ -899,12 +918,14 @@ impl Ui {
             Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
                 #[cfg(windows)]
                 if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
-                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.explorer_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::Software){events.software_detect();}}
+                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
-            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());}if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
+            Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
             Update::Children{remote:true,result,..} if events.player.awaiting_directory(events, response.serial) =>
                 events.player.listed(events,result),
+            Update::Children{remote:true,parent,result} if files_tabs::awaiting_refresh(events, response.serial) =>
+                files_tabs::refreshed(events, response.serial, &parent, result),
             Update::Children{remote,parent,result}=>file_browser::accept_children(events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){if remote{state.revise(file_browser::remote_browse_failed);}events.error(format!("读取目录失败：{message}"));}},
             #[cfg(windows)]
@@ -916,7 +937,7 @@ impl Ui {
             Update::ConnectionLost(message)=>{
                 events.player.close(events);
                 #[cfg(windows)]
-                events.close_web_browser();operations::connection_lost(events);terminal::disconnected(events);software::on_connection_lost(events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.explorer_uploads.abort();for (id,c) in &s.cancels{c.store(true,Ordering::Relaxed);s.transfer_pauses.remove(id);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if Some(&j.server_id)==s.selected.as_ref() && j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
+                events.close_web_browser();operations::connection_lost(events);terminal::disconnected(events);software::on_connection_lost(events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.files_uploads.abort();for (id,c) in &s.cancels{c.store(true,Ordering::Relaxed);s.transfer_pauses.remove(id);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if Some(&j.server_id)==s.selected.as_ref() && j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
             Update::TransferFile(id,progress)=>state.revise(|s|{transfer_details::update(s,&id,progress);s.transfer_now=std::time::Instant::now();let waiting=transfer_details::waiting(s,&id)||workspace::transfer_paused(s,&id);if let Some(m)=s.transfer_meters.get_mut(&id){if waiting{m.pause(s.transfer_now);}else{m.resume(s.transfer_now);}}}),
@@ -931,7 +952,7 @@ impl Ui {
                     if let Some(m)=s.transfer_meters.get_mut(&id){m.finish(s.transfer_now);}
                     s.transfer_pauses.remove(&id);
                     let cancelled=s.cancels.remove(&id).is_some_and(|c|c.load(Ordering::Relaxed));
-                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();s.explorer_uploads.finish(&id,&status);transfer_details::finish(s,&id,&status);}
+                    if let Some(job)=s.jobs.iter_mut().find(|j|j.id==id){job.status=finished_status(result,cancelled);let status=job.status.clone();s.files_uploads.finish(&id,&status);transfer_details::finish(s,&id,&status);}
                 });
                 if state.with(|s|s.cancels.is_empty()) {events.refresh(false);if state.with(|s|s.connected){events.refresh(true);}}
             }
@@ -944,14 +965,11 @@ impl Ui {
             }
             Update::Renamed{remote,name}=>{
                 events.log(if remote {"远程文件已重命名"} else {"本地文件已重命名"});
-                if state.with(|s|s.file_pending==Some(response.serial) && s.dialog==Some(Dialog::RenameFile{remote})){
-                    state.revise(|s|{s.file_pending=None;s.dialog=None;s.dialog_error.clear();s.notice.clear();});
-                    events.refresh(remote);
-                }else{
-                    file_browser::refresh_changed_entry(events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
-                }
+                file_browser::refresh_changed_entry(events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
             }
             Update::Trash{remote,result}=>trash_ui::completed(events,response.serial,remote,result),
+            Update::ManagedRemoteFiles(result)=>file_actions::completed(events,response.serial,result),
+            Update::FileAlias(result)=>file_actions::alias_resolved(events,response.serial,result),
             Update::Deleted{remote,result}=>file_context::deleted(events,response.serial,remote,result),
             Update::DeletionProgress(progress)=>file_context::deletion_progress(events,response.serial,progress),
             Update::FileMetadata(result)=>file_properties::metadata(events,response.serial,result),
@@ -960,7 +978,7 @@ impl Ui {
             Update::Error(message)=>{
                 if file_browser::mutation_failed(events,response.serial,&message) {return;}
                 let pending=state.with(|s|s.file_pending==Some(response.serial)||(!s.background&&s.import_pending==Some(response.serial)));
-                if pending {state.revise(|s|{if s.file_pending==Some(response.serial){s.file_pending=None;}if s.import_pending==Some(response.serial){s.import_pending=None;}s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
+                if pending {state.revise(|s|{if s.file_pending==Some(response.serial){s.file_pending=None;};if s.import_pending==Some(response.serial){s.import_pending=None;}s.dialog_error=message.clone();});events.log(format!("操作失败：{message}"));}
                 else {events.error(format!("错误：{message}"));}
             },
             Update::ConnectionError(message)=>events.connection_failed(Some(&format!("连接失败：{message}")),false),
@@ -1007,7 +1025,7 @@ impl Ui {
                 if let Some(batch) = s.batch_ids.remove(&old) {
                     s.batch_ids.insert(new.clone(), batch);
                 }
-                s.explorer_uploads.retry(&old, new);
+                s.files_uploads.retry(&old, new);
             }
             s.transfer_meters
                 .retain(|id, _| s.jobs.iter().any(|j| &j.id == id));
@@ -1167,8 +1185,8 @@ impl Ui {
             s.queue_rules.clear();
             s.workbench.reset_open_windows();
             s.workbench.fullscreen = false;
-            s.workspace_page = if s.workbench.active == server_desktop::Tab::Files {
-                WorkspacePage::Files
+            s.workspace_page = if s.workbench.active == server_desktop::Tab::TransferFiles {
+                WorkspacePage::TransferFiles
             } else {
                 WorkspacePage::Desktop
             };
@@ -1179,7 +1197,7 @@ impl Ui {
         self.state.revise(|s| {
             s.transfer_now = std::time::Instant::now();
 
-            s.explorer_uploads.abort();
+            s.files_uploads.abort();
             for (id, cancel) in &s.cancels {
                 cancel.store(true, Ordering::Relaxed);
                 s.transfer_pauses.remove(id);
@@ -1341,6 +1359,15 @@ impl Ui {
         self.transfer_entries(direction, entries);
     }
     fn transfer_entries(&self, direction: TransferDirection, entries: Vec<FileEntry>) {
+        let local = self.state.with(|s| PathBuf::from(&s.local_path));
+        self.transfer_entries_to(direction, entries, &local);
+    }
+    fn transfer_entries_to(
+        &self,
+        direction: TransferDirection,
+        entries: Vec<FileEntry>,
+        local: &Path,
+    ) {
         if direction == TransferDirection::Download
             && entries.iter().any(|f| !safe_local_name(&f.name))
         {
@@ -1363,7 +1390,7 @@ impl Ui {
                     local_path: if direction == TransferDirection::Upload {
                         PathBuf::from(&f.path)
                     } else {
-                        Path::new(&s.local_path).join(&f.name)
+                        local.join(&f.name)
                     },
                     remote_path: if direction == TransferDirection::Download {
                         f.path.clone()
@@ -1393,15 +1420,15 @@ impl Ui {
             }
             s.parked
                 .iter()
-                .filter_map(|(key, session)| {
-                    (session.connected
+                .filter(|(key, session)| {
+                    session.connected
                         && !session.queue_paused
                         && s.jobs.iter().any(|job| {
                             job.status == TransferStatus::Queued
                                 && Some(&job.server_id) == key.as_ref()
-                        }))
-                    .then(|| key.clone())
+                        })
                 })
+                .map(|(key, _)| key.clone())
                 .collect::<Vec<_>>()
         });
         for key in parked {
@@ -1459,29 +1486,6 @@ impl Ui {
                 paused,
                 policy,
             });
-        }
-    }
-    fn rename_selected(&self, remote: bool) {
-        let operation = self.state.with(|s| {
-            let selected = if remote {
-                &s.remote_selection
-            } else {
-                &s.local_selection
-            };
-            if selected.len() != 1 {
-                return Err("重命名时请选择一个项目");
-            }
-            rename_action(s, remote, selected.iter().next().unwrap(), &s.name)
-        });
-        match operation {
-            Ok(action) => {
-                let serial = self.send(action);
-                self.state.revise(|s| {
-                    s.file_pending = Some(serial);
-                    s.dialog_error.clear();
-                });
-            }
-            Err(e) => self.state.revise(|s| s.dialog_error = e.into()),
         }
     }
 }
@@ -1993,12 +1997,15 @@ fn app(ui: Ui) -> impl Widget {
                 updates_ui::banner(ui.clone()),
                 servers::dialogs(ui.clone()),
                 updates_ui::overlay(ui.clone()),
-                workspace::file_dialog(ui.clone()),
-                explorer_ui::color_dialog(ui.clone()),
+                settings::files_dialog(ui.clone()),
+                video_player::picker_dialog(ui.clone()),
+                files_ui::folder_icon_dialog(ui.clone()),
                 network_ui::dialog(ui.clone()),
                 fragment((
                     fragment((
                         file_context::dialogs(ui.clone()),
+                        file_open::dialog(ui.clone()),
+                        file_open::settings_dialog(ui.clone()),
                         trash_ui::dialog(ui.clone()),
                     )),
                     software_install_ui::dialogs(ui.clone()),
@@ -2025,6 +2032,7 @@ fn app(ui: Ui) -> impl Widget {
             fragment((
                 transfer_ui::dialogs(ui.clone()),
                 workspace::transfer_progress_dialog(ui.clone()),
+                files_transfer::download_dialog(ui.clone()),
             )),
             when(state.map(|s| s.fingerprint.is_some()), move || {
                 let trust = trust.clone();
@@ -2234,13 +2242,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 [
                     include_str!("../assets/system-theme.js"),
                     include_str!("../assets/desktop-frame.js"),
+                    include_str!("../assets/shortcut-chords.js"),
                     include_str!("../assets/file-list-events.js"),
                     include_str!("../assets/desktop-customization.js"),
                     include_str!("../assets/help-events.js"),
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/desktop-geometry.js"),
-                    include_str!("../assets/explorer-tabs.js"),
+                    include_str!("../assets/files-tabs.js"),
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),
                     include_str!("../assets/desktop-motion.js"),
@@ -2255,9 +2264,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             width: 1440.,
             height: 980.,
             css: format!(
-                "{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}\n{}",
                 include_str!("style.css"),
                 icons::css(),
+                folder_icons::css(),
                 desktop_customization_ui::customization_css(),
                 include_str!("../assets/vendor/xterm/xterm.css")
             ),

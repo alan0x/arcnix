@@ -68,7 +68,7 @@ def main():
                 pane = p.locator('.remote-slot:visible' if remote else '.local-slot:visible')
                 pane.get_by_role('button', name='Remote file actions' if remote else 'Local file actions', exact=True).click()
                 p.locator('.file-actions-menu:visible').get_by_role('button', name='Open Trash', exact=True).click()
-                return (p.locator('.desktop-window.active.app-explorer .trash-panel') if remote
+                return (p.locator('.desktop-window.active.app-files .trash-panel') if remote
                         else p.get_by_role('dialog', name='Local Trash', exact=True))
 
             def close_bin(panel, remote):
@@ -187,8 +187,8 @@ def main():
             app.workspace('Desktop')
             expect(p.locator('.desktop-shortcuts').get_by_role('button', name='Trash', exact=True)).to_have_count(0)
             app.application('Files')
-            files = p.locator('.desktop-window.active.app-explorer')
-            files.locator('.explorer-sidebar').get_by_role('button', name='Trash', exact=True).click()
+            files = p.locator('.desktop-window.active.app-files')
+            files.locator('.files-sidebar').get_by_role('button', name='Trash', exact=True).click()
             panel = files.locator('.trash-panel')
             row = item(panel, original)
             expect(row).to_contain_text(fields['DeletionDate'].replace('T', ' '))
@@ -203,8 +203,8 @@ def main():
             p.locator('.desktop-context-menu').get_by_role('button', name='Move to Trash', exact=True).click()
             expect(shortcut).to_have_count(0)
             app.application('Files')
-            p.locator('.explorer-sidebar').get_by_role('button', name='Trash', exact=True).click()
-            panel = p.locator('.desktop-window.active.app-explorer .trash-panel')
+            p.locator('.files-sidebar').get_by_role('button', name='Trash', exact=True).click()
+            panel = p.locator('.desktop-window.active.app-files .trash-panel')
             purge(panel, item(panel, '/home/arcnix/Desktop/desktop.txt'))
             assert not desktop_file.exists()
 

@@ -3,13 +3,32 @@ use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{Result, ensure};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use crate::desktop_shortcuts::Shortcuts;
 use crate::remote::{CommandStream, RemoteSession};
 use crate::{CommandOutput, Theme};
+
+const TERMINAL_TAB_LIMIT: usize = 8;
+const TERMINAL_TAB_NAME_LIMIT: usize = 128;
+
+// Bound untrusted transport input using the existing field limits. JSON can
+// encode an ASCII byte as six bytes (\u00XX); the remaining space covers keys,
+// numeric fields, and formatting. Saving uses the typed schema's limits.
+pub(crate) const DESKTOP_JSON_READ_LIMIT: usize = 6
+    * (FilesPreferences::PATHS_LIMIT
+        + FilesPreferences::MAX_FOLDER_ICONS * FilesPreferences::ICON_ID_LIMIT
+        + TERMINAL_TAB_LIMIT
+            * (crate::terminal::DIRECTORY_LIMIT
+                + crate::terminal::SESSION_ID_LIMIT
+                + TERMINAL_TAB_NAME_LIMIT)
+        + crate::terminal::SESSION_ID_LIMIT
+        + crate::browser::BOOKMARK_LIMIT
+            * (crate::browser::BOOKMARK_TITLE_LIMIT + crate::browser::URL_LIMIT)
+        + crate::desktop_customization::MAX_ICONS
+            * crate::desktop_customization::DESKTOP_NAME_LIMIT
+        + crate::desktop_customization::WALLPAPER_PATH_LIMIT)
+    + 64 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Applications {
@@ -32,8 +51,12 @@ pub struct DesktopPreferences {
     pub terminal: TerminalLayout,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub windows: BTreeMap<DesktopApp, DesktopWindow>,
-    #[serde(default, skip_serializing_if = "ExplorerPreferences::is_default")]
-    pub explorer: ExplorerPreferences,
+    #[serde(
+        default,
+        alias = "explorer",
+        skip_serializing_if = "FilesPreferences::is_default"
+    )]
+    pub files: FilesPreferences,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_bookmarks: Vec<crate::browser::Bookmark>,
     #[serde(
@@ -48,16 +71,19 @@ pub struct DesktopPreferences {
 pub enum DesktopApp {
     Terminal,
     Monitor,
-    Store,
+    #[serde(alias = "store")]
+    AppCenter,
     // Retained so existing desktop and Dock preferences still deserialize.
     Services,
     Logs,
-    Explorer,
+    #[serde(alias = "explorer")]
+    Files,
     Disks,
     Docker,
     Editor,
     Code,
-    Video,
+    #[serde(alias = "video")]
+    Player,
     Trash,
     Browser,
     Settings,
@@ -112,13 +138,15 @@ impl WindowBounds {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExplorerPreferences {
+pub struct FilesPreferences {
     #[serde(default)]
     pub sidebar_hidden: bool,
     #[serde(default)]
     pub favorites: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub colors: BTreeMap<String, FolderColor>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub folder_icons: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,11 +161,32 @@ pub enum FolderColor {
     Gray,
 }
 
-impl ExplorerPreferences {
+impl FilesPreferences {
     pub const MAX_FAVORITES: usize = 24;
     pub const MAX_COLORS: usize = 64;
+    pub const MAX_FOLDER_ICONS: usize = 64;
+    const PATHS_LIMIT: usize = 24 * 1024;
+    const ICON_ID_LIMIT: usize = 48;
+    pub fn marked_paths(&self) -> std::collections::BTreeSet<String> {
+        self.favorites
+            .iter()
+            .chain(self.colors.keys())
+            .chain(self.folder_icons.keys())
+            .cloned()
+            .collect()
+    }
+
+    pub fn remove_path_metadata(&mut self, paths: &std::collections::BTreeSet<String>) {
+        self.favorites.retain(|path| !paths.contains(path));
+        self.colors.retain(|path, _| !paths.contains(path));
+        self.folder_icons.retain(|path, _| !paths.contains(path));
+    }
+
     fn is_default(&self) -> bool {
-        !self.sidebar_hidden && self.favorites.is_empty() && self.colors.is_empty()
+        !self.sidebar_hidden
+            && self.favorites.is_empty()
+            && self.colors.is_empty()
+            && self.folder_icons.is_empty()
     }
     pub fn validate_path(path: &str) -> Result<()> {
         ensure!(
@@ -156,21 +205,43 @@ impl ExplorerPreferences {
             "Too many folder colors"
         );
         ensure!(
+            self.folder_icons.len() <= Self::MAX_FOLDER_ICONS,
+            "Too many custom folder icons"
+        );
+        ensure!(
             self.favorites
                 .iter()
                 .chain(self.colors.keys())
+                .chain(self.folder_icons.keys())
                 .map(String::len)
                 .sum::<usize>()
-                <= 24 * 1024,
-            "Explorer preferences exceed the path limit"
+                <= Self::PATHS_LIMIT,
+            "Files preferences exceed the path limit"
         );
         let mut seen = HashSet::new();
         for path in &self.favorites {
             Self::validate_path(path)?;
             ensure!(seen.insert(path), "Duplicate favorite folder");
         }
-        for path in self.colors.keys() {
+        for path in self.colors.keys().chain(self.folder_icons.keys()) {
             Self::validate_path(path)?;
+        }
+        for icon in self.folder_icons.values() {
+            // An optional style prefix and a semantic name identify a client-bundled icon.
+            let valid_part = |part: &str| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+            };
+            ensure!(
+                icon.len() <= Self::ICON_ID_LIMIT
+                    && icon.split_once(':').map_or_else(
+                        || valid_part(icon),
+                        |(style, name)| valid_part(style) && valid_part(name),
+                    ),
+                "Invalid folder icon identifier"
+            );
         }
         Ok(())
     }
@@ -194,14 +265,17 @@ impl TerminalLayout {
         self.tabs.is_empty() && !self.maximized
     }
     fn validate(&self) -> Result<()> {
-        ensure!(self.tabs.len() <= 8, "At most 8 terminal tabs can be saved");
+        ensure!(
+            self.tabs.len() <= TERMINAL_TAB_LIMIT,
+            "At most 8 terminal tabs can be saved"
+        );
         let mut ids = std::collections::HashSet::new();
         for tab in &self.tabs {
             crate::terminal::validate_session(&tab.id)?;
             ensure!(ids.insert(tab.id.clone()), "Duplicate terminal session");
             if let Some(name) = &tab.name {
                 ensure!(
-                    name.len() <= 128 && !name.chars().any(char::is_control),
+                    name.len() <= TERMINAL_TAB_NAME_LIMIT && !name.chars().any(char::is_control),
                     "Invalid terminal tab name"
                 );
             }
@@ -225,7 +299,7 @@ impl Default for DesktopPreferences {
             shortcuts: Shortcuts::default(),
             terminal: Default::default(),
             windows: Default::default(),
-            explorer: Default::default(),
+            files: Default::default(),
             browser_bookmarks: Vec::new(),
             appearance: Default::default(),
         }
@@ -242,7 +316,7 @@ impl DesktopPreferences {
         );
         self.terminal.validate()?;
         self.shortcuts.validate()?;
-        self.explorer.validate()?;
+        self.files.validate()?;
         crate::browser::validate_bookmarks(&self.browser_bookmarks)?;
         self.appearance.validate()?;
         for bounds in self.windows.values().filter_map(|window| window.bounds) {
@@ -395,13 +469,7 @@ if [ -L "$arcnix_file" ]; then printf 'Refusing linked desktop preferences\n' >&
 if [ -e "$arcnix_file" ] && { [ ! -f "$arcnix_file" ] || [ ! -O "$arcnix_file" ]; }; then printf 'Invalid desktop preferences owner or type\n' >&2; exit 1; fi
 "#;
 
-pub fn preferences_read_command() -> String {
-    format!(
-        "# arcnix:desktop:read\n{DIRECTORY}\nif [ -f \"$arcnix_file\" ]; then head -c 65537 -- \"$arcnix_file\"; else printf 'null\\n'; fi"
-    )
-}
 pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
-    ensure!(text.len() <= 65536, "Desktop preferences exceed 64 KiB");
     let prefs: Option<DesktopPreferences> = serde_json::from_str(text)?;
     let mut prefs = prefs.unwrap_or_default();
     prefs.validate()?;
@@ -433,65 +501,62 @@ pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
     }
     Ok(prefs)
 }
-pub fn read_preferences(session: &RemoteSession) -> Result<DesktopPreferences> {
-    let output = execute(session, &preferences_read_command(), 69632)?;
-    ensure!(
-        output.exit_code == 0,
-        "Cannot read ~/.arcnix/desktop.json: {}",
-        output.stderr.trim()
-    );
-    parse_preferences(&output.stdout)
-}
-pub fn preferences_write_command(prefs: &DesktopPreferences) -> Result<String> {
-    prefs.validate()?;
-    let json = serde_json::to_string(prefs)?;
-    ensure!(json.len() <= 65536, "Desktop preferences exceed 64 KiB");
-    let encoded = STANDARD.encode(json);
-    Ok(format!(
-        r#"# arcnix:desktop:write
-{DIRECTORY}
-umask 077
-if [ ! -d "$arcnix_dir" ]; then mkdir -m 700 -- "$arcnix_dir"; fi
-arcnix_temp=$(mktemp "$arcnix_dir/.desktop.XXXXXXXX")
-trap 'rm -f -- "$arcnix_temp"' EXIT HUP INT TERM
-printf '%s' '{encoded}' | base64 -d > "$arcnix_temp"
-chmod 600 -- "$arcnix_temp"
-mv -fT -- "$arcnix_temp" "$arcnix_file"
-printf 'ARCNIX_DESKTOP_SAVED_V1\n'
-"#
-    ))
-}
-pub fn write_preferences(session: &RemoteSession, prefs: &DesktopPreferences) -> Result<()> {
-    let output = execute(session, &preferences_write_command(prefs)?, 8192)?;
-    ensure!(
-        output.exit_code == 0 && output.stdout.trim() == "ARCNIX_DESKTOP_SAVED_V1",
-        "Cannot save ~/.arcnix/desktop.json: {}",
-        output.stderr.trim()
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn restores_independent_windows_and_explorer_settings_from_remote_json() {
+    fn loads_legacy_desktop_app_names_and_saves_canonical_names() {
         let prefs = parse_preferences(r#"{
             "version":1,"theme":"Dark",
             "terminal":{"tabs":[],"active":"","maximized":true},
-            "windows":{"explorer":{"bounds":{"x":34,"y":52,"width":820,"height":480}}},
-            "explorer":{"sidebar_hidden":true,"favorites":["/srv/网站"],"colors":{"/srv/网站":"purple"}}
+            "windows":{
+                "explorer":{"bounds":{"x":34,"y":52,"width":820,"height":480}},
+                "store":{"maximized":true},
+                "video":{"maximized":false}
+            },
+            "explorer":{
+                "sidebar_hidden":true,"favorites":["/srv/网站"],"colors":{"/srv/网站":"purple"},
+                "folder_icons":{"/srv/照片":"photos","/srv/cloud":"filled:cloud","/srv/calendar":"duotone:calendar"}
+            },
+            "appearance":{
+                "order":[{"kind":"app","id":"store"}],
+                "hidden":["video"],
+                "dock":{"order":["explorer","store","video"],"unpinned":["video"]}
+            }
         }"#).unwrap();
-        assert!(!prefs.windows[&DesktopApp::Explorer].maximized);
-        assert_eq!(prefs.explorer.colors["/srv/网站"], FolderColor::Purple);
+        assert!(!prefs.windows[&DesktopApp::Files].maximized);
+        assert!(prefs.windows[&DesktopApp::AppCenter].maximized);
+        assert!(prefs.windows.contains_key(&DesktopApp::Player));
+        assert_eq!(prefs.files.colors["/srv/网站"], FolderColor::Purple);
+        assert_eq!(prefs.files.folder_icons["/srv/照片"], "photos");
+        assert_eq!(prefs.files.folder_icons["/srv/cloud"], "filled:cloud");
         assert_eq!(
-            parse_preferences(&serde_json::to_string(&prefs).unwrap()).unwrap(),
-            prefs
+            prefs.files.folder_icons["/srv/calendar"],
+            "duotone:calendar"
         );
+        assert!(prefs.files.sidebar_hidden);
+        assert_eq!(prefs.files.favorites, ["/srv/网站"]);
+        assert_eq!(
+            prefs.appearance.dock.order,
+            [DesktopApp::Files, DesktopApp::AppCenter, DesktopApp::Player]
+        );
+        let saved = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(saved["windows"]["files"]["bounds"]["width"], 820);
+        assert_eq!(saved["windows"]["app_center"]["maximized"], true);
+        assert!(saved["windows"].get("player").is_some());
+        assert_eq!(saved["files"]["sidebar_hidden"], true);
+        assert!(saved.get("explorer").is_none());
+        assert_eq!(saved["appearance"]["order"][0]["id"], "app_center");
+        assert_eq!(saved["appearance"]["hidden"][0], "player");
+        assert_eq!(saved["appearance"]["dock"]["unpinned"][0], "player");
+        assert_eq!(parse_preferences(&saved.to_string()).unwrap(), prefs);
         for field in [
             r#""windows":{"explorer":{"bounds":{"x":0,"y":0,"width":0,"height":900}}}"#,
             r#""explorer":{"favorites":["relative"]}"#,
             r#""explorer":{"colors":{"/srv":"chartreuse"}}"#,
+            r#""files":{"folder_icons":{"relative":"photos"}}"#,
+            r#""files":{"folder_icons":{"/srv":"filled:"}}"#,
+            r#""files":{"folder_icons":{"/srv":"<svg>"}}"#,
         ] {
             assert!(
                 parse_preferences(&format!(r#"{{"version":1,"theme":"Dark",{field}}}"#)).is_err()
@@ -541,14 +606,5 @@ mod tests {
             assert!(parse_preferences(invalid).is_err());
         }
         assert!(parse_preferences(&" ".repeat(4097)).is_err());
-        let write = preferences_write_command(&DesktopPreferences {
-            version: 1,
-            theme: Theme::Dark,
-            ..Default::default()
-        })
-        .unwrap();
-        assert!(
-            write.contains("mktemp") && write.contains("mv -fT") && write.contains("chmod 600")
-        );
     }
 }

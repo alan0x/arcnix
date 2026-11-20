@@ -11,26 +11,121 @@ use super::*;
 mod picker;
 pub(super) use picker::Directory;
 
-const EXTENSIONS: &[&str] = if cfg!(all(windows, target_arch = "x86_64")) {
-    &["MP4", "MKV"]
-} else {
-    &["MP4"]
-};
+const WEB_FORMATS: &[(&str, &str)] = &[
+    ("mp4", "video/mp4"),
+    ("m4v", "video/mp4"),
+    ("webm", "video/webm"),
+    ("ogv", "video/ogg"),
+];
+// Pin native demuxers so opening a remote file cannot load a playlist.
+const NATIVE_FORMATS: &[(&str, &str)] = &[
+    ("mkv", "mkv"),
+    ("mov", "mov"),
+    ("avi", "avi"),
+    ("mpeg", "mpeg"),
+    ("mpg", "mpeg"),
+    ("ts", "mpegts"),
+    ("m2ts", "mpegts"),
+    ("flv", "flv"),
+    ("wmv", "asf"),
+    ("vob", "mpeg"),
+    ("3gp", "mov"),
+    ("asf", "asf"),
+];
+const NATIVE_AVAILABLE: bool = cfg!(all(windows, target_arch = "x86_64"));
 
 type ReadResult = Result<Vec<u8>, String>;
 
 #[cfg(windows)]
 pub(super) fn native_format(path: &str) -> bool {
-    cfg!(target_arch = "x86_64")
-        && Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("mkv"))
+    NATIVE_AVAILABLE && web_format(path).is_none()
 }
+
+fn web_format(path: &str) -> Option<(&'static str, &'static str)> {
+    let extension = arcnix_core::file_associations::extension(path)?;
+    WEB_FORMATS
+        .iter()
+        .copied()
+        .find(|(ext, _)| *ext == extension)
+}
+
+fn native_demuxer(path: &str) -> Option<&'static str> {
+    let extension = arcnix_core::file_associations::extension(path)?;
+    NATIVE_FORMATS
+        .iter()
+        .find_map(|(ext, demuxer)| (*ext == extension).then_some(*demuxer))
+}
+
 pub(super) fn supports(path: &str) -> bool {
-    Path::new(path).extension().is_some_and(|ext| {
-        EXTENSIONS
+    web_format(path).is_some() || (NATIVE_AVAILABLE && native_demuxer(path).is_some())
+}
+
+pub(super) fn supported_extensions() -> impl Iterator<Item = &'static str> {
+    WEB_FORMATS.iter().map(|(ext, _)| *ext).chain(
+        NATIVE_FORMATS
             .iter()
-            .any(|format| ext.eq_ignore_ascii_case(format))
+            .filter(|_| NATIVE_AVAILABLE)
+            .map(|(ext, _)| *ext),
+    )
+}
+
+struct StreamFormat {
+    extension: &'static str,
+    mime: &'static str,
+    #[cfg(windows)]
+    native_demuxer: Option<&'static str>,
+}
+
+impl StreamFormat {
+    fn web(extension: &'static str, mime: &'static str) -> Self {
+        Self {
+            extension,
+            mime,
+            #[cfg(windows)]
+            native_demuxer: None,
+        }
+    }
+
+    fn native(_demuxer: &'static str) -> Self {
+        Self {
+            extension: "media",
+            mime: "application/octet-stream",
+            #[cfg(windows)]
+            native_demuxer: Some(_demuxer),
+        }
+    }
+}
+
+fn stream_format(
+    path: &str,
+    file: &mut (impl Read + Seek),
+    size: u64,
+) -> anyhow::Result<StreamFormat> {
+    if let Some((extension, mime)) = web_format(path) {
+        return Ok(StreamFormat::web(extension, mime));
+    }
+    if NATIVE_AVAILABLE && let Some(demuxer) = native_demuxer(path) {
+        return Ok(StreamFormat::native(demuxer));
+    }
+    // An explicitly chosen Player may be opening a video with an unknown suffix.
+    let mut header = [0; 12];
+    let len = size.min(header.len() as u64) as usize;
+    file.read_exact(&mut header[..len])?;
+    file.seek(SeekFrom::Start(0))?;
+    let (extension, mime, demuxer) = match &header[..len] {
+        [_, _, _, _, b'f', b't', b'y', b'p', ..] => ("mp4", "video/mp4", "mov"),
+        [0x1a, 0x45, 0xdf, 0xa3, ..] => ("webm", "video/webm", "mkv"),
+        [b'O', b'g', b'g', b'S', ..] => ("ogv", "video/ogg", "ogg"),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'A', b'V', b'I', b' '] if NATIVE_AVAILABLE => {
+            ("avi", "", "avi")
+        }
+        [b'F', b'L', b'V', ..] if NATIVE_AVAILABLE => ("flv", "", "flv"),
+        _ => anyhow::bail!("Player could not identify a supported video format"),
+    };
+    Ok(if NATIVE_AVAILABLE {
+        StreamFormat::native(demuxer)
+    } else {
+        StreamFormat::web(extension, mime)
     })
 }
 struct RangeRead {
@@ -40,6 +135,7 @@ struct RangeRead {
 }
 pub(crate) struct Source {
     url: String,
+    format: StreamFormat,
     size: u64,
     active: Arc<AtomicBool>,
     reads: mpsc::SyncSender<RangeRead>,
@@ -49,7 +145,7 @@ impl AssetSource for Source {
         self.size
     }
     fn mime(&self) -> &str {
-        "video/mp4"
+        self.format.mime
     }
     fn current(&self) -> bool {
         self.active.load(Ordering::Acquire)
@@ -59,6 +155,11 @@ impl AssetSource for Source {
     }
 }
 impl Source {
+    #[cfg(windows)]
+    pub(super) fn native_demuxer(&self) -> Option<&'static str> {
+        self.format.native_demuxer
+    }
+
     pub(super) fn read(
         &self,
         offset: u64,
@@ -111,9 +212,17 @@ pub(super) fn serve(
             return;
         }
     };
+    let format = match stream_format(path, &mut file, size) {
+        Ok(format) => format,
+        Err(error) => {
+            ready(Err(format!("{error:#}")));
+            return;
+        }
+    };
     let (reads, requests) = mpsc::sync_channel(4);
     ready(Ok(Arc::new(Source {
-        url: format!("/media/{}.mp4", new_id()),
+        url: format!("/media/{}.{}", new_id(), format.extension),
+        format,
         size,
         active: active.clone(),
         reads,
@@ -166,6 +275,7 @@ impl AssetProvider for Assets {
 pub(super) struct Playback {
     pub(super) serial: u64,
     pub(super) title: String,
+    path: String,
     active: Arc<AtomicBool>,
     source: Option<Arc<Source>>,
     pub(super) status: String,
@@ -203,6 +313,7 @@ impl Player {
             s.video = Some(Playback {
                 serial,
                 title: path.rsplit('/').next().unwrap_or(path).to_owned(),
+                path: path.to_owned(),
                 active,
                 source: None,
                 status: i18n::translate("正在打开视频…"),
@@ -210,16 +321,20 @@ impl Player {
                 native: native_format(path).then(Default::default),
             })
         });
-        ui.open_desktop_app(WorkspacePage::Video);
+        ui.open_desktop_app(WorkspacePage::Player);
     }
     pub fn close(&self, ui: &Ui) {
         self.stop(ui);
         ui.state
-            .revise(|s| server_desktop::remove_window(s, WorkspacePage::Video));
+            .revise(|s| server_desktop::remove_window(s, WorkspacePage::Player));
     }
     pub fn stop(&self, ui: &Ui) {
         ui.state.revise(|s| {
             s.video_picker = None;
+            if s.dialog == Some(Dialog::OpenVideo) {
+                s.dialog = None;
+                s.dialog_error.clear();
+            }
             if let Some(video) = s.video.take() {
                 video.active.store(false, Ordering::Release);
             }
@@ -244,6 +359,17 @@ impl Player {
                 Err(error) => video.status = error,
             }
         });
+    }
+
+    pub(super) fn opened(&self, ui: &Ui, serial: u64) {
+        if let Some(path) = ui.state.with(|s| {
+            s.video
+                .as_ref()
+                .filter(|video| video.serial == serial)
+                .map(|video| video.path.clone())
+        }) {
+            file_open::remember(ui, &path, arcnix_core::file_associations::FileApp::Player);
+        }
     }
 
     pub(super) fn sync_surface(&self, ui: &Ui) {
@@ -298,16 +424,13 @@ fn empty_player(ui: Ui) -> impl Widget {
             text()
                 .class("player-idle-title")
                 .content(i18n::bind("Open video")),
-            text()
-                .class("player-formats")
-                .content(EXTENSIONS.join(" · ")),
         )),
         col().class("player-idle-controls").fill((
             view().class("player-empty-timeline"),
             row().class("player-idle-transport").fill((
                 icons::glyph(Icon::Play),
                 text().class("player-clock").content("0:00 / 0:00"),
-                text_action("Browse files…", Icon::Folder)
+                text_action("Browse files…", Icon::OpenVideo)
                     .class("button with-icon player-browse")
                     .on_press(move || ui.player.browse(&ui)),
             )),
@@ -318,18 +441,34 @@ fn empty_player(ui: Ui) -> impl Widget {
 pub(super) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let idle = ui.clone();
-    let listing = ui.clone();
     col().class("remote-player").fill((
         #[cfg(windows)]
         crate::mpv_native::bridge(ui.clone()),
-        view()
+        col()
             .class("remote-player-screen")
-            .node_ref(ui.player.node),
+            .node_ref(ui.player.node)
+            .fill(
+                row()
+                    .class("player-feedback")
+                    .fill((icons::glyph(Icon::Play), icons::glyph(Icon::Pause))),
+            ),
+        input()
+            .class("player-opened-input hidden")
+            .on(value_changed, {
+                let ui = ui.clone();
+                move |event| {
+                    if let Event::ValueChanged { value, .. } = event
+                        && let Some(serial) = ui.state.with(|s| {
+                            let video = s.video.as_ref()?;
+                            (video.source.as_ref()?.url == value).then_some(video.serial)
+                        })
+                    {
+                        ui.player.opened(&ui, serial);
+                    }
+                }
+            }),
         when(state.map(|s| s.video.is_none()), move || {
             empty_player(idle.clone())
-        }),
-        when(state.map(|s| s.video_picker.is_some()), move || {
-            picker::panel(listing.clone())
         }),
         #[cfg(windows)]
         crate::mpv_native::controls(ui.clone()),
@@ -339,8 +478,12 @@ pub(super) fn panel(ui: Ui) -> impl Widget {
                 .map(|v| v.status.clone())
                 .unwrap_or_default()
         })),
-        text()
-            .class("remote-player-error")
-            .content(i18n::bind("无法播放此视频，请检查连接和 MP4 编码。")),
+        text().class("remote-player-error").content(i18n::bind(
+            "Could not play this video. Check the connection and video codec.",
+        )),
     ))
+}
+
+pub(super) fn picker_dialog(ui: Ui) -> impl Widget {
+    picker::dialog(ui)
 }

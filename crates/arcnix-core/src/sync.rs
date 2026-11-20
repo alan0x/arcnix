@@ -9,12 +9,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::desktop_storage;
+pub use crate::desktop_storage::encode as encode_desktop;
 use crate::remote::{CommandStream, RemoteSession};
-use crate::server_apps::{DesktopPreferences, parse_preferences};
+use crate::server_apps::{DESKTOP_JSON_READ_LIMIT, DesktopPreferences, parse_preferences};
 
 pub const COOKIE_LIMIT: usize = 512 * 1024;
-const DESKTOP_LIMIT: usize = 64 * 1024;
-const JOURNAL_LIMIT: usize = 3 * COOKIE_LIMIT;
+const COOKIE_JOURNAL_LIMIT: usize = 3 * COOKIE_LIMIT;
+// base, desired and the last attempted revision are full desktop snapshots.
+const DESKTOP_JOURNAL_LIMIT: usize = 3 * DESKTOP_JSON_READ_LIMIT + 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pending<T> {
@@ -58,7 +61,7 @@ pub enum Document<'a> {
 impl Document<'_> {
     fn spec(self) -> Result<(&'static str, String, usize)> {
         Ok(match self {
-            Self::Desktop => ("desktop.json", String::new(), DESKTOP_LIMIT),
+            Self::Desktop => ("desktop", String::new(), DESKTOP_JSON_READ_LIMIT),
             Self::Cookies(client) => {
                 ensure!(
                     client.len() == 32 && client.bytes().all(|b| b.is_ascii_hexdigit()),
@@ -73,12 +76,20 @@ impl Document<'_> {
         })
     }
 
-    fn command(self, expected: Option<(&Revision, &Revision)>) -> Result<String> {
+    fn command(self, expected: Option<(&Revision, &Revision, &[u8])>) -> Result<String> {
         let (file, children, limit) = self.spec()?;
+        if let Some((old, next, _)) = expected {
+            ensure!(old.valid() && next.valid(), "Invalid sync revision");
+        }
+        if matches!(self, Self::Desktop) {
+            return desktop_storage::command(
+                limit,
+                expected.map(|(old, next, bytes)| (old.0.as_str(), next.0.as_str(), bytes)),
+            );
+        }
         let operation = if expected.is_some() { "commit" } else { "read" };
         let create = if expected.is_some() { "yes" } else { "no" };
-        let action = if let Some((old, next)) = expected {
-            ensure!(old.valid() && next.valid(), "Invalid sync revision");
+        let action = if let Some((old, next, _)) = expected {
             format!(
                 r#"temporary=$(mktemp "$dir/.arcnix-sync.XXXXXXXX")
 trap 'rm -f -- "$temporary"' EXIT
@@ -148,7 +159,10 @@ regular "$target"
         let result = session.exec_stream_controlled(
             command,
             input,
-            Duration::from_secs(15),
+            Duration::from_secs(match self {
+                Self::Desktop => 60,
+                Self::Cookies(_) => 15,
+            }),
             !input.is_empty(),
             None,
             false,
@@ -172,7 +186,7 @@ regular "$target"
     }
 
     pub fn read(self, session: &RemoteSession) -> Result<Snapshot> {
-        let output = self.run(session, &self.command(None)?, &[])?;
+        let output = self.run(session, &self.read_command()?, &[])?;
         match output.as_slice() {
             b"M\n" => Ok(Snapshot(None)),
             [b'F', b'\n', bytes @ ..] => Ok(Snapshot(Some(bytes.to_vec()))),
@@ -180,13 +194,25 @@ regular "$target"
         }
     }
 
-    pub fn commit(self, session: &RemoteSession, base: &Revision, bytes: &[u8]) -> Result<bool> {
+    pub fn read_command(self) -> Result<String> {
+        self.command(None)
+    }
+
+    pub fn commit_command(self, base: &Revision, bytes: &[u8]) -> Result<String> {
         ensure!(
             !bytes.is_empty() && bytes.len() <= self.spec()?.2,
             "Invalid sync document size"
         );
         let next = Revision::of(Some(bytes));
-        let output = self.run(session, &self.command(Some((base, &next)))?, bytes)?;
+        self.command(Some((base, &next, bytes)))
+    }
+
+    pub fn commit(self, session: &RemoteSession, base: &Revision, bytes: &[u8]) -> Result<bool> {
+        self.send_commit(session, &self.commit_command(base, bytes)?, bytes)
+    }
+
+    fn send_commit(self, session: &RemoteSession, command: &str, bytes: &[u8]) -> Result<bool> {
+        let output = self.run(session, command, bytes)?;
         match output.as_slice() {
             b"OK\n" => Ok(true),
             b"STALE\n" => Ok(false),
@@ -208,13 +234,46 @@ pub fn read_desktop(session: &RemoteSession) -> Result<DesktopPreferences> {
     decode_desktop(&Document::Desktop.read(session)?)
 }
 
-fn decode_desktop(snapshot: &Snapshot) -> Result<DesktopPreferences> {
-    let parsed = || {
-        parse_preferences(std::str::from_utf8(
-            snapshot.0.as_deref().unwrap_or(b"null"),
-        )?)
-    };
-    parsed().context("Invalid desktop preferences")
+pub fn decode_desktop(snapshot: &Snapshot) -> Result<DesktopPreferences> {
+    let bytes = snapshot.0.as_deref().unwrap_or(b"null");
+    if bytes.starts_with(desktop_storage::HEADER) {
+        desktop_storage::decode(bytes)
+    } else {
+        parse_preferences(std::str::from_utf8(bytes)?)
+    }
+    .context("Invalid desktop preferences")
+}
+
+/// Prepare the remote command and input for a desktop preferences commit.
+pub fn desktop_commit_command(
+    base: &Snapshot,
+    preferences: &DesktopPreferences,
+) -> Result<(String, Vec<u8>)> {
+    prepare_desktop_commit(base, &decode_desktop(base)?, preferences)
+}
+
+fn prepare_desktop_commit(
+    base: &Snapshot,
+    remote: &DesktopPreferences,
+    preferences: &DesktopPreferences,
+) -> Result<(String, Vec<u8>)> {
+    let revision = base.revision();
+    if let Some(packet) = base
+        .0
+        .as_deref()
+        .filter(|data| data.starts_with(desktop_storage::HEADER))
+        && let Some(update) = desktop_storage::single_file_update(
+            packet,
+            remote,
+            preferences,
+            DESKTOP_JSON_READ_LIMIT,
+        )?
+    {
+        let command = desktop_storage::file_command(DESKTOP_JSON_READ_LIMIT, &revision.0, &update);
+        return Ok((command, update.contents));
+    }
+    let bytes = encode_desktop(preferences)?;
+    Ok((Document::Desktop.commit_command(&revision, &bytes)?, bytes))
 }
 
 pub fn sync_desktop(
@@ -228,13 +287,15 @@ pub fn sync_desktop(
         if !paths.is_empty() {
             return Ok(DesktopResult::Conflict { remote, paths });
         }
-        if merged == remote
-            || Document::Desktop.commit(
-                session,
-                &snapshot.revision(),
-                &serde_json::to_vec(&merged)?,
-            )?
-        {
+        let legacy = snapshot
+            .0
+            .as_deref()
+            .is_some_and(|bytes| !bytes.starts_with(desktop_storage::HEADER));
+        if merged == remote && !legacy {
+            return Ok(DesktopResult::Saved(merged));
+        }
+        let (command, bytes) = prepare_desktop_commit(&snapshot, &remote, &merged)?;
+        if Document::Desktop.send_commit(session, &command, &bytes)? {
             return Ok(DesktopResult::Saved(merged));
         }
     }
@@ -398,18 +459,22 @@ struct Journal<T> {
 }
 
 pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    load_journal(path, COOKIE_JOURNAL_LIMIT)
+}
+
+pub fn load_desktop_pending(path: &Path) -> Result<Option<Pending<DesktopPreferences>>> {
+    load_journal(path, DESKTOP_JOURNAL_LIMIT)
+}
+
+fn load_journal<T: DeserializeOwned>(path: &Path, limit: usize) -> Result<Option<T>> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     let mut bytes = Vec::new();
-    file.take(JOURNAL_LIMIT as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() <= JOURNAL_LIMIT,
-        "Local sync journal is too large"
-    );
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= limit, "Local sync journal is too large");
     let journal: Journal<T> = serde_json::from_slice(&bytes)?;
     ensure!(
         journal.version == 1,
@@ -419,14 +484,19 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 }
 
 pub fn save<T: Serialize>(path: &Path, pending: &T) -> Result<()> {
+    save_journal(path, pending, COOKIE_JOURNAL_LIMIT)
+}
+
+pub fn save_desktop_pending(path: &Path, pending: &Pending<DesktopPreferences>) -> Result<()> {
+    save_journal(path, pending, DESKTOP_JOURNAL_LIMIT)
+}
+
+fn save_journal<T: Serialize>(path: &Path, pending: &T, limit: usize) -> Result<()> {
     let bytes = serde_json::to_vec(&Journal {
         version: 1,
         pending,
     })?;
-    ensure!(
-        bytes.len() <= JOURNAL_LIMIT,
-        "Local sync journal is too large"
-    );
+    ensure!(bytes.len() <= limit, "Local sync journal is too large");
     crate::store::replace_document(path, &bytes)
 }
 
@@ -475,6 +545,69 @@ mod tests {
             title: name.into(),
             url: format!("https://example.com/{name}"),
         }
+    }
+
+    #[test]
+    fn large_desktop_snapshots_and_three_revision_outbox_fit() -> Result<()> {
+        use crate::browser::{BOOKMARK_LIMIT, BOOKMARK_TITLE_LIMIT, URL_LIMIT};
+        use crate::desktop_customization::{DESKTOP_NAME_LIMIT, MAX_ICONS, Shortcut};
+        use crate::server_apps::TerminalTab;
+
+        let mut prefs = DesktopPreferences::default();
+        prefs.browser_bookmarks = (0..BOOKMARK_LIMIT)
+            .map(|i| {
+                let prefix = format!("https://example.com/{i}?q=");
+                Bookmark {
+                    title: "\"".repeat(BOOKMARK_TITLE_LIMIT),
+                    url: format!("{prefix}{}", "\"".repeat(URL_LIMIT - prefix.len())),
+                }
+            })
+            .collect();
+        prefs.terminal.tabs = (0..8)
+            .map(|id| TerminalTab {
+                id: format!("{id:x}"),
+                name: Some("\"".repeat(128)),
+                directory: Some(format!(
+                    "/{}",
+                    "\"".repeat(crate::terminal::DIRECTORY_LIMIT - 1)
+                )),
+            })
+            .collect();
+        prefs.appearance.order = (0..MAX_ICONS)
+            .map(|i| Shortcut::File(format!("{i:03}{}", "\"".repeat(DESKTOP_NAME_LIMIT - 3))))
+            .collect();
+        let bytes = encode_desktop(&prefs)?;
+        assert!(bytes.starts_with(desktop_storage::HEADER));
+        assert!(
+            bytes
+                .windows(b"{\n  \"version\": 1,\n".len())
+                .any(|slice| slice == b"{\n  \"version\": 1,\n")
+        );
+        assert!(serde_json::to_vec(&prefs)?.len() > 512 * 1024);
+        Document::Desktop.commit_command(&Snapshot(None).revision(), &bytes)?;
+        assert_eq!(decode_desktop(&Snapshot(Some(bytes)))?, prefs);
+
+        let pending = Pending {
+            base: prefs.clone(),
+            desired: DesktopPreferences {
+                theme: Theme::Dark,
+                ..prefs.clone()
+            },
+            attempted: Some(prefs),
+        };
+        let dir = std::env::temp_dir().join(format!("arcnix-desktop-outbox-{}", crate::new_id()));
+        fs::create_dir(&dir)?;
+        let path = dir.join("desktop.json");
+        let roundtrip = (|| -> Result<_> {
+            save_desktop_pending(&path, &pending)?;
+            Ok((fs::metadata(&path)?.len(), load_desktop_pending(&path)?))
+        })();
+        let _ = fs::remove_file(&path);
+        fs::remove_dir(dir)?;
+        let (size, loaded) = roundtrip?;
+        assert!(size > COOKIE_JOURNAL_LIMIT as u64);
+        assert_eq!(loaded, Some(pending));
+        Ok(())
     }
 
     #[test]

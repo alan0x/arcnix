@@ -75,7 +75,7 @@ impl Ui {
                 catalog_id: Some(id),
                 ..Default::default()
             };
-            let source = if s.software.store.compose_only && source_available(s, 2) {
+            let source = if s.software.app_center.compose_only && source_available(s, 2) {
                 2
             } else {
                 (0..3)
@@ -99,7 +99,7 @@ impl Ui {
     }
     pub(super) fn open_software_install(&self, source: u8, package: Option<String>) {
         if package.is_none() {
-            self.open_software_store(source == 2);
+            self.open_app_center(source == 2);
             return;
         }
         self.state.revise(|s| {
@@ -221,7 +221,7 @@ impl Ui {
             }
             Err(e) => self.state.revise(|s| {
                 s.software.error = format!("{e:#}");
-                s.software.store.error = s.software.error.clone();
+                s.software.app_center.error = s.software.error.clone();
             }),
         }
     }
@@ -429,7 +429,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                 let fields = ui.clone();
                 modal(ui.clone(),"Install software",col().class("software-install-form").fill((
             each(state.map(|s|selected_app(s).into_iter().collect::<Vec<_>>())).key(|a|a.id).children(move|item|{
-                let app=item.value.get();row().class("install-app-heading").fill((text().class(format!("store-app-icon store-color-{}",app.color)).content(app.mark),col().fill((text().class("install-app-name").content(app.name),text().class("subtle").content(i18n::bind(app.summary))))))
+                let app=item.value.get();row().class("install-app-heading").fill((text().class(format!("app-center-app-icon app-center-color-{}",app.color)).content(app.mark),col().fill((text().class("install-app-name").content(app.name),text().class("subtle").content(i18n::bind(app.summary))))))
             }),
             text().class("install-method-heading").content(i18n::bind("Installation method")),
             row().class("install-sources").fill([(0,"System packages",Icon::Server),(1,"Snap",Icon::Grid),(2,"Docker Compose",Icon::Docker)].into_iter().map(move|(source,label,icon)|sapid::button().class("button install-source-card").name(i18n::bind(label)).label("").pressed(state.map(move|s|s.install.source==source)).enabled(state.map(move|s|source_available(s,source))).fill((icons::glyph(icon),text().class("install-source-name").content(i18n::bind(label)),text().class("install-source-note").content(state.map(move|s|source_note(s,source))))).on_press(move||state.revise(|s|set_source(s,source)))).collect::<Vec<_>>()),

@@ -52,7 +52,7 @@ def main():
             expect(first.page.locator('.desktop-window.app-code')).to_have_count(0)
             check_native_resize(first)
             first.page.locator('.desktop-shortcuts').get_by_role('button', name='Player', exact=True).click()
-            player = first.page.locator('.desktop-window.app-video')
+            player = first.page.locator('.desktop-window.app-player')
             expect(player.locator('.desktop-window-title')).to_have_text('Player')
             folder = peer.root / 'folder'
             (folder / 'clip.MP4').touch()
@@ -60,8 +60,8 @@ def main():
             (folder / 'clip.mp4.txt').touch()
             (folder / 'empty.dir').mkdir()
             player.get_by_role('button', name='Browse files…').click()
-            picker = player.locator('.player-picker')
-            expect(player.locator('.player-idle')).to_be_hidden()
+            picker = first.page.get_by_role('dialog', name='Open video', exact=True)
+            expect(picker).to_be_visible()
             picker.get_by_role('button', name='folder', exact=True).click()
             for name in ('clip.MP4', 'clip.mKv'):
                 expect(picker.get_by_role('button', name=name, exact=True)).to_be_visible()
@@ -71,6 +71,7 @@ def main():
             picker.get_by_role('button', name='Parent folder').click()
             expect(picker.get_by_role('button', name='clip.MP4', exact=True)).to_be_visible()
             picker.get_by_role('button', name='Cancel').click()
+            expect(picker).to_have_count(0)
             expect(player.locator('.player-idle')).to_be_visible()
             visit(browser(first), endpoint + '/first', 'Routed first page')
             expect(second_view.locator('.browser-tab.active .browser-tab-label')).to_have_text('Routed second page')

@@ -17,7 +17,7 @@ def main():
         app.connect()
         app.application('Terminal')
         terminal = page.locator('.desktop-window.app-terminal')
-        monitor = page.locator('.desktop-window.app-resources')
+        monitor = page.locator('.desktop-window.app-monitor')
         settings = page.locator('.desktop-window.app-settings')
         windows = page.locator('.desktop-window:visible')
         front = page.locator('.desktop-window.active')

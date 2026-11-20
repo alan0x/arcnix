@@ -1,9 +1,10 @@
-"""Window geometry and Explorer preferences through the real WebView and SSH peer."""
+"""Window geometry and Files preferences through the real WebView and SSH peer."""
 import re
 import ctypes
 from ctypes import wintypes
 import json
 import time
+from server_apps_fixture import read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, expect, eventually
 
 
@@ -69,7 +70,7 @@ def main():
             p.on('pageerror', lambda error: errors.append(str(error)))
 
             def prefs():
-                return json.loads(remote.read_text())
+                return read_desktop_settings(remote)
 
             def settled():
                 eventually(lambda: not p.locator('html').evaluate('el=>el.classList.contains("desktop-motion")'))
@@ -147,9 +148,9 @@ def main():
             assert abs(positioned['width'] - moved['width'] - 14) <= 2
             drag(p.locator('.desktop-window.active .edge-e'), 50, 0, cancel=True)
             assert same(positioned, bounds())
-            eventually(lambda: prefs().get('windows', {}).get('explorer', {}).get('bounds'))
-            eventually(lambda: abs(prefs()['windows']['explorer']['bounds']['width'] - positioned['width']) <= 2)
-            geometry = prefs()['windows']['explorer']['bounds']
+            eventually(lambda: prefs().get('windows', {}).get('files', {}).get('bounds'))
+            eventually(lambda: abs(prefs()['windows']['files']['bounds']['width'] - positioned['width']) <= 2)
+            geometry = prefs()['windows']['files']['bounds']
 
             p.locator('.desktop-window.active .window-maximize').click()
             settled()
@@ -186,7 +187,7 @@ def main():
             eventually(lambda: projected(positioned, reference))
             p.set_viewport_size(dict(width=760, height=650))
             eventually(lambda: projected(positioned, reference))
-            assert prefs()['windows']['explorer']['bounds'] == geometry
+            assert prefs()['windows']['files']['bounds'] == geometry
             p.set_viewport_size(dict(width=1440, height=980))
             eventually(lambda: same(positioned, bounds()))
 
@@ -199,14 +200,14 @@ def main():
             p.keyboard.press('Escape')
             eventually(lambda: native_bounds(hwnd) == native_before)
             assert same(positioned, bounds())
-            assert prefs()['windows']['explorer']['bounds'] == geometry
+            assert prefs()['windows']['files']['bounds'] == geometry
 
-            sidebar = p.locator('.explorer-sidebar')
+            sidebar = p.locator('.files-sidebar')
             sidebar.get_by_role('button', name='Desktop', exact=True).click()
             expect(app.file('desktop-file.txt')).to_be_visible()
-            pane = p.locator('.explorer-pane')
-            address = p.locator('.explorer-window-tools .pathbar')
-            expect(p.locator('.explorer-pane .pathbar, .explorer-titlebar .path-edit')).to_have_count(0)
+            pane = p.locator('.files-pane')
+            address = p.locator('.files-window-tools .pathbar')
+            expect(p.locator('.files-pane .pathbar, .files-titlebar .path-edit')).to_have_count(0)
             root_crumb = address.locator('.breadcrumb[aria-label="/"]')
             root_crumb.dblclick()
             expect(address.locator('.path-input')).to_be_focused()
@@ -217,61 +218,71 @@ def main():
             p.keyboard.press('Control+l')
             expect(address.locator('.path-input')).to_be_focused()
             p.keyboard.press('Escape')
-            star = address.locator('.path-location + .explorer-favorite')
+            star = address.locator('.path-location + .files-favorite')
             star.click()
             expect(star).to_have_attribute('aria-pressed', 'true')
             expect(sidebar.get_by_role('button', name=f'Open favorite {desktop_path}', exact=True)).to_be_visible()
-            favorites = sidebar.locator('.explorer-favorites')
-            folder_favorite = favorites.locator(f'.explorer-favorite-row[aria-label="{desktop_path}"]')
+            favorites = sidebar.locator('.files-favorites')
+            folder_favorite = favorites.locator(f'.files-favorite-row[aria-label="{desktop_path}"]')
             file_path = f'{desktop_path}/desktop-file.txt'
             file_row = pane.locator(f'.file-row[aria-label="{file_path}"]')
             file_row.drag_to(folder_favorite, target_position={'x': 40, 'y': 3})
-            eventually(lambda: prefs()['explorer']['favorites'] == [file_path, desktop_path])
-            file_favorite = favorites.locator(f'.explorer-favorite-row[aria-label="{file_path}"]')
+            eventually(lambda: prefs()['files']['favorites'] == [file_path, desktop_path])
+            file_favorite = favorites.locator(f'.files-favorite-row[aria-label="{file_path}"]')
             folder_favorite.drag_to(file_favorite, target_position={'x': 40, 'y': 3})
-            eventually(lambda: prefs()['explorer']['favorites'] == [desktop_path, file_path])
+            eventually(lambda: prefs()['files']['favorites'] == [desktop_path, file_path])
             file_row.drag_to(folder_favorite, target_position={'x': 40, 'y': 3})
-            eventually(lambda: prefs()['explorer']['favorites'] == [file_path, desktop_path])
+            eventually(lambda: prefs()['files']['favorites'] == [file_path, desktop_path])
 
             file_icon = file_row.locator('.file-entry-icon')
             file_color = file_icon.evaluate('icon => getComputedStyle(icon).color')
             app.file('desktop-file.txt').click(button='right')
-            app.action('File color…')
-            p.get_by_role('dialog', name='File color', exact=True).get_by_role('button', name='Blue', exact=True).click()
+            palette = p.locator('.file-context-menu .file-color-menu')
+            palette.get_by_role('button', name='Green', exact=True).focus()
+            p.keyboard.press('ArrowRight')
+            expect(palette.get_by_role('button', name='Blue', exact=True)).to_be_focused()
+            p.keyboard.press('Enter')
             expect(file_row.locator('.folder-color-dot')).to_have_css('background-color', 'rgb(91, 153, 236)')
             expect(file_icon).to_have_css('color', file_color)
             root_crumb.click()
             expect(address.locator('.breadcrumb.current')).to_have_attribute('aria-label', '/')
             sidebar.get_by_role('button', name='Home', exact=True).click()
             app.file('Desktop').click(button='right')
-            app.action('Folder color…')
-            color = p.get_by_role('dialog', name='Folder color', exact=True)
-            color.get_by_role('button', name='Purple', exact=True).click()
+            palette.get_by_role('button', name='Purple', exact=True).click()
             expect(folder_favorite.locator('.tag-purple')).to_be_visible()
             folder_row = pane.locator(f'.file-row[aria-label="{desktop_path}"]')
             folder_icon = folder_row.locator('.file-entry-icon.glyph-folder')
             expect(folder_row.locator('.folder-color-dot')).to_have_css('background-color', 'rgb(165, 128, 235)')
             expect(folder_icon).to_have_css('color', 'rgb(165, 128, 235)')
+            app.file('Desktop').click(button='right')
+            expect(palette.get_by_role('button', name='Purple', exact=True)).to_have_attribute('aria-pressed', 'true')
+            app.action('Customize Folder…')
+            customize = p.get_by_role('dialog', name='Customize Folder', exact=True)
+            customize.get_by_role('button', name='Photos', exact=True).click()
+            expect(customize.locator('.folder-icon-preview .folder-icon-outline-photos')).to_be_visible()
+            customize.get_by_role('button', name='Done', exact=True).click()
+            expect(folder_row.locator('.folder-icon-outline-photos')).to_be_visible()
+            eventually(lambda: prefs().get('files', {}).get('folder_icons', {}).get(desktop_path) == 'photos')
             address.locator('.view-grid').click()
             expect(pane).to_have_class(re.compile(r'\bicons-view\b'))
-            expect(folder_icon).to_have_css('color', 'rgb(165, 128, 235)')
+            expect(folder_row.locator('.folder-icon-outline-photos')).to_be_visible()
             address.locator('.view-list').click()
             sidebar.get_by_role('button', name='Blue', exact=True).click()
-            tags = p.locator('.explorer-tags-view')
+            tags = p.locator('.files-tags-view')
             expect(pane).to_be_hidden()
-            expect(tags.locator('.explorer-tag-item')).to_have_count(1)
+            expect(tags.locator('.files-tag-item')).to_have_count(1)
             tags.get_by_role('button', name=file_path, exact=True).click()
             expect(app.code().locator('.view-lines')).to_contain_text('desktop file')
             p.locator('.desktop-window.active .window-close').click()
             app.application('Files')
             sidebar.get_by_role('button', name='All Tags', exact=True).click()
-            expect(tags.locator('.explorer-tag-item')).to_have_count(2)
+            expect(tags.locator('.files-tag-item')).to_have_count(2)
             tags.get_by_role('button', name=desktop_path, exact=True).click()
             expect(app.file('desktop-file.txt')).to_be_visible()
-            toggle = p.locator('.explorer-sidebar-toggle')
+            toggle = p.locator('.files-sidebar-toggle')
             toggle.click()
             expect(sidebar).to_be_hidden()
-            eventually(lambda: prefs().get('explorer', {}).get('sidebar_hidden') is True)
+            eventually(lambda: prefs().get('files', {}).get('sidebar_hidden') is True)
 
             p.locator('.desktop-window.active .window-close').click()
             settled()
@@ -286,20 +297,30 @@ def main():
             app.application('Files')
             settled()
             eventually(lambda: same(positioned, bounds()))
-            expect(p.locator('.explorer-sidebar')).to_be_hidden()
-            p.locator('.explorer-sidebar-toggle').click()
-            sidebar = p.locator('.explorer-sidebar')
-            expect(sidebar.locator(f'.explorer-favorite-row[aria-label="{desktop_path}"] .tag-purple')).to_be_visible()
-            expect(sidebar.locator('.explorer-favorite-row').first).to_have_attribute('aria-label', file_path)
+            expect(p.locator('.files-sidebar')).to_be_hidden()
+            p.locator('.files-sidebar-toggle').click()
+            sidebar = p.locator('.files-sidebar')
+            expect(sidebar.locator(f'.files-favorite-row[aria-label="{desktop_path}"] .tag-purple')).to_be_visible()
+            expect(sidebar.locator('.files-favorite-row').first).to_have_attribute('aria-label', file_path)
             sidebar.get_by_role('button', name=f'Open favorite {desktop_path}', exact=True).click()
             expect(app.file('desktop-file.txt')).to_be_visible()
-            app.screenshot('restored-explorer.png')
+            app.screenshot('restored-files.png')
             sidebar.get_by_role('button', name=f'Remove favorite {desktop_path}', exact=True).click()
             sidebar.get_by_role('button', name=f'Remove favorite {file_path}', exact=True).click()
-            eventually(lambda: prefs()['explorer']['favorites'] == [])
+            eventually(lambda: prefs()['files']['favorites'] == [])
             assert (home / 'Desktop/desktop-file.txt').is_file()
-            assert prefs()['explorer']['colors'][desktop_path] == 'purple'
-            assert prefs()['explorer']['colors'][file_path] == 'blue'
+            assert prefs()['files']['colors'][desktop_path] == 'purple'
+            assert prefs()['files']['colors'][file_path] == 'blue'
+            assert prefs()['files']['folder_icons'][desktop_path] == 'photos'
+            sidebar.get_by_role('button', name='Home', exact=True).click()
+            expect(p.locator(f'.file-row[aria-label="{desktop_path}"] .folder-icon-outline-photos')).to_be_visible()
+            app.file('Desktop').click(button='right')
+            app.action('Customize Folder…')
+            restored = p.get_by_role('dialog', name='Customize Folder', exact=True)
+            restored.get_by_role('button', name='Restore default icon', exact=True).click()
+            restored.get_by_role('button', name='Done', exact=True).click()
+            expect(p.locator(f'.file-row[aria-label="{desktop_path}"] .glyph-folder')).to_be_visible()
+            eventually(lambda: 'folder_icons' not in prefs()['files'])
             area = work_area()
             original = bounds()
             titlebar = p.locator('.desktop-window.active .desktop-window-titlebar')
@@ -310,8 +331,8 @@ def main():
             assert top_left['x'] < area['x'] and top_left['y'] < area['y'], top_left
             assert abs(top_left['x'] + top_left['width'] - area['x'] - 64) <= 2, top_left
             assert abs(top_left['y'] + titlebar.bounding_box()['height'] - area['y'] - 19) <= 2, top_left
-            eventually(lambda: prefs()['windows']['explorer']['bounds']['x'] < 0
-                       and prefs()['windows']['explorer']['bounds']['y'] < 0)
+            eventually(lambda: prefs()['windows']['files']['bounds']['x'] < 0
+                       and prefs()['windows']['files']['bounds']['y'] < 0)
             assert not p.evaluate('([x,y]) => !!document.elementFromPoint(x,y)?.closest(".desktop-window")',
                                   [area['x'] - 4, area['y'] + 8])
             app.screenshot('outside-top-left.png')
@@ -344,7 +365,7 @@ def main():
             app.settings('General')
             p.get_by_role('button', name='简体中文', exact=True).click()
             app.servers()
-            expect(p.locator('.explorer-sidebar').get_by_role('button', name='下载目录', exact=True)).to_be_visible()
+            expect(p.locator('.files-sidebar').get_by_role('button', name='下载目录', exact=True)).to_be_visible()
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Eight resize handles, captured titlebar movement and Escape cancellation',

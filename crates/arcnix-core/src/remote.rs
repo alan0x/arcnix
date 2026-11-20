@@ -20,8 +20,11 @@ use crate::{
     AuthMethod, CommandOutput, FileEntry, ServerInfo, ServerProfile, TransferDirection, new_id,
 };
 
+#[path = "remote_file_actions.rs"]
+mod file_actions;
 #[path = "remote_recycle.rs"]
 mod recycle;
+pub use file_actions::FileAction;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -233,7 +236,7 @@ pub struct PendingConnection {
     fingerprint: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExplorerLocation {
+pub struct FileLocation {
     pub name: &'static str,
     pub path: String,
 }
@@ -1331,6 +1334,18 @@ impl RemoteSession {
         cancel: &AtomicBool,
         plan: &mut TreePlan,
     ) -> Result<()> {
+        self.scan_remote_tree(root, relative, depth, cancel, plan, true)
+    }
+
+    fn scan_remote_tree(
+        &self,
+        root: &str,
+        relative: &str,
+        depth: usize,
+        cancel: &AtomicBool,
+        plan: &mut TreePlan,
+        for_download: bool,
+    ) -> Result<()> {
         check_cancel(cancel)?;
         ensure!(
             depth <= TREE_DEPTH_LIMIT,
@@ -1340,11 +1355,16 @@ impl RemoteSession {
         let mut names = std::collections::HashSet::new();
         for entry in entries {
             check_cancel(cancel)?;
-            validate_download_name(&entry.name)?;
-            #[cfg(windows)]
-            let name_key = entry.name.to_lowercase();
-            #[cfg(not(windows))]
-            let name_key = entry.name.clone();
+            if for_download {
+                validate_download_name(&entry.name)?;
+            } else {
+                file_actions::validate_name(&entry.name)?;
+            }
+            let name_key = if cfg!(windows) && for_download {
+                entry.name.to_lowercase()
+            } else {
+                entry.name.clone()
+            };
             ensure!(names.insert(name_key), "目标文件名发生大小写冲突");
             ensure!(!entry.is_symlink, "目录包含符号链接：{}", entry.path);
             let relative = if relative.is_empty() {
@@ -1369,7 +1389,7 @@ impl RemoteSession {
                 metadata.mtime,
             )?;
             if metadata.is_dir() {
-                self.scan_remote(root, &relative, depth + 1, cancel, plan)?;
+                self.scan_remote_tree(root, &relative, depth + 1, cancel, plan, for_download)?;
             }
         }
         Ok(())
@@ -1386,7 +1406,7 @@ impl RemoteSession {
         Ok(output.stdout)
     }
 
-    pub fn explorer_locations(&self) -> Result<Vec<ExplorerLocation>> {
+    pub fn file_locations(&self) -> Result<Vec<FileLocation>> {
         let sftp = self.sftp()?;
         let home = match self.login_home() {
             Ok(home) if sftp.stat(Path::new(&home)).is_ok_and(|stat| stat.is_dir()) => home,
@@ -1396,7 +1416,7 @@ impl RemoteSession {
         crate::terminal::validate_directory(&home)?;
         let mut locations = Vec::new();
         if home != "/" {
-            locations.push(ExplorerLocation {
+            locations.push(FileLocation {
                 name: "Home",
                 path: home.clone(),
             });
@@ -1405,10 +1425,13 @@ impl RemoteSession {
             ("Desktop", "Desktop"),
             ("Documents", "Documents"),
             ("Downloads", "Download directory"),
+            ("Music", "Music"),
+            ("Pictures", "Pictures"),
+            ("Videos", "Videos"),
         ] {
             let path = format!("{}/{directory}", home.trim_end_matches('/'));
             if sftp.stat(Path::new(&path)).is_ok_and(|stat| stat.is_dir()) {
-                locations.push(ExplorerLocation { name, path });
+                locations.push(FileLocation { name, path });
             }
         }
         Ok(locations)
@@ -1572,6 +1595,61 @@ impl RemoteSession {
             uid: stat.uid,
             gid: stat.gid,
         })
+    }
+
+    pub fn find_missing_desktop_paths(&self, paths: Vec<String>) -> Result<(Vec<String>, usize)> {
+        use crate::server_apps::FilesPreferences;
+
+        ensure!(
+            paths.len()
+                <= FilesPreferences::MAX_FAVORITES
+                    + FilesPreferences::MAX_COLORS
+                    + FilesPreferences::MAX_FOLDER_ICONS,
+            "Too many desktop file references"
+        );
+        let sftp = self.sftp()?;
+        let mut missing = Vec::new();
+        let mut unchecked = 0;
+        let mut is_missing = |path: &str| -> Result<bool> {
+            match sftp.lstat(Path::new(path)) {
+                Ok(_) => Ok(false),
+                Err(error) if matches!(error.code(), ErrorCode::SFTP(2 | 10)) => Ok(true),
+                Err(error) if matches!(error.code(), ErrorCode::SFTP(_)) => {
+                    unchecked += 1;
+                    Ok(false)
+                }
+                Err(error) => Err(error).context("Cannot check desktop file references"),
+            }
+        };
+        for path in paths {
+            FilesPreferences::validate_path(&path)?;
+            if is_missing(&path)? {
+                missing.push(path);
+            }
+        }
+        if !missing.is_empty() {
+            let trash = self.recycle(&crate::recycle::Operation::List, || Ok(()))?;
+            missing.retain(|path| {
+                !trash.iter().any(|item| {
+                    item.payload.as_ref().is_some_and(|payload| {
+                        path == &item.original
+                            || payload.directory
+                                && !payload.symlink
+                                && path
+                                    .strip_prefix(&item.original)
+                                    .is_some_and(|rest| rest.starts_with('/'))
+                    })
+                })
+            });
+            let mut still_missing = Vec::with_capacity(missing.len());
+            for path in missing {
+                if is_missing(&path)? {
+                    still_missing.push(path);
+                }
+            }
+            missing = still_missing;
+        }
+        Ok((missing, unchecked))
     }
     pub fn set_permissions(
         &self,

@@ -17,7 +17,8 @@ with Desktop(out/'desktop',config) as app:
         return settings.evaluate("""button => {
             const r = button.getBoundingClientRect();
             const x = r.left + r.width / 2;
-            return r.height >= 43 && innerHeight - r.bottom >= 23 &&
+            const bottomGap = innerHeight - r.bottom;
+            return r.height >= 43 && bottomGap >= 9 && bottomGap <= 11 &&
                 [r.top + 2, r.bottom - 2].every(y => button.contains(document.elementFromPoint(x, y)));
         }""")
     for width, height in [(1440, 980), (860, 400), (800, 320)]:
