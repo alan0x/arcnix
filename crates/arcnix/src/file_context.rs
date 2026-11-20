@@ -506,9 +506,13 @@ fn edit_actions(ui: Ui, remote: bool) -> impl Widget {
             let ui = ui.clone();
             move || paste_action(ui.clone())
         }),
-        action(&ui, remote, "重命名", file_browser::can_rename, move || {
-            file_browser::begin_rename(&rename, remote)
-        }),
+        action(
+            &ui,
+            remote,
+            "重命名",
+            file_browser::can_rename,
+            move || file_browser::begin_rename(&rename, remote),
+        ),
     ))
 }
 

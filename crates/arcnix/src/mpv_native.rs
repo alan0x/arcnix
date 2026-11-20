@@ -3,7 +3,8 @@
 mod engine;
 mod runtime;
 
-use std::{collections::HashMap, sync::mpsc};
+use std::collections::HashMap;
+use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 use glory::wry::shell::{NativeWindow, NativeWindowExtWindows};

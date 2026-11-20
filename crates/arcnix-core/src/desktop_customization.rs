@@ -76,6 +76,7 @@ fn discard_magnification<'de, D: serde::Deserializer<'de>>(
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Dock {
     pub order: Vec<DesktopApp>,
     pub unpinned: Vec<DesktopApp>,

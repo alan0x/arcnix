@@ -553,8 +553,7 @@ mod tests {
         use crate::desktop_customization::{DESKTOP_NAME_LIMIT, MAX_ICONS, Shortcut};
         use crate::server_apps::TerminalTab;
 
-        let mut prefs = DesktopPreferences::default();
-        prefs.browser_bookmarks = (0..BOOKMARK_LIMIT)
+        let browser_bookmarks = (0..BOOKMARK_LIMIT)
             .map(|i| {
                 let prefix = format!("https://example.com/{i}?q=");
                 Bookmark {
@@ -563,6 +562,10 @@ mod tests {
                 }
             })
             .collect();
+        let mut prefs = DesktopPreferences {
+            browser_bookmarks,
+            ..DesktopPreferences::default()
+        };
         prefs.terminal.tabs = (0..8)
             .map(|id| TerminalTab {
                 id: format!("{id:x}"),

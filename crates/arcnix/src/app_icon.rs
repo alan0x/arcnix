@@ -4,7 +4,8 @@ use std::task::Waker;
 
 use glory::wry::shell::{Fullscreen, NativeLifecycle, NativeWindow, ShellError};
 
-use super::{Ui, WorkspacePage, code_native, desktop_customization_ui::wallpaper_asset};
+use super::desktop_customization_ui::wallpaper_asset;
+use super::{Ui, WorkspacePage, code_native};
 
 pub(super) struct DesktopWindow {
     ui: Ui,

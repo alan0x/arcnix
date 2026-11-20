@@ -888,9 +888,7 @@ pub(super) fn can_create(s: &State, remote: bool) -> bool {
 }
 
 pub(super) fn can_rename(s: &State, remote: bool) -> bool {
-    s.dialog.is_none()
-        && can_create(s, remote)
-        && selected_entries(s, remote).len() == 1
+    s.dialog.is_none() && can_create(s, remote) && selected_entries(s, remote).len() == 1
 }
 
 pub(super) fn begin_rename(ui: &Ui, remote: bool) {
