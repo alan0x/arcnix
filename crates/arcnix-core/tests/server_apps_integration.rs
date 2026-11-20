@@ -167,7 +167,7 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
             volume.mountpoint.ends_with("/_data"),
             "Volume inspect lost mountpoint"
         );
-        let logs = raw(&invoke(&docker::logs_command(&id, 200)?))?;
+        let logs = raw(&invoke(&docker::logs_command(&id)?))?;
         ensure!(
             logs.status.success()
                 && logs.stdout == b"container output\ncontainer error\ncontainer output again\n"

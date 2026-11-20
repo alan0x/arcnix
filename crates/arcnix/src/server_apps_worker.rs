@@ -93,7 +93,7 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::DockerSnapshot => Reply::Snapshot(docker::snapshot(session)?),
         Action::DockerInspect(id) => Reply::Container(docker::inspect(session, &id)?),
         Action::DockerVolume(name) => Reply::Volume(docker::volume(session, &name)?),
-        Action::DockerLogs(id, lines) => Reply::Logs(docker::logs(session, &id, lines)?),
+        Action::DockerLogs(id, lines) => Reply::Logs(docker::logs_with_tail(session, &id, lines)?),
         Action::DockerOperate(id, operation) => {
             docker::operate(session, &id, &operation)?;
             Reply::Operated

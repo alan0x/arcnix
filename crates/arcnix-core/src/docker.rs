@@ -245,7 +245,12 @@ pub fn volume(session: &RemoteSession, name: &str) -> Result<VolumeDetails> {
 }
 /// How many of the newest log lines can be read; the first is the default.
 pub const LOG_LINES: [u16; 3] = [200, 500, 1000];
-pub fn logs_command(id: &str, lines: u16) -> Result<String> {
+
+pub fn logs_command(id: &str) -> Result<String> {
+    logs_command_with_tail(id, LOG_LINES[0])
+}
+
+fn logs_command_with_tail(id: &str, lines: u16) -> Result<String> {
     ensure!(id_valid(id), "Invalid container ID");
     ensure!(
         LOG_LINES.contains(&lines),
@@ -260,9 +265,14 @@ pub fn logs_command(id: &str, lines: u16) -> Result<String> {
 /// The CLI copies both streams from the daemon one entry at a time, so sharing
 /// one pipe keeps their order. Output is shown, not parsed, so it is decoded
 /// lossily rather than rejected for invalid UTF-8.
-pub fn logs(session: &RemoteSession, id: &str, lines: u16) -> Result<String> {
+pub fn logs(session: &RemoteSession, id: &str) -> Result<String> {
+    logs_with_tail(session, id, LOG_LINES[0])
+}
+
+/// Read one snapshot with a supported tail length from [`LOG_LINES`].
+pub fn logs_with_tail(session: &RemoteSession, id: &str, lines: u16) -> Result<String> {
     let output = check(
-        execute_lossy(session, &logs_command(id, lines)?, LIMIT)?,
+        execute_lossy(session, &logs_command_with_tail(id, lines)?, LIMIT)?,
         merged_failure,
     )?;
     Ok(output.stdout)
@@ -369,12 +379,12 @@ mod tests {
     #[test]
     fn logs_share_one_pipe_and_failures_report_the_merged_error() {
         let id = "a".repeat(64);
-        let command = logs_command(&id, 200).unwrap();
+        let command = logs_command(&id).unwrap();
         assert!(command.ends_with(&format!("--tail 200 {id} 2>&1")));
-        assert!(logs_command(&id, 1000).unwrap().contains("--tail 1000 "));
-        assert!(logs_command("a; id", 200).is_err());
+        assert!(logs_command_with_tail(&id, 1000).unwrap().contains("--tail 1000 "));
+        assert!(logs_command("a; id").is_err());
         for lines in [0, 199, 1001, u16::MAX] {
-            assert!(logs_command(&id, lines).is_err());
+            assert!(logs_command_with_tail(&id, lines).is_err());
         }
         let output = |stdout: &str, stderr: &str| crate::CommandOutput {
             stdout: stdout.into(),
