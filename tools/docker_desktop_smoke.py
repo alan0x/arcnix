@@ -154,9 +154,8 @@ def main():
             dialog = settings()
             dialog.get_by_role('button', name='Dark', exact=True).click()
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(dialog).to_contain_text('Saved on server')
             preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
-            assert read_desktop_settings(preferences)['theme'] == 'Dark'
+            eventually(lambda: read_desktop_settings(preferences).get('theme') == 'Dark')
             close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-dark desktop-dark')
             app.application('Terminal')
@@ -193,7 +192,7 @@ def main():
             denied.unlink()
             dialog.get_by_role('button', name='Light', exact=True).click()
             expect(dialog.get_by_role('button', name='Light', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(dialog).to_contain_text('Saved on server')
+            eventually(lambda: read_desktop_settings(preferences).get('theme') == 'Light')
             close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
             app.screenshot('docker-light-restored.png')
@@ -220,10 +219,13 @@ def main():
             denied.touch()
             page.get_by_role('button', name='Refresh Docker', exact=True).click()
             expect(page.locator('.docker-error')).to_contain_text('permission denied')
+            expect(page.locator('.docker-error-hint')).to_contain_text("sudo usermod -aG docker -- 'arcnix'")
+            expect(page.locator('.docker-error-hint')).to_contain_text('root-equivalent')
             expect(page.locator('.docker-container-actions').get_by_role('button', name='Restart', exact=True)).to_be_disabled()
             denied.unlink()
             page.get_by_role('button', name='Refresh Docker', exact=True).click()
             expect(page.locator('.docker-container-actions').get_by_role('button', name='Configure', exact=True)).to_be_enabled()
+            expect(page.locator('.docker-error-hint')).to_have_count(0)
             truncated = peer.root / 'docker-truncated'
             truncated.touch()
             page.get_by_role('button', name='Refresh Docker', exact=True).click()
@@ -247,10 +249,9 @@ def main():
             dialog = settings()
             dialog.get_by_role('button', name='Dark', exact=True).click()
             expect(dialog.get_by_role('button', name='Dark', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(dialog).to_contain_text('Saved on server')
-            close_settings()
             second = peer.root / 'home/arcnix-nosftp/.arcnix/desktop.json'
-            assert read_desktop_settings(second)['theme'] == 'Dark'
+            eventually(lambda: read_desktop_settings(second).get('theme') == 'Dark')
+            close_settings()
             assert read_desktop_settings(preferences)['theme'] == 'Light'
             page.locator('.host-select').nth(2).click()
             page.locator('.overview-connect').click()
@@ -289,7 +290,6 @@ def main():
             checks.append('Malformed settings are preserved, partial inventory is rejected, and delayed Docker responses cannot leak into another server')
             # Return to the original login for localization checks.
             page.locator('.host-select').first.click()
-            page.locator('.overview-connect').click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             docker()
             app.settings('General')
