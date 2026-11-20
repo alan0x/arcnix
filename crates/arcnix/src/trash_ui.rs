@@ -1,12 +1,12 @@
-use super::*;
 use arcnix_core::recycle::{Item, Operation};
+
+use super::*;
 
 #[derive(Clone, Default)]
 pub(super) struct Bin {
     items: Vec<Item>,
     pending: Option<(u64, bool)>,
     confirm: Option<Item>,
-    menu: Option<TrashMenu>,
     error: String,
 }
 
@@ -36,7 +36,6 @@ fn request(ui: &Ui, remote: bool, operation: Operation) {
     ui.state.revise(|s| {
         let bin = &mut s.trash[remote as usize];
         bin.confirm = None;
-        bin.menu = None;
         bin.pending = Some((serial, list));
         if !list {
             s.file_pending = Some(serial);
@@ -103,7 +102,6 @@ pub(super) fn open(ui: &Ui, remote: bool) {
             s.server_apps.explorer_open_pending = None;
             s.file_context = None;
             s.file_menu = None;
-            s.trash[1].menu = None;
         });
         enter(ui);
     } else {
@@ -171,7 +169,6 @@ pub(super) fn location_tools(ui: Ui) -> impl Widget {
             .on_press(move || {
                 state.revise(|s| {
                     s.workbench.files.trash = false;
-                    s.trash[1].menu = None;
                     s.trash[1].confirm = None;
                 })
             }),
@@ -188,80 +185,11 @@ fn refresh(ui: &Ui, remote: bool) {
     request(ui, remote, Operation::List);
 }
 
-#[derive(Clone, serde::Deserialize)]
-struct TrashMenu {
-    key: String,
-    x: u32,
-    y: u32,
-}
-
 fn item_key(item: &Item) -> String {
     item.payload
         .as_ref()
         .map(|t| t.path.clone())
         .unwrap_or_else(|| item.id.clone())
-}
-
-fn menu(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let listen = ui.clone();
-    let restore = ui.clone();
-    let remove = ui.clone();
-    fragment((
-        input()
-            .class("files-trash-input hidden")
-            .on(value_changed, move |event| {
-                if let Event::ValueChanged { value, .. } = event {
-                    let menu = serde_json::from_str::<TrashMenu>(&value).ok();
-                    listen.state.revise(|s| {
-                        if explorer_tabs::trash_active(s) && s.dialog.is_none() {
-                            s.trash[1].menu = menu
-                                .filter(|m| s.trash[1].items.iter().any(|i| item_key(i) == m.key));
-                        }
-                    });
-                }
-            }),
-        when(state.map(|s| s.trash[1].menu.is_some()), move || {
-            let remove = remove.clone();
-            let restore = restore.clone();
-            col().class("pane-menu trash-item-menu").fill((
-                text()
-                    .class("trash-menu-position hidden")
-                    .content(state.map(|s| {
-                        s.trash[1]
-                            .menu
-                            .as_ref()
-                            .map(|m| format!("{},{}", m.x, m.y))
-                            .unwrap_or_default()
-                    })),
-                btn("还原", move || {
-                    if let Some(item) = state.with(menu_item) {
-                        request(&restore, true, Operation::Restore(item));
-                    }
-                })
-                .enabled(state.map(|s| {
-                    available(s, true) && menu_item(s).is_some_and(|i| !i.original.is_empty())
-                })),
-                text().class("menu-divider").content(""),
-                btn("永久删除", move || {
-                    remove.state.revise(|s| {
-                        s.trash[1].confirm = menu_item(s);
-                        s.trash[1].menu = None;
-                    })
-                })
-                .enabled(state.map(|s| available(s, true))),
-            ))
-        }),
-    ))
-}
-
-fn menu_item(s: &State) -> Option<Item> {
-    let key = &s.trash[1].menu.as_ref()?.key;
-    s.trash[1]
-        .items
-        .iter()
-        .find(|i| item_key(i) == *key)
-        .cloned()
 }
 
 pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
@@ -283,10 +211,6 @@ pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                         .enabled(controls)
                         .on_press(move || self::refresh(&ui, remote)),
                 )
-            }),
-            when(in_files, {
-                let ui = ui.clone();
-                move || menu(ui.clone())
             }),
             text().class("trash-error").content(i18n::bind(
                 state.map(move |s| s.trash[remote as usize].error.clone()),
@@ -357,13 +281,26 @@ pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                         let item = row_item.value;
                         let restore = ui.clone();
                         let body = if in_files {
-                            let directory =
-                                item.get().payload.is_some_and(|target| target.directory);
-                            fragment(
-                                row()
-                                    .class("trash-file-row")
-                                    .focus(FocusMode::TabStop)
-                                    .fill((
+                            fragment(glory::ui::widget(move |scope| {
+                                let id = scope.id();
+                                let restore = restore.clone();
+                                let remove = restore.clone();
+                                let directory =
+                                    item.get().payload.is_some_and(|target| target.directory);
+                                sapid::context_menu(format!(
+                                    "trash-{}-{}",
+                                    id.slot(),
+                                    id.generation()
+                                ))
+                                .name(i18n::bind("回收站"))
+                                .target_name(item.map(display_name))
+                                .enabled(
+                                    state.map(|s| {
+                                        explorer_tabs::trash_active(s) && s.dialog.is_none()
+                                    }),
+                                )
+                                .target(
+                                    row().class("trash-file-row").fill((
                                         row().class("trash-file-name").fill((
                                             icons::glyph(if directory {
                                                 Icon::Folder
@@ -386,7 +323,32 @@ pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                                             .class("subtle")
                                             .content(item.map(|i| i.deleted.replace('T', " "))),
                                     )),
-                            )
+                                )
+                                .item(
+                                    sapid::menu_item("restore")
+                                        .label(i18n::bind("还原"))
+                                        .enabled(state.map(move |s| {
+                                            available(s, true) && !item.get().original.is_empty()
+                                        }))
+                                        .on_activate(move || {
+                                            request(&restore, true, Operation::Restore(item.get()))
+                                        }),
+                                )
+                                .separator("actions")
+                                .item(
+                                    sapid::menu_item("delete-permanently")
+                                        .label(i18n::bind("永久删除"))
+                                        .enabled(controls)
+                                        .on_activate(move || {
+                                            if remove.state.with(|s| available(s, true)) {
+                                                remove.state.revise(|s| {
+                                                    s.trash[1].confirm = Some(item.get())
+                                                });
+                                            }
+                                        }),
+                                )
+                                .show_in(scope)
+                            }))
                         } else {
                             fragment((
                                 col().class("trash-details").fill((
@@ -412,12 +374,7 @@ pub(super) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                                     }),
                             ))
                         };
-                        row().class("trash-item").fill((
-                            text()
-                                .class("trash-item-key hidden")
-                                .content(item.map(item_key)),
-                            body,
-                        ))
+                        row().class("trash-item").fill(body)
                     }),
             ),
         ))

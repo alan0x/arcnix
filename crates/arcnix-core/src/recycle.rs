@@ -1,6 +1,7 @@
 //! Reversible file operations, separate from permanent deletion.
-use crate::deletion::Target;
 use anyhow::{Context, Result, ensure};
+
+use crate::deletion::Target;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {

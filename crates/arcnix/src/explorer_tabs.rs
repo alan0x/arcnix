@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arcnix_core::server_apps::DesktopWindow;
+use glory::render::{DragCapture, DragPhase, EventKind, NodeId, Query, QueryValue, Semantics};
 use serde::Deserialize;
 
 use super::*;
@@ -19,11 +20,20 @@ struct Window {
     layout: DesktopWindow,
 }
 
+#[derive(Clone, Copy)]
+struct TabDrag {
+    from: NodeId,
+    window: u32,
+    tab: u32,
+    epoch: u64,
+}
+
 #[derive(Clone, Default)]
 pub(super) struct Windows {
     windows: BTreeMap<u32, Window>,
     live: Option<u32>,
     next_id: u32,
+    drag: Option<TabDrag>,
     pub trash: bool,
 }
 
@@ -126,7 +136,7 @@ fn after_change(ui: &Ui) {
         s.file_context = None;
         s.file_menu = None;
     });
-    if ui.state.with(|s| trash_active(s)) {
+    if ui.state.with(trash_active) {
         trash_ui::enter(ui);
     } else if ui
         .state
@@ -227,19 +237,8 @@ fn close(ui: &Ui, id: u32, tab: u32) {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Gesture {
-    New {
-        window: u32,
-    },
-    Close {
-        window: u32,
-        tab: u32,
-    },
-    Move {
-        window: u32,
-        tab: u32,
-        target: Option<u32>,
-        before: Option<u32>,
-    },
+    New { window: u32 },
+    Close { window: u32, tab: u32 },
 }
 
 fn move_tab(ui: &Ui, source: u32, tab: u32, target: Option<u32>, before: Option<u32>) {
@@ -296,6 +295,115 @@ fn move_tab(ui: &Ui, source: u32, tab: u32, target: Option<u32>, before: Option<
     }
 }
 
+fn drag_source(ui: &Ui, window: u32, tab: u32, event: Event) {
+    match event {
+        Event::Drag {
+            from,
+            phase: DragPhase::Start,
+            ..
+        } => {
+            ui.state.revise(|s| {
+                if available(s) && s.workbench.window_visible(WorkspacePage::Explorer(window)) {
+                    s.workbench.files.drag = Some(TabDrag {
+                        from,
+                        window,
+                        tab,
+                        epoch: s.epoch,
+                    });
+                }
+            });
+        }
+        Event::Drag {
+            from,
+            phase: DragPhase::Cancel,
+            ..
+        } => {
+            take_drag(ui, from);
+        }
+        _ => {}
+    }
+}
+
+fn take_drag(ui: &Ui, from: NodeId) -> Option<TabDrag> {
+    ui.state.revise(|s| {
+        let source = s.workbench.files.drag?;
+        (source.from == from)
+            .then(|| s.workbench.files.drag.take())
+            .flatten()
+    })
+}
+
+fn drop_position(event: Event) -> Option<(NodeId, f64)> {
+    if let Event::Drag {
+        from,
+        phase: DragPhase::Drop,
+        x,
+        ..
+    } = event
+    {
+        Some((from, x))
+    } else {
+        None
+    }
+}
+
+pub(super) fn drop_on_window(ui: &Ui, window: Option<u32>, event: Event) {
+    if let Some((from, _)) = drop_position(event)
+        && let Some(source) = take_drag(ui, from)
+        && window != Some(source.window)
+    {
+        move_tab(ui, source.window, source.tab, window, None);
+    }
+}
+
+fn drop_on_strip(ui: &Ui, window: u32, event: Event) {
+    if let Some((from, _)) = drop_position(event)
+        && let Some(source) = take_drag(ui, from)
+    {
+        move_tab(ui, source.window, source.tab, Some(window), None);
+    }
+}
+
+fn drop_on_tab(
+    ui: &Ui,
+    window: u32,
+    tab: u32,
+    scope: glory::ui::WeakScope,
+    node: Option<NodeId>,
+    event: Event,
+) {
+    let Some((from, x)) = drop_position(event) else {
+        return;
+    };
+    let Some(source) = take_drag(ui, from) else {
+        return;
+    };
+    if window == source.window && tab == source.tab {
+        return;
+    }
+    let (Some(scope), Some(node)) = (scope.upgrade(), node) else {
+        return;
+    };
+    let ui = ui.clone();
+    let _ = scope.request(Query::Bounds(node), move |result| {
+        let Ok(QueryValue::Bounds(bounds)) = result else {
+            return;
+        };
+        let before = ui.state.with(|s| {
+            if s.epoch != source.epoch {
+                return None;
+            }
+            let tabs = &s.workbench.files.windows.get(&window)?.tabs;
+            let index = tabs.iter().position(|item| item.id == tab)?;
+            let next = index + usize::from(x > bounds.x + bounds.width / 2.0);
+            Some(tabs.get(next).map(|item| item.id))
+        });
+        if let Some(before) = before {
+            move_tab(&ui, source.window, source.tab, Some(window), before);
+        }
+    });
+}
+
 pub(super) fn bridge(ui: Ui) -> impl Widget {
     input()
         .class("files-tab-input hidden")
@@ -308,12 +416,6 @@ pub(super) fn bridge(ui: Ui) -> impl Widget {
                 match gesture {
                     Gesture::New { window } => new_tab(&ui, window),
                     Gesture::Close { window, tab } => close(&ui, window, tab),
-                    Gesture::Move {
-                        window,
-                        tab,
-                        target,
-                        before,
-                    } => move_tab(&ui, window, tab, target, before),
                 }
             }
         })
@@ -335,65 +437,128 @@ fn title(s: &State, window: u32, id: u32) -> String {
     }
 }
 
-pub(super) fn window_content(ui: Ui, id: u32) -> impl Widget {
+pub(super) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
     let state = ui.state;
     let choose = ui.clone();
+    let strip = ui.clone();
+    row()
+        .class("files-tabs")
+        .name(i18n::bind("File tabs"))
+        .on(EventKind::Drag, move |event| {
+            drop_on_strip(&strip, id, event)
+        })
+        .fill(
+            each(state.map(move |s| {
+                s.workbench
+                    .files
+                    .windows
+                    .get(&id)
+                    .map(|w| w.tabs.clone())
+                    .unwrap_or_default()
+            }))
+            .key(|t| t.id)
+            .children(move |t| {
+                let tab = t.value.get().id;
+                let choose = choose.clone();
+                glory::ui::widget(move |scope| {
+                    let remove = choose.clone();
+                    let select_ui = choose.clone();
+                    let source = choose.clone();
+                    let target = choose.clone();
+                    let source_drop = choose.clone();
+                    let ref_node = scope.cage(None);
+                    let target_scope = scope.downgrade();
+                    let source_scope = target_scope.clone();
+                    row()
+                        .node_ref(ref_node)
+                        .class(state.map(move |s| {
+                            let selected = s
+                                .workbench
+                                .files
+                                .windows
+                                .get(&id)
+                                .is_some_and(|w| w.selected == tab);
+                            let dragging = s
+                                .workbench
+                                .files
+                                .drag
+                                .is_some_and(|item| item.window == id && item.tab == tab);
+                            format!(
+                                "files-tab{}{}",
+                                if selected { " selected" } else { "" },
+                                if dragging { " files-tab-dragging" } else { "" }
+                            )
+                        }))
+                        .on(EventKind::Drag, move |event| {
+                            drop_on_tab(
+                                &target,
+                                id,
+                                tab,
+                                target_scope.clone(),
+                                ref_node.get(),
+                                event,
+                            )
+                        })
+                        .fill((
+                            text().class("files-tab-id hidden").content(tab.to_string()),
+                            row()
+                                .class("files-tab-drag-source")
+                                .name(state.map(move |s| title(s, id, tab)))
+                                .semantics(Some(Box::new(Semantics {
+                                    drag_capture: Some(DragCapture::ThresholdPreview),
+                                    ..Default::default()
+                                })))
+                                .on(EventKind::Drag, move |event| {
+                                    if matches!(
+                                        event,
+                                        Event::Drag {
+                                            phase: DragPhase::Drop,
+                                            ..
+                                        }
+                                    ) {
+                                        drop_on_tab(
+                                            &source_drop,
+                                            id,
+                                            tab,
+                                            source_scope.clone(),
+                                            ref_node.get(),
+                                            event,
+                                        );
+                                    } else {
+                                        drag_source(&source, id, tab, event);
+                                    }
+                                })
+                                .fill(
+                                    sapid::button()
+                                        .class("files-tab-select")
+                                        .name(state.map(move |s| title(s, id, tab)))
+                                        .pressed(state.map(move |s| {
+                                            s.workbench
+                                                .files
+                                                .windows
+                                                .get(&id)
+                                                .is_some_and(|w| w.selected == tab)
+                                        }))
+                                        .fill(text().content(state.map(move |s| title(s, id, tab))))
+                                        .on_press(move || select(&select_ui, id, tab)),
+                                ),
+                            close_action("Close file tab")
+                                .class("icon-button files-tab-close")
+                                .on_press(move || close(&remove, id, tab)),
+                        ))
+                        .show_in(scope)
+                })
+            }),
+        )
+}
+
+pub(super) fn window_content(ui: Ui, id: u32) -> impl Widget {
+    let state = ui.state;
     let live = ui.clone();
     col().class("files-window-content").fill((
         text()
             .class("files-window-id hidden")
             .content(id.to_string()),
-        row()
-            .class("files-tabs")
-            .name(i18n::bind("File tabs"))
-            .fill(
-                each(state.map(move |s| {
-                    s.workbench
-                        .files
-                        .windows
-                        .get(&id)
-                        .map(|w| w.tabs.clone())
-                        .unwrap_or_default()
-                }))
-                .key(|t| t.id)
-                .children(move |t| {
-                    let tab = t.value.get().id;
-                    let choose = choose.clone();
-                    let remove = choose.clone();
-                    row()
-                        .class(state.map(move |s| {
-                            if s.workbench
-                                .files
-                                .windows
-                                .get(&id)
-                                .is_some_and(|w| w.selected == tab)
-                            {
-                                "files-tab selected"
-                            } else {
-                                "files-tab"
-                            }
-                            .to_owned()
-                        }))
-                        .fill((
-                            text().class("files-tab-id hidden").content(tab.to_string()),
-                            sapid::button()
-                                .class("files-tab-select")
-                                .name(state.map(move |s| title(s, id, tab)))
-                                .pressed(state.map(move |s| {
-                                    s.workbench
-                                        .files
-                                        .windows
-                                        .get(&id)
-                                        .is_some_and(|w| w.selected == tab)
-                                }))
-                                .fill(text().content(state.map(move |s| title(s, id, tab))))
-                                .on_press(move || select(&choose, id, tab)),
-                            close_action("Close file tab")
-                                .class("icon-button files-tab-close")
-                                .on_press(move || close(&remove, id, tab)),
-                        ))
-                }),
-            ),
         when(
             state.map(move |s| s.workbench.files.live == Some(id)),
             move || {

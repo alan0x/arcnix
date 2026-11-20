@@ -80,7 +80,8 @@ def main():
             def trash_action(panel, row, label):
                 if panel.evaluate("e => e.classList.contains('files-trash')"):
                     row.click(button='right')
-                    panel.locator('.trash-item-menu').get_by_role('button', name=label, exact=True).click()
+                    panel.get_by_role('menu', name='Trash', exact=True).get_by_role(
+                        'menuitem', name=label, exact=True).click()
                 else:
                     row.get_by_role('button', name=label, exact=True).click()
 

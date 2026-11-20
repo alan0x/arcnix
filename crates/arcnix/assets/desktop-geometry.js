@@ -2,7 +2,7 @@
 const desktopGeometry = (() => {
     const minimumWidth = 480;
     const minimumHeight = 260;
-    const controls = 'button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .explorer-search-options';
+    const controls = 'button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .explorer-search-options, .files-tab';
     const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
     let canvas, layout, gesture, observedArea;
     let lastDragEnd = -Infinity;

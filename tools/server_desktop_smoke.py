@@ -159,12 +159,18 @@ def main():
                 page.set_viewport_size(size)
                 title = titlebar.bounding_box()
                 pathbar = tab_tools.locator('.pathbar').bounding_box()
-                strip = page.locator('.files-tabs').bounding_box()
+                strip = titlebar.locator('.files-tabs').bounding_box()
+                sidebar_button = titlebar.locator('.explorer-sidebar-toggle').bounding_box()
+                new_tab = titlebar.get_by_role('button', name='New tab', exact=True)
                 first = page.locator('.explorer-pane .file-row').first.bounding_box()
-                assert title['y'] + title['height'] <= strip['y'] + 1 <= pathbar['y'], (title, strip, pathbar)
+                assert title['y'] <= strip['y'] and strip['y'] + strip['height'] <= title['y'] + title['height'] + 1
+                assert sidebar_button['x'] + sidebar_button['width'] <= strip['x']
+                assert strip['x'] + strip['width'] <= new_tab.bounding_box()['x']
+                assert title['y'] + title['height'] <= pathbar['y'] + 1
                 assert pathbar['y'] + pathbar['height'] <= first['y'], (pathbar, first)
+                expect(titlebar.locator('.files-tab.selected')).to_have_css('border-top-left-radius', '8px')
                 expect(titlebar.locator('.pathbar')).to_have_count(0)
-                expect(titlebar.get_by_role('button', name='New tab', exact=True)).to_be_visible()
+                expect(new_tab).to_be_visible()
                 actions = tab_tools.get_by_role('button', name='Remote file actions', exact=True)
                 expect(actions).to_be_in_viewport()
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
@@ -178,7 +184,7 @@ def main():
                     menu.get_by_role('button', name='Detailed list', exact=True).click()
                     expect(page.locator('.explorer-pane.details-view')).to_be_visible()
             page.set_viewport_size(dict(width=1440,height=980))
-            checks.append('Files keeps window controls in the titlebar and tab navigation and view actions below the tab strip at both widths')
+            checks.append('Files fits rounded tabs between the sidebar toggle and window actions, with navigation tools below at both widths')
             app.file('work').dblclick()
             expect(app.file('example.txt')).to_be_visible()
             app.file('example.txt').click(button='right')

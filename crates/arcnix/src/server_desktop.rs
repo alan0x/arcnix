@@ -760,6 +760,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let maximize = ui.clone();
     let close = ui.clone();
     let add_tab = ui.clone();
+    let window_drop = ui.clone();
     let title = if page == WorkspacePage::Video {
         text().content(state.map(|s| {
             s.video
@@ -781,7 +782,10 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     .on_press(move || browse.player.browse(&browse))
             }))
         }
-        WorkspacePage::Explorer(_) => fragment(explorer_ui::sidebar_toggle(ui.clone())),
+        WorkspacePage::Explorer(id) => fragment((
+            explorer_ui::sidebar_toggle(ui.clone()),
+            explorer_tabs::tab_strip(ui.clone(), id),
+        )),
         WorkspacePage::Resources => fragment(monitor_ui::window_tools(ui.clone())),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone())),
@@ -800,7 +804,13 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Browser => fragment(web_browser::page(ui)),
         _ => fragment(()),
     };
-    col()
+    let mut window = col();
+    if let Some(id) = files {
+        window = window.on(glory::render::EventKind::Drag, move |event| {
+            explorer_tabs::drop_on_window(&window_drop, Some(id), event);
+        });
+    }
+    window
         .class(state.map(move |s| {
             let mut class = format!("desktop-window {}", app_class(page));
             if files.is_some() {
@@ -951,6 +961,7 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
     let show_desktop = ui.clone();
     let exit_fullscreen = ui.clone();
     let geometry = ui.clone();
+    let desktop_drop = ui.clone();
     let focus = ui.clone();
     col()
         .class(state.map(|s| {
@@ -1040,6 +1051,9 @@ pub(super) fn desktop(ui: Ui) -> impl Widget {
             }),
             col()
                 .class("desktop-canvas")
+                .on(glory::render::EventKind::Drag, move |event| {
+                    explorer_tabs::drop_on_window(&desktop_drop, None, event);
+                })
                 .name(i18n::bind("Desktop"))
                 .focus(FocusMode::Programmatic)
                 .fill((

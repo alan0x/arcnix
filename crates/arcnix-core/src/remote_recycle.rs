@@ -1,8 +1,9 @@
 //! FreeDesktop home and per-volume Trash. File contents stay on the SFTP server.
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+
 use super::*;
 use crate::deletion::Target;
 use crate::recycle::{Item, Operation, move_roots, timestamp};
-use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
 const INFO_LIMIT: usize = 64 * 1024;
 const ENVIRONMENT: &str = "# arcnix:trash:environment\nprintf '%s\\n%s\\n%s\\n%s\\n' \"$HOME\" \"$XDG_DATA_HOME\" \"$(id -u)\" \"$(date +%Y-%m-%dT%H:%M:%S)\"";
