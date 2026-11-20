@@ -111,6 +111,8 @@ use worker::{Action, Request, Update};
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
     SoftwareInstall,
+    SoftwareAction(arcnix_core::software_install::Action, String),
+    DesktopTask(String),
     ConfigureNetwork,
     #[cfg(windows)]
     BrowserForwardingRepair,
@@ -172,7 +174,7 @@ enum Dialog {
     BackupFiles,
     BackupRestore,
     BackupDatabaseRestore,
-    ScriptRefresh(String, String),
+    ScriptRefresh(String, String, bool),
     ScriptBatchRefresh(String),
     SnippetDelete(String),
     TransferConflict,
@@ -495,6 +497,9 @@ impl Ui {
         self.state.revise(|s| show_dialog(s, dialog));
     }
     fn close_dialog(&self) {
+        if self.state.with(|s| matches!(&s.dialog, Some(Dialog::DesktopTask(id)) if s.scripts.active.as_ref() == Some(id) && !s.scripts.submitted)) {
+            self.stop_script_queue();
+        }
         let terminal_rename = self
             .state
             .with(|s| matches!(s.dialog, Some(Dialog::TerminalRename { .. })));
@@ -533,6 +538,12 @@ impl Ui {
             if s.dialog == Some(Dialog::Connect) {
                 s.secret.clear();
             }
+            if let Some(Dialog::ScriptRefresh(id, _, true)) = &s.dialog {
+                s.scripts.refresh_secret.clear();
+                s.dialog = Some(Dialog::DesktopTask(id.clone()));
+                s.dialog_error.clear();
+                return;
+            }
             if matches!(s.dialog, Some(Dialog::ScriptRefresh(..))) {
                 s.scripts.refresh_secret.clear();
             }
@@ -550,6 +561,12 @@ impl Ui {
                 s.scripts.values.clear();
                 s.scripts.preset_selected.clear();
                 s.scripts.preset_name.clear();
+            }
+            if matches!(
+                s.dialog,
+                Some(Dialog::SoftwareInstall | Dialog::SoftwareAction(..))
+            ) {
+                s.scripts.credentials.clear();
             }
             if s.dialog == Some(Dialog::TaskRecordConnect) {
                 s.task_records.secrets.clear();

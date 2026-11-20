@@ -26,6 +26,8 @@ pub(super) struct ScriptsState {
     pub active: Option<String>,
     pub prepared: bool,
     pub submitted: bool,
+    pub auto_submit: bool,
+    pub software_task: Option<String>,
     pub selected_task: Option<String>,
     pub error: String,
     pub history_writable: bool,
@@ -36,6 +38,12 @@ pub(super) struct ScriptsState {
 }
 pub(super) fn busy(s: &State) -> bool {
     s.scripts.active.is_some()
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Submission {
+    ReviewBatch,
+    ReviewSoftware,
+    ApplySoftware,
 }
 fn templates(s: &State) -> Vec<Template> {
     let custom = || s.config.snippets.iter().cloned().map(Template::custom);
@@ -71,6 +79,19 @@ fn templates(s: &State) -> Vec<Template> {
         })
         .collect()
 }
+fn can_submit(s: &State) -> bool {
+    s.scripts.prepared
+        && !s.scripts.submitted
+        && s.scripts.history_writable
+        && s.scripts.tasks.iter().any(|task| {
+            Some(&task.id) == s.scripts.active.as_ref()
+                && task
+                    .targets
+                    .iter()
+                    .any(|target| target.status == Status::Ready)
+        })
+}
+
 impl Ui {
     fn toggle_script_favorite(&self, favorite: Favorite) {
         let result = (|| -> anyhow::Result<_> {
@@ -99,74 +120,79 @@ impl Ui {
             self.error("Connect a server and wait for the current operation to finish");
             return;
         };
-        self.choose_script(template);
-        self.state.revise(|s| {
-            s.scripts.targets.insert(selected);
-        });
+        self.open_script(template, Some(selected), Dialog::ScriptRun);
     }
     fn refresh_server_task(&self) {
         let result = self.state.with(|s| -> anyhow::Result<_> {
-            let Some(Dialog::ScriptRefresh(task_id, target_id)) = &s.dialog else {
+            let Some(Dialog::ScriptRefresh(task_id, target_id, desktop)) = &s.dialog else {
                 anyhow::bail!("Choose a server task");
             };
             let request =
                 crate::task_refresh_ui::request(s, task_id, target_id, &s.scripts.refresh_secret)?;
-            Ok((task_id.clone(), request))
+            Ok((task_id.clone(), request, *desktop))
         });
         match result {
             Err(e) => self.state.revise(|s| s.dialog_error = e.to_string()),
-            Ok((task, request)) => {
+            Ok((task, request, desktop)) => {
                 self.state.revise(|s| {
                     s.scripts
                         .refreshing
                         .insert((task.clone(), request.id.clone()));
                     s.scripts.refresh_secret.clear();
-                    s.dialog = None;
+                    s.dialog = desktop.then(|| Dialog::DesktopTask(task.clone()));
+                    s.dialog_error.clear();
                 });
                 batch_worker::refresh_many(task, vec![request], 1, self.batch_events.clone());
             }
         }
     }
-    pub(super) fn choose_script(&self, mut template: Template) {
+    pub(super) fn choose_script(&self, template: Template) {
+        self.open_script(template, None, Dialog::ScriptRun);
+    }
+    pub(super) fn open_script(&self, template: Template, target: Option<String>, dialog: Dialog) {
         if self.state.with(busy) {
             return;
         }
-        if let Some(policy) = template.installation.as_ref().and_then(|d| d.policy)
-            && let Err(e) = template.set_installation_policy(policy)
-        {
-            self.state.revise(|s| s.scripts.error = e.to_string());
-            return;
+        match self.configure_script(template, target) {
+            Ok(()) => {
+                self.state.revise(|s| s.scripts.credentials.clear());
+                self.open_dialog(dialog);
+            }
+            Err(e) => self.state.revise(|s| s.scripts.error = e.to_string()),
         }
-        let values = match template.parameters() {
-            Ok(keys) => {
-                let defaults =
-                    arcnix_core::script_parameters::defaults(&template.snippet).unwrap_or_default();
-                keys.into_iter()
-                    .map(|key| {
-                        let value = defaults.get(&key).cloned().unwrap_or_default();
-                        (key, value)
-                    })
-                    .collect()
-            }
-            Err(e) => {
-                self.state.revise(|s| s.scripts.error = e.to_string());
-                return;
-            }
-        };
+    }
+    pub(super) fn configure_script(
+        &self,
+        mut template: Template,
+        target: Option<String>,
+    ) -> anyhow::Result<()> {
+        if let Some(policy) = template.installation.as_ref().and_then(|d| d.policy) {
+            template.set_installation_policy(policy)?;
+        }
+        let defaults =
+            arcnix_core::script_parameters::defaults(&template.snippet).unwrap_or_default();
+        let values = template
+            .parameters()?
+            .into_iter()
+            .map(|key| {
+                let value = defaults.get(&key).cloned().unwrap_or_default();
+                (key, value)
+            })
+            .collect();
         self.state.revise(|s| {
             s.scripts.template = Some(template);
             s.scripts.preset_selected.clear();
             s.scripts.preset_name.clear();
             s.scripts.values = values;
-            s.scripts.targets.clear();
+            s.scripts.targets = target.into_iter().collect();
             s.scripts.target_filter = Default::default();
-            s.scripts.credentials.clear();
             s.scripts.error.clear();
             s.scripts.concurrency = 3;
         });
-        self.open_dialog(Dialog::ScriptRun);
+        Ok(())
     }
-    fn prepare_script(&self) {
+    pub(super) fn prepare_script(&self, submission: Submission) {
+        let software = submission != Submission::ReviewBatch;
         let result = (|| -> anyhow::Result<_> {
             anyhow::ensure!(
                 self.writable.get() && self.state.with(|s| s.scripts.history_writable),
@@ -174,6 +200,9 @@ impl Ui {
             );
             self.state.with(|s| {
                 anyhow::ensure!(!busy(s) && !s.system_task_running, "Wait for the current operation to finish");
+                if software {
+                    anyhow::ensure!(s.connected && s.selected.as_ref().is_some_and(|id| s.scripts.targets.len() == 1 && s.scripts.targets.contains(id)), "Connect to the server again before continuing");
+                }
                 let mut template = s.scripts.template.clone().ok_or_else(|| anyhow::anyhow!("Choose a script"))?;
                 anyhow::ensure!(task_target_picker::hidden(s)==0,"Review hidden selected servers before checking targets");
                 arcnix_core::target_selection::validate(&s.config,&template,&s.scripts.targets)?;
@@ -215,19 +244,30 @@ impl Ui {
                     return;
                 }
                 self.state.revise(|s| {
-                    task_records_ui::recent(s);
                     s.scripts.tasks = history;
                     s.scripts.private_previews.clear();
                     s.scripts.active = Some(id.clone());
                     s.scripts.selected_task = Some(id.clone());
                     s.scripts.prepared = false;
                     s.scripts.submitted = false;
+                    s.scripts.auto_submit = submission == Submission::ApplySoftware;
+                    if software {
+                        s.scripts.software_task = Some(id.clone());
+                    }
+                    if s.dialog == Some(Dialog::SoftwareInstall) {
+                        s.install.task = Some(id.clone());
+                    }
                     s.scripts.credentials.clear();
                     s.scripts.values.clear();
                     s.scripts.preset_selected.clear();
                     s.scripts.preset_name.clear();
-                    s.dialog = None;
-                    navigation::change_page(s, navigation::Page::Tasks, "prepare-script");
+                    if software || server_desktop::visible(s) {
+                        show_dialog(s, Dialog::DesktopTask(id.clone()));
+                    } else {
+                        task_records_ui::recent(s);
+                        s.dialog = None;
+                        navigation::change_page(s, navigation::Page::Tasks, "prepare-script");
+                    }
                 });
                 let controller = batch_worker::start(
                     id,
@@ -254,10 +294,7 @@ impl Ui {
         }
     }
     fn submit_script(&self) {
-        if !self
-            .state
-            .with(|s| s.scripts.prepared && !s.scripts.submitted && s.scripts.history_writable)
-        {
+        if !self.state.with(can_submit) {
             return;
         }
         self.state.revise(|s| {
@@ -275,6 +312,7 @@ impl Ui {
             }
         });
         if !self.persist_tasks() {
+            self.stop_script_queue();
             return;
         }
         if let Some(controller) = self.batch_controller.borrow().as_ref() {
@@ -282,7 +320,7 @@ impl Ui {
         }
         self.state.revise(|s| s.scripts.submitted = true);
     }
-    fn stop_script_queue(&self) {
+    pub(super) fn stop_script_queue(&self) {
         if let Some(controller) = self.batch_controller.borrow().as_ref() {
             controller.stop.store(true, Ordering::Release);
             let _ = controller.decision.send(false);
@@ -327,6 +365,29 @@ pub(super) fn event(ui: &Ui, event: batch_worker::Event) {
             return;
         }
         event => event,
+    };
+    let automatic = matches!(&event, batch_worker::Event::Prepared(id) if ui.state.with(|s| {
+        s.scripts.auto_submit && s.scripts.active.as_ref() == Some(id)
+            && matches!(&s.dialog, Some(Dialog::DesktopTask(shown)) if shown == id)
+    }));
+    let refresh_software = match &event {
+        batch_worker::Event::Complete(id) | batch_worker::Event::Refreshed { task: id, .. } => {
+            ui.state.with(|s| {
+                s.connected
+                    && s.scripts.software_task.as_ref() == Some(id)
+                    && s.scripts
+                        .tasks
+                        .iter()
+                        .find(|task| &task.id == id)
+                        .is_some_and(|task| {
+                            task.targets.iter().any(|target| {
+                                s.selected.as_ref() == Some(&target.id)
+                                    && target.may_have_server_result()
+                            })
+                        })
+            })
+        }
+        _ => false,
     };
     ui.state.revise(|s| match event {
         batch_worker::Event::ConfigurationPreview { task, id, diff } => {
@@ -407,13 +468,24 @@ pub(super) fn event(ui: &Ui, event: batch_worker::Event) {
                 s.scripts.active = None;
                 s.scripts.prepared = false;
                 s.scripts.submitted = false;
+                s.scripts.auto_submit = false;
             }
         }
     });
     backups_ui::record_confirmations(ui);
     ui.persist_tasks();
+    if automatic {
+        if ui.state.with(|s| s.scripts.history_writable) {
+            ui.submit_script();
+        } else {
+            ui.stop_script_queue();
+        }
+    }
     if !ui.state.with(busy) {
         ui.batch_controller.borrow_mut().take();
+    }
+    if refresh_software {
+        ui.refresh_software_inventory();
     }
 }
 fn apply_refresh(
@@ -695,7 +767,7 @@ fn recent_tasks(ui: Ui) -> impl Widget {
         text().class(state.map(|s|if s.scripts.error.is_empty(){"hidden"}else{"form-error"}.to_owned())).content(state.map(|s|s.scripts.error.clone())),
         when(state.map(|s|s.scripts.tasks.is_empty()),||text().class("context-hint").content(i18n::bind("Run a script to create your first task."))),
         when(state.map(busy),move||{let submit=submit.clone();let stop=stop.clone();row().class("global-toolbar").fill((
-            btn("Execute ready targets",move||submit.submit_script()).class("button primary").enabled(state.map(|s|s.scripts.prepared&&!s.scripts.submitted&&s.scripts.tasks.iter().find(|t|Some(&t.id)==s.scripts.active.as_ref()).is_some_and(|t|t.targets.iter().any(|t|t.status==Status::Ready)))),
+            btn("Execute ready targets",move||submit.submit_script()).class("button primary").enabled(state.map(can_submit)),
             btn("Stop pending targets",move||stop.stop_script_queue()),
             text().class("subtle").content(i18n::bind("Already submitted server jobs continue running.")),
         ))}),
@@ -714,7 +786,7 @@ fn recent_tasks(ui: Ui) -> impl Widget {
                             row().class("script-row-heading").fill((text().class("section-title").content(t.map(|t|t.name.clone())),text().class("task-status").content(i18n::bind(t.map(|t|t.status.label().to_owned()))))),
                             text().class("subtle").content(t.map(|t|t.endpoint.clone())),
                             text().class("subtle").content(t.map(|t|format!("{} · {}",t.fingerprint,t.remote_directory))),
-                            row().class("script-actions").fill((btn("Query server result",move||{query.state.revise(|s|s.scripts.refresh_secret.clear());query.open_dialog(Dialog::ScriptRefresh(query_task.clone(),target_id.clone()));}).enabled(state.map(move|s|!busy(s)&&!s.scripts.refreshing.contains(&(enabled_task.clone(),enabled_id.clone()))&&s.scripts.tasks.iter().find(|task|task.id==enabled_task).and_then(|task|task.targets.iter().find(|target|target.id==enabled_id)).is_some_and(tasks::Target::may_have_server_result))),
+                            row().class("script-actions").fill((btn("Query server result",move||{query.state.revise(|s|s.scripts.refresh_secret.clear());query.open_dialog(Dialog::ScriptRefresh(query_task.clone(),target_id.clone(),false));}).enabled(state.map(move|s|!busy(s)&&!s.scripts.refreshing.contains(&(enabled_task.clone(),enabled_id.clone()))&&s.scripts.tasks.iter().find(|task|task.id==enabled_task).and_then(|task|task.targets.iter().find(|target|target.id==enabled_id)).is_some_and(tasks::Target::may_have_server_result))),
                             text().class("task-query-progress subtle").content(i18n::bind(state.map(move|s|if s.scripts.refreshing.contains(&(pending_task.clone(),pending_id.clone())){"Reading server result…"}else{""}.to_owned()))),
                             row().class(t.map(|t|if t.remote_directory.is_empty() || t.result_read_at.is_none() && matches!(t.status,Status::Checking|Status::Ready|Status::Queued|Status::Submitting|Status::Cancelled){"hidden"}else{"help-heading task-result-age"}.to_owned())).fill((text().class("subtle task-result-read").content(t.map(|t|t.result_read_at.map(|at|i18n::translate(&format!("Snapshot read: {}",formatting::timestamp(Some(at))))).unwrap_or_else(||i18n::translate("Read time unavailable")))),crate::help_ui::tip("Result snapshot","Time this client received the displayed server snapshot, using this computer's clock. This is not the task completion time or continuous confirmation of its state. Failed queries retain the previous read time. Older history may have no recorded time."))),
                             )),
@@ -735,10 +807,219 @@ fn recent_tasks(ui: Ui) -> impl Widget {
         }}),
     ))
 }
+fn desktop_task(ui: Ui, id: String) -> impl Widget {
+    let state = ui.state;
+    let metadata = state.with(|s| {
+        s.scripts
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .map(|task| {
+                (
+                    task.name.clone(),
+                    task.installation.clone(),
+                    task.revision.clone(),
+                )
+            })
+    });
+    let (name, installation, revision) = metadata.unwrap_or_default();
+    let task_id = id.clone();
+    let targets = state.map(move |s| {
+        s.scripts
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.targets.clone())
+            .unwrap_or_default()
+    });
+    let active_id = id.clone();
+    let awaiting_submit = state.map(move |s| {
+        if s.scripts.active.as_ref() == Some(&active_id) && !s.scripts.submitted {
+            "Cancel"
+        } else {
+            "Close"
+        }
+        .to_owned()
+    });
+    let submit_id = id.clone();
+    let back_id = id.clone();
+    let back = ui.clone();
+    let submit = ui.clone();
+    let close = ui.clone();
+    let submit_label = if installation.is_some()
+        && state.with(|s| s.scripts.software_task.as_ref() == Some(&id))
+    {
+        "Apply package changes"
+    } else {
+        "Run operation"
+    };
+    modal(
+        ui.clone(),
+        "Operation status",
+        col().class("desktop-task").fill((
+            text().class("section-title").content(i18n::bind(name)),
+            text()
+                .class("script-code")
+                .content(state.map(|s| s.scripts.error.clone())),
+            each(targets).key(|t| t.id.clone()).children(move |item| {
+                let target = item.value;
+                let target_id = target.get().id;
+                let query_key = (id.clone(), target_id.clone());
+                let query = ui.clone();
+                let queryable = id.clone();
+                let open = id.clone();
+                let report_id = id.clone();
+                let review_id = id.clone();
+                let definition = installation.clone();
+                let revision = revision.clone();
+                col().class("task-target").fill((
+                    row().class("script-row-heading").fill((
+                        text().content(target.map(|t| t.name.clone())),
+                        text()
+                            .class("task-status")
+                            .content(i18n::bind(target.map(|t| t.status.label().to_owned()))),
+                    )),
+                    text()
+                        .class("subtle")
+                        .content(target.map(|t| t.endpoint.clone())),
+                    when(
+                        state.map(move |s| {
+                            s.scripts.active.as_ref() == Some(&review_id)
+                                && !s.scripts.auto_submit
+                                && !s.scripts.submitted
+                        }),
+                        move || {
+                            text()
+                                .class("script-code")
+                                .selectable(true)
+                                .content(target.map(|t| t.preview.clone()))
+                        },
+                    ),
+                    text()
+                        .class("script-code installation-report")
+                        .selectable(true)
+                        .content(target.map(move |t| {
+                            let Some(definition) = &definition else {
+                                return String::new();
+                            };
+                            let exit_code = matches!(t.status, Status::Succeeded | Status::Failed)
+                                .then_some(t.exit_code)
+                                .flatten();
+                            installation_ui::summary(
+                                &t.output,
+                                &report_id,
+                                &revision,
+                                Some(definition),
+                                exit_code,
+                            )
+                        })),
+                    text()
+                        .class("script-code task-output")
+                        .selectable(true)
+                        .content(target.map(desktop_output)),
+                    when(
+                        state.map(move |s| {
+                            !busy(s) && task_refresh_ui::queryable(s, &queryable, &target.get())
+                        }),
+                        move || {
+                            let query = query.clone();
+                            let id = open.clone();
+                            let target = target_id.clone();
+                            btn("Query server result", move || {
+                                query.state.revise(|s| s.scripts.refresh_secret.clear());
+                                query.open_dialog(Dialog::ScriptRefresh(
+                                    id.clone(),
+                                    target.clone(),
+                                    true,
+                                ));
+                            })
+                        },
+                    ),
+                    when(
+                        state.map(move |s| s.scripts.refreshing.contains(&query_key)),
+                        || {
+                            text()
+                                .class("subtle")
+                                .content(i18n::bind("Reading server result…"))
+                        },
+                    ),
+                ))
+            }),
+        )),
+        (
+            when(
+                state.map(move |s| {
+                    !busy(s)
+                        && s.connected
+                        && s.install.task.as_ref() == Some(&back_id)
+                        && s.scripts
+                            .tasks
+                            .iter()
+                            .find(|task| task.id == back_id)
+                            .is_some_and(|task| {
+                                task.targets.iter().any(|target| {
+                                    target.status == Status::Failed
+                                        && !target.may_have_server_result()
+                                })
+                            })
+                }),
+                move || {
+                    let back = back.clone();
+                    btn("Back to installation", move || {
+                        back.open_dialog(Dialog::SoftwareInstall)
+                    })
+                },
+            ),
+            sapid::button()
+                .class("button")
+                .label(i18n::bind(awaiting_submit))
+                .on_press(move || close.close_dialog()),
+            when(
+                state.map(move |s| {
+                    s.scripts.active.as_ref() == Some(&submit_id)
+                        && !s.scripts.auto_submit
+                        && can_submit(s)
+                }),
+                move || {
+                    let submit = submit.clone();
+                    btn(submit_label, move || submit.submit_script()).class("button primary")
+                },
+            ),
+        ),
+    )
+}
+
+fn desktop_output(target: &tasks::Target) -> String {
+    let output = target.output.trim();
+    match output {
+        "Preflight failed: Server-owned jobs require a running systemd manager and systemd-run" => {
+            i18n::translate(
+                "The operation did not start. This server needs a running systemd system manager and systemd-run.",
+            )
+        }
+        "Preflight failed: The plan changes an installed package; select Allow reviewed upgrades and check targets again"
+        | "Preflight failed: The plan configures an existing package; select Allow reviewed upgrades and check targets again" => {
+            i18n::translate(
+                "Installation requires changes to installed packages. Open Installation options and select Review dependency upgrades to see the changes.",
+            )
+        }
+        _ => arcnix_core::installers::human_log(&target.output),
+    }
+}
+
 pub(super) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
     fragment((
         crate::task_refresh_ui::dialog(ui.clone()),
+        each(state.map(|s| match &s.dialog {
+            Some(Dialog::DesktopTask(id)) => vec![id.clone()],
+            _ => vec![],
+        }))
+        .key(Clone::clone)
+        .children({
+            let ui = ui.clone();
+            move |item| desktop_task(ui.clone(), item.value.get())
+        }),
         when(
             state.map(|s| matches!(s.dialog, Some(Dialog::ScriptRefresh(..)))),
             {
@@ -769,7 +1050,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
             row().class("script-actions").fill((text().class("field-label").content(i18n::bind("Parallel submissions")),row().class("script-actions").fill(each(state.map(|s|if s.scripts.template.as_ref().and_then(|t|t.backup.as_ref()).is_some_and(|j|!matches!(j.action,arcnix_core::backups::Action::Backup)){vec![1usize]}else{vec![1usize,3,5,8]})).key(|n|*n).children(move|item|{let n=item.value.get();btn(format!("{n}"),move||state.revise(|s|s.scripts.concurrency=n)).class(state.map(move|s|if s.scripts.concurrency==n {"choice active"}else{"choice"}.to_owned()))})),crate::help_ui::group("Parallel submissions",&["Maximum parallel submissions; accepted jobs run independently on all servers","Each server runs one global Arcnix operation at a time; diagnostics may run alongside it. Server locks survive client closure."]))),
             task_target_picker::picker(ui.clone()),
             text().class("hint").content(i18n::bind("Parameters and script text must not contain passwords or tokens. Credentials are used only for this submission.")),
-        )),(btn("Cancel",move||cancel.close_dialog()),btn("Check targets",move||prepare.prepare_script()).class("button primary").enabled(state.map(|s|task_target_picker::hidden(s)==0))))
+        )),(btn("Cancel",move||cancel.close_dialog()),btn("Check targets",move||prepare.prepare_script(Submission::ReviewBatch)).class("button primary").enabled(state.map(|s|task_target_picker::hidden(s)==0))))
             },
         ),
     ))

@@ -2224,7 +2224,27 @@ Compose 项目	Compose projects
 监听地址	Listen address
 宿主机端口	Host port
 预览 Compose	Preview Compose
-审核安装	Review installation
+安装	Install
+安装选项	Installation options
+管理员权限	Administrator access
+核对依赖包升级	Review dependency upgrades
+核对软件包变更…	Review package changes…
+应用软件包变更	Apply package changes
+升级软件	Upgrade software
+升级	Upgrade
+软件包管理器可能同时升级依赖包。	The package manager may also upgrade dependencies.
+卸载软件	Remove software
+卸载	Remove
+软件包管理器可能同时卸载依赖此软件的其他软件包。	The package manager may also remove packages that depend on this software.
+整机升级（Pacman）	Full system upgrade (Pacman)
+升级系统	Upgrade system
+Pacman 会在同一事务中升级整个系统。	Pacman upgrades the whole system in one transaction.
+更新	Update
+从此服务器配置的软件源刷新可用软件包列表。	Refresh the list of packages available from this server’s repositories.
+操作状态	Operation status
+返回安装	Back to installation
+安装需要更改已有软件包。请打开“安装选项”并选中“核对依赖包升级”，查看将要发生的变更。	Installation requires changes to installed packages. Open Installation options and select Review dependency upgrades to see the changes.
+操作未启动。此服务器需要运行 systemd 系统管理器，并提供 systemd-run。	The operation did not start. This server needs a running systemd system manager and systemd-run.
 软件包名称	Package names
 Snap 渠道	Snap channel
 允许经典模式（classic）	Allow classic confinement

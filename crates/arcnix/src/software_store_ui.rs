@@ -171,11 +171,17 @@ impl Ui {
         let Item::Package(source, p) = item else {
             return;
         };
-        match software_install::template(source, action, vec![p.name], "stable", false) {
-            Ok(t) => self.choose_server_script(t),
-            Err(e) => self
-                .state
-                .revise(|s| s.software.store.error = format!("{e:#}")),
+        self.open_software_action(source, action, vec![p.name]);
+    }
+    pub(super) fn refresh_software_inventory(&self) {
+        self.state.revise(|s| s.software.store.pending = None);
+        self.store_refresh();
+        if self.state.with(|s| s.software.store.view == 3) {
+            if self.state.with(|s| s.software.installed_view) {
+                self.software_installed();
+            } else {
+                self.software_search();
+            }
         }
     }
 }

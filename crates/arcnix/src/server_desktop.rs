@@ -319,6 +319,9 @@ pub(super) fn owns_dialog(s: &State) -> bool {
             s.dialog,
             Some(
                 Dialog::SoftwareInstall
+                    | Dialog::SoftwareAction(..)
+                    | Dialog::DesktopTask(..)
+                    | Dialog::ScriptRefresh(_, _, true)
                     | Dialog::ConfigureNetwork
                     | Dialog::StartupService
                     | Dialog::ScriptRun
