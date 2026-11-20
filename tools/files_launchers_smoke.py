@@ -3,7 +3,7 @@ import json
 import time
 
 from server_apps_fixture import read_desktop_settings
-from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
+from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expect
 
 
 def main():
@@ -94,12 +94,17 @@ def main():
             dock_player.click(button='right')
             expect(menu.get_by_role('button', name='Open video', exact=True)).to_be_visible()
             choose('Dock settings')
+            tabs = page.locator('.desktop-settings-tabs')
+            expect(tabs.get_by_role('button', name='Dock', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings = page.locator('.desktop-settings-pane')
-            settings.get_by_role('button', name='Files', exact=True).click()
+            settings.get_by_role('button', name='Pinned shortcuts', exact=True).click()
+            pins = page.get_by_role('dialog', name='Pinned shortcuts', exact=True)
+            pins.get_by_role('checkbox', name='Files', exact=True).check()
             eventually(lambda: 'files' not in dock_preferences().get('unpinned', []))
-            expect(dock_files).to_be_visible()
-            settings.get_by_role('button', name='Player', exact=True).click()
+            pins.get_by_role('checkbox', name='Player', exact=True).uncheck()
             eventually(lambda: 'player' not in dock_preferences().get('order', []))
+            close_dialog(pins)
+            expect(dock_files).to_be_visible()
             expect(dock_player).to_have_count(0)
 
             dock_terminal = icon('.desktop-dock', 'Terminal')

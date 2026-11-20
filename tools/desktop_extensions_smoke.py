@@ -1,7 +1,7 @@
 """Owned SSH/WebView scenarios for desktop isolation, installers and session restore."""
 import json,time,re
 from server_apps_fixture import read_desktop_settings
-from desktop_fixture import Desktop,Peer,ROOT,expect,eventually
+from desktop_fixture import Desktop,Peer,ROOT,expect,eventually, set_desktop_mode
 from docker_desktop_smoke import seed
 
 def main():
@@ -57,18 +57,15 @@ def main():
             fits_desktop(p.locator('.desktop-window.active'))
             expect(p.locator('.desktop-modal-backdrop')).to_have_count(0)
             d.get_by_role('button',name='Every 10 s',exact=True).click()
-            expect(d).to_contain_text('Saved on server')
             prefs=ubuntu.root/'home/arcnix/.arcnix/desktop.json'
-            assert read_desktop_settings(prefs)['resource_interval_seconds']==10
+            eventually(lambda: read_desktop_settings(prefs).get('resource_interval_seconds') == 10)
             d.get_by_role('button',name='Keyboard shortcuts',exact=True).click()
             expect(d).to_contain_text('Ctrl+Shift+T')
             expect(d).to_contain_text('Ctrl+S')
             p.set_viewport_size(dict(width=900,height=650))
             assert d.locator('.desktop-preferences').evaluate('el=>el.scrollWidth <= el.clientWidth + 1')
             p.set_viewport_size(dict(width=1440,height=980))
-            d.get_by_role('button',name='Desktop',exact=True).click()
-            expect(d.get_by_role('button',name='Dark',exact=True)).to_be_enabled();d.get_by_role('button',name='Dark',exact=True).click()
-            expect(d).to_contain_text('Saved on server')
+            set_desktop_mode(d, 'Dark')
             expect(p.locator('.app')).to_have_class('app theme-light')
             expect(p.locator('.server-desktop')).to_have_class(re.compile(r'\btheme-dark\b'))
             assert p.locator('.navigation-rail').evaluate('el=>getComputedStyle(el).backgroundColor')==rail

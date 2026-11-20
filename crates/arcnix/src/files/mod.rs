@@ -1,0 +1,20 @@
+pub(crate) mod browser;
+pub(crate) mod file_actions;
+pub(crate) mod file_browser;
+pub(crate) mod file_columns;
+pub(crate) mod file_context;
+pub(crate) mod file_open;
+pub(crate) mod file_picker;
+pub(crate) mod file_properties;
+pub(crate) mod files_search;
+pub(crate) mod files_tabs;
+pub(crate) mod files_transfer;
+pub(crate) mod files_ui;
+pub(crate) mod folder_icons;
+pub(crate) mod trash_ui;
+pub(crate) mod transfer_details;
+pub(crate) mod transfer_progress;
+pub(crate) mod transfer_ui;
+pub(crate) mod transfer_worker;
+#[cfg(test)]
+pub(crate) mod transfer_worker_tests;

@@ -11,7 +11,7 @@ fn procfs_inspection_deduplicates_metadata_and_preserves_live_descriptors() -> a
     use arcnix_core::remote_tasks::quote;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
-    let request = serde_json::json!({"program":STANDARD.encode(include_str!("../src/deleted_files.py")),
+    let request = serde_json::json!({"program":STANDARD.encode(include_str!("../src/maintenance/deleted_files.py")),
         "command":deleted_files::execution(false,false,false,false)?.command});
     let script = format!(
         "unshare --mount --pid --fork --mount-proc --kill-child=KILL python3 -I -c {} {}",

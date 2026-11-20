@@ -6,21 +6,12 @@ const desktopGeometry = (() => {
     const titlebarHeightToKeep = 18;
     const controls = 'button, a, input, textarea, select, [contenteditable], [role="button"], [role="tab"], .path-location, .files-search-options, .files-tab';
     const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+    const moveWithin = (start, delta, minimum, maximum) =>
+        clamp(start + delta, Math.min(start, minimum), Math.max(start, maximum));
     let canvas, layout, gesture, observedArea;
     let lastDragEnd = -Infinity;
     const pending = new Map();
     const openingAreas = new Map();
-
-    function area() {
-        const frame = canvas.getBoundingClientRect();
-        const [left, right, bottom] = Object.values(desktopFrame.dockInsets(canvas))
-            .map(size => size ? size + 8 : 0);
-        return {
-            left, right, bottom,
-            width: Math.max(1, Math.floor(frame.width - left - right)),
-            height: Math.max(1, Math.floor(frame.height - bottom)),
-        };
-    }
 
     function reachable(limits, titlebarHeight) {
         const width = Math.min(titlebarWidthToKeep, limits.width);
@@ -53,17 +44,31 @@ const desktopGeometry = (() => {
         if (!openingAreas.has(item.class)) openingAreas.set(item.class, {width: limits.width, height: limits.height});
         const opening = openingAreas.get(item.class);
         const bounds = pending.get(item.class)?.bounds ?? item.bounds ?? initialBounds(item, opening);
-        return { ...bounds, reference: bounds.reference ?? opening };
+        return { bounds, reference: bounds.reference ?? opening };
     }
 
-    function place(bounds, limits, range) {
+    function projectAxis(position, size, reference, extent, hasSnapshot) {
+        if (extent < size) return 0;
+        const space = extent - size;
+        const originalSpace = reference - size;
+        if (hasSnapshot && originalSpace >= 0 && (position < 0 || position > originalSpace)) {
+            if (extent < reference) return Math.round(position * space / originalSpace);
+
+            // Reveal a deliberately clipped edge before following the saved center.
+            const revealed = position < 0 ? Math.min(0, position + extent - reference) : position;
+            if (revealed < 0 || revealed > space) return revealed;
+        }
+        const center = (position + size / 2) / reference;
+        return clamp(Math.round(center * extent - size / 2), 0, space);
+    }
+
+    function place({bounds, reference}, limits, range) {
         const width = Math.min(bounds.width, limits.width);
         const height = Math.min(bounds.height, limits.height);
-        const centerX = (bounds.x + bounds.width / 2) / bounds.reference.width;
-        const centerY = (bounds.y + bounds.height / 2) / bounds.reference.height;
+        const hasSnapshot = Boolean(bounds.reference);
         return fit({
-            x: Math.round(centerX * limits.width - width / 2),
-            y: Math.round(centerY * limits.height - height / 2),
+            x: projectAxis(bounds.x, bounds.width, reference.width, limits.width, hasSnapshot),
+            y: projectAxis(bounds.y, bounds.height, reference.height, limits.height, hasSnapshot),
             width,
             height,
         }, range);
@@ -84,7 +89,7 @@ const desktopGeometry = (() => {
 
     function drawWindows() {
         if (!layout?.shown || !canvas?.offsetWidth || !canvas.offsetHeight) return;
-        const limits = area();
+        const limits = desktopFrame.workArea(canvas);
         for (const edge of ['left', 'right', 'bottom', 'width']) {
             const property = `--desktop-work-${edge}`;
             const value = limits[edge] + 'px';
@@ -94,9 +99,12 @@ const desktopGeometry = (() => {
             const element = canvas.querySelector(`.desktop-window.${item.class}:not(.hidden)`);
             if (!element) continue;
             element.style.zIndex = item.order;
-            if (gesture?.element === element && gesture.current) continue;
+            if (gesture?.element === element) continue;
             const local = pending.get(item.class);
-            if (local && JSON.stringify(item.bounds) !== local.original) pending.delete(item.class);
+            if (local) {
+                const recorded = JSON.stringify(item.bounds);
+                if (recorded === local.saved || !local.previous.has(recorded)) pending.delete(item.class);
+            }
             const bounds = preferredBounds(item, limits);
             const range = reachable(limits, element.querySelector('.desktop-window-titlebar').offsetHeight);
             draw(element, item.maximized
@@ -124,19 +132,20 @@ const desktopGeometry = (() => {
         gesture = null;
         drag.element.removeAttribute('data-window-dragging');
         if (drag.capture.hasPointerCapture(drag.pointer)) drag.capture.releasePointerCapture(drag.pointer);
-        if (!drag.current) return;
+        if (!drag.current) {
+            for (const animation of drag.animations) if (animation.playState === 'paused') animation.play();
+            drawWindows();
+            return;
+        }
         lastDragEnd = performance.now();
         if (commit && !Object.keys(drag.start).every(key => drag.start[key] === drag.current[key])) {
-            // Only an explicitly moved or resized axis replaces its preferred geometry.
-            const bounds = { ...drag.preferred, reference: { ...drag.preferred.reference } };
-            for (const [position, size] of [['x', 'width'], ['y', 'height']]) {
-                if (drag.current[position] !== drag.start[position] || drag.current[size] !== drag.start[size]) {
-                    bounds[position] = drag.current[position];
-                    bounds[size] = drag.current[size];
-                    bounds.reference[size] = drag.limits[size];
-                }
-            }
-            pending.set(drag.app, { bounds, original: drag.original });
+            // Save the displayed rectangle and the workspace it belongs to as one snapshot.
+            const bounds = { ...drag.current, reference: {width: drag.limits.width, height: drag.limits.height} };
+            const earlier = pending.get(drag.app);
+            const previous = earlier?.previous ?? new Set();
+            previous.add(drag.original);
+            if (earlier) previous.add(earlier.saved);
+            pending.set(drag.app, { bounds, saved: JSON.stringify(bounds), previous });
             send('.desktop-bounds-input', drag.item, { bounds });
         }
         drawWindows();
@@ -144,7 +153,7 @@ const desktopGeometry = (() => {
 
     function updateArea() {
         if (!canvas || !layout?.shown) return;
-        const current = area();
+        const current = desktopFrame.workArea(canvas);
         if (observedArea && Object.keys(current).every(key => current[key] === observedArea[key])) return;
         observedArea = current;
         finish(false);
@@ -173,7 +182,7 @@ const desktopGeometry = (() => {
                 observer.observe(nextCanvas);
                 const dock = nextCanvas.querySelector('.desktop-dock-zone');
                 if (dock) {
-                    observer.observe(dock);
+                    observer.observe(dock, {box: 'border-box'});
                     dockPosition.observe(dock, {attributes: true, attributeFilter: ['class']});
                 }
             }
@@ -200,17 +209,21 @@ const desktopGeometry = (() => {
         const handle = target.closest('.desktop-resize-handle');
         const titlebar = target.closest('.desktop-window-titlebar');
         if (titlebar) canvas.focus({preventScroll: true});
-        if (item.maximized || (!handle && !titlebar)) return;
+        if (item.maximized || (!handle && !titlebar) || !element.offsetParent) return;
         const edge = handle ? [...handle.classList].find(name => name.startsWith('edge-'))?.slice(5) : '';
-        const limits = area();
+        const limits = desktopFrame.workArea(canvas);
         const range = reachable(limits, element.querySelector('.desktop-window-titlebar').offsetHeight);
+        const animations = element.getAnimations().filter(animation => animation.playState === 'running');
+        for (const animation of animations) animation.pause();
+        const rendered = element.getBoundingClientRect();
+        const layer = element.offsetParent.getBoundingClientRect();
         const start = {
-            x: element.offsetLeft, y: element.offsetTop,
-            width: element.offsetWidth, height: element.offsetHeight,
+            x: Math.round(rendered.left - layer.left), y: Math.round(rendered.top - layer.top),
+            width: Math.round(rendered.width), height: Math.round(rendered.height),
         };
         const capture = handle ? element : titlebar;
         gesture = {
-            pointer: event.pointerId, element, capture, edge, limits, range, start, preferred: preferredBounds(item, limits),
+            pointer: event.pointerId, element, capture, edge, limits, range, start, animations,
             x: event.clientX, y: event.clientY, app: item.class, item, original: JSON.stringify(item.bounds),
         };
         // Capture before a fast move reaches the underlying file or desktop content.
@@ -235,16 +248,21 @@ const desktopGeometry = (() => {
         }
         const { start, edge, limits, range } = drag;
         if (!edge) {
-            drag.current = fit({ ...start, x: start.x + dx, y: start.y + dy }, range);
+            const widthToKeep = Math.min(range.width, start.width);
+            drag.current = {
+                ...start,
+                x: moveWithin(start.x, dx, widthToKeep - start.width, range.right - widthToKeep),
+                y: moveWithin(start.y, dy, range.top, range.bottom),
+            };
         } else {
-            const minWidth = Math.min(minimumWidth, limits.width);
-            const minHeight = Math.min(minimumHeight, limits.height);
+            const minWidth = Math.min(minimumWidth, limits.width, start.width);
+            const minHeight = Math.min(minimumHeight, limits.height, start.height);
             const right = start.x + start.width;
             const bottom = start.y + start.height;
-            const left = edge.includes('w') ? clamp(start.x + dx, right - limits.width, Math.min(right - minWidth, limits.width - range.width)) : start.x;
-            const top = edge.includes('n') ? clamp(start.y + dy, Math.max(bottom - limits.height, range.top), Math.min(bottom - minHeight, range.bottom)) : start.y;
-            const newRight = edge.includes('e') ? clamp(right + dx, Math.max(left + minWidth, range.width), left + limits.width) : right;
-            const newBottom = edge.includes('s') ? clamp(bottom + dy, top + minHeight, top + limits.height) : bottom;
+            const left = edge.includes('w') ? moveWithin(start.x, dx, right - limits.width, Math.min(right - minWidth, limits.width - range.width)) : start.x;
+            const top = edge.includes('n') ? moveWithin(start.y, dy, Math.max(bottom - limits.height, range.top), Math.min(bottom - minHeight, range.bottom)) : start.y;
+            const newRight = edge.includes('e') ? moveWithin(right, dx, Math.max(left + minWidth, range.width), left + limits.width) : right;
+            const newBottom = edge.includes('s') ? moveWithin(bottom, dy, top + minHeight, top + limits.height) : bottom;
             drag.current = { x: left, y: top, width: newRight - left, height: newBottom - top };
         }
         draw(drag.element, drag.current, limits);

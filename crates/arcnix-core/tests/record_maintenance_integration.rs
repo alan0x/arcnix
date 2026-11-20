@@ -151,8 +151,8 @@ for number,name in enumerate({configs}):
         }
         let source = format!(
             "import json,sys\nns={{'__name__':'native_storage_probe'}}\nexec(compile({},'<config-reader>','exec'),ns)\nexec(compile({},'<storage-reader>','exec'),ns)\n{hook}try:ns['maintenance_main'](json.loads(sys.argv[1]))\nexcept BaseException as error:\n print(str(error),file=sys.stderr);sys.exit(2)",
-            serde_json::to_string(include_str!("../src/configuration_records.py"))?,
-            serde_json::to_string(include_str!("../src/record_maintenance.py"))?
+            serde_json::to_string(include_str!("../src/automation/configuration_records.py"))?,
+            serde_json::to_string(include_str!("../src/automation/record_maintenance.py"))?
         );
         let (action, offset, ids) = match &request.action {
             Action::List(offset) => ("list", *offset, vec![]),
@@ -314,11 +314,11 @@ print(hashlib.sha256(json.dumps(rows).encode()).hexdigest())
         for maintenance in [false, true] {
             let source = format!(
                 "import json,signal,sys,time\nns={{'__name__':'deadline_probe'}}\nexec(compile({},'<config-reader>','exec'),ns)\n{}\nreal_alarm=signal.alarm\nsignal.alarm=lambda _seconds:real_alarm(1)\nns['service']=lambda _id:(time.sleep(3) or 'not-found')\nns['maint_task_service']=lambda _id:(time.sleep(3) or ('not-found',None))\ntry:{}\nexcept BaseException as error:\n print(str(error),file=sys.stderr);sys.exit(2)",
-                serde_json::to_string(include_str!("../src/configuration_records.py"))?,
+                serde_json::to_string(include_str!("../src/automation/configuration_records.py"))?,
                 if maintenance {
                     format!(
                         "exec(compile({},'<storage-reader>','exec'),ns)",
-                        serde_json::to_string(include_str!("../src/record_maintenance.py"))?
+                        serde_json::to_string(include_str!("../src/automation/record_maintenance.py"))?
                     )
                 } else {
                     String::new()

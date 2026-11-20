@@ -10,6 +10,7 @@ def main():
         (peer.root/'release-edit.txt').write_bytes(b'original\r\n')
         config=peer.config([peer.profile('Release fixture')],out,updates=dict(automatic_checks=False,automatic_install=False))
         config['config']['settings']['theme']='Dark'
+        config['config']['settings']['file_associations']={'txt': {'default': 'code'}}
         with Desktop(out,config,binary=binary,extra_env={'ARCNIX_TEST_UPDATE_URL':'not-a-valid-url'}) as app:
             app.settings('Updates'); panel=app.page.locator('.update-panel')
             expect(panel).not_to_contain_text('Development build')

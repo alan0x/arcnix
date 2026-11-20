@@ -10,6 +10,7 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
     use anyhow::{Result, ensure};
     use arcnix_core::Theme;
     use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT};
+    use arcnix_core::desktop_theme::{Preset, Selection};
     use arcnix_core::docker::{self, Operation};
     use arcnix_core::remote_tasks::quote as q;
     use arcnix_core::server_apps::{DesktopApp, DesktopPreferences, DesktopWindow, FolderColor};
@@ -256,6 +257,53 @@ fn remote_preferences_are_atomic_private_and_docker_uses_bounded_local_commands(
                 && decode_desktop(&saved)? == files_changed,
             "Single-file saves changed the generation, touched the browser, or lost an edit"
         );
+
+        let state = format!("{home}/.arcnix");
+        let previous_link = format!("{state}/desktop.saved");
+        let sparse = "desktop-revisions/generation.Legacy01";
+        let sparse_system = r#"{"theme":"Dark"}"#;
+        run(&format!(
+            "umask 077\nmkdir -- {0}/{1}\nprintf '%s' {2} > {0}/{1}/system.json\nmv -- {3} {4}\nln -s -- {1} {3}",
+            q(&state),
+            q(sparse),
+            q(sparse_system),
+            q(&config),
+            q(&previous_link),
+        ))?;
+        let read_snapshot = || -> Result<Snapshot> {
+            let output = run(&invoke(&read))?;
+            Ok(Snapshot(Some(
+                output.strip_prefix("F\n").unwrap().as_bytes().to_vec(),
+            )))
+        };
+        let before = read_snapshot()?;
+        let mut edited = decode_desktop(&before)?;
+        ensure!(
+            edited
+                == DesktopPreferences {
+                    theme: Theme::Dark,
+                    ..Default::default()
+                },
+            "A sparse generation did not keep its existing values and supply defaults"
+        );
+        run(&format!(
+            "test ! -e {0}/apps && test ! -e {0}/preferences",
+            q(&config)
+        ))?;
+        edited.appearance.themes.selection = Selection::Preset(Preset::Aurora);
+        let save_theme = commit(&before, &edited)?;
+        ensure!(run(&save_theme)? == "OK\n" && run(&save_theme)? == "OK\n");
+        ensure!(
+            decode_desktop(&read_snapshot()?)? == edited
+                && active_generation()? == format!("{sparse}\n")
+                && run(&format!("cat {}", q(&system)))? == sparse_system,
+            "Saving a theme did not preserve the sparse generation and its existing file"
+        );
+        run(&format!(
+            "test ! -e {0}/apps && test -f {0}/preferences/desktop.json",
+            q(&config)
+        ))?;
+        run(&format!("mv -fT -- {} {}", q(&previous_link), q(&config)))?;
 
         run(&format!(
             "mv {} {}\nprintf keep > {}\nln -s {} {}",

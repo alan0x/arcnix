@@ -734,6 +734,7 @@ SSH 保活	SSH keepalive
 使用应用的默认连接设置	Use application connection defaults
 编辑文件	Edit file
 编辑远程文件	Edit remote file
+文本编辑器	Text Editor
 文件内容	File contents
 正在读取远程文件…	Loading remote file…
 编辑后的文件超过 1 MiB	Edited file exceeds 1 MiB
@@ -2453,12 +2454,11 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 壁纸	Wallpaper
 程序坞	Dock
 显示服务器信息	Show server info
-Arcnix 快捷方式	Arcnix shortcuts
 重置桌面图标	Reset desktop icons
 隐藏桌面图标	Hide desktop shortcut
 保留在程序坞	Keep in Dock
 从程序坞移除	Remove from Dock
-已固定的应用	Pinned apps
+固定的快捷方式	Pinned shortcuts
 显示窗口	Show window
 关闭窗口	Close window
 用作壁纸	Use as wallpaper
@@ -2580,6 +2580,7 @@ Docker 显示发布和暴露的端口。使用主机网络的容器直接使用�
 网页响应超时	The website took too long to respond
 服务器无法访问此网页，或 SSH 转发被拒绝	The server could not reach this page or SSH forwarding was refused
 等待同步	Pending sync
+正在保存…	Saving…
 桌面设置同步冲突	Desktop sync conflict
 桌面设置同步冲突，请打开设置处理。	Desktop sync conflict. Open Settings to resolve.
 保留本地改动	Keep local changes
@@ -2628,6 +2629,10 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 音量	Volume
 播放器	Player
 打开视频	Open video
+所有受支持的视频	All supported videos
+自定义扩展名	Custom extensions
+可输入 .video、.backup 等扩展名	Enter extensions such as .video, .backup
+切换文件选择侧栏	Toggle file picker sidebar
 上一级文件夹	Parent folder
 此文件夹没有可播放的视频。	No playable videos in this folder.
 正在打开视频…	Opening video…
@@ -2701,3 +2706,78 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 HTML 预览 · 脚本和外部资源已停用	HTML preview · Scripts and external resources are disabled
 无法播放此视频，请检查连接和视频编码。	Could not play this video. Check the connection and video codec.
 Player 无法识别受支持的视频格式	Player could not identify a supported video format
+图标排列	Icon arrangement
+起始方向	Starting edge
+竖向排列	Vertical
+横向排列	Horizontal
+从左到右	Left to right
+从右到左	Right to left
+桌面图标	Desktop icons
+桌面图标大小	Desktop icon size
+显示的图标	Visible icons
+可从文件拖到桌面。Ctrl 复制，Shift 移动，Alt 或 Ctrl+Shift 创建快捷方式。	Drag from Files. Ctrl copies, Shift moves, and Alt or Ctrl+Shift creates a shortcut.
+状态栏	Status bar
+主题	Themes
+自定义	Customize
+创建主题	Create theme
+当前主题	Current theme
+配色方案	Color scheme
+壁纸选项	Wallpaper options
+请输入 #RRGGBB 格式的强调色。	Enter an accent color in #RRGGBB format.
+自定义主题	Customize theme
+编辑样式	Edit style
+公共设置	Shared
+浅色样式	Light style
+深色样式	Dark style
+明暗模式	Color mode
+背景图片	Background image
+颜色	Colors
+请输入 #RRGGBB 格式的颜色。其他颜色可由主色自动生成。	Enter colors as #RRGGBB. The main color generates the automatic palette.
+主色	Main color
+背景色	Background color
+面板色	Panel color
+输入框色	Input color
+边框色	Border color
+文字色	Text color
+次要文字色	Secondary text color
+强调色	Accent color
+错误色	Error color
+继承	Inherit
+继承{}	Inherit {}
+撤销编辑	Undo edit
+取消预览	Cancel preview
+应用主题	Apply theme
+主题名称	Theme name
+另存主题	Save as theme
+请输入主题名称。	Enter a theme name.
+该主题名称已被使用。	This theme name is already in use.
+已达到主题保存数量上限。	The saved theme limit has been reached.
+壁纸预览	Wallpaper preview
+区域与语言	Region & Language
+日期与时间	Date & Time
+界面语言	Interface language
+桌面语言	Desktop language
+仅影响当前 Arcnix 桌面的界面语言。服务器的系统语言独立管理。	Changes the display language of this Arcnix desktop only. The server manages its system language separately.
+服务器未安装选中的语言环境	The selected language is not installed on the server
+服务器的 LC_ALL 覆盖了默认语言。请移除该覆盖后再修改。	The server locale has an LC_ALL override. Remove it before changing the default language.
+无法读取服务器语言：{}	Cannot read the server locale: {}
+无法保存服务器语言：{}	Cannot save the server locale: {}
+数字和文件大小	Numbers and file sizes
+Dock 时钟	Dock clock
+服务器时钟不可用	Server clock unavailable
+当前日期和时间	Current date and time
+时区	Time zone
+选择所在时区	Select time zone
+搜索城市和时区	Search cities and time zones
+没有匹配的时区	No matching time zones
+服务器时区 · {}	Server time zone · {}
+无法读取服务器时区：{}	Cannot read the server time zone: {}
+无法保存服务器时区：{}	Cannot save the server time zone: {}
+预览：{}	Preview: {}
+时间格式	Time format
+上午／下午	AM / PM
+24 小时制	24-hour
+星期	Weekday
+日期	Date
+秒数	Seconds
+在应用中心查看已安装的服务器软件包并审查升级。	Review upgrades for installed server packages in App Center.

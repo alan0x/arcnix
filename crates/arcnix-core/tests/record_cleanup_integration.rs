@@ -525,9 +525,9 @@ for n,name in enumerate({configs}):
         );
         let source = format!(
             "{}\n{}\n{}",
-            include_str!("../src/configuration_records.py"),
-            include_str!("../src/record_maintenance.py"),
-            include_str!("../src/cleanup_records.py")
+            include_str!("../src/automation/configuration_records.py"),
+            include_str!("../src/automation/record_maintenance.py"),
+            include_str!("../src/maintenance/cleanup_records.py")
         );
         let deadline = format!(
             "import signal,sys,time\nns={{'__name__':'cleanup_deadline_probe'}}\nexec(compile({},'<reader>','exec'),ns)\nreal=signal.alarm;signal.alarm=lambda _seconds:real(1)\nns['service']=lambda _id:(time.sleep(3) or 'not-found')\ntry:ns['cleanup_records_main']('list','0')\nexcept BaseException as error:print(str(error),file=sys.stderr);sys.exit(2)",

@@ -78,19 +78,21 @@ def main():
             def bounds():
                 return p.locator('.desktop-window.active').bounding_box()
 
-            def drag(locator, dx, dy, cancel=False):
+            def drag(locator, dx, dy, cancel=False, expected=None):
                 box = locator.bounding_box()
                 x, y = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
                 p.mouse.move(x, y)
                 hit = p.evaluate('([x,y])=>document.elementFromPoint(x,y)?.className',[x,y])
                 if 'edge-' in locator.evaluate('node=>node.className'):
                     assert 'desktop-resize-handle' in hit, (box,hit,bounds())
-                drag_from(x, y, dx, dy, cancel)
+                drag_from(x, y, dx, dy, cancel, expected)
 
-            def drag_from(x, y, dx, dy, cancel=False):
+            def drag_from(x, y, dx, dy, cancel=False, expected=None):
                 p.mouse.move(x, y)
                 p.mouse.down()
                 p.mouse.move(x + dx, y + dy, steps=12)
+                if expected is not None:
+                    assert same(bounds(), expected), (bounds(), expected)
                 if cancel:
                     p.keyboard.press('Escape')
                 p.mouse.up()
@@ -103,20 +105,14 @@ def main():
                 dock = p.locator('.desktop-dock-zone').bounding_box()
                 return dict(canvas, height=dock['y'] - canvas['y'] - 8)
 
-            def projected(window, reference):
-                area = work_area()
+            def projected(window, reference, area=None):
+                area = area or work_area()
                 result = {}
-                title_height = p.locator('.desktop-window.active .desktop-window-titlebar').bounding_box()['height']
-                horizontal = min(64, window['width'], area['width'])
-                vertical = min(18, title_height, area['height'])
-                for axis, size, lower, upper in [
-                    ('x', 'width', horizontal - min(window['width'], area['width']), area['width'] - horizontal),
-                    ('y', 'height', vertical - title_height, area['height'] - vertical),
-                ]:
-                    center_fraction = (window[axis] - reference[axis] + window[size] / 2) / reference[size]
+                for axis, size in [('x', 'width'), ('y', 'height')]:
+                    center = window[axis] - reference[axis] + window[size] / 2
+                    target = center / reference[size] * area[size] - window[size] / 2
                     result[size] = min(window[size], area[size])
-                    offset = center_fraction * area[size] - result[size] / 2
-                    result[axis] = area[axis] + min(max(lower, offset), upper)
+                    result[axis] = area[axis] + min(max(0, target), area[size] - result[size])
                 return same(bounds(), result)
 
             app.connect()
@@ -177,6 +173,38 @@ def main():
             eventually(lambda: prefs()['windows'].get('monitor', {}).get('bounds', {}).get('height') == 505)
             p.set_viewport_size(dict(width=1440, height=980))
             eventually(lambda: projected(after_drag, enlarged_area))
+
+            p.set_viewport_size(dict(width=710, height=820))
+            eventually(lambda: bounds()['width'] < 480 and projected(after_drag, enlarged_area))
+            narrow = bounds()
+            narrow_area = work_area()
+            monitor_title = p.locator('.desktop-window.active .desktop-window-mark')
+            overhang = dict(narrow, x=narrow['x'] + 21, y=narrow['y'] + 11)
+            drag(monitor_title, 21, 11, expected=overhang)
+            eventually(lambda: same(bounds(), overhang))
+
+            def narrow_snapshot():
+                saved = prefs()['windows']['monitor']['bounds']
+                reference = saved['reference']
+                return (same(saved, dict(overhang, x=overhang['x'] - narrow_area['x'],
+                                         y=overhang['y'] - narrow_area['y']))
+                        and abs(reference['width'] - narrow_area['width']) <= 1
+                        and abs(reference['height'] - narrow_area['height']) <= 1)
+
+            eventually(narrow_snapshot)
+            p.set_viewport_size(dict(width=720, height=820))
+            eventually(lambda: abs(bounds()['x'] - overhang['x']) <= 1
+                       and abs(bounds()['width'] - overhang['width']) <= 1
+                       and 0 < bounds()['x'] + bounds()['width'] - work_area()['x'] - work_area()['width'] < 21)
+            before_resize = bounds()
+            slightly_wider = dict(before_resize, x=before_resize['x'] - 6, width=before_resize['width'] + 6)
+            drag(p.locator('.desktop-window.active .edge-w'), -6, 0, expected=slightly_wider)
+            eventually(lambda: same(bounds(), slightly_wider))
+            slightly_lower = dict(slightly_wider, y=slightly_wider['y'] + 6)
+            drag(monitor_title, 0, 6, expected=slightly_lower)
+            eventually(lambda: same(bounds(), slightly_lower))
+
+            p.set_viewport_size(dict(width=1440, height=980))
             app.application('Files')
             settled()
             expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
@@ -272,7 +300,7 @@ def main():
             expect(pane).to_be_hidden()
             expect(tags.locator('.files-tag-item')).to_have_count(1)
             tags.get_by_role('button', name=file_path, exact=True).click()
-            expect(app.code().locator('.view-lines')).to_contain_text('desktop file')
+            expect(p.locator('.app-editor.active .remote-editor-content')).to_have_value('desktop file')
             p.locator('.desktop-window.active .window-close').click()
             app.application('Files')
             sidebar.get_by_role('button', name='All Tags', exact=True).click()
@@ -350,6 +378,20 @@ def main():
             drag_from(top_left['x'] + top_left['width'] - 13, area['y'] + 9,
                       original['x'] - top_left['x'], original['y'] - top_left['y'])
             eventually(lambda: same(bounds(), original))
+            partly_hidden = dict(original, x=area['x'] - 40, y=area['y'] - 12)
+            drag_from(original['x'] + 24, original['y'] + 20,
+                      partly_hidden['x'] - original['x'], partly_hidden['y'] - original['y'])
+            eventually(lambda: same(bounds(), partly_hidden))
+            p.set_viewport_size(dict(width=1460, height=986))
+            eventually(lambda: same(bounds(), dict(partly_hidden, x=area['x'] - 20, y=area['y'] - 6)))
+            p.set_viewport_size(dict(width=1800, height=1200))
+            eventually(lambda: projected(partly_hidden, area))
+            assert bounds()['x'] > work_area()['x'] + 2 and bounds()['y'] > work_area()['y'] + 2
+            p.set_viewport_size(dict(width=1440, height=980))
+            eventually(lambda: same(bounds(), partly_hidden))
+            drag_from(area['x'] + 24, area['y'] + 12,
+                      original['x'] - partly_hidden['x'], original['y'] - partly_hidden['y'])
+            eventually(lambda: same(bounds(), original))
             max_x = area['x'] + area['width'] - 64
             max_y = area['y'] + area['height'] - 18
             drag_from(original['x'] + 13, original['y'] + 20,
@@ -362,6 +404,117 @@ def main():
             drag_from(bottom_right['x'] + 13, bottom_right['y'] + 11,
                       original['x'] - bottom_right['x'], original['y'] - bottom_right['y'])
             eventually(lambda: same(bounds(), original))
+
+            app.application('Settings')
+            settled()
+            settings = p.locator('.desktop-window.app-settings.active')
+            settings.get_by_role('button', name='Desktop', exact=True).click()
+            initial = bounds()
+            area = work_area()
+            right_margin = area['x'] + area['width'] - initial['x'] - initial['width']
+            drag(settings.locator('.desktop-window-mark'), right_margin - 8, 0)
+            preferred = bounds()
+            saved_bounds = eventually(lambda: prefs().get('windows', {}).get('settings', {}).get('bounds'))
+
+            def settings_fit():
+                window = bounds()
+                area = work_area()
+                return (
+                    window['x'] >= area['x'] - 1 and window['y'] >= area['y'] - 1
+                    and window['x'] + window['width'] <= area['x'] + area['width'] + 1
+                    and window['y'] + window['height'] <= area['y'] + area['height'] + 1
+                )
+
+            for width, height in [(1240, 980), (860, 980), (790, 520)]:
+                p.set_viewport_size(dict(width=width, height=height))
+                eventually(settings_fit)
+                if height == 980:
+                    assert abs(bounds()['height'] - preferred['height']) <= 2
+                actions = settings.locator('.desktop-window-actions button')
+                expect(actions).to_have_count(3)
+                assert actions.evaluate_all('''buttons => buttons.every(button => {
+                    const box = button.getBoundingClientRect();
+                    return button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+                })''')
+                pane = settings.locator('.desktop-preferences')
+                assert pane.evaluate('el => el.clientHeight > 0 && el.scrollWidth <= el.clientWidth + 1')
+            expect(settings.locator('.desktop-settings-page')).to_have_css('flex-direction', 'column')
+            settings.get_by_role('button', name='About', exact=True).click()
+            expect(settings.locator('.about-details')).to_be_visible()
+            p.set_viewport_size(dict(width=1440, height=980))
+            eventually(lambda: same(bounds(), preferred))
+            assert prefs()['windows']['settings']['bounds'] == saved_bounds
+
+            settings.get_by_role('button', name='Dock', exact=True).click()
+            settings.get_by_role('button', name='Right side', exact=True).click()
+            settings.get_by_role('button', name='Panel mode', exact=True).click()
+            right_dock = p.locator('.desktop-dock-zone.dock-right.dock-panel-zone')
+            expect(right_dock).to_be_visible()
+            settings.locator('.window-close').click()
+            p.locator('.desktop-dock-home').click()
+            p.locator('.desktop-shortcuts').get_by_role('button', name='Player', exact=True).click()
+            settled()
+            player = p.locator('.desktop-window.app-player.active')
+
+            def player_area():
+                canvas = p.locator('.desktop-canvas').bounding_box()
+                dock = right_dock.bounding_box()
+                return dict(canvas, width=dock['x'] - canvas['x'] - 8)
+
+            initial = player.bounding_box()
+            reference = player_area()
+            clipped = dict(initial, x=reference['x'] + reference['width'] - initial['width'] + 90,
+                           y=reference['y'] + reference['height'] - initial['height'] + 65)
+            drag(player.locator('.desktop-window-mark'), clipped['x'] - initial['x'], clipped['y'] - initial['y'],
+                 expected=clipped)
+            eventually(lambda: same(bounds(), clipped))
+            player_bounds = eventually(lambda: prefs().get('windows', {}).get('player', {}).get('bounds'))
+            assert abs(player_bounds['reference']['width'] - reference['width']) <= 1
+            assert abs(player_bounds['reference']['height'] - reference['height']) <= 1
+            # The Player retains its full bounds for restoration. Its clipped
+            # portion must stop receiving pointer hits before the Dock.
+            edge_x = reference['x'] + reference['width']
+            assert p.evaluate('''([x, y]) => {
+                const app = point => document.elementFromPoint(point, y)?.closest('.app-player');
+                return !!app(x - 4) && !app(x + 4);
+            }''', [edge_x, clipped['y'] + 80])
+
+            p.set_viewport_size(dict(width=1485, height=1015))
+            eventually(lambda: same(bounds(), clipped) and player_area()['width'] > reference['width'] + 30)
+            expanded = player_area()
+            assert 0 < clipped['x'] + clipped['width'] - expanded['x'] - expanded['width'] < 60
+            assert 0 < clipped['y'] + clipped['height'] - expanded['y'] - expanded['height'] < 45
+            p.set_viewport_size(dict(width=1530, height=1045))
+            eventually(lambda: same(bounds(), clipped)
+                       and abs(bounds()['x'] + bounds()['width'] - player_area()['x'] - player_area()['width']) <= 2
+                       and abs(bounds()['y'] + bounds()['height'] - player_area()['y'] - player_area()['height']) <= 2)
+            p.set_viewport_size(dict(width=1590, height=1150))
+            eventually(lambda: projected(clipped, reference, player_area()))
+            restored = bounds()
+            expanded = player_area()
+            assert restored['x'] >= clipped['x'] + 2 and restored['y'] >= clipped['y'] + 2
+            assert restored['x'] + restored['width'] <= expanded['x'] + expanded['width'] + 1
+            assert restored['y'] + restored['height'] <= expanded['y'] + expanded['height'] + 1
+            p.set_viewport_size(dict(width=1840, height=1280))
+            eventually(lambda: projected(clipped, reference, player_area()))
+            assert bounds()['x'] > restored['x'] + 2 and bounds()['y'] > restored['y'] + 2
+
+            p.set_viewport_size(dict(width=1370, height=920))
+            eventually(lambda: 0 < bounds()['x'] - reference['x'] < clipped['x'] - reference['x'] - 2
+                       and 0 < bounds()['y'] - reference['y'] < clipped['y'] - reference['y'] - 2
+                       and abs(bounds()['width'] - clipped['width']) <= 1
+                       and abs(bounds()['height'] - clipped['height']) <= 1)
+            flush_width = round(1440 - (reference['width'] - clipped['width']))
+            p.set_viewport_size(dict(width=flush_width, height=980))
+            eventually(lambda: abs(bounds()['x'] - player_area()['x']) <= 3
+                       and abs(bounds()['width'] - clipped['width']) <= 2
+                       and abs(bounds()['height'] - clipped['height']) <= 1)
+            p.set_viewport_size(dict(width=990, height=600))
+            eventually(lambda: same(bounds(), player_area()))
+            p.set_viewport_size(dict(width=1440, height=980))
+            eventually(lambda: same(bounds(), clipped))
+            assert prefs()['windows']['player']['bounds'] == player_bounds
+            app.application('Files')
             app.settings('General')
             p.get_by_role('button', name='简体中文', exact=True).click()
             app.servers()
@@ -370,7 +523,11 @@ def main():
     print(json.dumps(dict(output=str(out), checks=[
         'Eight resize handles, captured titlebar movement and Escape cancellation',
         'All four desktop edges clip floating windows while a titlebar grip stays reachable, including after restart',
+        'Growth reveals top and left overhangs first, then follows the saved relative center on both axes',
         'Independent window geometry across apps, reopen, resize, maximize and client restart',
+        'A drag in a narrow Desktop saves the full rectangle and both reference dimensions, and a partially visible window moves and resizes by the pointer delta',
+        'A right-aligned Settings window stays inside the desktop on shrink, reflows, and restores its saved placement',
+        'Player reveals its right and bottom overhang, then follows its relative center inside the side Dock; shrink eventually fits flush',
         'Native monitor fullscreen with Escape restoring the original OS window',
         'Breadcrumb double-click editing and single-click navigation',
         'File and folder favorites, drag ordering, tag filters and sidebar persistence over SSH',

@@ -161,6 +161,8 @@ def main():
         expect(exit_fullscreen).to_have_count(0)
         expect(page.get_by_text('Saved on server', exact=True)).to_have_count(0)
         focus = record('Move focus forward', 'Control+Alt+j')
+        shortcut_state = page.locator('.desktop-shortcut-state')
+        eventually(lambda: json.loads(shortcut_state.text_content())['bindings']['focus_next'] == 'Ctrl+Alt+J')
         expect(focus).to_be_focused()
         page.keyboard.press('Tab')
         expect(focus).to_be_focused()

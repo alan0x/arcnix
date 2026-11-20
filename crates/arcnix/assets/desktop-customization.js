@@ -1,8 +1,32 @@
 (() => {
     const dragType = 'application/x-arcnix-desktop-icon';
     let drag, marker, focusedMenu, dockMenuAnchor;
-    let clock, clockLocale, clockCompact, clockTimer, clockSample, clockAnchor;
-    let sizeControl;
+    let clockViews = [];
+    let clockOptions, clockTimer, clockSample, clockAnchor;
+    let timeZonePicker;
+    let themeSource, themeTokens;
+    const sizeControls = new Map();
+    const themed = new WeakMap();
+
+    function updateTheme() {
+        const data = document.querySelector('.server-desktop:not(.hidden) .desktop-theme-data');
+        if (!data?.textContent) return;
+        const source = data.textContent;
+        if (source !== themeSource) {
+            themeTokens = JSON.parse(source);
+            themeSource = source;
+        }
+        const {colors, icons} = themeTokens;
+        const roots = [data.closest('.server-desktop'), ...document.querySelectorAll('.desktop-modal-backdrop')];
+        for (const root of roots) {
+            const old = themed.get(root);
+            if (old?.source === source) continue;
+            for (const key of old?.keys || []) root.style.removeProperty(key);
+            for (const [key, value] of colors) root.style.setProperty(key, value);
+            root.dataset.desktopIconStyle = icons;
+            themed.set(root, {source, keys: colors.map(([key]) => key)});
+        }
+    }
 
     function canvasFor(target) {
         if (!(target instanceof Element) || target.closest('[inert],[hidden],.hidden')) return null;
@@ -54,9 +78,12 @@
         const slot = event.target.closest?.('.desktop-icon-slot');
         if (canvas !== drag.canvas || epoch(canvas) !== drag.epoch || !slot || slot === drag.slot || zone(slot) !== drag.zone) return null;
         const rect = slot.getBoundingClientRect();
-        const after = drag.zone === 'desktop' || slot.closest('.dock-side-zone')
+        const row = slot.closest('.icons-by-row');
+        const after = (drag.zone === 'desktop' && !row) || slot.closest('.dock-side-zone')
             ? event.clientY >= rect.top + rect.height / 2
-            : event.clientX >= rect.left + rect.width / 2;
+            : row?.classList.contains('icons-from-right')
+                ? event.clientX <= rect.left + rect.width / 2
+                : event.clientX >= rect.left + rect.width / 2;
         return {slot, after};
     }
 
@@ -98,7 +125,7 @@
         const grid = event.target.closest?.('.desktop-shortcuts');
         if (!grid || event.ctrlKey || event.deltaX || !event.deltaY || grid.scrollWidth <= grid.clientWidth) return;
         const scale = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? grid.clientWidth : 1;
-        grid.scrollLeft += event.deltaY * scale;
+        grid.scrollLeft += event.deltaY * scale * (grid.classList.contains('icons-from-right') ? -1 : 1);
         event.preventDefault();
     }, {passive: false});
 
@@ -156,67 +183,181 @@
     }, true);
 
     function updateClock() {
-        const panel = document.querySelector('.desktop-panel-clock');
-        const current = canvasFor(panel) && !document.hidden ? panel : null;
-        const locale = current?.querySelector('.clock-zh') ? 'zh-CN' : 'en-US';
-        const compact = !!current?.closest('.dock-side-zone');
+        const views = document.hidden ? [] : [...document.querySelectorAll('.desktop-panel-clock')]
+            .filter(canvasFor)
+            .map(node => ({
+                node, compact: !!node.closest('.dock-side-zone'), label: node.getAttribute('aria-label'),
+                preview: node.classList.contains('desktop-time-preview'),
+            }));
+        const options = document.querySelector('.desktop-clock-options')?.textContent;
         const sample = document.querySelector('.desktop-clock-sample')?.textContent;
         const changed = sample !== clockSample;
         if (changed) {
             clockSample = sample;
             const [, seconds, offset] = (sample || '').split(',').map(Number);
-            const wallTime = seconds * 1000 + offset * 60_000;
-            clockAnchor = Number.isFinite(new Date(wallTime).getTime())
-                ? {wallTime, offset, received: performance.now()}
+            const unixTime = seconds * 1000;
+            clockAnchor = Number.isFinite(new Date(unixTime).getTime()) && Number.isFinite(offset)
+                ? {unixTime, offset, received: performance.now()}
                 : null;
         }
-        if (!changed && current === clock && locale === clockLocale && compact === clockCompact) return;
-        clock = current;
-        clockLocale = locale;
-        clockCompact = compact;
+        if (!changed && options === clockOptions && views.length === clockViews.length
+            && views.every((view, i) => view.node === clockViews[i].node
+                && view.compact === clockViews[i].compact && view.label === clockViews[i].label)) return;
+
+        clockOptions = options;
+        clockViews = views;
         clearTimeout(clockTimer);
-        if (!clock) return;
-
-        const time = clock.querySelector('.desktop-panel-time');
-        const date = clock.querySelector('.desktop-panel-date');
-        const tooltip = clock.querySelector('.desktop-clock-tooltip');
-        if (!time || !date || !tooltip) {
-            clock = null;
-            return;
-        }
+        if (!views.length) return;
         if (!clockAnchor) {
-            time.textContent = '—';
-            date.textContent = '';
-            tooltip.textContent = '';
-            clock.removeAttribute('title');
+            for (const {node} of views) {
+                node.querySelector('.desktop-panel-time').textContent = '—';
+                node.querySelector('.desktop-panel-weekday').textContent = '';
+                node.querySelector('.desktop-panel-date').textContent = '';
+                node.querySelector('.desktop-clock-tooltip').textContent = '';
+                node.removeAttribute('title');
+            }
             return;
         }
 
-        const {wallTime, offset, received} = clockAnchor;
+        const [locale, hourCycle, showWeekday, showDate, showSeconds] =
+            (options || 'en-US,h12,false,true,true').split(',');
+        const {unixTime, offset, received} = clockAnchor;
+        const wallTime = unixTime + offset * 60_000;
         const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
         const minutes = String(Math.abs(offset) % 60).padStart(2, '0');
         const zone = `UTC${offset < 0 ? '-' : '+'}${hours}:${minutes}`;
-        if (compact) clock.removeAttribute('title');
-        else clock.title = `${clock.getAttribute('aria-label')} (${zone})`;
-        // The sample is already shifted to the server's civil time.
-        const fullTime = new Intl.DateTimeFormat(locale, {timeZone: 'UTC', hour: 'numeric', minute: '2-digit', second: '2-digit'});
-        const fullDate = new Intl.DateTimeFormat(locale, {timeZone: 'UTC', year: 'numeric', month: 'numeric', day: 'numeric'});
-        const timeFormat = compact
-            ? new Intl.DateTimeFormat(locale, {timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'})
-            : fullTime;
-        const dateFormat = compact
-            ? new Intl.DateTimeFormat(locale, {timeZone: 'UTC', month: '2-digit', day: '2-digit'})
-            : fullDate;
+        const formatter = fields => new Intl.DateTimeFormat(locale, {timeZone: 'UTC', ...fields});
+        const timeFields = {hour: 'numeric', minute: '2-digit', hourCycle};
+        const fullTime = formatter({...timeFields, second: '2-digit'});
+        const fullDate = formatter({year: 'numeric', month: 'numeric', day: 'numeric'});
+        const dockTime = showSeconds === 'true' ? fullTime : formatter(timeFields);
+        const compactTime = formatter({...timeFields, hour: '2-digit',
+            second: showSeconds === 'true' ? '2-digit' : undefined});
+        const compactDate = formatter({month: '2-digit', day: '2-digit'});
+        const weekday = formatter({weekday: 'short'});
+        const displays = views.map(({node, compact, label, preview}) => {
+            if (compact) node.removeAttribute('title');
+            else node.title = `${label} (${zone})`;
+            return {
+                compact,
+                time: node.querySelector('.desktop-panel-time'),
+                weekday: node.querySelector('.desktop-panel-weekday'),
+                date: node.querySelector('.desktop-panel-date'),
+                tooltip: node.querySelector('.desktop-clock-tooltip'),
+                timeFormatter: preview ? fullTime : compact ? compactTime : dockTime,
+                dateFormatter: preview || showDate === 'true' ? (compact ? compactDate : fullDate) : null,
+                showWeekday: !preview && showWeekday === 'true',
+            };
+        });
         function tick() {
             const now = new Date(wallTime + (performance.now() - received));
-            const serverDate = dateFormat.format(now);
-            const serverTime = timeFormat.format(now);
-            if (time.textContent !== serverTime) time.textContent = serverTime;
-            if (date.textContent !== serverDate) date.textContent = serverDate;
-            if (compact) tooltip.textContent = `${fullTime.format(now)} · ${fullDate.format(now)} (${zone})`;
+            for (const display of displays) {
+                setClockText(display.time, display.timeFormatter.format(now));
+                setClockText(display.weekday, display.showWeekday ? weekday.format(now) : '');
+                setClockText(display.date, display.dateFormatter?.format(now) ?? '');
+                if (display.compact) {
+                    setClockText(display.tooltip, `${fullTime.format(now)} · ${fullDate.format(now)} (${zone})`);
+                }
+            }
             clockTimer = setTimeout(tick, 1000 - now.getUTCMilliseconds());
         }
         tick();
+    }
+
+    function setClockText(node, value) {
+        if (node.textContent !== value) node.textContent = value;
+    }
+
+    function mountTimeZonePicker(dialog, search, list) {
+        const locale = clockOptions?.split(',')[0] || 'en-US';
+        const countries = typeof Intl.DisplayNames === 'function'
+            ? new Intl.DisplayNames([locale], {type: 'region'}) : null;
+        const normalize = value => value.toLowerCase().normalize('NFD')
+            .replace(/\p{Diacritic}/gu, '').replaceAll('_', ' ');
+        const rows = [...list.querySelectorAll('.time-zone-option')].map(node => {
+            const name = node.getAttribute('aria-label');
+            const code = node.querySelector('.time-zone-country-code').textContent;
+            const country = code ? countries?.of(code) ?? code : '';
+            if (country) {
+                const countryLabel = document.createElement('span');
+                countryLabel.className = 'time-zone-country';
+                countryLabel.textContent = country;
+                node.querySelector('.time-zone-place').append(countryLabel);
+            }
+            const offset = document.createElement('span');
+            offset.className = 'time-zone-offset';
+            node.querySelector('.time-zone-detail').append(offset);
+            return {node, searchText: normalize(`${name} ${country}`)};
+        });
+        const empty = list.querySelector('.time-zone-empty');
+        const visible = new Map();
+        function refresh() {
+            const now = new Date(clockAnchor
+                ? clockAnchor.unixTime + performance.now() - clockAnchor.received : Date.now());
+            for (const [node, format] of visible) {
+                const offset = format.offset.formatToParts(now).find(part => part.type === 'timeZoneName')?.value;
+                const utc = offset?.replace(/^GMT/, 'UTC') || '';
+                setClockText(node.querySelector('.time-zone-offset'), utc === 'UTC+00:00' ? 'UTC' : utc);
+                setClockText(node.querySelector('.time-zone-local-time'), format.time.format(now));
+            }
+        }
+        const observer = new IntersectionObserver(entries => {
+            for (const {target, isIntersecting} of entries) {
+                if (!isIntersecting) { visible.delete(target); continue; }
+                const timeZone = target.getAttribute('aria-label');
+                try {
+                    visible.set(target, {
+                        time: new Intl.DateTimeFormat(locale, {timeZone, weekday: 'short', hour: '2-digit',
+                            minute: '2-digit', hourCycle: 'h23'}),
+                        offset: new Intl.DateTimeFormat('en', {timeZone, timeZoneName: 'longOffset'}),
+                    });
+                } catch (_) { /* Older WebViews may not recognize every zone installed on the server. */ }
+            }
+            refresh();
+        }, {root: list});
+        for (const {node} of rows) observer.observe(node);
+
+        search.placeholder = search.getAttribute('aria-label') || '';
+        search.addEventListener('input', () => {
+            const terms = normalize(search.value).trim().split(/\s+/);
+            let count = 0;
+            for (const {node, searchText} of rows) {
+                node.hidden = !terms.every(term => searchText.includes(term));
+                if (!node.hidden) count++;
+            }
+            empty.classList.toggle('hidden', count !== 0);
+            list.scrollTop = 0;
+        });
+        dialog.addEventListener('keydown', event => {
+            if (event.isComposing || !['ArrowDown', 'ArrowUp'].includes(event.key)
+                || (event.target !== search && !event.target.matches('.time-zone-option'))) return;
+            const options = rows.filter(({node}) => !node.hidden).map(({node}) => node);
+            if (!options.length) return;
+            const index = options.indexOf(event.target);
+            const next = index < 0 ? options[0]
+                : event.key === 'ArrowDown' ? options[index + 1] : options[index - 1] || search;
+            event.preventDefault();
+            next?.focus();
+        });
+        requestAnimationFrame(() => search.focus({preventScroll: true}));
+        const timer = setInterval(refresh, 1000);
+        return {dialog, stop: () => { clearInterval(timer); observer.disconnect(); }};
+    }
+
+    function updateTimeZonePicker() {
+        const dialog = document.querySelector('.time-zone-dialog');
+        if (timeZonePicker ? timeZonePicker.dialog === dialog : !dialog) return;
+        if (timeZonePicker) {
+            timeZonePicker.stop();
+            timeZonePicker = null;
+            if (!dialog) requestAnimationFrame(() => {
+                const target = document.querySelector('.app-settings.active .desktop-time-zone-current');
+                if (!target?.closest('[inert]')) target?.focus({preventScroll: true});
+            });
+        }
+        const search = dialog?.querySelector('.time-zone-query');
+        const list = dialog?.querySelector('.time-zone-options');
+        if (search && list?.querySelector('.time-zone-empty')) timeZonePicker = mountTimeZonePicker(dialog, search, list);
     }
 
     function showSizeValue({slider, value}) {
@@ -224,28 +365,28 @@
         const min = Number(slider.min);
         const max = Number(slider.max);
         value.textContent = `${size} px`;
-        slider.style.setProperty('--dock-size-progress', `${(size - min) / (max - min) * 100}%`);
+        slider.style.setProperty('--icon-size-progress', `${(size - min) / (max - min) * 100}%`);
     }
 
-    function mountSizeControl(host, dock, bridge, min, max) {
+    function mountSizeControl(host, target, preview, bridge, min, max) {
         const slider = document.createElement('input');
-        slider.className = 'dock-size-slider';
+        slider.className = 'icon-size-slider';
         slider.type = 'range';
         slider.min = min;
         slider.max = max;
         slider.step = 1;
         const value = document.createElement('span');
-        value.className = 'dock-size-value';
+        value.className = 'icon-size-value';
         host.append(slider, value);
 
-        const control = {host, dock, slider, value};
+        const control = {host, target, bridge, slider, value};
         slider.addEventListener('input', () => {
-            dock.style.setProperty('--dock-preview', `${slider.value}px`);
+            target.style.setProperty(preview, `${slider.value}px`);
             showSizeValue(control);
         });
         slider.addEventListener('change', () => {
             if (slider.valueAsNumber === control.saved) {
-                dock.style.removeProperty('--dock-preview');
+                target.style.removeProperty(preview);
                 return;
             }
             bridge.value = slider.value;
@@ -254,35 +395,39 @@
         slider.addEventListener('pointercancel', () => {
             slider.value = control.saved;
             showSizeValue(control);
-            dock.style.removeProperty('--dock-preview');
+            target.style.removeProperty(preview);
         });
         return control;
     }
 
-    function updateSizeControl() {
-        const host = document.querySelector('.desktop-window.app-settings.active .dock-size-control');
-        if (sizeControl && (sizeControl.host !== host || !canvasFor(host))) {
-            sizeControl.dock.style.removeProperty('--dock-preview');
-            sizeControl.slider.remove();
-            sizeControl.value.remove();
-            sizeControl = null;
+    function updateSizeControl(settings, selector, targetSelector, preview) {
+        const host = settings?.querySelector(selector);
+        const target = canvasFor(host)?.querySelector(targetSelector);
+        const bridge = host?.querySelector('.icon-size-bridge');
+        const state = host?.querySelector('.icon-size-state');
+        let control = sizeControls.get(selector);
+        if (control && (control.host !== host || control.target !== target || control.bridge !== bridge)) {
+            control.target.style.removeProperty(preview);
+            control.slider.remove();
+            control.value.remove();
+            sizeControls.delete(selector);
+            control = undefined;
         }
-        const dock = canvasFor(host)?.querySelector('.desktop-dock');
-        if (!dock) return;
-        const bridge = host.querySelector('.dock-size-bridge');
-        const state = host.querySelector('.dock-size-state');
-        if (!bridge || !state) return;
+        if (!target || !bridge || !state) return;
         const [min, max, size] = state.textContent.split(',').map(Number);
-        if (!sizeControl) sizeControl = mountSizeControl(host, dock, bridge, min, max);
-        const {slider} = sizeControl;
+        if (!control) {
+            control = mountSizeControl(host, target, preview, bridge, min, max);
+            sizeControls.set(selector, control);
+        }
+        const {slider} = control;
         const label = bridge.getAttribute('aria-label') || '';
         if (slider.getAttribute('aria-label') !== label) slider.setAttribute('aria-label', label);
         if (slider.disabled !== bridge.disabled) slider.disabled = bridge.disabled;
-        if (sizeControl.saved !== size) {
-            sizeControl.saved = size;
+        if (control.saved !== size) {
+            control.saved = size;
             slider.value = size;
-            showSizeValue(sizeControl);
-            dock.style.removeProperty('--dock-preview');
+            showSizeValue(control);
+            target.style.removeProperty(preview);
         }
     }
 
@@ -317,8 +462,12 @@
     }
 
     function update() {
+        updateTheme();
         updateClock();
-        updateSizeControl();
+        updateTimeZonePicker();
+        const settings = document.querySelector('.desktop-window.app-settings.active');
+        updateSizeControl(settings, '.dock-size-control', '.desktop-dock', '--dock-preview');
+        updateSizeControl(settings, '.desktop-size-control', '.desktop-shortcuts', '--desktop-icon-preview');
         for (const slot of document.querySelectorAll('.desktop-icon-slot:not([draggable])')) slot.draggable = true;
         const menu = document.querySelector('.desktop-context-menu');
         const canvas = menu && canvasFor(menu);

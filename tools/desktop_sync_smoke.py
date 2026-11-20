@@ -4,8 +4,8 @@ import shutil
 import time
 
 from desktop_browser_smoke import site
-from server_apps_fixture import desktop_settings_dir, read_desktop_settings
-from desktop_fixture import Desktop, Peer, ROOT, eventually, executable, expect
+from server_apps_fixture import desktop_mode, desktop_settings_dir, read_desktop_settings
+from desktop_fixture import Desktop, Peer, ROOT, eventually, executable, expect, set_desktop_mode
 
 
 def settings(client, section):
@@ -80,8 +80,8 @@ def main():
             # A failed SSH request must leave an on-disk outbox, including when the app exits.
             dropped.touch()
             visit(first, endpoint + '/sync/update', 'Session cookie updated')
-            a_settings = settings(a, 'Desktop')
-            a_settings.get_by_role('button', name='Dark', exact=True).click()
+            a_settings = settings(a, 'Appearance')
+            set_desktop_mode(a_settings, 'Dark')
             b_settings = settings(b, 'General')
             b_settings.get_by_role('button', name='Every 5 s', exact=True).click()
             expect(a_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
@@ -89,24 +89,21 @@ def main():
             eventually(lambda: json.loads(pending(a, 'cookies.json').read_text())['pending']['dirty'])
             assert pending(a, 'desktop.json') and pending(b, 'desktop.json')
             assert pending(a, 'desktop.json').stat().st_size > 64 * 1024
-            assert remote().get('theme') == 'System'
+            assert desktop_mode(remote()) == 'System'
 
             # Both clients now retry against the same remote account.
             dropped.unlink()
-            eventually(lambda: remote().get('theme') == 'Dark' and remote().get('resource_interval_seconds') == 5,
+            eventually(lambda: desktop_mode(remote()) == 'Dark' and remote().get('resource_interval_seconds') == 5,
                        timeout=30)
             eventually(lambda: pending(a, 'desktop.json') is None and pending(b, 'desktop.json') is None)
             eventually(lambda: any(p.read_bytes() != old for p, old in before.items()))
             assert sum(p.read_bytes() != old for p, old in before.items()) == 1
 
             # Same-field edits require a selection while distinct changes survive.
-            b.page.locator('.desktop-settings-page').get_by_role('button', name='Desktop', exact=True).click()
-            expect(b_settings.get_by_role('button', name='Dark', exact=True)).to_have_attribute(
-                'aria-pressed', 'true', timeout=25000,
-            )
+            expect(b.page.locator('.server-desktop')).to_have_class('server-desktop theme-dark desktop-dark', timeout=25000)
             dropped.touch()
-            a_settings.get_by_role('button', name='Light', exact=True).click()
-            b_settings.get_by_role('button', name='Follow application', exact=True).click()
+            set_desktop_mode(a_settings, 'Light')
+            set_desktop_mode(b_settings, 'Follow application')
             expect(a_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             expect(b_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             dropped.unlink()
@@ -124,7 +121,7 @@ def main():
 
             # Save an edit while SSH is unavailable, and exit before it can be acknowledged.
             dropped.touch()
-            b_settings.get_by_role('button', name='Dark', exact=True).click()
+            set_desktop_mode(b_settings, 'Dark')
             expect(b_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             assert pending(b, 'desktop.json')
 
@@ -142,7 +139,7 @@ def main():
             a.connect()
             visit(browser(a), endpoint + '/sync/check', 'Updated session cookie restored')
             b.connect()
-            eventually(lambda: remote().get('theme') == 'Dark' and pending(b, 'desktop.json') is None, timeout=30)
+            eventually(lambda: desktop_mode(remote()) == 'Dark' and pending(b, 'desktop.json') is None, timeout=30)
             assert all(bookmark in remote()['browser_bookmarks'] for bookmark in long_bookmarks)
             visit(browser(b), endpoint + '/sync/check', 'No session cookie')
     print('Desktop settings over 64 KiB, conflict resolution, restart retry, encrypted Cookie restore and isolation passed.')

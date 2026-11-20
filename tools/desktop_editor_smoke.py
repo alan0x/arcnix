@@ -21,10 +21,7 @@ def main():
         for number in range(28):
             (home_desktop / f'sample-{number:02}.txt').write_text('sample', encoding='utf-8')
         (peer.root / 'plain.txt').write_text('plain text from SSH', encoding='utf-8')
-        config = peer.config([
-            peer.profile('Editor fixture'), dict(peer.profile('Offline'), port=9),
-        ], local)
-        with Desktop(out / 'desktop', config) as app:
+        with Desktop(out / 'desktop', peer.config([peer.profile('Editor fixture')], local)) as app:
             p = app.page
             errors = []
             p.on('pageerror', lambda error: errors.append(str(error)))
@@ -32,6 +29,9 @@ def main():
             app.workspace('Desktop')
             p.set_viewport_size(dict(width=900, height=620))
             shortcuts = p.locator('.desktop-shortcuts')
+            launcher = shortcuts.get_by_role('button', name='Text Editor', exact=True)
+            editor_icon = launcher.locator('.desktop-app-icon')
+            assert editor_icon.evaluate("icon => getComputedStyle(icon, '::before').maskImage") != 'none'
             expect(shortcuts.get_by_role('button', name='sample-27.txt', exact=True)).to_have_count(1)
             layout = shortcuts.evaluate('''grid => {
                 const slots = [...grid.querySelectorAll('.desktop-icon-slot')];
@@ -53,44 +53,85 @@ def main():
             shortcuts.evaluate('el => el.scrollLeft = 0')
             app.screenshot('desktop-icon-columns.png')
             p.set_viewport_size(dict(width=1440, height=980))
-            app.application('Code')
-            code = app.code()
-            code.get_by_role('treeitem', name='plain.txt', exact=True).dblclick()
-            expect(code.locator('.view-lines')).to_contain_text('plain text from SSH')
-            app.replace_code('unsaved plain draft')
-            p.locator('.host-select').filter(has_text='Offline').click()
-            expect(p.locator('.server-overview')).to_contain_text('Offline')
-            expect(p.locator('.desktop-window.app-code')).to_be_hidden()
-            p.locator('.host-select').filter(has_text='Editor fixture').click()
-            expect(p.locator('.desktop-window.app-code.active')).to_be_visible()
-            expect(p.locator('.connection-state')).to_have_text('SSH connected')
-            expect(code.locator('.view-lines:visible').first).to_contain_text('unsaved plain draft')
+            launcher.click()
+            editor = p.locator('.desktop-editor')
+            editor.get_by_role('button', name='Open file…', exact=True).click()
+            app.file('plain.txt').dblclick()
+            contents = editor.get_by_role('textbox', name='File contents', exact=True)
+            expect(contents).to_have_value('plain text from SSH')
             p.locator('.desktop-window.active .window-minimize').click()
             p.locator('.desktop-dock-home').click()
-            shortcuts.get_by_role('button', name='Notes.md', exact=True).click()
-            expect(code.locator('.view-lines:visible').first).to_contain_text('Bold')
-            code.get_by_role('button',name='Markdown: Open Preview to the Side').click()
-            preview = code.locator('.arcnix-preview')
+            p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).click()
+            expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Text Editor')
+            preview = editor.locator('.markdown-preview')
+            strip = editor.locator('.editor-tab-strip')
+            plain_tab = strip.get_by_role('button', name='/plain.txt', exact=True)
+            notes_tab = strip.get_by_role('button', name='/home/arcnix/Desktop/Notes.md', exact=True)
+            expect(strip.locator('.editor-tab')).to_have_count(2)
+            expect(preview.get_by_role('heading', name='Notes')).to_be_visible()
             expect(preview.locator('strong')).to_have_text('Bold text')
             expect(preview.locator('td').last).to_have_text('22')
-            expect(preview.locator('pre code')).to_contain_text('ls -l')
+            expect(preview.locator('pre code')).to_have_text('ls -l\n')
             expect(preview.locator('img')).to_have_count(0)
             expect(preview).to_contain_text('<img src=')
-            code.screenshot(path=str(out/'markdown-preview.png'))
-            code.locator('.tab').filter(has_text='plain.txt').click()
-            expect(code.locator('.view-lines:visible').first).to_contain_text('unsaved plain draft')
-            window = p.locator('.desktop-window.app-code')
-            window.locator('.window-close').click()
-            keep = window.get_by_role('button',name='Keep editing')
-            keep.click()
-            expect(keep).to_be_hidden()
-            expect(code.locator('.view-lines:visible').first).to_contain_text('unsaved plain draft')
-            window.locator('.window-close').click()
-            window.get_by_role('button',name='Discard changes').click()
-            expect(window).to_have_count(0)
-            assert (peer.root/'plain.txt').read_text() == 'plain text from SSH'
+            app.screenshot('markdown-preview.png')
+
+            editor.get_by_role('button', name='Edit source', exact=True).click()
+            expect(contents).to_have_value(source)
+            edited = source.replace('# Notes', '# Saved notes')
+            contents.fill(edited)
+            editor.get_by_role('button', name='Preview', exact=True).click()
+            expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
+            plain_tab.click()
+            expect(contents).to_have_value('plain text from SSH')
+            contents.fill('unsaved plain draft')
+            notes_tab.click()
+            expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
+            p.locator('.desktop-window.active .window-minimize').click()
+            app.application('Text Editor')
+            expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
+            editor.get_by_role('button', name='Edit source', exact=True).click()
+            contents.press('Control+s')
+            plain_tab.click()
+            expect(contents).to_have_value('unsaved plain draft')
+            eventually(lambda: notes.read_bytes() == b'\xef\xbb\xbf' + edited.replace('\n', '\r\n').encode())
+            notes_tab.click()
+            expect(editor.locator('.editor-feedback')).to_have_text('Remote file saved')
+
+            editor.get_by_role('button', name='Open file…', exact=True).click()
+            app.file('plain.txt').dblclick()
+            expect(strip.locator('.editor-tab')).to_have_count(2)
+            expect(contents).to_have_value('unsaved plain draft')
+            notes_tab.click()
+            close_plain = strip.get_by_role('button', name='Close file tab plain.txt', exact=True)
+            close_plain.click()
+            expect(editor.get_by_text('Discard unsaved changes?')).to_be_visible()
+            editor.get_by_role('button', name='Keep editing', exact=True).click()
+            expect(contents).to_have_value('unsaved plain draft')
+            close_plain.click()
+            editor.get_by_role('button', name='Discard changes', exact=True).click()
+            expect(plain_tab).to_have_count(0)
+            expect(notes_tab).to_have_attribute('aria-pressed', 'true')
+            assert (peer.root / 'plain.txt').read_text(encoding='utf-8') == 'plain text from SSH'
+
+            contents.fill('# Unsaved draft\n')
+            p.locator('.desktop-window.active .window-close').click()
+            expect(editor.get_by_text('Discard unsaved changes in all open files?')).to_be_visible()
+            editor.get_by_role('button', name='Keep editing', exact=True).click()
+            expect(contents).to_have_value('# Unsaved draft\n')
+            p.locator('.desktop-window.active .window-close').click()
+            editor.get_by_role('button', name='Discard changes', exact=True).click()
+            expect(p.locator('.desktop-window.app-editor')).to_have_count(0)
+            assert b'Unsaved draft' not in notes.read_bytes()
             assert not errors, errors
-    print(json.dumps(dict(output=str(out),checks=['Desktop icon columns', 'Desktop file opens alongside working tree tab', 'Markdown formatting and escaped HTML', 'Dirty draft survives switching servers, minimizing, and switching tabs', 'Discard confirmation']),indent=2))
+    print(json.dumps(dict(output=str(out), checks=[
+        'Desktop icons fill a column before growing right, with no vertical scroll or visible scrollbar',
+        'Text Editor launcher, Files and Desktop file icons open independent tabs without duplicating a file',
+        'Markdown renders headings, emphasis, tables and code offline with raw HTML shown as text',
+        'Source editing, preview, minimize and Ctrl+S retain the draft and source encoding',
+        'Switching tabs preserves each draft and preview mode, and saving targets the original tab',
+        'Closing a dirty tab or the editor window prompts before discarding',
+    ]), indent=2))
 
 
 if __name__ == '__main__':

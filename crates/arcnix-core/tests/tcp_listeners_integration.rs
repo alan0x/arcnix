@@ -66,7 +66,7 @@ fn tcp_listener_queries_preserve_sockets_and_verify_visible_holders() -> anyhow:
                 .collect::<Vec<_>>()
                 .join(","),
         )?;
-        let source = include_str!("../src/tcp_listeners.py").replace("\r\n", "\n");
+        let source = include_str!("../src/observability/tcp_listeners.py").replace("\r\n", "\n");
         let read = |ports: &[u16], user: Option<&str>| -> anyhow::Result<tcp::Snapshot> {
             let command = format!(
                 "{}timeout --kill-after=2 15 /usr/bin/python3 -I -c {} {}",

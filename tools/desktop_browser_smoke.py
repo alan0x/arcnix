@@ -254,6 +254,14 @@ def main():
 
             visit(endpoint + '/first', 'Routed first page')
             expect_clipping(bridge, app.process.pid, overlap=False)
+            eventually(lambda: bridge.evaluate('''bridge => {
+                const layer = bridge.closest('.desktop-window-layer').getBoundingClientRect();
+                const canvas = bridge.closest('.desktop-canvas').getBoundingClientRect();
+                const frame = JSON.parse(bridge.value).frame;
+                return frame && layer.bottom < canvas.bottom &&
+                    ['left', 'top', 'right', 'bottom'].every(edge =>
+                        Math.abs(frame[edge] - Math.round(layer[edge] * devicePixelRatio)) <= 1);
+            }'''))
             path = first.root / 'browser-forwarding.jsonl'
             assert any(entry['host'] == 'browser-fixture.test'
                        for entry in [json.loads(line) for line in path.read_text().splitlines()])
@@ -338,9 +346,9 @@ def main():
             visit(endpoint + '/theme', 'Light page (0)')
             app.application('Settings')
             settings = page.locator('.desktop-settings-page')
-            settings.get_by_role('button', name='Desktop', exact=True).click()
+            settings.get_by_role('button', name='Appearance', exact=True).click()
             for count, (choice, effective) in enumerate([
-                ('Dark', 'Dark'), ('Light', 'Light'), ('Dark', 'Dark'), ('Follow application', 'Light'),
+                ('Aurora', 'Dark'), ('Terracotta', 'Light'), ('Aurora', 'Dark'), ('Fjord', 'Light'),
             ], start=1):
                 settings.get_by_role('button', name=choice, exact=True).click()
                 title = f'{effective} page ({count})'

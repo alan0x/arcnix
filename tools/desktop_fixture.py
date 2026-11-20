@@ -50,6 +50,23 @@ def eventually(probe, timeout=15):
     raise AssertionError('Timed out waiting for the isolated test condition')
 
 
+def set_desktop_mode(panel, mode):
+    panel.get_by_role('button', name='Appearance', exact=True).click()
+    if mode == 'Follow application':
+        fjord = panel.get_by_role('button', name='Fjord', exact=True)
+        fjord.click()
+        expect(fjord).to_have_attribute('aria-pressed', 'true')
+        return
+    panel.get_by_role('button', name='Customize', exact=True).click()
+    creator = panel.page.get_by_role('dialog', name='Create theme', exact=True)
+    creator.get_by_role('textbox', name='Theme name', exact=True).fill(f'{mode} fixture {time.time_ns()}')
+    scheme = creator.get_by_role('button', name=mode, exact=True)
+    scheme.click()
+    expect(scheme).to_have_attribute('aria-pressed', 'true')
+    creator.get_by_role('button', name='Create theme', exact=True).click()
+    expect(creator).to_have_count(0)
+
+
 class Peer:
     def __init__(self, out, io_delay=0, browser_port=0, browser_web=None):
         self.out = out

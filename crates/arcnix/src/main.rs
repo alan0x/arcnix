@@ -1,101 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-mod ansi;
-mod app_center_ui;
-mod app_icon;
-mod backups_ui;
-mod batch_worker;
-mod browser;
-#[cfg(windows)]
-mod browser_cookies;
-mod cleanup_records_ui;
-mod client_logs;
-mod clipboard;
-mod code_native;
-mod code_terminal;
-mod code_workbench;
-mod compose_ui;
-mod configuration_backup_ui;
-mod deleted_files_ui;
-mod desktop_customization_ui;
-mod desktop_shortcuts_ui;
-mod diagnostics_ui;
-mod disks_ui;
-mod docker_ui;
-mod file_actions;
-mod file_browser;
-mod file_columns;
-mod file_context;
-mod file_open;
-mod file_picker;
-mod file_properties;
-mod files_search;
-mod files_tabs;
-mod files_transfer;
-mod files_ui;
-mod folder_icons;
-mod formatting;
-mod help_ui;
-mod i18n;
-mod icons;
-mod installation_ui;
-mod log_text;
-#[cfg(target_os = "macos")]
-mod macos_menu;
-mod monitor_ui;
-#[cfg(windows)]
-mod mpv_native;
-mod native_viewport;
-mod navigation;
-mod network_ui;
-mod observability;
-mod operations;
-mod operations_worker;
-mod preferences_ui;
-mod processes_ui;
-mod record_maintenance_ui;
-mod recovery_ui;
-mod resource_ports_ui;
-mod resource_trends;
-mod script_exchange_ui;
-mod script_parameters_ui;
-mod scripts_ui;
-mod server_apps_ui;
-mod server_apps_worker;
-mod server_desktop;
-mod server_labels_ui;
-mod servers;
-mod settings;
+mod automation;
+mod desktop;
+mod editor;
+mod files;
+mod maintenance;
+mod media;
+mod monitoring;
+mod shared;
+mod shell;
 mod software;
-mod software_install_ui;
-mod splitter;
-mod ssh_credentials;
-mod task_records_ui;
-mod task_refresh_ui;
-mod task_target_picker;
-mod tcp_listeners_ui;
-mod terminal;
-mod terminal_menu;
-mod terminal_worker;
-#[cfg(test)]
-mod terminal_worker_tests;
-mod transfer_details;
-mod transfer_progress;
-mod transfer_ui;
-mod transfer_worker;
-#[cfg(test)]
-mod transfer_worker_tests;
-mod trash_ui;
-mod update_install;
-mod updates_ui;
-mod video_player;
-#[cfg(windows)]
-mod web_browser;
-#[cfg(windows)]
-mod web_browser_native;
-mod worker;
-#[cfg(test)]
-mod worker_conflict_tests;
-mod workspace;
+mod terminals;
+mod workers;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -105,16 +21,33 @@ use std::sync::mpsc::Sender;
 
 use arcnix_core::store::ConfigStore;
 use arcnix_core::*;
+use automation::{operations, *};
 use browser::{Sort, visible};
+use desktop::*;
+use editor::*;
+use files::{browser, *};
 use glory::prelude::*;
 use glory::ui::{IntoChildren, fragment};
 use glory::wry::shell::{Config, Shell, WindowApp};
 use icons::{Icon, close_action, icon_action, text_action};
+use maintenance::*;
+use media::*;
+use monitoring::*;
+use shared::*;
+use shell::*;
+use software::{app_center_ui, compose_ui, docker_ui, installation_ui, software_install_ui};
+use terminals::{terminal, *};
 use worker::{Action, Request, Update};
+use workers::*;
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
     OpenVideo,
+    TextEditor,
+    DesktopTimeZone,
+    DesktopIcons,
+    DockShortcuts,
+    CreateDesktopTheme,
     FileAssociation {
         extension: String,
         add: bool,
@@ -205,6 +138,7 @@ enum WorkspacePage {
     Terminal,
     Files(u32),
     Docker,
+    Editor,
     Code,
     Player,
     Browser,
@@ -279,8 +213,11 @@ define_state! {
         deletion: Option<file_context::Deletion> = None,
         properties: Option<file_properties::Editor> = None,
         code: code_workbench::Runtime = Default::default(),
+        remote_editor: Option<text_editor::Editor> = None,
+        desktop_editor: text_editor::Tabs = Default::default(),
         video: Option<video_player::Playback> = None,
         video_picker: Option<video_player::Directory> = None,
+        video_picker_sidebar_hidden: bool = false,
         activity_tab: u8 = 0,
         activity_open: bool = true,
         local_filter_open: bool = false,
@@ -673,7 +610,10 @@ impl Ui {
         let terminal_rename = self
             .state
             .with(|s| matches!(s.dialog, Some(Dialog::TerminalRename { .. })));
-        if file_context::dismiss_deletion(self) {
+        let creating_theme = self
+            .state
+            .with(|s| s.dialog == Some(Dialog::CreateDesktopTheme));
+        if text_editor::dismiss(self) || file_context::dismiss_deletion(self) {
             return;
         }
         if file_properties::dismiss(self) {
@@ -693,6 +633,9 @@ impl Ui {
         self.state.revise(|s| {
             if s.file_pending.is_some() || (!s.background && s.import_pending.is_some()) {
                 return;
+            }
+            if s.dialog == Some(Dialog::CreateDesktopTheme) {
+                desktop_appearance_ui::cancel(s);
             }
             if s.background {
                 s.dialog = None;
@@ -764,6 +707,9 @@ impl Ui {
             && let Some(id) = self.shell_focus.get()
         {
             let _ = self.scope.action(glory::render::Action::Focus(id));
+        }
+        if creating_theme && self.state.with(|s| s.dialog.is_none()) {
+            self.load_desktop_wallpaper();
         }
         if self
             .state
@@ -935,6 +881,11 @@ impl Ui {
             #[cfg(windows)]
             Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(events,response.serial,result),
             Update::ConnectionLost(message)=>{
+                state.revise(|s| {
+                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::CreateDesktopTheme)) {
+                        s.dialog = None;
+                    }
+                });
                 events.player.close(events);
                 #[cfg(windows)]
                 events.close_web_browser();operations::connection_lost(events);terminal::disconnected(events);software::on_connection_lost(events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.files_uploads.abort();for (id,c) in &s.cancels{c.store(true,Ordering::Relaxed);s.transfer_pauses.remove(id);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if Some(&j.server_id)==s.selected.as_ref() && j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
@@ -975,6 +926,7 @@ impl Ui {
             Update::FileMetadata(result)=>file_properties::metadata(events,response.serial,result),
             Update::Permissions(result)=>file_properties::finished(events,response.serial,result),
             Update::CodeFile(reply)=>code_workbench::reply(events,response.serial,reply),
+            Update::TextFile(reply)=>text_editor::event(events,response.serial,reply),
             Update::Error(message)=>{
                 if file_browser::mutation_failed(events,response.serial,&message) {return;}
                 let pending=state.with(|s|s.file_pending==Some(response.serial)||(!s.background&&s.import_pending==Some(response.serial)));
@@ -1135,6 +1087,7 @@ impl Ui {
         }
     }
     fn disconnect(&self) {
+        text_editor::cancel(self);
         file_context::cancel_deletion(self);
         file_properties::cancel(self);
         if self.state.with(|s| s.system_task_running) {
@@ -1145,10 +1098,18 @@ impl Ui {
         self.player.close(self);
         #[cfg(windows)]
         self.close_web_browser();
-        if self
-            .state
-            .with(|s| s.dialog == Some(Dialog::TransferConflict))
-        {
+        if self.state.with(|s| {
+            matches!(
+                s.dialog,
+                Some(
+                    Dialog::TransferConflict
+                        | Dialog::DesktopTimeZone
+                        | Dialog::DesktopIcons
+                        | Dialog::DockShortcuts
+                        | Dialog::CreateDesktopTheme
+                )
+            )
+        }) {
             self.close_dialog();
         }
         self.state.revise(|s| {
@@ -1177,6 +1138,7 @@ impl Ui {
             s.compose = Default::default();
             s.install = Default::default();
             s.code = Default::default();
+            text_editor::disconnect(s);
             s.operations = Default::default();
             s.metrics = Default::default();
             resource_ports_ui::reset(s);
@@ -1589,7 +1551,9 @@ fn accepts_listing(latest: u64, received: u64) -> bool {
 /// A running file task keeps the dialog slot until it finishes.
 fn file_task_busy(s: &State) -> bool {
     s.file_pending.is_some()
-        && (s.deletion.is_some() || s.properties.as_ref().is_some_and(|p| p.is_running()))
+        && (s.deletion.is_some()
+            || s.properties.as_ref().is_some_and(|p| p.is_running())
+            || text_editor::busy(s))
 }
 fn dismiss_menus(s: &mut State) {
     if !s.background {
@@ -1737,6 +1701,21 @@ fn modal(
         let close = ui.clone();
         let scrim = ui.clone();
         let focus = scope.cage(None);
+        let title = if ui.state.with(|s| {
+            matches!(
+                s.dialog,
+                Some(
+                    Dialog::DesktopTimeZone
+                        | Dialog::DesktopIcons
+                        | Dialog::DockShortcuts
+                        | Dialog::CreateDesktopTheme
+                )
+            )
+        }) {
+            i18n::desktop::bind(title)
+        } else {
+            i18n::bind(title)
+        };
         let mounted = scope.mount_with(|| {
             col()
                 .class(ui.state.map(|s| {
@@ -1754,7 +1733,8 @@ fn modal(
                         .enabled(ui.state.map(|s| {
                             (s.file_pending.is_none()
                                 || file_context::deletion_dialog(s)
-                                || file_properties::running(s))
+                                || file_properties::running(s)
+                                || s.dialog == Some(Dialog::TextEditor))
                                 && s.import_pending.is_none()
                         }))
                         .on(activate, move |_| scrim.close_dialog()),
@@ -1764,22 +1744,33 @@ fn modal(
                                 Some(Dialog::TransferProgress(_)) => {
                                     "modal-card transfer-progress-modal"
                                 }
+                                Some(Dialog::DesktopTimeZone) => "modal-card time-zone-dialog",
+                                Some(Dialog::DesktopIcons) => "modal-card shortcut-settings-dialog",
+                                Some(Dialog::DockShortcuts) => {
+                                    "modal-card shortcut-settings-dialog dock-shortcut-dialog"
+                                }
+                                Some(Dialog::CreateDesktopTheme) => {
+                                    "modal-card theme-create-dialog"
+                                }
+                                Some(Dialog::OpenVideo) => "modal-card file-picker-dialog",
+                                Some(Dialog::TextEditor) => "modal-card remote-editor-modal",
                                 _ => "modal-card",
                             }
                             .to_owned()
                         }))
                         .role(Role::Dialog)
-                        .name(i18n::bind(title.clone()))
+                        .name(title.clone())
                         .focus(FocusMode::Programmatic)
                         .node_ref(focus)
                         .fill((
                             row().class("modal-header").fill((
-                                text().class("dialog-title").content(i18n::bind(title)),
+                                text().class("dialog-title").content(title),
                                 close_action("关闭对话框")
                                     .enabled(ui.state.map(|s| {
                                         (s.file_pending.is_none()
                                             || file_context::deletion_dialog(s)
-                                            || file_properties::running(s))
+                                            || file_properties::running(s)
+                                            || s.dialog == Some(Dialog::TextEditor))
                                             && s.import_pending.is_none()
                                     }))
                                     .on_press(move || close.close_dialog()),
@@ -2003,6 +1994,10 @@ fn app(ui: Ui) -> impl Widget {
                 network_ui::dialog(ui.clone()),
                 fragment((
                     fragment((
+                        desktop_system_settings::time_zone_dialog(ui.clone()),
+                        desktop_customization_ui::shortcut_settings_dialog(ui.clone()),
+                        text_editor::dialogs(ui.clone()),
+                        desktop_appearance_ui::create_theme_dialog(ui.clone()),
                         file_context::dialogs(ui.clone()),
                         file_open::dialog(ui.clone()),
                         file_open::settings_dialog(ui.clone()),
@@ -2150,6 +2145,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         local_display(&path),
         error.clone().unwrap_or_default(),
     ));
+    i18n::desktop::init(scope, state);
     let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
         player: video_player::Player::new(window.renderer().clone(), scope),
@@ -2252,6 +2248,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/files-tabs.js"),
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),
+                    include_str!("../assets/text-editor-events.js"),
                     include_str!("../assets/desktop-motion.js"),
                     include_str!("../assets/desktop-shortcuts.js"),
                     include_str!("../assets/vendor/xterm/xterm.js"),

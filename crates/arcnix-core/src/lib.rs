@@ -1,79 +1,41 @@
-pub mod backup_evidence;
-pub mod backups;
-pub mod browser;
-pub mod browser_proxy;
-pub mod cleanup_records;
-pub mod compose_apps;
-pub mod configuration_backups;
-pub mod configuration_compare;
-pub mod configuration_records;
-pub mod configuration_templates;
-pub mod configurations;
-pub mod database_backups;
-pub mod deleted_files;
-pub mod deletion;
-pub mod desktop_customization;
-pub mod desktop_shortcuts;
-mod desktop_storage;
-pub mod diagnostic_exports;
-pub mod diagnostic_logs;
-pub mod diagnostics;
-pub mod disks;
-pub mod docker;
-pub mod file_associations;
-pub mod installation_plan;
-pub mod installers;
-pub mod local;
-pub mod metric_history;
-pub mod metrics;
-pub mod model;
-mod name_resolution;
-pub mod network;
-pub mod operations;
-pub mod packages;
-pub mod permissions;
-pub mod preferences;
-pub mod private_keys;
-pub mod processes;
-pub mod record_cleanup;
-pub mod record_maintenance;
-pub mod record_recovery;
-pub mod recovery_drills;
-pub mod recycle;
-pub mod remote;
-pub mod remote_tasks;
-pub mod resource_ports;
-pub mod script_bundles;
-pub mod script_favorites;
-pub mod script_parameters;
-pub mod scripts;
-pub mod server_apps;
-pub mod server_inventory;
-pub mod server_labels;
-pub mod snapshot_files;
-pub mod software_catalog;
-pub mod software_install;
-pub mod ssh_config;
-pub mod startup_services;
-pub mod store;
-pub mod sync;
-pub mod system_logs;
-pub mod target_selection;
-pub mod task_records;
-pub mod task_result;
-pub mod task_stops;
-pub mod tasks;
-pub mod tcp_listeners;
-pub mod terminal;
-pub mod text_files;
-pub mod transfer;
-pub mod transport_error;
-pub mod updates;
+//! Shared models and SSH operations for the Arcnix client.
 
+mod automation;
+mod config;
+mod connection;
+mod desktop;
+mod files;
+mod maintenance;
+mod observability;
+mod software;
+
+// Keep existing module paths available to the client and external callers.
+pub use automation::{
+    operations, remote_tasks, script_bundles, script_favorites, script_parameters, scripts,
+    startup_services, target_selection, task_records, task_result, task_stops, tasks,
+};
+pub use config::{model, preferences, server_labels, store};
+use connection::private_program;
+pub use connection::{browser_proxy, private_keys, remote, ssh_config, terminal, transport_error};
+use desktop::desktop_storage;
+pub use desktop::{
+    browser, desktop_customization, desktop_shortcuts, desktop_theme, desktop_time_zone,
+    server_apps, sync,
+};
+pub use files::{deletion, file_associations, local, permissions, recycle, text_files, transfer};
+pub use maintenance::{
+    audit_cleanup, audit_details, audit_storage, backup_evidence, backups, cleanup_records,
+    configuration_backups, configuration_compare, configuration_records, configuration_templates,
+    configurations, database_backups, deleted_files, export_download, record_cleanup,
+    record_maintenance, record_recovery, recovery_drills, snapshot_files,
+};
 pub use model::*;
-pub mod audit_cleanup;
-pub mod audit_details;
-pub mod audit_storage;
-pub mod export_download;
-mod private_program;
-mod tls_diagnostics;
+pub use observability::{
+    diagnostic_exports, diagnostic_logs, diagnostics, disks, metric_history, metrics, network,
+    processes, resource_ports, system_logs, tcp_listeners,
+};
+use observability::{name_resolution, tls_diagnostics};
+pub use software::{
+    compose_apps, docker, installation_plan, installers, packages, server_inventory,
+    software_catalog, software_install, updates,
+};

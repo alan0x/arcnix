@@ -76,7 +76,7 @@ def main():
             expect(page.locator('.desktop-menubar')).to_have_count(0)
             assert page.locator('.workspace-header').bounding_box()['height'] <= 46
             expect(page.locator('.desktop-shortcuts .desktop-app-label')).to_have_text([
-                'Terminal', 'Monitor', 'App Center', 'Files', 'Code', 'Web browser', 'Settings', 'Player',
+                'Files', 'Terminal', 'Code', 'Web browser', 'Player', 'Monitor', 'App Center', 'Settings', 'Text Editor',
             ])
             expect(page.locator('.server-desktop .files-module')).to_have_count(0)
             expect(page.locator('.desktop-window.active')).to_be_hidden()
@@ -253,8 +253,10 @@ def main():
             download_to.get_by_role('button', name='Download', exact=True).click()
             eventually(lambda: (local / 'renamed.txt').read_text() == 'remote file')
             app.file('renamed.txt').dblclick()
-            expect(app.code().locator('.view-lines')).to_contain_text('remote file')
-            app.replace_code('Edited from desktop Files\n').press('Control+s')
+            contents = page.locator('.app-editor.active .remote-editor-content')
+            expect(contents).to_have_value('remote file')
+            contents.fill('Edited from desktop Files\n')
+            contents.press('Control+s')
             eventually(lambda: (peer.root / 'work' / 'renamed.txt').read_text() == 'Edited from desktop Files\n')
             page.locator('.desktop-window.active .window-close').click()
             launch('Files')

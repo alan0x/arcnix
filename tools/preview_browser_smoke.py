@@ -67,7 +67,7 @@ def main():
                 expect(picker.get_by_role('button', name=name, exact=True)).to_be_visible()
             expect(picker.get_by_role('button', name='clip.mp4.txt', exact=True)).to_have_count(0)
             picker.get_by_role('button', name='empty.dir', exact=True).click()
-            expect(picker.locator('.player-picker-message')).to_have_text('No playable videos in this folder.')
+            expect(picker.get_by_text('No playable videos in this folder.', exact=True)).to_be_visible()
             picker.get_by_role('button', name='Parent folder').click()
             expect(picker.get_by_role('button', name='clip.MP4', exact=True)).to_be_visible()
             picker.get_by_role('button', name='Cancel').click()

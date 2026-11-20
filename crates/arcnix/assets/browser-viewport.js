@@ -36,8 +36,7 @@ function observeNativeSurface(app) {
         const canvas = browser.closest('.desktop-canvas');
         const layer = browser.closest('.desktop-window-layer');
         const windows = Array.from(layer.querySelectorAll('.desktop-window:not(.hidden)'));
-        const dock = canvas.querySelector('.desktop-dock');
-        const next = new Set([surface, commandButton, menuSlot, canvas, dock, ...windows].filter(Boolean));
+        const next = new Set([surface, commandButton, menuSlot, layer, ...windows].filter(Boolean));
         for (const node of watched) {
             if (!next.has(node)) {
                 resize.unobserve(node);
@@ -50,11 +49,11 @@ function observeNativeSurface(app) {
                 watched.add(node);
             }
         }
-        const desktop = rect(canvas);
+        const workArea = rect(layer);
         const surfaceBox = rect(surface);
-        const area = desktop && surfaceBox && !browser.closest('[inert]')
-            && surfaceBox.right > desktop.left && surfaceBox.left < desktop.right
-            && surfaceBox.bottom > desktop.top && surfaceBox.top < desktop.bottom ? surfaceBox : null;
+        const area = workArea && surfaceBox && !browser.closest('[inert]')
+            && surfaceBox.right > workArea.left && surfaceBox.left < workArea.right
+            && surfaceBox.bottom > workArea.top && surfaceBox.top < workArea.bottom ? surfaceBox : null;
         const commandCenter = area && rect(commandButton);
         const top = commandCenter?.top ?? area?.top;
         const rank = Number(getComputedStyle(browser).zIndex) || 0;
@@ -62,11 +61,11 @@ function observeNativeSurface(app) {
         const overlays = canvas.querySelectorAll(
             '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip'
         );
-        const clip = area ? [...blockers, dock, ...overlays].map(rect).filter(box => box
+        const clip = area ? [...blockers, ...overlays].map(rect).filter(box => box
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom
         ).slice(0, 32) : [];
         const epoch = Number(browser.querySelector('.browser-epoch').textContent);
-        const serialized = JSON.stringify({epoch, area, frame: desktop, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
+        const serialized = JSON.stringify({epoch, area, frame: workArea, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
         if (bridge !== previousInput || serialized !== previous) {
             previousInput = bridge;
             previous = serialized;

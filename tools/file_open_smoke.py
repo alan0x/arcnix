@@ -116,11 +116,16 @@ def main():
 
             right_click('source.ts')
             show_submenu()
+            expect(submenu.get_by_role('button', name='Text Editor', exact=True)).to_be_visible()
             expect(submenu.get_by_role('button', name='Code', exact=True)).to_be_visible()
             expect(submenu.get_by_role('button', name='Player', exact=True)).to_be_visible()
             app.action('Open')
-            expect(page.locator('.desktop-window.app-code.active')).to_be_visible()
-            expect(app.code().locator('.view-lines')).to_contain_text('const greeting')
+            expect(page.get_by_role('dialog', name='Text Editor', exact=True).get_by_role(
+                'textbox', name='File contents', exact=True,
+            )).to_have_value(re.compile('const greeting'))
+            page.get_by_role('dialog', name='Text Editor', exact=True).get_by_role(
+                'button', name='Close dialog', exact=True,
+            ).click()
 
             right_click('misc.webvideo')
             show_submenu()
@@ -158,7 +163,8 @@ def main():
             expect(extension_row('legacyopen').locator('.file-association-current')).to_have_text('Code')
             search_extensions('.HTML')
             expect(extension_row('html').locator('.file-association-current')).to_have_text('Web browser')
-            expect(extension_row('html').locator('.file-association-other-apps')).to_have_text('Code')
+            expect(extension_row('html').locator('.file-association-other-apps')).to_contain_text('Code')
+            expect(extension_row('html').locator('.file-association-other-apps')).to_contain_text('Text Editor')
             extension_row('html').click()
             association = page.get_by_role('dialog', name='File association', exact=True)
             associated_app(association, 'Code').get_by_role('button', name='Use as default', exact=True).click()
@@ -166,7 +172,7 @@ def main():
             association.get_by_role('button', name='Done', exact=True).click()
             app.settings('Files')
             expect(extension_row('html').locator('.file-association-current')).to_have_text('Code')
-            expect(extension_row('html').locator('.file-association-other-apps')).to_have_text('Web browser')
+            expect(extension_row('html').locator('.file-association-other-apps')).to_contain_text('Web browser')
             search_extensions('legacyopen')
             extension_row('legacyopen').click()
             association.get_by_role('button', name='Restore suggested default', exact=True).click()

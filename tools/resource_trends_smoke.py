@@ -34,14 +34,21 @@ with Peer(out/'peer') as peer:
         expect(p.locator('.resource-trend-cpu .resource-trend-axis')).to_contain_text(['0%','25%','50%','75%','100%'])
         passed('Actual SSH samples retain first-read unknown rates, exact CPU/network deltas and monotonic client spacing; percentage axes stay fixed at 0–100%')
 
-        svg=p.locator('.resource-trend-cpu svg');p.locator('.resource-trend-toolbar button').last.focus();p.keyboard.press('Tab');expect(svg).to_be_focused();svg.press('Home')
+        svg=p.locator('.resource-trend-cpu svg');p.locator('.resource-trend-toolbar button').last.focus();p.keyboard.press('Tab');expect(svg).to_be_focused()
+        expect(svg).to_have_css('outline-style','solid')
+        svg.press('Home')
         expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).to_contain_text('Unavailable')
         svg.press('End');expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).to_contain_text('30%')
         svg.press('ArrowLeft');expect(svg).to_have_attribute('aria-label',__import__('re').compile('CPU usage'))
         svg.press('Escape');expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).not_to_be_visible()
         svg.hover(position=dict(x=130,y=90));expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).to_be_visible()
+        memory_svg=p.locator('.resource-trend-memory svg')
+        memory_svg.click(position=dict(x=130,y=90))
+        expect(memory_svg).to_be_focused()
+        expect(memory_svg).to_have_css('outline-style','none')
+        expect(p.locator('.resource-trend-memory .resource-trend-tooltip')).to_be_visible()
         tip=p.get_by_role('button',name='Help: Session trends',exact=True);tip.hover();expect(p.get_by_role('tooltip')).to_contain_text('monotonic clock');tip.click();p.mouse.move(1400,950);expect(p.get_by_role('tooltip')).to_be_visible();p.keyboard.press('Escape')
-        passed('Charts expose sample values by pointer and keyboard, missing values remain labelled, and detailed guidance stays in hover/click help')
+        passed('Charts expose samples by pointer and keyboard, outline only keyboard focus, and keep detailed guidance in hover/click help')
 
         fixture(peer,error=True);refresh(p);assert data(p)['points'][-1]['memory'] is None
         expect(p.locator('.monitor-page .software-error')).to_be_visible()

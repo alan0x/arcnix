@@ -3,8 +3,8 @@ import json
 import re
 import time
 
-from server_apps_fixture import desktop_settings_dir, read_desktop_settings
-from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
+from server_apps_fixture import desktop_mode, desktop_settings_dir, read_desktop_settings
+from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expect, set_desktop_mode
 
 
 def seed():
@@ -47,7 +47,7 @@ def main():
                 panel = page.locator('.desktop-settings-page')
                 panel.get_by_role('button', name=section, exact=True).click()
                 if section == 'Desktop':
-                    expect(panel.get_by_role('button', name='Dark', exact=True)).to_be_enabled()
+                    expect(panel.get_by_role('button', name='Horizontal', exact=True)).to_be_enabled()
                 return panel
 
             def close_settings():
@@ -152,10 +152,14 @@ def main():
             page.keyboard.press('Enter')
             expect(reader).to_contain_text('THEME_SESSION_PRESERVED')
             dialog = settings()
-            dialog.get_by_role('button', name='Dark', exact=True).click()
-            expect(dialog.get_by_role('button', name='Dark', exact=True)).to_have_attribute('aria-pressed', 'true')
+            set_desktop_mode(dialog, 'Dark')
             preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
-            eventually(lambda: read_desktop_settings(preferences).get('theme') == 'Dark')
+            eventually(lambda: desktop_mode(read_desktop_settings(preferences)) == 'Dark')
+            dialog.get_by_role('button', name='Desktop', exact=True).click()
+            dialog.get_by_role('button', name='Visible icons', exact=True).click()
+            shortcuts = page.get_by_role('dialog', name='Visible icons', exact=True)
+            expect(shortcuts.locator('.preference-check').first).to_have_css('color', 'rgb(226, 234, 244)')
+            close_dialog(shortcuts)
             close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-dark desktop-dark')
             app.application('Terminal')
@@ -172,7 +176,7 @@ def main():
             expect(page.locator('.app')).to_have_class('app theme-light')
             app.workspace('Desktop')
             expect(page.locator('.app')).to_have_class('app theme-light')
-            checks.append('Remote-user theme saves to its system.json domain, changes the desktop and controls, preserves terminal history, and leaves Home using the client theme')
+            checks.append('Remote-user theme saves to the desktop preferences, preserves terminal history, and leaves Home using the client theme')
 
             app.stop()
             app.launch()
@@ -184,15 +188,20 @@ def main():
             denied = peer.root / 'desktop-write-denied'
             denied.touch()
             dialog = settings()
-            dialog.get_by_role('button', name='Light', exact=True).click()
+            set_desktop_mode(dialog, 'Light')
             expect(dialog).to_contain_text('Permission denied')
             expect(dialog).to_contain_text('Pending sync')
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
-            assert read_desktop_settings(preferences)['theme'] == 'Dark'
+            assert desktop_mode(read_desktop_settings(preferences)) == 'Dark'
             denied.unlink()
-            dialog.get_by_role('button', name='Light', exact=True).click()
-            expect(dialog.get_by_role('button', name='Light', exact=True)).to_have_attribute('aria-pressed', 'true')
-            eventually(lambda: read_desktop_settings(preferences).get('theme') == 'Light')
+            set_desktop_mode(dialog, 'Light')
+            eventually(lambda: desktop_mode(read_desktop_settings(preferences)) == 'Light')
+            dialog.get_by_role('button', name='Desktop', exact=True).click()
+            shortcut_entry = dialog.get_by_role('button', name='Visible icons', exact=True)
+            shortcut_entry.click()
+            shortcuts = page.get_by_role('dialog', name='Visible icons', exact=True)
+            expect(shortcuts.locator('.preference-check').first).to_have_css('color', 'rgb(35, 50, 72)')
+            close_dialog(shortcuts)
             close_settings()
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')
             app.screenshot('docker-light-restored.png')
@@ -203,13 +212,16 @@ def main():
             dialog.get_by_role('button', name='Reload settings', exact=True).click()
             expect(dialog.locator('.desktop-preferences > .error')).not_to_be_empty()
             dialog.get_by_role('button', name='Desktop', exact=True).click()
-            expect(dialog.get_by_role('button', name='Dark', exact=True)).to_be_disabled()
+            expect(dialog.get_by_role('button', name='Horizontal', exact=True)).to_be_disabled()
+            expect(shortcut_entry).to_be_disabled()
+            expect(shortcut_entry).to_have_css('color', 'rgb(104, 122, 146)')
             assert system_domain.read_text() == '{invalid JSON'
             system_domain.write_text(original)
             dialog.get_by_role('button', name='General', exact=True).click()
             dialog.get_by_role('button', name='Reload settings', exact=True).click()
             dialog.get_by_role('button', name='Desktop', exact=True).click()
-            expect(dialog.get_by_role('button', name='Dark', exact=True)).to_be_enabled()
+            expect(dialog.get_by_role('button', name='Horizontal', exact=True)).to_be_enabled()
+            expect(shortcut_entry).to_be_enabled()
             close_settings()
             docker()
             checks.append('A new client process restores the server theme; failed writes retain the previous file/theme and can be retried')
@@ -247,12 +259,11 @@ def main():
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             docker()
             dialog = settings()
-            dialog.get_by_role('button', name='Dark', exact=True).click()
-            expect(dialog.get_by_role('button', name='Dark', exact=True)).to_have_attribute('aria-pressed', 'true')
+            set_desktop_mode(dialog, 'Dark')
             second = peer.root / 'home/arcnix-nosftp/.arcnix/desktop.json'
-            eventually(lambda: read_desktop_settings(second).get('theme') == 'Dark')
+            eventually(lambda: desktop_mode(read_desktop_settings(second)) == 'Dark')
             close_settings()
-            assert read_desktop_settings(preferences)['theme'] == 'Light'
+            assert desktop_mode(read_desktop_settings(preferences)) == 'Light'
             page.locator('.host-select').nth(2).click()
             page.locator('.overview-connect').click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')

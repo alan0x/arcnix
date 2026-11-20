@@ -151,7 +151,7 @@ fn finite_snapshots_keep_file_bytes_and_refuse_unstable_or_unsupported_sources()
         );
         let changed = format!(
             "import sys,pathlib\nns={{'__name__':'changing_fixture'}};exec(compile({},'<reader>','exec'),ns)\nreal=ns['os'].read;done=False\ndef replacing(fd,count):\n global done\n data=real(fd,count)\n if not done:\n  done=True;pathlib.Path({}).write_text('changed during read',encoding='utf-8')\n return data\nns['os'].read=replacing;sys.argv=['reader',{}];ns['main']()",
-            serde_json::to_string(include_str!("../src/configuration_compare.py"))?,
+            serde_json::to_string(include_str!("../src/maintenance/configuration_compare.py"))?,
             serde_json::to_string(&file)?,
             serde_json::to_string(&argument)?
         );

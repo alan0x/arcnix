@@ -1,6 +1,6 @@
 """Application-first catalog, source selection and merged installed inventory."""
 import json,time,re
-from desktop_fixture import Desktop,Peer,ROOT,expect,eventually
+from desktop_fixture import Desktop,Peer,ROOT,expect,eventually, set_desktop_mode
 from docker_desktop_smoke import seed
 
 def main():
@@ -110,7 +110,7 @@ def main():
             d=install('PostgreSQL');expect(d.locator('.install-package-name')).to_have_text('postgresql-server');expect(d.locator('.install-provider')).to_contain_text('DNF')
             expect(d.get_by_role('button',name='Snap',exact=True)).to_be_disabled();close(d)
             d=install('htop');expect(d.get_by_role('button',name='Snap',exact=True)).to_be_disabled();expect(d).to_contain_text('Requires Snap');close(d)
-            app.application('Settings');settings=p.locator('.desktop-settings-page');settings.get_by_role('button',name='Desktop',exact=True).click();settings.get_by_role('button',name='Dark',exact=True).click();expect(settings.get_by_role('button',name='Dark',exact=True)).to_have_attribute('aria-pressed','true');app.application('App Center')
+            app.application('Settings');settings=p.locator('.desktop-settings-page');set_desktop_mode(settings, 'Dark');app.application('App Center')
             expect(p.locator('.app')).to_have_class('app theme-light')
             app.screenshot('app-center-dark.png')
             for width in [1100,900]:

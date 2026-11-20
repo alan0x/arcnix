@@ -4,6 +4,12 @@ Rust + Glory + Sapid 桌面服务器管理工作台。通过 SSH 管理多台服
 
 界面默认使用英语，可从左侧底部 **Settings** 切换为简体中文。站点名、分组名、文件路径和远程日志正文保留原文。
 
+## 客户端代码目录
+
+`crates/arcnix/src/main.rs` 负责启动、应用状态和事件分发。功能实现按职责放在子目录。桌面和设置在 `desktop/`，文件浏览和传输在 `files/`，Text Editor 和 Code 在 `editor/`，Player 和浏览器在 `media/`。其余目录分别负责终端、监控、自动化、维护、软件管理、应用导航、公共组件和后台请求。
+
+`crates/arcnix-core/src/` 按连接、配置、桌面、文件、可观测性、自动化、维护和软件分组。客户端和 core 都用 `software/` 组织软件管理。客户端负责 App Center、Docker 和安装界面，core 负责软件源、包管理器、安装计划和远程操作。嵌入的 Shell 和 Python 程序与调用它们的功能在一起。公开模块通过 `lib.rs` 导出，客户端和集成测试继续使用原有模块路径。
+
 ## 项目图标
 
 图标源文件为 [`arcnix.svg`](../crates/arcnix/assets/arcnix.svg)，画布为 **512×512**，背景完全透明。四条单层服务器分别倾斜 ±45° 围成菱形，连接中央汇聚节点，表达多台服务器的统一管理。导航栏随主题使用同源的 `arcnix-dark.svg`／`arcnix-light.svg`，Windows 程序文件、窗口与任务栏使用通用蓝绿色版本的多尺寸 ICO。
@@ -225,6 +231,16 @@ Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口�
 
 桌面外观独立于客户端设置。“跟随应用”沿用客户端主题，亮／暗选择作用于 Desktop 及其对话框。远端 `~/.arcnix/desktop` 下的 `system.json`、`preferences/` 和 `apps/` 保存分域的 v1 JSON，通过 SSH 读写。首次保存、旧版 `desktop.json` 迁移和同次修改涉及多个文件时，生成一个配置目录并原子切换 `desktop` 链接。单文件修改只上传该文件，在锁内校验读到的配置版本，再原子替换目标文件。单文件保存之间共用当前代目录，上一代对应上次整套发布。并发修改触发重新读取和三方合并，同字段发生冲突时由用户选择。
 
+**Desktop** 将图标流向、起始方向、大小及主文件夹和回收站开关保存在 `preferences/desktop.json` 的 `layout`。在 **Settings → Dock** 可设置 Dock 的位置、样式、图标大小、时钟及固定快捷方式。Dock 设置保存在 `apps/dock.json`。从同一 SSH 桌面的 Files 拖到桌面时，默认或按 Shift 移动，Ctrl 复制，Alt 或 Ctrl+Shift 在远端 `Desktop` 目录创建符号链接。复制和移动继续使用 Files 的文件操作及冲突处理。
+
+桌面 **Region & Language** 将界面语言保存在远端 `~/.arcnix/desktop/system.json`，缺失时使用客户端语言。数字和文件大小格式沿用客户端偏好。**Date & Time** 仅在识别到系统的时区名称时提供时区选择，在 systemd 上通过 `timedatectl set-timezone` 保存，在其他 Linux 上更新系统时区链接及已有的兼容文件。修改系统时区需要 root 或可非交互使用的 sudo。12／24 小时制可在 **Date & Time** 设置。Dock 位于左侧或右侧时，**Dock clock** 可设置星期、日期和秒数。时钟的显示选项保存在 `system.json` 的 `clock` 中。客户端的更新检查位于主设置的 **Updates**。
+
+**Text Editor** 是已识别文本格式的建议默认应用。用户设置的文件关联优先。编辑器支持独立标签页、Markdown 预览、保存时检查远程版本和关闭前确认未保存修改。Code 仍可从 **Open with** 选用。Player 的 **Open video** 可拖右下角调整宽高，侧栏读取 Files 的位置、收藏、标签及回收站。
+
+**Appearance** 在预置主题和命名主题中选中一套，所选主题和命名主题均保存在 `preferences/desktop.json` 的 `themes`。从 **Customize** 创建主题时，选择浅色或深色方案、图标风格和强调色。新主题继承所选主题的壁纸，可在壁纸选项中更改当前配色方案的壁纸。浅色与深色壁纸不同时，缩略图并排显示。保存时记录选择的颜色参数，显示时使用对应的基础色板生成背景、面板、输入框、边框和文字色，强调色用于高亮和交互状态，并根据背景调整对比度。旧主题的色值覆盖仍可读取。文件夹只保存图案 ID，并按当前主题的风格渲染。
+
+新版读取旧配置或缺少配置文件的服务器时，保留已有设置，缺失项使用当前客户端的默认值。没有可用的主题时沿用旧配置中的壁纸和明暗模式，缺失的明暗模式跟随客户端。默认值在读取时生效，配置在用户保存修改时写入服务器。
+
 App Center 默认展示应用目录：18 个内置应用、7 个分类、搜索、详情和统一已安装列表。仅在点击安装后展示系统软件包／Snap／Docker Compose 的来源卡片，带入发行版对应的包名、Snap 发布者或 Compose 镜像；未定义方案或服务器缺少运行环境时禁用对应来源。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。目录介绍离线可用，不获取远程图片，也不虚构评分、下载量或版本；可用软件包和版本仍以服务器已启用仓库为准。按名称安装和仓库搜索保留为辅助入口。
 
 已安装页通过有限查询合并系统包、Snap 和 Arcnix Compose 项目，显示实际来源和版本；默认只显示目录中识别的系统应用，可勾选显示全部系统包。更新、卸载绑定原来源，Compose 项目跳转 Docker 管理。查询失败保留其他来源的结果并显示错误，刷新由用户主动触发，不增加客户端常驻任务。
@@ -252,7 +268,7 @@ cargo test -p arcnix-core --test server_apps_integration --locked -- --ignored -
 
 桌面应用打开、切换、最小化、关闭与最大化采用 160–240 毫秒的过渡，打开与最小化分别从启动图标方向展开和朝 Dock 收拢。Rust 通过 desktop-motion-state 仅发布可见性、应用、连接世代与窗口布局；浏览器使用独立窗口的 View Transition 合成快照，不复制应用 DOM 或终端内容、不重建会话，也不等待 SSH 数据。点击仍只交给原有处理器一次；连续点击跳过旧视觉并保持原生操作顺序，切回首页或更换连接立即结束旧过渡。缺少 View Transition 时使用轻量入场，捕获失败仍保留原操作；prefers-reduced-motion 动态关闭两种效果和图标动画。API 行为参考 [startViewTransition](https://developer.mozilla.org/en-US/docs/Web/API/Document/startViewTransition)；专项入口为 `python tools/desktop_motion_smoke.py`，另由 `server_desktop_smoke.py` 和 `app_center_smoke.py` 回归窗口与终端、应用中心流程。
 
-每个桌面应用在自己的 `~/.arcnix/desktop/apps/*.json` 中保存普通窗口的位置、大小和最大化状态。拖动或缩放结束后保存，双击标题栏可以恢复普通尺寸。视口变小时只限制显示范围，打开更大的视口会恢复原窗口几何。Files 通过 SFTP 查找主目录及已有的 Desktop、Documents、Downloads，侧栏开关、收藏、目录标记和自定义文件夹图标都保存在 `apps/files.json`。`tools/desktop_windows_smoke.py` 验证了跨应用、重开、视口缩小及客户端重启时的恢复。
+每个桌面应用在自己的 `~/.arcnix/desktop/apps/*.json` 中保存普通窗口的位置、宽高、参考工作区宽高和最大化状态。底部 Dock 从工作区扣除高度，左右 Dock 从相应侧扣除宽度。窗口布局、最大化和原生视图裁切共用这块工作区。自动隐藏保留 Dock 的占位，避免显示 Dock 时窗口移动。拖动或缩放从窗口当前显示的矩形开始，结束后将位置、宽高和工作区尺寸一起保存。工作区宽度和高度分别计算。空间小于原尺寸时，窗口在对应方向贴合两边。用户拖到边缘外的部分在工作区扩大时优先露出。窗口能完整显示后，中心尽量保持在参考工作区里的相对位置，由工作区边缘限制最终位置。Files 通过 SFTP 查找主目录及已有的 Desktop、Documents、Downloads，侧栏开关、收藏、目录标记和自定义文件夹图标都保存在 `apps/files.json`。`tools/desktop_windows_smoke.py` 验证了拖动、跨尺寸恢复及客户端重启。
 
 服务器首页右上角齿轮进入编辑。桌面标签右侧可将服务器桌面铺满应用内容区域；桌面顶栏按钮或 Escape 恢复原布局，弹窗和菜单优先处理 Escape，终端控件与 SSH 会话保留。桌面内“资源管理器”复用现有 SFTP 文件操作，仅显示远程目录，与“传输文件”共享路径、筛选和选择；下载使用当前本地目录，保存位置收进工具栏 `?`，也可跳转到双栏选择本地目录。日志工具栏放大镜重新检测日志源并读取日志，刷新按钮只读取当前查询。`python tools/server_desktop_smoke.py` 覆盖这些入口、实际文件内容、全屏与弹窗层级、语言和窄窗口。
 

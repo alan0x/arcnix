@@ -80,7 +80,8 @@ def read_desktop_settings(legacy):
             continue
         value = load(path)
         if 'window' in value:
-            windows['browser' if path.stem == 'web_browser' else path.stem] = value['window']
+            name = {'web_browser': 'browser', 'text_editor': 'editor'}.get(path.stem, path.stem)
+            windows[name] = value['window']
         if path.stem in ('files', 'terminal'):
             prefs[path.stem] = value.get('settings', {})
         elif path.stem == 'web_browser':
@@ -91,6 +92,20 @@ def read_desktop_settings(legacy):
                 prefs['resource_interval_seconds'] = interval
     prefs['windows'] = windows
     return prefs
+
+
+def desktop_mode(preferences):
+    themes = preferences.get('appearance', {}).get('themes', {})
+    selection = themes.get('selection', {})
+    value = selection.get('value')
+    kind = selection.get('kind')
+    modes = {'fjord': 'System', 'aurora': 'Dark', 'terracotta': 'Light'}
+    if kind == 'preset':
+        return modes[value]
+    if kind in ('saved', 'custom'):
+        custom = themes['saved'][value] if kind == 'saved' else value
+        return custom.get('overrides', {}).get('mode', modes[custom['base']])
+    return preferences.get('theme', 'System')
 
 
 def desktop_packet(legacy, paths, update=None):
@@ -196,6 +211,41 @@ def reply(server, channel, command):
         )
     if marker == '# arcnix:apps:discover':
         return send('ARCNIX_APPS_V1\n' + ('docker\ncompose\n' if seed.exists() else '') + ('snap\n' if (root/'software-snap-enabled').exists() else '') + ('tmux\n' if (root/'tmux-enabled').exists() else ''))
+    locale = root / 'system-locale'
+    if marker == '# arcnix:desktop:locale':
+        if not locale.exists():
+            return send('ARCNIX_LOCALE_V1\n\n')
+        return send('ARCNIX_LOCALE_V1\n/etc/default/locale\n' + locale.read_text(encoding='utf-8'))
+    if marker == '# arcnix:desktop:locale-list':
+        return send('C\nC.utf8\nen_US.utf8\nzh_CN.utf8\n')
+    if marker == '# arcnix:desktop:set-locale':
+        if (root / 'system-locale-denied').exists():
+            return send(status=1, error='Permission denied changing the fixture locale')
+        assert locale.exists()
+        lang = re.search(r"^lang='([^']+)'$", command, re.M)[1]
+        settings = [line for line in locale.read_text(encoding='utf-8').splitlines()
+                    if not line.startswith(('LANG=', 'LC_MESSAGES=', 'LANGUAGE='))]
+        locale.write_text('\n'.join([f'LANG={lang}', *settings, '']), encoding='utf-8')
+        return send('')
+    time_zone = root / 'system-time-zone'
+    if marker == '# arcnix:desktop:time-zone':
+        system = time_zone.exists()
+        current = time_zone.read_text(encoding='utf-8').strip() if system else ''
+        extra = root / 'time-zone-choices.txt'
+        return send(f"ARCNIX_TIME_ZONE_V1\n{'yes' if system else 'no'}\n{current}\n"
+                    'America/Phoenix\tUS\nAsia/Shanghai\tCN\nEtc/UTC\n'
+                    + (extra.read_text(encoding='utf-8') if extra.exists() else ''))
+    if marker == '# arcnix:desktop:set-time-zone':
+        if (root / 'system-time-zone-denied').exists():
+            return send(status=1, error='Permission denied changing the fixture time zone')
+        assert time_zone.exists()
+        zone = re.search(r"^zone='([^']+)'$", command, re.M)[1]
+        offsets = {'America/Phoenix': '-0700', 'Asia/Shanghai': '+0800', 'Etc/UTC': '+0000'}
+        time_zone.write_text(zone + '\n', encoding='utf-8')
+        clock_file = root / 'desktop-clock.json'
+        clock = json.loads(clock_file.read_text(encoding='utf-8')) if clock_file.exists() else {}
+        clock_file.write_text(json.dumps(dict(clock, offset=offsets[zone])), encoding='utf-8')
+        return send('')
     preferences = root / 'home' / server.username / '.arcnix' / 'desktop.json'
     if marker.startswith('# arcnix:desktop:domains:'):
         paths = re.search(r"^domains='([^']+)'$", command, re.M)[1].split()
@@ -210,6 +260,10 @@ def reply(server, channel, command):
             data.extend(chunk)
         if (root / 'desktop-write-denied').exists():
             return send(status=1, error='Permission denied writing desktop preferences')
+        hold = root / 'desktop-write-hold'
+        deadline = time.monotonic() + 10
+        while hold.exists() and time.monotonic() < deadline:
+            time.sleep(.025)
         if marker.endswith(':file'):
             base, expected, path = re.search(
                 r"^publish_file '([^']+)' '([^']+)' '([^']+)'$", command, re.M).groups()

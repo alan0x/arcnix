@@ -96,6 +96,14 @@
     }
     function itemTarget(event) {
         if (!favoriteDrag?.sourcePane) return null;
+        const canvas = event.target.closest?.('.desktop-canvas');
+        if (canvas && !event.target.closest('.desktop-window,.desktop-dock-zone,.desktop-context-menu,[inert],.hidden,[hidden]')
+            && canvas === favoriteDrag.window.closest('.desktop-canvas') && !favoriteDrag.fromFavorites) {
+            const shortcut = event.altKey || ((event.ctrlKey || event.metaKey) && event.shiftKey);
+            const action = shortcut ? 'shortcut' : (event.ctrlKey || event.metaKey) ? 'copy' : 'move';
+            return {bridge:favoriteDrag.window.querySelector('.files-item-drop-input'), mark:canvas,
+                copy:action === 'copy', effect:shortcut ? 'link' : action, data:{kind:'desktop', action}};
+        }
         const target = event.target.closest?.('.files-window-content');
         if (!target || target.closest('[inert],.hidden,[hidden]')) return null;
         const bridge = target.querySelector('.files-item-drop-input');
@@ -230,7 +238,7 @@
                 document.documentElement.dataset.filesDownloading = 'true';
                 send(downloadPane, 'drag_start', row, {}, {drag_id: favoriteDrag.id});
             }
-            event.dataTransfer.effectAllowed = favoriteDrag.fromFavorites ? 'move' : 'copyMove';
+            event.dataTransfer.effectAllowed = favoriteDrag.fromFavorites ? 'move' : 'all';
             event.dataTransfer.setData(favoriteDragType, String(favoriteDrag.id));
             fileGhost(event, row);
             return;
@@ -256,7 +264,7 @@
             const download = favoriteDrag.downloadPane && filesDownloadTarget(event.target);
             event.preventDefault();
             event.dataTransfer.dropEffect = target ? (favoriteDrag.fromFavorites ? 'move' : 'copy')
-                : transfer ? (transfer.copy || transfer.data.kind === 'tag' ? 'copy' : 'move') : download ? 'copy' : 'none';
+                : transfer ? (transfer.effect || (transfer.copy || transfer.data.kind === 'tag' ? 'copy' : 'move')) : download ? 'copy' : 'none';
             if (target) {
                 favoriteIndicator = target.row || target.zone;
                 favoriteIndicator.setAttribute('data-favorite-drop', target.row ? (target.after ? 'after' : 'before') : 'append');
@@ -548,7 +556,7 @@
         if (!(event.target instanceof Element) || event.detail === 0) return;
         clearTimeout(breadcrumbClick);
         const crumb = event.target.closest('.breadcrumb');
-        if (crumb) {
+        if (crumb && pathPane(crumb)) {
             event.preventDefault(); event.stopImmediatePropagation();
             // Give the browser time to recognize a double-click before replacing the path.
             if (event.detail === 1 && !crumb.classList.contains('current')) {
@@ -560,13 +568,14 @@
         }
         lastPane = pathPane(event.target) || lastPane;
         const row = event.target.closest(".file-list .file-row");
-        if (!row || event.target.closest(".file-expander,.file-inline-name")) return;
+        const pane = validPane(row);
+        if (!pane || event.target.closest(".file-expander,.file-inline-name")) return;
         const name = row.querySelector(".file-name");
         if (!name || name.disabled) return;
         event.preventDefault(); event.stopImmediatePropagation();
         name.focus({preventScroll: true});
-        if (event.detail === 1) send(row.closest(".file-pane"), "select", row, event);
-        else if (event.detail === 2 && !additive(event) && !event.shiftKey) send(row.closest(".file-pane"), "activate", row);
+        if (event.detail === 1) send(pane, "select", row, event);
+        else if (event.detail === 2 && !additive(event) && !event.shiftKey) send(pane, "activate", row);
     }, true);
     document.addEventListener('dblclick', event => {
         if (event.button !== 0 || !(event.target instanceof Element) || !event.target.closest('.breadcrumbs')) return;

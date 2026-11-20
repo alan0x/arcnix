@@ -9,7 +9,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'crates/arcnix-core/src'
+SOURCE = ROOT / 'crates/arcnix-core/src/observability'
 spec = importlib.util.spec_from_file_location('resource_ports', SOURCE / 'resource_ports.py')
 ports = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ports)

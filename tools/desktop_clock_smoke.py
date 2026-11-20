@@ -4,30 +4,51 @@ import json
 import re
 import time
 
-from desktop_fixture import Desktop, Peer, ROOT, expect
+from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expect, set_desktop_mode
+from server_apps_fixture import read_desktop_settings
+from update_smoke import ReleaseServer
 
 
-def set_clock(peer, epoch, offset, dock):
+def set_clock(peer, epoch, offset, dock, **preferences):
     (peer.root / 'desktop-clock.json').write_text(json.dumps({
         'unix_seconds': epoch, 'offset': offset,
     }), encoding='utf-8')
     settings = peer.root / 'home/arcnix/.arcnix/desktop.json'
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(json.dumps({
-        'version': 1, 'theme': 'System', 'appearance': {'dock': dock},
+        'version': 1, 'theme': 'System', 'appearance': {'dock': dock}, **preferences,
     }), encoding='utf-8')
 
 
 def main():
+    language_scope = (
+        'Changes the display language of this Arcnix desktop only. '
+        'The server manages its system language separately.'
+    )
     out = ROOT / 'artifacts/desktop-clock' / f'run-{time.time_ns()}'
     out.mkdir(parents=True)
-    with Peer(out / 'east') as east, Peer(out / 'west') as west:
+    with Peer(out / 'east') as east, Peer(out / 'west') as west, ReleaseServer(b'', '0.0.0') as updates:
+        updates.mode = 'none'
         epoch = int(datetime(2026, 11, 17, 22, 17, tzinfo=timezone.utc).timestamp())
-        set_clock(east, epoch, '+0545', {'panel_mode': True})
-        set_clock(west, epoch, '-0700', {'floating_status': True})
+        set_clock(east, epoch, '+0545', {'panel_mode': True}, time_zone='Asia/Shanghai')
+        set_clock(west, epoch, '-0700', {'floating_status': True}, clock={'timezone': 'local', 'show_seconds': True})
+        locale = west.root / 'system-locale'
+        system_locale = 'LANG="zh_CN.utf8"\nLC_TIME=de_DE.UTF-8\n'
+        locale.write_text(system_locale, encoding='utf-8')
+        system_zone = west.root / 'system-time-zone'
+        system_zone.write_text('America/Phoenix\n', encoding='utf-8')
+        (west.root / 'time-zone-choices.txt').write_text(
+            'Africa/Abidjan\tCI\nAfrica/Accra\tGH\nAmerica/Adak\tUS\n'
+            'Africa/Addis_Ababa\tET\nAustralia/Adelaide\tAU\nAsia/Aden\tYE\n'
+            'Africa/Algiers\tDZ\nAsia/Amman\tJO\nEurope/Amsterdam\tNL\n'
+            'Europe/Andorra\tAD\nAsia/Ankara\tTR\nEurope/Athens\tGR\n'
+            'America/Bahia\tBR\nAsia/Baku\tAZ\nEurope/London\tGB\n',
+            encoding='utf-8',
+        )
         config = east.config([east.profile('Eastern test server'), west.profile('Western test server')], out)
+        config['config']['settings']['theme'] = 'Dark'
         config['config']['trusted_hosts'].extend(west.config([], out)['config']['trusted_hosts'])
-        with Desktop(out / 'desktop', config) as app:
+        with Desktop(out / 'desktop', config, extra_env={'ARCNIX_TEST_UPDATE_URL': updates.base + '/latest'}) as app:
             page = app.page
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -53,8 +74,193 @@ def main():
             expect(clock).to_have_attribute('title', 'Server time (UTC-07:00)')
             expect(clock.locator('.desktop-panel-date')).to_have_text('11/17/2026')
             expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^3:17:[0-5]\d\s+PM$'))
+
+            app.application('Settings')
+            panel = page.locator('.desktop-settings-page')
+
+            def button(name):
+                return panel.get_by_role('button', name=name, exact=True)
+
+            zone = panel.locator('.desktop-time-zone-current')
+            picker = page.get_by_role('dialog', name='Select time zone', exact=True)
+            search = picker.get_by_role('textbox', name='Search cities and time zones', exact=True)
+            results = picker.locator('.time-zone-options')
+            status = page.locator('.app-settings > .desktop-window-titlebar > .desktop-settings-saving')
+
+            def open_zones():
+                zone.click()
+                expect(picker).to_be_visible()
+                expect(search).to_be_focused()
+
+            def set_zone(name):
+                open_zones()
+                search.fill(name.split('/')[-1].replace('_', ' '))
+                picker.get_by_role('button', name=name, exact=True).click()
+                expect(picker).to_have_count(0)
+
+            button('Date & Time').click()
+            preview = panel.locator('.desktop-time-preview')
+            expect(preview).to_have_attribute('title', 'Server time (UTC-07:00)')
+            expect(zone).to_have_text('America/Phoenix')
+            expect(panel.locator('.time-zone-summary')).to_have_text('Server time zone · UTC-07:00')
+            open_zones()
+            expect(results.get_by_role('button').first).to_have_attribute('aria-label', 'Africa/Abidjan')
+            assert results.get_by_role('button').count() > 12
+            assert results.evaluate('list => list.scrollHeight > list.clientHeight')
+            search.fill('united states phoenix')
+            expect(results.get_by_role('button')).to_have_count(1)
+            phoenix = results.get_by_role('button', name='America/Phoenix', exact=True)
+            expect(phoenix).to_have_attribute('aria-pressed', 'true')
+            expect(phoenix.locator('.time-zone-country')).to_have_text('United States')
+            expect(phoenix.locator('.time-zone-offset')).to_have_text('UTC-07:00')
+            expect(phoenix.locator('.time-zone-local-time')).to_have_text(re.compile(r'Tue,? 15:17'))
+            search.press('ArrowDown')
+            expect(phoenix).to_be_focused()
+            phoenix.press('Escape')
+            expect(picker).to_have_count(0)
+            expect(zone).to_be_focused()
+            open_zones()
+            expect(search).to_have_value('')
+            search.fill('unavailable zone')
+            expect(results.get_by_text('No matching time zones')).to_be_visible()
+            picker.get_by_role('button', name='Close dialog', exact=True).click()
+            expect(picker).to_have_count(0)
+            expect(button('AM / PM')).to_have_attribute('aria-pressed', 'true')
+            button('24-hour').click()
+            expect(status).to_be_hidden()
+            expect(preview.locator('.desktop-panel-time')).to_have_text(re.compile(r'^15:17:[0-5]\d$'))
+            expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^15:17:[0-5]\d$'))
+            expect(panel.get_by_role('switch')).to_have_count(0)
+            panel.screenshot(path=str(out / 'date-and-time.png'))
+            button('Dock').click()
+            clock_settings = panel.locator('.dock-clock-settings')
+            expect(clock_settings).to_have_count(0)
+            button('Left side').click()
+            side_clock = page.locator('.dock-left .desktop-panel-clock')
+            expect(clock_settings.get_by_text('Dock clock', exact=True)).to_be_visible()
+            weekday = clock_settings.get_by_role('switch', name='Weekday', exact=True)
+            date = clock_settings.get_by_role('switch', name='Date', exact=True)
+            seconds = clock_settings.get_by_role('switch', name='Seconds', exact=True)
+            expect(weekday).not_to_be_checked()
+            expect(date).to_be_checked()
+            expect(seconds).to_be_checked()
+            west_prefs = west.root / 'home/arcnix/.arcnix/desktop.json'
+            eventually(lambda: read_desktop_settings(west_prefs).get('clock', {}).get('format') == 'twenty_four_hour')
+            weekday.focus()
+            hold = west.root / 'desktop-write-hold'
+            hold.touch()
+            try:
+                started = time.monotonic()
+                weekday.press('Space')
+                expect(status).to_be_hidden()
+                expect(status).to_have_text('Saving…', timeout=7500)
+                assert time.monotonic() - started >= 5
+                expect(panel.get_by_text('Saving…', exact=True)).to_have_count(0)
+                assert status.evaluate('''element => {
+                    const note = element.getBoundingClientRect();
+                    const bar = element.parentElement.getBoundingClientRect();
+                    return Math.abs(note.left + note.right - bar.left - bar.right) < 1;
+                }''')
+            finally:
+                hold.unlink()
+            expect(status).to_be_hidden()
+            date.press('Space')
+            seconds.press('Space')
+            expect(side_clock.locator('.desktop-panel-weekday')).to_have_text('Tue')
+            expect(side_clock.locator('.desktop-panel-date')).to_be_hidden()
+            expect(side_clock.locator('.desktop-panel-time')).to_have_text('15:17')
+            eventually(lambda: read_desktop_settings(west_prefs).get('clock') == {
+                'format': 'twenty_four_hour', 'show_weekday': True, 'show_date': False, 'show_seconds': False,
+            })
+            button('Bottom').click()
+            expect(clock_settings).to_have_count(0)
+            expect(clock.locator('.desktop-panel-date')).to_have_text('11/17/2026')
+            expect(clock.locator('.desktop-panel-weekday')).to_be_hidden()
+            expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^15:17:[0-5]\d$'))
+            button('Left side').click()
+            button('Date & Time').click()
+            expect(preview.locator('.desktop-panel-date')).to_have_text('11/17/2026')
+            zone_denied = west.root / 'system-time-zone-denied'
+            zone_denied.touch()
+            set_zone('Asia/Shanghai')
+            expect(panel.get_by_text(re.compile('Cannot save the server time zone:'))).to_be_visible()
+            expect(zone).to_have_text('America/Phoenix')
+            assert 'time_zone' not in read_desktop_settings(west_prefs)
+            zone_denied.unlink()
+            set_zone('Asia/Shanghai')
+            expect(zone).to_have_text('Asia/Shanghai')
+            expect(side_clock.locator('.desktop-panel-time')).to_have_text('06:17')
+            expect(panel.locator('.time-zone-summary')).to_have_text('Server time zone · UTC+08:00')
+            assert system_zone.read_text(encoding='utf-8').strip() == 'Asia/Shanghai'
+            assert 'time_zone' not in read_desktop_settings(west_prefs)
+
+            button('Region & Language').click()
+            expect(panel.get_by_role('button', name='Exact bytes', exact=True)).to_be_visible()
+            expect(button('English')).to_have_attribute('aria-pressed', 'true')
+            expect(panel.get_by_text(language_scope, exact=True)).to_be_visible()
+            button('简体中文').click()
+            eventually(lambda: read_desktop_settings(west_prefs).get('language') == 'SimplifiedChinese')
+            expect(button('区域与语言')).to_have_attribute('aria-pressed', 'true')
+            expect(panel.get_by_text('仅影响当前 Arcnix 桌面的界面语言。服务器的系统语言独立管理。', exact=True)).to_be_visible()
+            expect(panel.get_by_role('button', name='精确字节数', exact=True)).to_be_visible()
+            expect(page.locator('.workbench-tabs').get_by_role('button', name='Desktop', exact=True)).to_be_visible()
+            expect(page.locator('.desktop-shortcuts').get_by_role('button', name='终端', exact=True)).to_be_visible()
+            assert locale.read_text(encoding='utf-8') == system_locale
+            log = (west.root / 'server-app-queries.jsonl').read_text(encoding='utf-8')
+            assert '# arcnix:desktop:locale' not in log and '# arcnix:desktop:set-locale' not in log
+            button('English').click()
+            expect(button('Region & Language')).to_have_attribute('aria-pressed', 'true')
+
+            set_desktop_mode(panel, 'Dark')
+            page.locator('.workbench-tabs').get_by_role('button', name='Fullscreen desktop').click()
+            page.set_viewport_size(dict(width=440, height=750))
+            button('Dock').click()
+            expect(seconds).to_be_visible()
+            clock_settings.screenshot(path=str(out / 'compact-dock-clock.png'))
+            button('Date & Time').click()
+            assert panel.locator('.desktop-preferences').evaluate('el => el.scrollWidth <= el.clientWidth + 1')
+            panel.screenshot(path=str(out / 'compact-date-and-time.png'))
+            open_zones()
+            assert picker.evaluate('''card => {
+                const box = card.getBoundingClientRect();
+                return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight;
+            }''')
+            assert results.evaluate('list => list.scrollHeight > list.clientHeight')
+            picker.screenshot(path=str(out / 'compact-time-zone-picker.png'))
+            search.press('Escape')
+            expect(picker).to_have_count(0)
+            expect(button('Software Updates')).to_have_count(0)
+            page.set_viewport_size(dict(width=1440, height=980))
+            page.get_by_role('button', name='Exit desktop fullscreen', exact=True).click()
+            app.settings('Updates')
+            update_panel = page.locator('.update-panel')
+            expect(update_panel.locator('.preference-check').first).to_have_css(
+                'color', page.locator('.app').evaluate('app => getComputedStyle(app).color'),
+            )
+            update_panel.get_by_role('button', name='Check now', exact=True).click()
+            expect(update_panel.locator('.update-status')).to_have_text('No published release is available yet')
+            app.servers()
+
+            page.get_by_role('button', name='Disconnect', exact=True).click()
+            app.connect(0)
+            app.application('Settings')
+            button('Date & Time').click()
+            east_prefs = east.root / 'home/arcnix/.arcnix/desktop.json'
+            expect(zone).to_have_count(0)
+            expect(panel.locator('.desktop-time-preview .desktop-panel-time')).to_have_text(re.compile(r'^4:02:[0-5]\d\s+AM$'))
+            assert not (east.root / 'system-time-zone').exists()
+            # A system file with no identifiable zone also leaves the picker hidden.
+            (east.root / 'system-time-zone').touch()
+            button('Date & Time').click()
+            expect(zone).to_have_count(0)
+            button('Region & Language').click()
+            expect(panel.get_by_text(language_scope, exact=True)).to_be_visible()
+            button('简体中文').click()
+            eventually(lambda: read_desktop_settings(east_prefs).get('language') == 'SimplifiedChinese')
+            expect(button('区域与语言')).to_have_attribute('aria-pressed', 'true')
+            assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['language'] == 'English'
             assert not errors, errors
-            print('Both Dock modes show the connected server clock, including date rollover and seconds.')
+            print('Vertical Dock clocks, system time zones, Arcnix desktop language and application Updates passed.')
 
 
 if __name__ == '__main__':

@@ -13,6 +13,20 @@ const desktopFrame = (() => {
         return insets;
     }
 
+    function workArea(canvas) {
+        const {width, height} = canvas.getBoundingClientRect();
+        const dock = dockInsets(canvas);
+        const reserve = size => size ? size + 8 : 0;
+        const left = reserve(dock.left);
+        const right = reserve(dock.right);
+        const bottom = reserve(dock.bottom);
+        return {
+            left, right, bottom,
+            width: Math.max(1, Math.floor(width - left - right)),
+            height: Math.max(1, Math.floor(height - bottom)),
+        };
+    }
+
     function sync() {
         const root = document.documentElement;
         if (!canvas || !root) return;
@@ -44,7 +58,7 @@ const desktopFrame = (() => {
         if (!canvas) return;
         resize.observe(canvas);
         if (dock) {
-            resize.observe(dock);
+            resize.observe(dock, {box: 'border-box'});
             dockItems.observe(dock, {childList: true, subtree: true});
             dockPosition.observe(dock, {attributes: true, attributeFilter: ['class']});
             sizeDockTiles();
@@ -63,5 +77,5 @@ const desktopFrame = (() => {
         return {left: 0, top: 0, right: innerWidth, bottom: innerHeight};
     }
 
-    return {boundsFor, dockInsets};
+    return {boundsFor, workArea};
 })();
