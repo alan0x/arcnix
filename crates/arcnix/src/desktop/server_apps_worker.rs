@@ -12,8 +12,6 @@ pub enum Action {
     PickerTrash,
     CheckDesktopPaths(Vec<String>),
     DesktopItems,
-    ReadWallpaper(String),
-    ImportWallpaper(std::path::PathBuf),
     SoftwareInventory,
     Disks,
     NetworkSettings,
@@ -47,7 +45,6 @@ pub enum Reply {
         unchecked: usize,
     },
     DesktopItems(desktop_customization::DesktopItems),
-    Wallpaper(desktop_customization::WallpaperImage),
     SoftwareInventory(arcnix_core::software_catalog::Inventory),
     Disks(arcnix_core::disks::Snapshot),
     NetworkSettings(arcnix_core::network::Snapshot),
@@ -106,12 +103,6 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             Reply::MissingDesktopPaths { paths, unchecked }
         }
         Action::DesktopItems => Reply::DesktopItems(desktop_customization::items(session)?),
-        Action::ReadWallpaper(path) => {
-            Reply::Wallpaper(desktop_customization::read_wallpaper(session, &path)?)
-        }
-        Action::ImportWallpaper(path) => {
-            Reply::Wallpaper(desktop_customization::import_wallpaper(session, &path)?)
-        }
         #[cfg(windows)]
         Action::ReadCookies(client) => {
             Reply::Cookies(sync::Document::Cookies(&client).read(session)?)

@@ -33,6 +33,7 @@ pub(crate) struct BrowserState {
     remote: PaneState,
     local_icons: bool,
     remote_icons: bool,
+    pub(crate) icon_size: files_view::IconSize,
     drag: Option<FileDrag>,
     remote_history: RemoteHistory,
 }
@@ -83,48 +84,59 @@ pub(crate) struct TabSnapshot {
     selection: HashSet<String>,
     pane: PaneState,
     history: RemoteHistory,
-    icons: bool,
+    pub(super) icons: bool,
+    pub(super) icon_size: files_view::IconSize,
+    sort: Sort,
+    descending: bool,
     tag: Option<files_ui::TagFilter>,
     search: files_search::Search,
-    trash: bool,
+    view: files_tabs::Location,
 }
 
 impl TabSnapshot {
     pub(crate) fn title(&self) -> String {
-        tab_title(&self.path, self.trash, self.tag)
+        tab_title(&self.path, self.view, self.tag)
     }
 
     pub(crate) fn location(&self) -> String {
-        if self.trash {
-            i18n::translate("回收站")
-        } else {
-            self.path.clone()
+        match self.view {
+            files_tabs::Location::Trash => i18n::translate("回收站"),
+            files_tabs::Location::Apps => i18n::translate("Apps"),
+            files_tabs::Location::Directory => self.path.clone(),
         }
     }
 
     pub(crate) fn preview_entries(&self, show_hidden: bool) -> Vec<FileEntry> {
-        if self.trash || !self.ready {
+        if self.view != files_tabs::Location::Directory || !self.ready {
             Vec::new()
         } else {
-            self.entries
-                .iter()
-                .filter(|entry| show_hidden || !entry.name.starts_with('.'))
-                .take(100)
-                .cloned()
-                .collect()
+            let search = self.search.open.then_some(&self.search);
+            let range = search.and_then(files_search::Search::date_range);
+            visible(
+                &self.entries,
+                search.map_or("", |s| s.query.trim()),
+                self.sort,
+                self.descending,
+            )
+            .into_iter()
+            .filter(|entry| show_hidden || !entry.name.starts_with('.'))
+            .filter(|entry| search.is_none_or(|s| s.accepts(entry, range.as_ref())))
+            .take(100)
+            .collect()
         }
     }
 
     pub(crate) fn directory(&self) -> Option<&str> {
-        (self.ready && !self.trash && self.tag.is_none()).then_some(self.path.as_str())
+        (self.ready && self.view == files_tabs::Location::Directory && self.tag.is_none())
+            .then_some(self.path.as_str())
     }
 
     pub(crate) fn entries(&self) -> &[FileEntry] {
         &self.entries
     }
 
-    pub(crate) fn trash(&self) -> bool {
-        self.trash
+    pub(crate) fn view(&self) -> files_tabs::Location {
+        self.view
     }
 
     pub(crate) fn tag(&self) -> Option<files_ui::TagFilter> {
@@ -139,10 +151,11 @@ impl TabSnapshot {
     }
 
     pub(crate) fn dragged_entries(&self, path: &str) -> Vec<arcnix_core::deletion::Target> {
-        if !self
-            .entries
-            .iter()
-            .any(|entry| entry.path == path && !entry.is_symlink)
+        if self.view == files_tabs::Location::Apps
+            || !self
+                .entries
+                .iter()
+                .any(|entry| entry.path == path && !entry.is_symlink)
         {
             return Vec::new();
         }
@@ -155,9 +168,11 @@ impl TabSnapshot {
     }
 }
 
-fn tab_title(path: &str, trash: bool, tag: Option<files_ui::TagFilter>) -> String {
-    if trash {
+fn tab_title(path: &str, view: files_tabs::Location, tag: Option<files_ui::TagFilter>) -> String {
+    if view == files_tabs::Location::Trash {
         i18n::translate("回收站")
+    } else if view == files_tabs::Location::Apps {
+        i18n::translate("Apps")
     } else if let Some(tag) = tag {
         i18n::translate(tag.label())
     } else {
@@ -172,7 +187,7 @@ fn tab_title(path: &str, trash: bool, tag: Option<files_ui::TagFilter>) -> Strin
 pub(crate) fn live_tab_title(s: &State) -> String {
     tab_title(
         &s.remote_path,
-        s.workbench.files.trash,
+        s.workbench.files.location,
         s.server_apps.files_tag,
     )
 }
@@ -189,9 +204,12 @@ pub(crate) fn capture_tab(s: &State) -> TabSnapshot {
         pane,
         history: s.file_browser.remote_history.clone(),
         icons: s.file_browser.remote_icons,
+        icon_size: s.file_browser.icon_size,
+        sort: s.remote_sort,
+        descending: s.remote_desc,
         tag: s.server_apps.files_tag,
         search: s.server_apps.files_search.clone(),
-        trash: s.workbench.files.trash,
+        view: s.workbench.files.location,
     }
 }
 
@@ -203,10 +221,13 @@ pub(crate) fn restore_tab(s: &mut State, tab: &TabSnapshot) {
     s.file_browser.remote.clone_from(&tab.pane);
     s.file_browser.remote_history.clone_from(&tab.history);
     s.file_browser.remote_icons = tab.icons;
+    s.file_browser.icon_size = tab.icon_size;
+    s.remote_sort = tab.sort;
+    s.remote_desc = tab.descending;
     s.server_apps.files_tag = tab.tag;
     s.server_apps.files_search.clone_from(&tab.search);
     s.server_apps.files_open_pending = None;
-    s.workbench.files.trash = tab.trash;
+    s.workbench.files.location = tab.view;
     s.remote_request = 0;
     s.file_browser.cancel_drag();
 }
@@ -219,6 +240,7 @@ pub(crate) fn fresh_tab(s: &mut State) {
     s.remote_request = 0;
     s.server_apps.files_search = Default::default();
     s.server_apps.files_open_pending = None;
+    s.workbench.files.location = files_tabs::Location::Directory;
 }
 
 #[derive(Clone)]
@@ -740,7 +762,7 @@ pub(crate) fn navigate(ui: &Ui, remote: bool, target: String) {
     ui.state.revise(|s| {
         if remote {
             if s.workspace_page.is_files() {
-                s.workbench.files.trash = false;
+                s.workbench.files.location = files_tabs::Location::Directory;
             }
             s.file_browser.remote_history.requested = None;
             s.remote_path = target;
@@ -1497,6 +1519,7 @@ pub(crate) fn pathbar(
     let crumb_ui = ui.clone();
     let history_ui = ui.clone();
     let search_ui = ui.clone();
+    let toggle_search = ui.clone();
     let options_ui = ui.clone();
     let enabled = state.map(move |s| !remote || s.connected && s.sftp_available);
     row().class("pathbar").fill((
@@ -1650,6 +1673,7 @@ pub(crate) fn pathbar(
                 Err(error) => copy_ui.error(format!("复制路径失败：{error}")),
             }
         }),
+        when(files, move || files_search::toggle(toggle_search.clone())),
         icon_action(
             if remote {
                 "刷新远程目录"

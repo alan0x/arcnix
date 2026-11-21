@@ -168,7 +168,7 @@ pub(crate) struct Host {
     epoch: Option<u64>,
     view: Option<WebView>,
     ready: bool,
-    save_shortcut: Option<String>,
+    save_shortcut: Option<Vec<String>>,
     picker: bool,
     menu_width: Option<i32>,
     bounds: Option<native_viewport::Viewport>,
@@ -209,7 +209,7 @@ impl Host {
                 "pageBytes": arcnix_core::text_files::PAGE_BYTES,
                 "zh": desktop_system_settings::language(s) == arcnix_core::Language::SimplifiedChinese,
                 "dark": server_apps_ui::desktop_dark(s),
-                "saveShortcut": server_apps_ui::current(s).shortcuts.binding(arcnix_core::desktop_shortcuts::Action::CodeSave),
+                "saveShortcut": desktop_shortcuts_ui::keys(s).chords(arcnix_core::desktop_shortcuts::Action::CodeSave).collect::<Vec<_>>(),
             })
         });
         let tx = self.tx.clone();
@@ -370,6 +370,13 @@ impl Host {
                         );
                     }
                 }
+                Some("write") => {
+                    if let Some(id) = msg["id"].as_u64()
+                        && let Ok(write) = serde_json::from_value(msg)
+                    {
+                        code_workbench::save(&self.ui, id, Arc::new(write), None);
+                    }
+                }
                 Some("focus") => {
                     if self.ui.state.with(|s| {
                         server_desktop::visible(s)
@@ -393,11 +400,12 @@ impl Host {
                         let serial = self.ui.send(Action::CodeFile(request));
                         self.ui.state.revise(|s| {
                             if background {
-                                &mut s.code.background
+                                s.code.background.insert(serial, id);
                             } else {
-                                &mut s.code.pending
+                                s.code
+                                    .pending
+                                    .insert(serial, code_workbench::Pending::File(id));
                             }
-                            .insert(serial, id)
                         });
                     }
                 }
@@ -412,17 +420,17 @@ impl Host {
         }
         if self.ready {
             let shortcut = self.ui.state.with(|s| {
-                server_apps_ui::current(s)
-                    .shortcuts
-                    .binding(arcnix_core::desktop_shortcuts::Action::CodeSave)
+                desktop_shortcuts_ui::keys(s)
+                    .chords(arcnix_core::desktop_shortcuts::Action::CodeSave)
                     .map(str::to_owned)
+                    .collect::<Vec<_>>()
             });
-            if self.save_shortcut != shortcut {
+            if self.save_shortcut.as_ref() != Some(&shortcut) {
                 let _ = view.evaluate_script(&format!(
                     "window.arcnixSetSaveShortcut({});",
                     json!(shortcut)
                 ));
-                self.save_shortcut = shortcut;
+                self.save_shortcut = Some(shortcut);
             }
         }
         if self.ui.state.with(|s| !s.code.terminals.events.is_empty()) {

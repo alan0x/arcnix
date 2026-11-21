@@ -21,6 +21,9 @@ def main():
         for number in range(28):
             (home_desktop / f'sample-{number:02}.txt').write_text('sample', encoding='utf-8')
         (peer.root / 'plain.txt').write_text('plain text from SSH', encoding='utf-8')
+        python_source = ('    answer = 42\n"""\n' + 'documentation\n' * 300 +
+                         'last comment\n"""\nvalue = "' + 'x' * 600 + '"')
+        (peer.root / 'example.py').write_text(python_source, encoding='utf-8')
         (peer.root / 'drag.html').write_text('<p>dragged from Files</p>', encoding='utf-8')
         (home_desktop / 'drop.html').write_text('<p>dragged from Desktop</p>', encoding='utf-8')
         with Desktop(out / 'desktop', peer.config([peer.profile('Editor fixture')], local)) as app:
@@ -31,9 +34,10 @@ def main():
             app.workspace('Desktop')
             p.set_viewport_size(dict(width=900, height=620))
             shortcuts = p.locator('.desktop-shortcuts')
-            launcher = shortcuts.get_by_role('button', name='Text Editor', exact=True)
+            launcher = app.apps().get_by_role('button', name='Text Editor', exact=True)
             editor_icon = launcher.locator('.desktop-app-icon')
             assert editor_icon.evaluate("icon => getComputedStyle(icon, '::before').maskImage") != 'none'
+            p.keyboard.press('Escape')
             expect(shortcuts.get_by_role('button', name='sample-27.txt', exact=True)).to_have_count(1)
             layout = shortcuts.evaluate('''grid => {
                 const slots = [...grid.querySelectorAll('.desktop-icon-slot')];
@@ -55,7 +59,7 @@ def main():
             shortcuts.evaluate('el => el.scrollLeft = 0')
             app.screenshot('desktop-icon-columns.png')
             p.set_viewport_size(dict(width=1440, height=980))
-            launcher.click()
+            app.application('Text Editor')
             window = p.locator('.desktop-window.app-editor')
             titlebar = window.locator('.desktop-window-titlebar')
             editor = p.locator('.desktop-editor')
@@ -81,12 +85,33 @@ def main():
             expect(editor.get_by_text('Drop files here', exact=True)).to_be_visible()
             choose_file('drag.html', double=True)
             expect(contents).to_have_value('<p>dragged from Files</p>')
+            paint = editor.locator('.editor-code-lines')
+            expect(paint.locator('.cm-tag:not(.cm-bracket)').first).to_have_text('p')
+            expect(paint.locator('p')).to_have_count(0)
+            expect(editor.locator('.editor-mode-name')).to_have_text('HTML')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
             titlebar.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            choose_file('example.py')
+            expect(contents).to_have_value(python_source)
+            expect(contents).to_be_enabled()
+            expect(editor.locator('.editor-mode-name')).to_have_text('Python')
+            contents.press('Control+Home')
+            contents.press('End')
+            contents.press('Enter')
+            expect(contents).to_have_value(python_source.replace('42\n', '42\n    \n', 1))
+            contents.press('Control+z')
+            expect(contents).to_have_value(python_source)
+            contents.press('Control+End')
+            expect(editor.locator('.editor-line-value')).to_have_text('305')
+            expect(paint.locator('.cm-string').filter(has_text='last comment')).to_have_count(1)
+            assert contents.evaluate('el => el.scrollTop > 0 && el.scrollLeft > 0')
+            titlebar.get_by_role('button', name='Close file tab example.py', exact=True).click()
             choose_file('plain.txt')
             expect(contents).to_have_value('plain text from SSH')
+            expect(editor.locator('.editor-plain-label')).to_be_visible()
+            expect(paint).not_to_be_visible()
             p.locator('.desktop-window.active .window-minimize').click()
-            p.locator('.desktop-dock-home').click()
+            app.show_desktop()
             p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).click()
             expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Text Editor')
             preview = editor.locator('.markdown-preview')
@@ -108,6 +133,10 @@ def main():
 
             editor.get_by_role('button', name='Edit source', exact=True).click()
             expect(contents).to_have_value(source)
+            expect(editor.locator('.editor-format')).to_have_text('UTF-8 BOM · CRLF')
+            contents.press('Control+Home')
+            contents.press('ArrowDown')
+            expect(editor.locator('.editor-line-value')).to_have_text('2')
             edited = source.replace('# Notes', '# Saved notes')
             contents.fill(edited)
             editor.get_by_role('button', name='Preview', exact=True).click()
@@ -153,31 +182,28 @@ def main():
             expect(p.locator('.desktop-window.app-editor')).to_have_count(0)
             assert b'Unsaved draft' not in notes.read_bytes()
 
-            def move_window(app_class, delta):
-                mark = p.locator(f'.desktop-window.{app_class} .desktop-window-mark')
-                box = mark.bounding_box()
-                x, y = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
-                p.mouse.move(x, y)
-                p.mouse.down()
-                p.mouse.move(x + delta, y, steps=8)
-                p.mouse.up()
-
-            launcher.click()
+            app.application('Text Editor')
             app.application('Files')
-            move_window('app-files', 320)
-            files_source = p.locator('.app-files.active .file-row[aria-label="/drag.html"]')
+            # Keep both drop surfaces and the desktop shortcuts exposed at this viewport.
+            placement = p.add_style_tag(content="""
+                .desktop-window.app-editor, .desktop-window.app-files {
+                    top: 60px !important; width: 36% !important; height: 55% !important;
+                }
+                .desktop-window.app-editor { left: 24% !important; }
+                .desktop-window.app-files { left: 62% !important; }
+            """)
+            files_source = p.locator('.desktop-window.app-files:visible .file-row[aria-label="/drag.html"]')
             files_source.drag_to(editor, source_position={'x': 25, 'y': 12},
                                  target_position={'x': 110, 'y': 160})
             expect(contents).to_have_value('<p>dragged from Files</p>')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
             titlebar.get_by_role('button', name='Close file tab drag.html', exact=True).click()
-            move_window('app-editor', 320)
             shortcuts.get_by_role('button', name='drop.html', exact=True).drag_to(
                 editor, target_position={'x': 150, 'y': 160})
             expect(contents).to_have_value('<p>dragged from Desktop</p>')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
             assert (peer.root / 'drag.html').is_file() and (home_desktop / 'drop.html').is_file()
-            move_window('app-editor', -320)
+            placement.evaluate('el => el.remove()')
             titlebar.get_by_role('button', name='Toggle maximize', exact=True).click()
             for number in range(12):
                 choose_file(f'sample-{number:02}.txt', double=True, filesystem=False)
@@ -197,6 +223,7 @@ def main():
     print(json.dumps(dict(output=str(out), checks=[
         'Desktop icons fill a column before growing right, with no vertical scroll or visible scrollbar',
         'The shared picker confirms selection and opens HTML directly in Text Editor',
+        'The source view tracks the caret, both scroll axes, multiline tokens and undoable auto-indent',
         'Text Editor puts tabs and actions in the titlebar and opens a scrollable tab picker when space runs out',
         'Dragging files from Files and Desktop opens them directly without moving their originals',
         'Markdown renders headings, emphasis, tables and code offline with raw HTML shown as text',

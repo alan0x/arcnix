@@ -399,10 +399,15 @@ fn status(s: &State) -> &'static str {
     }
 }
 pub(crate) fn panel(ui: Ui) -> impl Widget {
-    settings::panel(
+    settings::panel_with_reset(
         &ui,
         navigation::SettingsSection::Updates,
         "Updates",
+        settings::local_reset(&ui, false, |s, defaults| {
+            s.updates.automatic_checks = defaults.updates.automatic_checks;
+            s.updates.automatic_install = defaults.updates.automatic_install;
+            s.updates.interval_days = defaults.updates.interval_days;
+        }),
         controls(ui.clone()),
     )
 }

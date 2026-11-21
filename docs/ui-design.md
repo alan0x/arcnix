@@ -16,6 +16,14 @@
 
 切换语言更新现有文本，保留应用与导航按钮实例；不通过销毁整棵界面刷新语言。切换后紧接导航操作应立即有效，也不自动补点或强制跳转。
 
+## 内部桌面的英文大小写
+
+Arcnix 内部桌面采用句式大小写（sentence case）。菜单栏、右键菜单、子菜单、设置分区、对话框标题、按钮、工具提示和可访问名称都遵循同一规则。短语的首词首字母大写，其余普通词小写。例如 `New window`、`Make alias`、`Customize folder…`、`Date & time` 和 `Toggle sidebar`。单词命令写作 `Close`。同一操作从不同入口打开时使用相同的大小写。[Microsoft 大小写指南](https://learn.microsoft.com/en-us/style-guide/capitalization) · [Microsoft 菜单标签指南](https://learn.microsoft.com/en-us/windows/win32/uxguide/cmd-menus#labels)
+
+应用名、明确引用的页面或位置名、技术名和缩写保留正式拼写。例如 `Open in Code Editor` 指向应用，`Move to Trash` 指向名为 `Trash` 的位置，`Open Markdown preview to the side` 中的 `Markdown` 是格式名。普通界面部件在短语中用小写，如 `Floating dock`。键名、单位和技术标识沿用各自的写法，如 `Ctrl+C`、`SSH`、`macOS`、`MiB`。
+
+直接编辑 Arcnix 提供的英文文案，同时核对翻译表、可访问名称和使用这些名称的界面测试。文件名、书签、远程输出、第三方编辑器和扩展自带的命令以及网页内容保留来源拼写。宿主系统原生菜单遵循对应平台规范。GNOME 与 Apple 均为原生菜单指定标题式大小写，如 `Always on Top`。[GNOME 菜单指南](https://developer.gnome.org/hig/patterns/controls/menus.html) · [Apple 菜单指南](https://developer.apple.com/design/human-interface-guidelines/menus)
+
 ## 信息层级
 
 | 区域 | 内容 | 不承载的内容 |

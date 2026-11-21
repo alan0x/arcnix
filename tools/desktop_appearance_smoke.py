@@ -5,6 +5,61 @@ from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expec
 from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 
 
+def check_appearance_choices(panel):
+    def button(name):
+        return panel.get_by_role('button', name=name, exact=True)
+
+    line, color = button('Line icons'), button('Color icons')
+    gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
+    expect(gallery.locator('.wallpaper-choice')).to_have_text(['Fjord', 'Aurora', 'Seaside'])
+    selected_wallpaper = gallery.locator('.wallpaper-choice[aria-pressed=true]')
+    background = panel.page.locator('.desktop-wallpaper-art')
+    for mode in ('Light', 'Dark'):
+        hover_colors = set()
+        for preset in ('Fjord', 'Aurora', 'Seaside'):
+            card = button(preset).locator('..')
+            card.click(position={'x': 20, 'y': 20})
+            expect(button(preset)).to_have_attribute('aria-pressed', 'true')
+            button(mode).click()
+            expect(button(mode)).to_have_attribute('aria-pressed', 'true')
+            expect(panel.page.locator('.server-desktop')).to_have_class(
+                f'server-desktop theme-{mode.lower()} desktop-{mode.lower()}',
+            )
+            color.hover()
+            selected = line.evaluate('e => getComputedStyle(e).backgroundColor')
+            hover = color.evaluate('e => getComputedStyle(e).backgroundColor')
+            assert hover != selected, (preset, mode)
+            hover_colors.add(hover)
+            color.click()
+            expect(color).to_have_attribute('aria-pressed', 'true')
+            expect(color).to_have_css('background-color', selected)
+            color.press('Tab')
+            panel.page.keyboard.press('Shift+Tab')
+            expect(color).to_be_focused()
+            assert color.evaluate("e => e.matches(':focus-visible') && parseFloat(getComputedStyle(e).outlineWidth) >= 1.8")
+            line.click()
+            override = 'Aurora' if preset == 'Seaside' else 'Seaside'
+            gallery.get_by_role('button', name=f'{override} wallpaper', exact=True).click()
+            expect(selected_wallpaper).to_have_text(override)
+            gallery.get_by_role('button', name='Reset', exact=True).click()
+            expect(selected_wallpaper).to_have_text(preset)
+            expect(background).to_have_class(f'desktop-wallpaper-art wallpaper-{preset.lower()}')
+            if preset == 'Aurora':
+                swatches = card.locator('.theme-wallpaper-swatch')
+                images = swatches.evaluate_all('els => els.map(el => getComputedStyle(el).backgroundImage)')
+                assert len(images) == 2 and images[0] != images[1]
+                assert all('gradient(' in image and 'url(' not in image for image in images)
+                active_image = images[0 if mode == 'Light' else 1]
+                expect(background).to_have_css('background-image', active_image)
+                expect(selected_wallpaper.locator('.wallpaper-swatch')).to_have_css('background-image', active_image)
+            if preset == 'Aurora' and mode == 'Dark':
+                button('Auto').click()
+                expect(selected_wallpaper).to_have_text('Aurora')
+                expect(background).to_have_class('desktop-wallpaper-art wallpaper-aurora')
+        assert len(hover_colors) == 3, (mode, hover_colors)
+    button('Fjord').click()
+
+
 def main():
     out = ROOT / 'artifacts/desktop-appearance' / str(time.time_ns())
     with Peer(out / 'peer') as peer:
@@ -20,6 +75,10 @@ def main():
         (home / 'night.svg').write_text(
             '<svg xmlns="http://www.w3.org/2000/svg" width="90" height="60">'
             '<rect width="90" height="60" fill="#32264a"/></svg>', encoding='utf-8',
+        )
+        (home / 'dawn.svg').write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="110" height="60">'
+            '<rect width="110" height="60" fill="#a57262"/></svg>', encoding='utf-8',
         )
         with Desktop(out / 'desktop', peer.config([peer.profile('Desktop appearance')], out)) as app:
             page = app.page
@@ -64,7 +123,8 @@ def main():
                         return gap < limit && Math.abs(first.inset * 2 - gap) <= 2;
                     };
                     const top = grid.getBoundingClientRect().top;
-                    return testAxis('width', 50, rect => Math.abs(rect[side] - start) - dock)
+                    return testAxis('width', 50, rect => Math.abs(rect[side] - start) - dock,
+                            parseFloat(rules.gridAutoColumns) + parseFloat(rules.columnGap))
                         && testAxis('height', 66, rect => rect.top - top,
                             parseFloat(rules.gridAutoRows) + parseFloat(rules.rowGap));
                 }'''))
@@ -116,7 +176,7 @@ def main():
             expect(links).to_have_css('column-gap', '8px')
 
             button('Desktop').click()
-            headings_locator = panel.locator('.desktop-settings-card > .section-title')
+            headings_locator = panel.locator('.desktop-settings-card .section-title')
             expect(headings_locator.first).to_have_text('Desktop layout')
             headings = headings_locator.all_text_contents()
             assert headings[:2] == ['Desktop layout', 'Desktop icons'], headings
@@ -173,7 +233,7 @@ def main():
             button('Dock').click()
             expect(panel.get_by_role('slider', name='Dock icon size', exact=True)).to_have_value('48')
             button('Desktop').click()
-            visible = shortcut_options('Visible icons')
+            visible = shortcut_options('App icons')
             expect(visible.get_by_role('checkbox', name='Files', exact=True)).to_be_checked()
             visible.get_by_role('checkbox', name='Home', exact=True).check()
             visible.get_by_role('checkbox', name='Trash', exact=True).check()
@@ -186,19 +246,34 @@ def main():
             files_mask = grid.get_by_role('button', name='Files', exact=True).locator('.desktop-app-icon').evaluate(
                 "icon => getComputedStyle(icon, '::before').maskImage",
             )
-            assert home_mask.startswith('url("data:image/svg+xml,') and home_mask != files_mask
+            assert home_mask.startswith('url("data:image/svg+xml;base64,') and home_mask != files_mask
             expect(grid.get_by_role('button', name='Trash', exact=True)).to_be_visible()
 
             button('Appearance').click()
+            check_appearance_choices(panel)
             button('Aurora').click()
+            expect(desktop).to_have_class('server-desktop theme-light desktop-light')
+            styles = panel.locator('.appearance-color-settings .desktop-setting-row')
+            scheme_options = styles.filter(has_text='Color scheme').get_by_role('button')
+            icon_styles = panel.locator('.appearance-icon-settings')
+            icon_options = icon_styles.locator('.desktop-setting-row').filter(has_text='Tile background').get_by_role('button')
+            default_scheme = styles.filter(has_text='Color scheme').get_by_role('button', name='Auto', exact=True)
+            expect(scheme_options).to_have_text(['Auto', 'Light', 'Dark'])
+            expect(icon_options).to_have_text(['Gradient', 'Solid color'])
+            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            button('Dark').click()
             expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
+            expect(button('Gradient')).to_have_attribute('aria-pressed', 'true')
             check_interval_style('aurora')
             button('Appearance').click()
-            button('Terracotta').click()
+            button('Seaside').click()
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'filled')
+            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            expect(desktop).to_have_class('server-desktop theme-light desktop-light')
+            expect(button('Solid color')).to_have_attribute('aria-pressed', 'true')
             check_filled_icons()
-            check_interval_style('terracotta')
-            button('Region & Language').click()
+            check_interval_style('seaside')
+            button('Region & language').click()
             region = panel.locator('.desktop-region')
             expect(region.get_by_role('button', name='English', exact=True)).to_have_attribute('aria-pressed', 'true')
             assert region.evaluate('''region => {
@@ -208,112 +283,150 @@ def main():
                 return [...region.querySelectorAll('.section-title, .field-label')].every(label => color(label) === color(desktop))
                     && [...region.querySelectorAll('.choice.active, .button[aria-pressed=true]')].every(button => color(button) === active);
             }''')
-            region.screenshot(path=str(out / 'terracotta-region.png'))
+            region.screenshot(path=str(out / 'seaside-region.png'))
             button('Appearance').click()
             button('Fjord').click()
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'outline')
             aurora = panel.locator('.theme-preset-grid').get_by_role('button', name='Aurora', exact=True).locator('..')
             expect(aurora.locator('.theme-wallpaper-swatch')).to_have_count(2)
             expect(aurora.locator('.theme-wallpaper-swatch').first).to_have_class(
-                'theme-wallpaper-swatch wallpaper-fjord',
+                'theme-wallpaper-swatch wallpaper-aurora-light',
             )
             themes = panel.get_by_role('group', name='Themes', exact=True)
             active_theme = themes.locator('button[aria-pressed=true]')
             expect(active_theme).to_have_count(1)
             expect(button('Fjord')).to_have_attribute('aria-pressed', 'true')
+            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            accent = panel.get_by_role('textbox', name='Accent color', exact=True)
+            fjord_accent = accent.input_value()
+            button('Light').click()
+            expect(button('Light')).to_have_attribute('aria-pressed', 'true')
+            button('#249688').click()
+            button('Solid color').click()
+            button('Color icons').click()
+            button('Seaside wallpaper').click()
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-seaside')
             button('Fjord').click()
-            expect(active_theme).to_have_count(1)
-
-            creator = page.get_by_role('dialog', name='Create theme', exact=True)
-            theme_name = creator.get_by_role('textbox', name='Theme name', exact=True)
-            accent = creator.get_by_role('textbox', name='Accent color', exact=True)
-
-            def dialog_button(name):
-                return creator.get_by_role('button', name=name, exact=True)
-
-            button('Customize').click()
-            expect(theme_name).to_be_focused()
-            expect(creator.get_by_text('Color scheme', exact=True)).to_be_visible()
-            expect(dialog_button('Follow application')).to_have_count(0)
-            expect(dialog_button('Light')).to_have_attribute('aria-pressed', 'true')
-            expect(creator.get_by_role('textbox', name='Local image path')).to_have_count(0)
-            theme_name.fill('Canceled theme')
-            dialog_button('Dark').click()
-            expect(desktop).to_have_css('color', 'rgb(226, 234, 244)')
-            dialog_button('Cancel').click()
-            expect(creator).to_have_count(0)
+            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
             expect(active_theme).to_have_text('Fjord')
-            expect(desktop).to_have_css('color', 'rgb(35, 50, 72)')
+            expect(accent).to_have_value(fjord_accent)
+            expect(button('Line icons')).to_have_attribute('aria-pressed', 'true')
+            expect(button('Gradient')).to_have_attribute('aria-pressed', 'true')
+            expect(button('Fjord wallpaper')).to_have_attribute('aria-pressed', 'true')
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-fjord')
 
-            button('Customize').click()
-            expect(theme_name).to_have_value('')
-            dialog_button('Create theme').click()
-            expect(creator.get_by_text('Enter a theme name.', exact=True)).to_be_visible()
-            theme_name.fill('Northern dusk')
+            expect(button('Customize')).to_have_count(0)
+            expect(accent).to_be_visible()
+            initial_accent = desktop.evaluate("el => getComputedStyle(el).getPropertyValue('--accent')")
             accent.fill('invalid')
-            dialog_button('Create theme').click()
-            expect(creator.get_by_text('Enter an accent color in #RRGGBB format.', exact=True)).to_be_visible()
-            dialog_button('#249688').click()
+            assert desktop.evaluate("el => getComputedStyle(el).getPropertyValue('--accent')") == initial_accent
+
+            button('#249688').click()
             expect(accent).to_have_value('#249688')
             accent.fill('#123456')
-            dialog_button('Filled').click()
-            dialog_button('Dark').click()
-            expect(dialog_button('Light')).to_have_attribute('aria-pressed', 'false')
-            expect(dialog_button('Dark')).to_have_attribute('aria-pressed', 'true')
-            expect(desktop).to_have_css('color', 'rgb(226, 234, 244)')
+            button('Solid color').click()
+            button('Dark').click()
+            expect(button('Dark')).to_have_attribute('aria-pressed', 'true')
+            expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
+            dark_text = desktop.evaluate('e => getComputedStyle(e).color')
             check_filled_icons()
-            creator.screenshot(path=str(out / 'create-theme-dark.png'))
+            expect(active_theme).to_have_text('Fjord')
 
-            dialog_button('Wallpaper options').click()
-            creator.get_by_role('textbox', name='Server image path', exact=True).fill('/home/arcnix/night.svg')
-            dialog_button('Apply').click()
-            expect(page.locator('.desktop-wallpaper-image')).to_be_visible()
-            theme_name.press('Enter')
-            expect(creator).to_have_count(0)
+            button('Aurora wallpaper').click()
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-aurora')
+            button('Gradient').click()
+            button('Color icons').click()
+            button('Seaside').click()
+            expect(active_theme).to_have_text('Seaside')
+            expect(button('Seaside wallpaper')).to_have_attribute('aria-pressed', 'true')
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-seaside')
+            expect(accent).to_have_value('#ac6059')
+            expect(button('Line icons')).to_have_attribute('aria-pressed', 'true')
+            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            expect(desktop).to_have_attribute('data-desktop-icon-style', 'filled')
+            expect(desktop).to_have_class('server-desktop theme-light desktop-light')
+            expect(desktop).not_to_have_css('color', dark_text)
+            eventually(lambda: (saved := persist()).get('theme') == 'seaside' and
+                       'wallpaper' not in saved and 'overrides' not in saved)
+            active_indicator = page.locator('.desktop-dock-app.active')
+            assert active_indicator.evaluate('''icon => {
+                const indicator = getComputedStyle(icon, '::after');
+                return parseFloat(indicator.height) >= 3 && indicator.boxShadow !== 'none';
+            }''')
+            button('Dark').click()
+            expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
+            dark_text = desktop.evaluate('e => getComputedStyle(e).color')
+            gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
+            gallery.get_by_role('button', name='Reset', exact=True).click()
+            expect(gallery.locator('.wallpaper-choice[aria-pressed=true]')).to_have_text('Seaside')
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-seaside')
+
+            expect(panel.get_by_text('Theme default', exact=True)).to_have_count(0)
+            expect(gallery.get_by_role('button', name='Add Picture', exact=True)).to_have_count(0)
+            gallery.get_by_role('button', name='Aurora wallpaper', exact=True).click()
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-aurora')
+            expect(icon_options).to_have_text(['Gradient', 'Solid color'])
+            files_symbol = grid.locator('.app-files .desktop-app-icon').first
+            symbol_mask = lambda: files_symbol.evaluate("icon => getComputedStyle(icon, '::before').maskImage")
+            line_mask = symbol_mask()
+            button('Color icons').click()
+            expect(desktop).to_have_attribute('data-desktop-icon-family', 'color')
+            expect(icon_options).to_have_count(0)
+            assert symbol_mask() == 'none'
+            catalog = app.apps()
+            catalog_icons = catalog.locator('.desktop-app-catalog-item .desktop-app-icon')
+            expect(catalog_icons.first).to_be_visible()
+            for icons in (grid.locator('.desktop-app-icon'),
+                          page.locator('.desktop-dock-app .desktop-app-icon'), catalog_icons):
+                assert icons.count() > 0
+                assert icons.evaluate_all('''icons => icons.every(icon => {
+                    const tile = getComputedStyle(icon);
+                    const symbol = getComputedStyle(icon, '::before');
+                    const {m41, m42} = new DOMMatrix(symbol.transform);
+                    const near = (a, b) => Math.abs(a - b) < 1;
+                    return tile.backgroundColor === 'rgba(0, 0, 0, 0)' && tile.backgroundImage === 'none'
+                        && tile.boxShadow === 'none' && symbol.maskImage === 'none'
+                        && symbol.backgroundImage.startsWith('url("data:image/svg+xml;base64,')
+                        && near(parseFloat(symbol.left) + m41 + parseFloat(symbol.width) / 2, icon.clientWidth / 2)
+                        && near(parseFloat(symbol.top) + m42 + parseFloat(symbol.height) / 2, icon.clientHeight / 2);
+                })''')
+            catalog.screenshot(path=str(out / 'color-apps.png'))
+            close_dialog(catalog)
+            button('Line icons').click()
+            expect(desktop).to_have_attribute('data-desktop-icon-family', 'line')
+            expect(button('Solid color')).to_have_attribute('aria-pressed', 'true')
+            assert symbol_mask() == line_mask
+            saved = eventually(lambda: persist() if persist().get('wallpaper') == 'aurora' and
+                                persist().get('overrides', {}).get('icon_family') == 'line' else None)
+            assert saved['theme'] == 'seaside'
+            assert saved['overrides'] == {'mode': 'Dark', 'icon_family': 'line'}
             expect(active_theme).to_have_count(1)
-            expect(button('Northern dusk')).to_have_attribute('aria-pressed', 'true')
-            saved = eventually(lambda: persist().get('themes', {}).get('saved', {}).get('Northern dusk'))
-            assert saved['overrides']['mode'] == 'Dark'
-            assert saved['overrides']['icons'] == 'filled'
-            assert saved['overrides']['accent'] == [18, 52, 86]
-            assert 'colors' not in saved['overrides']
-            assert saved['overrides']['dark'] == {'wallpaper': {'remote': '/home/arcnix/night.svg'}}
-            saved_tile = button('Northern dusk').locator('..')
-            expect(saved_tile.locator('.theme-wallpaper-swatch')).to_have_count(2)
-            expect(saved_tile.locator('.theme-wallpaper-swatch img')).to_be_visible()
-            saved_tile.screenshot(path=str(out / 'split-wallpaper.png'))
-
-            button('Customize').click()
-            theme_name.fill('Northern dusk')
-            dialog_button('Create theme').click()
-            expect(creator.get_by_text('This theme name is already in use.', exact=True)).to_be_visible()
-            dialog_button('Light').click()
-            expect(desktop).to_have_css('color', 'rgb(35, 50, 72)')
-            theme_name.press('Escape')
-            expect(creator).to_have_count(0)
-            expect(active_theme).to_have_text('Northern dusk')
-            expect(desktop).to_have_css('color', 'rgb(226, 234, 244)')
 
             page.locator('.workbench-tabs').get_by_role('button', name='Fullscreen desktop').click()
             page.set_viewport_size(dict(width=440, height=750))
-            expect(panel).to_have_css('flex-direction', 'column')
+            expect(panel).to_have_css('flex-direction', 'row')
             for section in ('Appearance', 'Desktop', 'Dock', 'General', 'About'):
                 button(section).click()
                 expect(button(section)).to_have_attribute('aria-pressed', 'true')
                 assert panel.locator('.desktop-preferences').evaluate('el => el.scrollWidth <= el.clientWidth + 1'), section
                 if section == 'Appearance':
-                    button('Customize').click()
-                    expect(theme_name).to_be_focused()
-                    assert creator.locator('.modal-body').evaluate('el => el.scrollWidth <= el.clientWidth + 1')
-                    creator.screenshot(path=str(out / 'compact-theme-creator.png'))
-                    dialog_button('Cancel').click()
-                    expect(creator).to_have_count(0)
+                    expect(button('Dark')).to_have_attribute('aria-pressed', 'true')
+                    choices = gallery.locator('.wallpaper-choices')
+                    choices.scroll_into_view_if_needed()
+                    assert choices.evaluate('''grid => {
+                        const tiles = [...grid.children].filter(el => el.classList.contains('wallpaper-choice'));
+                        const bounds = grid.getBoundingClientRect();
+                        const boxes = tiles.map(tile => tile.getBoundingClientRect());
+                        return boxes.length === 3 && boxes.at(-1).top > boxes[0].top &&
+                            boxes.every(box => box.left >= bounds.left - 1 && box.right <= bounds.right + 1);
+                    }''')
+                    panel.screenshot(path=str(out / 'compact-appearance.png'))
                 if section == 'Desktop':
                     expect(desktop_size).to_have_value(str(pixels))
                     check_desktop_icon(pixels)
                     check_shortcut_gutter()
                     panel.screenshot(path=str(out / 'compact-desktop-settings.png'))
-                    visible = shortcut_options('Visible icons')
+                    visible = shortcut_options('App icons')
                     expect(visible.get_by_role('checkbox', name='Home', exact=True)).to_be_checked()
                     assert visible.evaluate('''dialog => {
                         const box = dialog.getBoundingClientRect();
@@ -371,14 +484,14 @@ def main():
             drop('Linked folder', 'Alt')
             link = grid.get_by_role('button', name='Linked folder alias', exact=True)
             expect(link).to_be_visible()
-            page.locator('.desktop-dock').get_by_role('button', name='Show desktop', exact=True).click()
+            app.show_desktop()
             link.click()
             expect(app.file('inside.txt')).to_be_visible()
             assert (peer.root / 'Linked folder/inside.txt').is_file()
 
             app.application('Settings')
             button('Dock').click()
-            pinned = shortcut_options('Pinned shortcuts')
+            pinned = shortcut_options('App icons')
             home_pin = pinned.get_by_role('checkbox', name='Home', exact=True)
             trash_pin = pinned.get_by_role('checkbox', name='Trash', exact=True)
             expect(home_pin).not_to_be_checked()
@@ -398,8 +511,8 @@ def main():
             app.connect()
             app.workspace('Desktop')
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'filled')
-            expect(desktop).to_have_css('color', 'rgb(226, 234, 244)')
-            expect(page.locator('.desktop-wallpaper-image')).to_be_visible()
+            expect(desktop).to_have_css('color', dark_text)
+            expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-aurora')
             expect(desktop.locator('.desktop-wallpaper-copy')).to_have_count(0)
             home_shortcut.screenshot(path=str(out / 'home-shortcut.png'))
             expect(dock.locator('.desktop-dock-app').first).to_have_attribute('aria-label', 'Home')
@@ -416,11 +529,11 @@ def main():
             dock_trash.click()
             expect(sidebar.get_by_role('button', name='Trash', exact=True)).to_have_attribute('aria-pressed', 'true')
             dock_trash.click(button='right')
-            page.locator('.desktop-context-menu').get_by_role('button', name='Remove from Dock', exact=True).click()
+            page.locator('.desktop-context-menu').get_by_role('button', name='Remove from dock', exact=True).click()
             expect(dock_trash).to_have_count(0)
             expect(grid.get_by_role('button', name='Trash', exact=True)).to_be_visible()
 
-    print('Legacy desktop settings, layout, responsive settings, saved themes and drag/drop passed.')
+    print('Legacy desktop settings, layout, responsive settings, live appearance overrides and drag/drop passed.')
 
 
 if __name__ == '__main__':

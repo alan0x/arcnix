@@ -52,19 +52,10 @@ def eventually(probe, timeout=15):
 
 def set_desktop_mode(panel, mode):
     panel.get_by_role('button', name='Appearance', exact=True).click()
-    if mode == 'Follow application':
-        fjord = panel.get_by_role('button', name='Fjord', exact=True)
-        fjord.click()
-        expect(fjord).to_have_attribute('aria-pressed', 'true')
-        return
-    panel.get_by_role('button', name='Customize', exact=True).click()
-    creator = panel.page.get_by_role('dialog', name='Create theme', exact=True)
-    creator.get_by_role('textbox', name='Theme name', exact=True).fill(f'{mode} fixture {time.time_ns()}')
-    scheme = creator.get_by_role('button', name=mode, exact=True)
+    row = panel.locator('.appearance-color-settings .desktop-setting-row').filter(has_text='Color scheme')
+    scheme = row.get_by_role('button', name=mode, exact=True)
     scheme.click()
     expect(scheme).to_have_attribute('aria-pressed', 'true')
-    creator.get_by_role('button', name='Create theme', exact=True).click()
-    expect(creator).to_have_count(0)
 
 
 class Peer:
@@ -215,7 +206,19 @@ class Desktop:
             self.page.locator('.overview-connect' if label == 'Desktop' else '.overview-transfer').click()
     def application(self, label):
         self.workspace('Desktop')
-        self.page.locator('.desktop-dock').get_by_role('button', name=label, exact=True).click()
+        launcher = self.page.locator('.desktop-dock').get_by_role('button', name=label, exact=True)
+        if not launcher.count():
+            launcher = self.apps().get_by_role('button', name=label, exact=True)
+        launcher.click()
+    def apps(self):
+        self.workspace('Desktop')
+        self.page.locator('.desktop-dock').get_by_role('button', name='Apps', exact=True).click()
+        return self.page.get_by_role('dialog', name='Apps', exact=True)
+    def show_desktop(self):
+        self.page.locator('.desktop-dock').get_by_role('button', name='Apps', exact=True).click(button='right')
+        menu = self.page.locator('.desktop-context-menu')
+        menu.get_by_role('button', name='Show desktop', exact=True).or_(
+            menu.get_by_role('button', name='Restore windows', exact=True)).click()
     def code(self):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:

@@ -30,6 +30,10 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
         .otherwise(move || files_tabs::preview_header(state, window)),
         row().class("files-body").fill((
             files_ui::sidebar(ui.clone(), window),
+            when(state.map(move |s| files_tabs::showing_apps(s, window)), {
+                let ui = ui.clone();
+                move || desktop_apps::files(ui.clone())
+            }),
             when(live, move || {
                 fragment((
                     when(state.map(files_tabs::trash_active), {
@@ -38,7 +42,9 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                     }),
                     col()
                         .class(state.map(|s| {
-                            if files_tabs::trash_active(s) || s.server_apps.files_tag.is_some() {
+                            if s.workbench.files.location != files_tabs::Location::Directory
+                                || s.server_apps.files_tag.is_some()
+                            {
                                 "remote-slot files-slot hidden"
                             } else {
                                 "remote-slot files-slot"
@@ -49,7 +55,12 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                     files_ui::tag_results(ui.clone()),
                 ))
             })
-            .otherwise(move || files_tabs::preview_body(state, window)),
+            .otherwise(move || {
+                when(
+                    state.map(move |s| !files_tabs::showing_apps(s, window)),
+                    move || files_tabs::preview_body(state, window),
+                )
+            }),
         )),
     ))
 }
@@ -57,12 +68,29 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
 fn files_tab_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     let browse = ui.clone();
+    let back = ui.clone();
     row().class("files-window-tools").fill((
+        when(
+            state.map(|s| s.workbench.files.location == files_tabs::Location::Apps),
+            move || {
+                let back = back.clone();
+                row().class("trash-location-tools").fill((
+                    icon_action("Back to folder", Icon::ChevronRight)
+                        .class("icon-button files-history-back")
+                        .on_press(move || files_tabs::leave_apps(&back)),
+                    icons::glyph(Icon::Grid),
+                    text().content(i18n::desktop::bind("Apps")),
+                ))
+            },
+        ),
         when(state.map(files_tabs::trash_active), move || {
             trash_ui::location_tools(ui.clone())
         }),
         when(
-            state.map(|s| !files_tabs::trash_active(s) && s.server_apps.files_tag.is_none()),
+            state.map(|s| {
+                s.workbench.files.location == files_tabs::Location::Directory
+                    && s.server_apps.files_tag.is_none()
+            }),
             move || {
                 file_browser::pathbar(
                     browse.clone(),
@@ -80,7 +108,7 @@ fn files_tab_tools(ui: Ui) -> impl Widget {
 
 pub(crate) fn ready(s: &State, remote: bool) -> bool {
     if remote {
-        s.connected && s.sftp_available && s.remote_ready
+        s.connected && s.sftp_available && s.remote_ready && !files_tabs::apps_active(s)
     } else {
         s.local_ready
     }
@@ -166,52 +194,53 @@ fn pane_actions(ui: Ui, remote: bool, files: bool) -> impl Widget {
     let state = ui.state;
     let filter = ui.clone();
     let menu = ui.clone();
-    let filter = if files {
-        fragment(files_search::toggle(filter))
-    } else {
-        fragment(
-            icon_action(
-                if remote {
-                    "筛选远程文件"
-                } else {
-                    "筛选本地文件"
-                },
-                Icon::Filter,
-            )
-            .class(state.map(move |s| {
-                if if remote {
-                    s.remote_filter_open
-                } else {
-                    s.local_filter_open
-                } {
-                    "icon-button active"
-                } else {
-                    "icon-button"
-                }
-                .to_string()
-            }))
-            .on_press(move || {
-                filter.state.revise(|s| {
-                    if remote {
-                        s.remote_filter_open = !s.remote_filter_open
-                    } else {
-                        s.local_filter_open = !s.local_filter_open
-                    }
-                })
-            }),
+    let filter = when(!files, move || {
+        let filter = filter.clone();
+        icon_action(
+            if remote {
+                "筛选远程文件"
+            } else {
+                "筛选本地文件"
+            },
+            Icon::Filter,
         )
-    };
+        .class(state.map(move |s| {
+            if if remote {
+                s.remote_filter_open
+            } else {
+                s.local_filter_open
+            } {
+                "icon-button active"
+            } else {
+                "icon-button"
+            }
+            .to_string()
+        }))
+        .on_press(move || {
+            filter.state.revise(|s| {
+                if remote {
+                    s.remote_filter_open = !s.remote_filter_open
+                } else {
+                    s.local_filter_open = !s.local_filter_open
+                }
+            })
+        })
+    });
     fragment((
         filter,
         col().class("pane-menu-anchor").fill((
-            icon_action(
-                if remote {
-                    "远程文件操作"
-                } else {
-                    "本地文件操作"
-                },
-                Icon::More,
-            )
+            (if files {
+                i18n::desktop::icon_action("File view options", Icon::More)
+            } else {
+                icon_action(
+                    if remote {
+                        "远程文件操作"
+                    } else {
+                        "本地文件操作"
+                    },
+                    Icon::More,
+                )
+            })
             .class("icon-button")
             .on_press(move || {
                 menu.state.revise(|s| {
@@ -225,7 +254,9 @@ fn pane_actions(ui: Ui, remote: bool, files: bool) -> impl Widget {
                     }
                 })
             }),
-            when(!files, move || file_context::menu(ui.clone(), remote)),
+            when(!files, move || {
+                file_context::menu(ui.clone(), remote, false)
+            }),
         )),
     ))
 }
@@ -295,7 +326,10 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
         }),
         when(compact, {
             let ui = ui.clone();
-            move || file_context::menu(ui.clone(), remote)
+            move || fragment((
+                text().class("files-icon-pixels hidden").content(state.map(|s| s.file_browser.icon_size.pixels().to_string())),
+                file_context::menu(ui.clone(), remote, true),
+            ))
         }),
         when(!compact, {
           let ui = ui.clone();

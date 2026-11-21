@@ -284,16 +284,16 @@ def main():
             expect(folder_icon).to_have_css('color', 'rgb(165, 128, 235)')
             app.file('Desktop').click(button='right')
             expect(palette.get_by_role('button', name='Purple', exact=True)).to_have_attribute('aria-pressed', 'true')
-            app.action('Customize Folder…')
-            customize = p.get_by_role('dialog', name='Customize Folder', exact=True)
+            app.action('Customize folder…')
+            customize = p.get_by_role('dialog', name='Customize folder', exact=True)
             customize.get_by_role('button', name='Photos', exact=True).click()
-            expect(customize.locator('.folder-icon-preview .folder-icon-outline-photos')).to_be_visible()
+            expect(customize.locator('.folder-icon-preview .folder-icon-photos')).to_be_visible()
             customize.get_by_role('button', name='Done', exact=True).click()
-            expect(folder_row.locator('.folder-icon-outline-photos')).to_be_visible()
+            expect(folder_row.locator('.folder-icon-photos')).to_be_visible()
             eventually(lambda: prefs().get('files', {}).get('folder_icons', {}).get(desktop_path) == 'photos')
             address.locator('.view-grid').click()
             expect(pane).to_have_class(re.compile(r'\bicons-view\b'))
-            expect(folder_row.locator('.folder-icon-outline-photos')).to_be_visible()
+            expect(folder_row.locator('.folder-icon-photos')).to_be_visible()
             address.locator('.view-list').click()
             sidebar.get_by_role('button', name='Blue', exact=True).click()
             tags = p.locator('.files-tags-view')
@@ -303,7 +303,7 @@ def main():
             expect(p.locator('.app-editor.active .remote-editor-content')).to_have_value('desktop file')
             p.locator('.desktop-window.active .window-close').click()
             app.application('Files')
-            sidebar.get_by_role('button', name='All Tags', exact=True).click()
+            sidebar.get_by_role('button', name='All tags', exact=True).click()
             expect(tags.locator('.files-tag-item')).to_have_count(2)
             tags.get_by_role('button', name=desktop_path, exact=True).click()
             expect(app.file('desktop-file.txt')).to_be_visible()
@@ -341,11 +341,11 @@ def main():
             assert prefs()['files']['colors'][file_path] == 'blue'
             assert prefs()['files']['folder_icons'][desktop_path] == 'photos'
             sidebar.get_by_role('button', name='Home', exact=True).click()
-            expect(p.locator(f'.file-row[aria-label="{desktop_path}"] .folder-icon-outline-photos')).to_be_visible()
+            expect(p.locator(f'.file-row[aria-label="{desktop_path}"] .folder-icon-photos')).to_be_visible()
             app.file('Desktop').click(button='right')
-            app.action('Customize Folder…')
-            restored = p.get_by_role('dialog', name='Customize Folder', exact=True)
-            restored.get_by_role('button', name='Restore default icon', exact=True).click()
+            app.action('Customize folder…')
+            restored = p.get_by_role('dialog', name='Customize folder', exact=True)
+            restored.get_by_role('button', name='Reset', exact=True).click()
             restored.get_by_role('button', name='Done', exact=True).click()
             expect(p.locator(f'.file-row[aria-label="{desktop_path}"] .glyph-folder')).to_be_visible()
             eventually(lambda: 'folder_icons' not in prefs()['files'])
@@ -393,14 +393,21 @@ def main():
                       original['x'] - partly_hidden['x'], original['y'] - partly_hidden['y'])
             eventually(lambda: same(bounds(), original))
             max_x = area['x'] + area['width'] - 64
-            max_y = area['y'] + area['height'] - original['height']
-            drag_from(original['x'] + 13, original['y'] + 20,
+            max_y = area['y'] + area['height'] - 18
+            drag_from(original['x'] + 13, original['y'] + 11,
                       max_x - original['x'] + 12, max_y - original['y'] + 12)
             bottom_right = bounds()
             assert abs(bottom_right['x'] - max_x) <= 2, (original, bottom_right, max_x, max_y)
             assert abs(bottom_right['y'] - max_y) <= 2, bottom_right
             assert bottom_right['x'] + bottom_right['width'] > area['x'] + area['width'], bottom_right
-            assert abs(bottom_right['y'] + bottom_right['height'] - area['y'] - area['height']) <= 2, bottom_right
+            assert bottom_right['y'] + bottom_right['height'] > area['y'] + area['height'], bottom_right
+            dock = p.locator('.desktop-dock-zone').bounding_box()
+            floating_dock = p.locator('.desktop-dock').bounding_box()
+            desktop = p.locator('.desktop-canvas').bounding_box()
+            assert abs(desktop['y'] + desktop['height'] - floating_dock['y'] - floating_dock['height'] - 4) <= 1
+            exposed_x = (max(bottom_right['x'], dock['x'] + dock['width']) + area['x'] + area['width']) / 2
+            assert p.evaluate('''([x,y]) => !!document.elementFromPoint(x,y)?.closest('.app-files')''',
+                              [exposed_x, dock['y'] + 12])
             drag_from(bottom_right['x'] + 13, bottom_right['y'] + 11,
                       original['x'] - bottom_right['x'], original['y'] - bottom_right['y'])
             eventually(lambda: same(bounds(), original))
@@ -408,6 +415,37 @@ def main():
             app.application('Settings')
             settled()
             settings = p.locator('.desktop-window.app-settings.active')
+            search_button = settings.get_by_role('button', name='Search settings', exact=True)
+            search = settings.get_by_role('textbox', name='Search settings', exact=True)
+            sections = settings.locator('.desktop-settings-tabs')
+            expect(search).to_have_count(0)
+            search_button.click()
+            expect(search).to_be_focused()
+            search.fill('status bar')
+            expect(sections.get_by_role('button')).to_have_text(['Dock'])
+            sections.get_by_role('button', name='Dock', exact=True).click()
+            expect(settings.locator('.desktop-settings-section-title')).to_have_text('Dock')
+            expect(settings.get_by_role('switch', name='Show dock status bar', exact=True)).to_be_visible()
+            search.fill('app icons')
+            expect(sections.get_by_role('button')).to_have_text(['Desktop', 'Dock'])
+            search.fill('unavailable setting')
+            expect(sections.get_by_text('No matching settings')).to_be_visible()
+            settings.get_by_role('button', name='Clear search', exact=True).click()
+            expect(search).to_have_value('')
+            expect(search).to_be_focused()
+            expect(sections.get_by_role('button')).to_have_count(10)
+            search_button.click()
+            expect(search).to_have_count(0)
+            assert settings.evaluate('''el => {
+                const rect = selector => el.querySelector(selector).getBoundingClientRect();
+                const sidebar = rect('.desktop-settings-sidebar');
+                const heading = rect('.desktop-settings-sidebar-heading');
+                const content = rect('.desktop-preferences');
+                const card = rect('.desktop-settings-card');
+                return Math.abs(sidebar.right - heading.right) < 1
+                    && Math.abs(sidebar.right - content.left) < 1
+                    && Math.abs(card.left - content.left - (content.right - card.right)) < 1;
+            }''')
             settings.get_by_role('button', name='Desktop', exact=True).click()
             initial = bounds()
             area = work_area()
@@ -438,7 +476,7 @@ def main():
                 })''')
                 pane = settings.locator('.desktop-preferences')
                 assert pane.evaluate('el => el.clientHeight > 0 && el.scrollWidth <= el.clientWidth + 1')
-            expect(settings.locator('.desktop-settings-page')).to_have_css('flex-direction', 'column')
+            expect(settings.locator('.desktop-settings-page')).to_have_css('flex-direction', 'row')
             settings.get_by_role('button', name='About', exact=True).click()
             expect(settings.locator('.about-details')).to_be_visible()
             p.set_viewport_size(dict(width=1440, height=980))
@@ -447,38 +485,34 @@ def main():
 
             settings.get_by_role('button', name='Dock', exact=True).click()
             settings.get_by_role('button', name='Panel mode', exact=True).click()
-            for label, side, dx, dy in [('Bottom', 'bottom', 0, 420),
-                                        ('Right side', 'right', 420, 0),
-                                        ('Left side', 'left', -420, 0)]:
+            for label, side in [('Bottom', 'bottom'), ('Right side', 'right'), ('Left side', 'left')]:
                 settings.get_by_role('button', name=label, exact=True).click()
                 position = ':not(.dock-side-zone)' if side == 'bottom' else f'.dock-{side}'
                 dock = p.locator(f'.desktop-dock-zone.dock-panel-zone{position}')
                 expect(dock).to_be_visible()
 
-                def beside_dock():
-                    window = settings.bounding_box()
-                    panel = dock.bounding_box()
-                    if side == 'bottom':
-                        return window['y'] + window['height'] <= panel['y'] + 1
-                    if side == 'right':
-                        return window['x'] + window['width'] <= panel['x'] + 1
-                    return window['x'] >= panel['x'] + panel['width'] - 1
-
-                eventually(beside_dock)
-                mark = settings.locator('.desktop-window-mark')
-                drag(mark, dx, dy)
-                eventually(beside_dock)
-                window, layer = settings.bounding_box(), p.locator('.desktop-window-layer').bounding_box()
+                layer = p.locator('.desktop-window-layer').bounding_box()
+                before = settings.bounding_box()
+                clipped = dict(before)
                 if side == 'bottom':
-                    assert abs(window['y'] + window['height'] - layer['y'] - layer['height']) <= 2
+                    clipped['y'] = layer['y'] + layer['height'] - 18
+                    grip = (clipped['x'] + 13, clipped['y'] + 12)
                 elif side == 'right':
-                    assert abs(window['x'] + window['width'] - layer['x'] - layer['width']) <= 2
+                    clipped['x'] = layer['x'] + layer['width'] - 64
+                    grip = (clipped['x'] + 13, clipped['y'] + 13)
                 else:
-                    assert abs(window['x'] - layer['x']) <= 2
+                    clipped['x'] = layer['x'] + 64 - before['width']
+                    grip = (clipped['x'] + clipped['width'] - 13, clipped['y'] + 13)
+                dx, dy = clipped['x'] - before['x'], clipped['y'] - before['y']
+                start_x = before['x'] + before['width'] - 7 if side == 'left' else grip[0] - dx
+                drag_from(start_x, grip[1] - dy, dx, dy, expected=clipped)
+                eventually(lambda: same(bounds(), clipped))
+                drag_from(*grip, -dx, -dy, expected=before)
+                eventually(lambda: same(bounds(), before))
             left_dock = p.locator('.desktop-dock-zone.dock-left.dock-panel-zone')
             settings.locator('.window-close').click()
-            p.locator('.desktop-dock-home').click()
-            p.locator('.desktop-shortcuts').get_by_role('button', name='Player', exact=True).click()
+            app.show_desktop()
+            app.application('Player')
             settled()
             player = p.locator('.desktop-window.app-player.active')
 
@@ -498,13 +532,12 @@ def main():
             assert abs(player_bounds['reference']['width'] - reference['width']) <= 1
             assert abs(player_bounds['reference']['height'] - reference['height']) <= 1
             # The Player retains its full bounds for restoration. Its clipped
-            # portion must stop receiving pointer hits outside the workspace.
+            # portion must stop receiving pointer hits outside the desktop.
             edge_x = reference['x'] + reference['width']
             assert p.evaluate('''([x, y]) => {
                 const app = point => document.elementFromPoint(point, y)?.closest('.app-player');
                 return !!app(x - 4) && !app(x + 4);
             }''', [edge_x, clipped['y'] + 80])
-
             p.set_viewport_size(dict(width=1485, height=1015))
             eventually(lambda: same(bounds(), clipped) and player_area()['width'] > reference['width'] + 30)
             expanded = player_area()
@@ -548,12 +581,15 @@ def main():
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Eight resize handles, captured titlebar movement and Escape cancellation',
-        'Desktop edges without a Dock can clip floating windows while keeping a titlebar grip reachable',
+        'All desktop edges can clip floating windows while keeping a titlebar grip reachable',
+        'Floating windows stay visible beside the Dock down to the desktop edge',
+        'Floating dock leaves a four-pixel gap at the desktop edge',
         'Growth reveals top and left overhangs first, then follows the saved relative center on both axes',
         'Independent window geometry across apps, reopen, resize, maximize and client restart',
         'A drag in a narrow Desktop saves the full rectangle and both reference dimensions, and a partially visible window moves and resizes by the pointer delta',
         'A right-aligned Settings window stays inside the desktop on shrink, reflows, and restores its saved placement',
-        'Window movement stops at the bottom, left, and right Dock boundaries',
+        'Settings search filters sections live and the split panes stay aligned with balanced content margins',
+        'Windows can move past the bottom, left, and right Dock boundaries and be dragged back',
         'Player reveals its right and bottom overhang, then follows its relative center inside the side Dock; shrink eventually fits flush',
         'Native monitor fullscreen with Escape restoring the original OS window',
         'Breadcrumb double-click editing and single-click navigation',

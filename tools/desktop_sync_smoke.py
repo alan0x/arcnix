@@ -16,7 +16,7 @@ def settings(client, section):
 
 
 def browser(client):
-    client.application('Web browser')
+    client.application('Browser')
     return client.page.locator('.desktop-window.app-browser')
 
 
@@ -103,7 +103,7 @@ def main():
             expect(b.page.locator('.server-desktop')).to_have_class('server-desktop theme-dark desktop-dark', timeout=25000)
             dropped.touch()
             set_desktop_mode(a_settings, 'Light')
-            set_desktop_mode(b_settings, 'Follow application')
+            set_desktop_mode(b_settings, 'Auto')
             expect(a_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             expect(b_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             dropped.unlink()

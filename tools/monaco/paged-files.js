@@ -175,7 +175,7 @@ export async function registerPagedFiles(request, zh, large) {
       }
     }
   }
-  registerEditorPane(id, zh ? '大文件查看器' : 'Large File Viewer', PagePane, [
+  registerEditorPane(id, zh ? '大文件查看器' : 'Large file viewer', PagePane, [
     PageInput,
   ]);
   const copies = await getService(IWorkingCopyService);
@@ -183,7 +183,7 @@ export async function registerPagedFiles(request, zh, large) {
     '*',
     {
       id,
-      label: zh ? '大文件查看器' : 'Large File Viewer',
+      label: zh ? '大文件查看器' : 'Large file viewer',
       priority: 'exclusive',
     },
     {

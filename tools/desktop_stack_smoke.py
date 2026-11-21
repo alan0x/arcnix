@@ -81,7 +81,7 @@ def main():
         expect(settings).to_have_count(0)
         expect(terminal.and_(front)).to_be_visible()
         assert monitor.bounding_box() == second
-        page.locator('.desktop-dock-home').click()
+        app.show_desktop()
         expect(windows).to_have_count(0)
         app.application('Monitor')
         expect(monitor.and_(front)).to_be_visible()

@@ -27,7 +27,7 @@ impl TagFilter {
                 .iter()
                 .find(|(value, _)| *value == color)
                 .map_or("Tags", |(_, label)| *label),
-            Self::All => "All Tags",
+            Self::All => "All tags",
         }
     }
 }
@@ -68,7 +68,7 @@ pub(crate) fn folder_icon_class(s: &State, path: &str) -> Option<String> {
     preferences(s)
         .folder_icons
         .get(path)
-        .and_then(|id| folder_icons::class(id, desktop_appearance_ui::theme(s).icons))
+        .and_then(|id| folder_icons::class(id))
 }
 
 fn color_dot(s: &State, path: &str) -> String {
@@ -347,7 +347,7 @@ impl Ui {
 
     fn filter_files_tags(&self, filter: Option<TagFilter>) {
         self.state.revise(|s| {
-            s.workbench.files.trash = false;
+            s.workbench.files.location = files_tabs::Location::Directory;
             s.server_apps.files_tag = filter;
             s.server_apps.files_open_pending = None;
         });
@@ -623,6 +623,19 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                         },
                     )),
                     sapid::button()
+                        .class("files-place files-apps-place")
+                        .name(i18n::bind("Apps"))
+                        .pressed(state.map(move |s| files_tabs::showing_apps(s, window)))
+                        .fill((icons::glyph(Icon::Grid), text().content(i18n::bind("Apps"))))
+                        .on_press({
+                            let ui = ui.clone();
+                            move || {
+                                if activate_sidebar(&ui, window) {
+                                    files_tabs::open_apps(&ui);
+                                }
+                            }
+                        }),
+                    sapid::button()
                         .class("files-place files-trash-place")
                         .name(i18n::bind("回收站"))
                         .pressed(state.map(move |s| files_tabs::showing_trash(s, window)))
@@ -887,7 +900,7 @@ pub(crate) fn appearance_menu(
                         let edit_target = edit_target.clone();
                         sapid::button()
                             .class("menu-item")
-                            .label(i18n::bind("Customize Folder…"))
+                            .label(i18n::bind("Customize folder…"))
                             .on_press(move || {
                                 if let Some((path, true)) = state.with(&edit_target) {
                                     close(&customize);
@@ -931,9 +944,17 @@ fn folder_icon_picker(ui: Ui, path: String) -> impl Widget {
         let reset = ui.clone();
         let done = ui.clone();
         let mounted = scope.mount_with(|| {
-            modal(
+            modal_with_header(
                 ui.clone(),
-                "Customize Folder",
+                "Customize folder",
+                settings::reset_button(true, move || {
+                    reset.change_files(|prefs| {
+                        prefs.folder_icons.remove(&restore);
+                    });
+                })
+                .enabled(state.map(move |s| {
+                    editable(s) && preferences(s).folder_icons.contains_key(&current)
+                })),
                 (
                     row().class("folder-customize-preview").fill((
                         row()
@@ -983,18 +1004,7 @@ fn folder_icon_picker(ui: Ui, path: String) -> impl Widget {
                     ),
                     folder_icon_gallery(ui.clone(), path.clone(), query),
                 ),
-                (
-                    btn("Restore default icon", move || {
-                        reset.change_files(|prefs| {
-                            prefs.folder_icons.remove(&restore);
-                        });
-                    })
-                    .class("button")
-                    .enabled(state.map(move |s| {
-                        editable(s) && preferences(s).folder_icons.contains_key(&current)
-                    })),
-                    btn("Done", move || done.close_dialog()).class("button primary"),
-                ),
+                btn("Done", move || done.close_dialog()).class("button primary"),
             )
         })?;
         scope.retain(mounted)?;
@@ -1058,12 +1068,10 @@ fn folder_icon_gallery(ui: Ui, path: String, query: Cage<String>) -> impl Widget
                             }))
                             .fill(
                                 text()
-                                    .class(state.map(move |s| {
-                                        format!(
-                                            "action-glyph folder-custom-mark {}",
-                                            icon.class(desktop_appearance_ui::theme(s).icons)
-                                        )
-                                    }))
+                                    .class(format!(
+                                        "action-glyph folder-custom-mark {}",
+                                        icon.class()
+                                    ))
                                     .content(""),
                             )
                             .on_press(move || {

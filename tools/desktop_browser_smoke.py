@@ -201,11 +201,14 @@ def native_regions(pid, points=()):
 def expect_clipping(bridge, pid, overlap):
     viewport = json.loads(bridge.input_value())
     area = viewport['area']
+    frame = viewport['frame']
     width = area['right'] - area['left']
     height = area['bottom'] - area['top']
     points = [(x, y) for x in range(6, width, 12) for y in range(6, height, 40)]
     expected = [
-        not any(clip['left'] <= x + area['left'] < clip['right']
+        frame['left'] <= x + area['left'] < frame['right']
+        and frame['top'] <= y + area['top'] < frame['bottom']
+        and not any(clip['left'] <= x + area['left'] < clip['right']
                 and clip['top'] <= y + area['top'] < clip['bottom']
                 for clip in viewport['clip'])
         for x, y in points
@@ -225,6 +228,11 @@ def main():
         port = server.server_port
         config = first.config([first.profile('Browser server A'), second.profile('Browser server B'),
                                denied.profile('Forwarding disabled')], out)
+        first_settings = first.root / 'home/arcnix/.arcnix/desktop.json'
+        first_settings.parent.mkdir(parents=True, exist_ok=True)
+        first_settings.write_text(json.dumps({
+            'version': 1, 'theme': 'System', 'appearance': {'dock': {'floating_status': True}},
+        }), encoding='utf-8')
         second_settings = second.root / 'home/arcnix/.arcnix/desktop.json'
         second_settings.parent.mkdir(parents=True, exist_ok=True)
         second_settings.write_text(json.dumps({'version': 1, 'theme': 'Dark'}), encoding='utf-8')
@@ -240,7 +248,7 @@ def main():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             app.connect()
-            app.application('Web browser')
+            app.application('Browser')
             browser = page.locator('.desktop-window.app-browser')
             address = browser.get_by_role('textbox', name='Web address', exact=True)
             label = browser.locator('.browser-tab.active .browser-tab-label')
@@ -260,8 +268,35 @@ def main():
                 const frame = JSON.parse(bridge.value).frame;
                 return frame && layer.bottom < canvas.bottom &&
                     ['left', 'top', 'right', 'bottom'].every(edge =>
-                        Math.abs(frame[edge] - Math.round(layer[edge] * devicePixelRatio)) <= 1);
+                        Math.abs(frame[edge] - Math.round(canvas[edge] * devicePixelRatio)) <= 1);
             }'''))
+            dock = page.locator('.desktop-dock-zone').bounding_box()
+            grip = browser.locator('.desktop-window-mark').bounding_box()
+            x = grip['x'] + grip['width'] / 2
+            y = grip['y'] + grip['height'] / 2
+            delta = dock['y'] - y - 110
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x, y + delta, steps=8)
+            page.mouse.up()
+            expect(bridge).to_have_value(re.compile(r'"clip":\[\{'))
+            expect_clipping(bridge, app.process.pid, overlap=True)
+            clock = page.locator('.desktop-dock .desktop-panel-clock')
+            clock.hover()
+            tooltip = clock.locator('.desktop-clock-tooltip')
+            expect(tooltip).to_be_visible()
+            eventually(lambda: bridge.evaluate('''bridge => {
+                const tooltip = document.querySelector('.desktop-clock-tooltip');
+                const box = tooltip.getBoundingClientRect();
+                return JSON.parse(bridge.value).clip.some(clip => ['left', 'top', 'right', 'bottom'].every(edge =>
+                    clip[edge] === Math.round(box[edge] * devicePixelRatio)));
+            }'''))
+            expect_clipping(bridge, app.process.pid, overlap=True)
+            page.mouse.move(x, y + delta)
+            page.mouse.down()
+            page.mouse.move(x, y, steps=8)
+            page.mouse.up()
+            expect(bridge).to_have_value(re.compile(r'"clip":\[\]'))
             path = first.root / 'browser-forwarding.jsonl'
             assert any(entry['host'] == 'browser-fixture.test'
                        for entry in [json.loads(line) for line in path.read_text().splitlines()])
@@ -318,16 +353,15 @@ def main():
             expect(browser).to_be_visible()
             expect(bridge).to_have_value(re.compile(r'"clip":\[\{'))
             expect_clipping(bridge, app.process.pid, overlap=True)
-            show_desktop = page.locator('.desktop-dock-home')
-            show_desktop.click()
+            app.show_desktop()
             expect(browser).to_be_hidden()
             eventually(lambda: not native_regions(app.process.pid))
-            show_desktop.click()
+            app.show_desktop()
             expect(browser).to_be_visible()
             expect(label).to_have_text('Remote loopback')
             expect_clipping(bridge, app.process.pid, overlap=True)
 
-            app.application('Web browser')
+            app.application('Browser')
             browser.locator('.window-maximize').click()
             expect(browser).to_have_class(re.compile(r'\bmaximized\b'))
             expect_clipping(bridge, app.process.pid, overlap=False)
@@ -348,28 +382,31 @@ def main():
             settings = page.locator('.desktop-settings-page')
             settings.get_by_role('button', name='Appearance', exact=True).click()
             for count, (choice, effective) in enumerate([
-                ('Aurora', 'Dark'), ('Terracotta', 'Light'), ('Aurora', 'Dark'), ('Fjord', 'Light'),
+                ('Aurora', 'Dark'), ('Seaside', 'Light'), ('Aurora', 'Dark'), ('Fjord', 'Light'),
             ], start=1):
                 settings.get_by_role('button', name=choice, exact=True).click()
+                expect(settings.get_by_role('button', name='Auto', exact=True)).to_have_attribute('aria-pressed', 'true')
+                if effective == 'Dark':
+                    settings.get_by_role('button', name='Dark', exact=True).click()
                 title = f'{effective} page ({count})'
                 expect(tabs.nth(1)).to_have_text(title)
                 expect(page.locator('.app')).to_have_class(re.compile(r'\btheme-light\b'))
                 # A hidden WebView can defer its media query event until it is shown.
-                app.application('Web browser')
+                app.application('Browser')
                 tabs.first.click()
                 expect(label).to_have_text(title)
                 tabs.nth(1).click()
                 app.application('Settings')
-            app.application('Web browser')
+            app.application('Browser')
 
             browser.locator('.window-close').click()
-            app.application('Web browser')
+            app.application('Browser')
             visit(endpoint + '/cookie', 'Cookie kept')
             page.get_by_role('button', name='Disconnect', exact=True).click()
             expect(browser).to_have_count(0)
 
             app.connect(index=1)
-            app.application('Web browser')
+            app.application('Browser')
             expect(page.locator('.server-desktop')).to_have_class(re.compile(r'\btheme-dark\b'))
             visit(endpoint + '/theme', 'Dark page (0)')
             visit(endpoint + '/cookie', 'Isolated profile')
@@ -401,7 +438,7 @@ def main():
             denied_policy = denied.root / 'browser-forwarding-denied'
             denied_policy.touch()
             app.connect(index=2)
-            app.application('Web browser')
+            app.application('Browser')
             address.fill('https://www.example.com/')
             browser.get_by_role('button', name='Open web address', exact=True).click()
             expect(browser.locator('.browser-error')).to_have_text(

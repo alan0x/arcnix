@@ -35,8 +35,10 @@ function observeNativeSurface(app) {
         const menuSlot = app === 'code' ? browser.querySelector('.code-menu-slot') : null;
         const canvas = browser.closest('.desktop-canvas');
         const layer = browser.closest('.desktop-window-layer');
+        const frameElement = nativeSurfaceRegionClipping ? canvas : layer;
+        const dock = nativeSurfaceRegionClipping ? canvas.querySelector('.desktop-dock-zone') : null;
         const windows = Array.from(layer.querySelectorAll('.desktop-window:not(.hidden)'));
-        const next = new Set([surface, commandButton, menuSlot, layer, ...windows].filter(Boolean));
+        const next = new Set([surface, commandButton, menuSlot, frameElement, dock, ...windows].filter(Boolean));
         for (const node of watched) {
             if (!next.has(node)) {
                 resize.unobserve(node);
@@ -49,23 +51,23 @@ function observeNativeSurface(app) {
                 watched.add(node);
             }
         }
-        const workArea = rect(layer);
+        const visibleFrame = rect(frameElement);
         const surfaceBox = rect(surface);
-        const area = workArea && surfaceBox && !browser.closest('[inert]')
-            && surfaceBox.right > workArea.left && surfaceBox.left < workArea.right
-            && surfaceBox.bottom > workArea.top && surfaceBox.top < workArea.bottom ? surfaceBox : null;
+        const area = visibleFrame && surfaceBox && !browser.closest('[inert]')
+            && surfaceBox.right > visibleFrame.left && surfaceBox.left < visibleFrame.right
+            && surfaceBox.bottom > visibleFrame.top && surfaceBox.top < visibleFrame.bottom ? surfaceBox : null;
         const commandCenter = area && rect(commandButton);
         const top = commandCenter?.top ?? area?.top;
         const rank = Number(getComputedStyle(browser).zIndex) || 0;
         const blockers = windows.filter(other => other !== browser && (Number(getComputedStyle(other).zIndex) || 0) > rank);
         const overlays = canvas.querySelectorAll(
-            '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip,.window-tabs-menu:popover-open'
+            '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip,.desktop-clock-tooltip,.window-tabs-menu:popover-open'
         );
-        const clip = area ? [...blockers, ...overlays].map(rect).filter(box => box
+        const clip = area ? [dock, ...blockers, ...overlays].map(rect).filter(box => box
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom
         ).slice(0, 32) : [];
         const epoch = Number(browser.querySelector('.browser-epoch').textContent);
-        const serialized = JSON.stringify({epoch, area, frame: workArea, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
+        const serialized = JSON.stringify({epoch, area, frame: visibleFrame, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
         if (bridge !== previousInput || serialized !== previous) {
             previousInput = bridge;
             previous = serialized;
@@ -85,6 +87,12 @@ function observeNativeSurface(app) {
     });
     addEventListener('resize', schedule);
     addEventListener('scroll', schedule, true);
+    function clockHover(event) {
+        const clock = event.target.closest?.('.desktop-dock .desktop-panel-clock');
+        if (clock && event.relatedTarget?.closest?.('.desktop-panel-clock') !== clock) schedule();
+    }
+    document.addEventListener('pointerover', clockHover, true);
+    document.addEventListener('pointerout', clockHover, true);
     schedule();
 }
 observeNativeSurface('browser');

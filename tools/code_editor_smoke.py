@@ -16,7 +16,7 @@ def main():
         (folder/'status.png').write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3X0AAAAASUVORK5CYII='))
         with Desktop(out/'app',peer.config([peer.profile('Workbench')],out)) as app:
             app.connect()
-            app.application('Code')
+            app.application('Code Editor')
             expect(app.page.locator('.desktop-dock').get_by_role('button',name='Editor',exact=True)).to_have_count(0)
             page = app.code()
             errors = []

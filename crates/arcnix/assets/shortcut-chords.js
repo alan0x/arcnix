@@ -13,9 +13,9 @@ window.arcnixShortcutChord = event => {
 window.arcnixChordMatches = (event, binding) => {
     if (!binding || event.isComposing || event.getModifierState('AltGraph')) return false;
     const chord = window.arcnixShortcutChord(event);
+    if (Array.isArray(binding)) return binding.includes(chord);
     if (chord === binding) return true;
-    // Keep Command equivalents for controls using the portable Ctrl bindings.
-    return /Mac|iPhone|iPad/.test(navigator.platform)
-        && event.metaKey && !event.ctrlKey && binding.startsWith('Ctrl+')
-        && chord.replace(/(^|\+)Meta\+/, '$1') === binding.slice(5);
+    // Outside the server desktop, legacy controls use portable Ctrl shortcuts.
+    return /Mac|iPhone|iPad/.test(navigator.platform) && event.metaKey && !event.ctrlKey
+        && binding.startsWith('Ctrl+') && chord.replace(/(^|\+)Meta\+/, '$1') === binding.slice(5);
 };

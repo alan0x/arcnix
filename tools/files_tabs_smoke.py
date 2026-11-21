@@ -3,7 +3,7 @@ import json
 import re
 import time
 
-from desktop_fixture import Desktop, Peer, ROOT, expect
+from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
 
 def main():
@@ -133,18 +133,55 @@ def main():
             expect(row).to_have_count(0)
             assert (peer.root / 'Projects/notes.txt').read_text(encoding='utf-8') == 'original'
             active.locator('.files-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
-            actions = active.get_by_role('button', name='Remote file actions', exact=True)
+            app.file('Projects').click()
+            actions = active.get_by_role('button', name='File view options', exact=True)
             actions.click()
             menu = active.locator('.file-actions-menu')
-            expect(menu.get_by_role('button', name='Transfer defaults')).to_have_count(0)
-            groups = menu.locator(':scope > .file-menu-group')
-            expect(groups).to_have_count(5)
-            expect(groups.nth(0).get_by_role('button')).to_have_text(['Paste', 'New folder', 'New file'])
-            expect(groups.nth(1).get_by_role('button')).to_have_text(['Copy directory path', 'Refresh'])
-            expect(groups.nth(2).get_by_role('button')).to_have_text(['Terminal here'])
-            expect(groups.nth(3).locator('.file-color-swatch')).to_have_count(8)
-            expect(groups.nth(3).get_by_role('button', name='Customize Folder…', exact=True)).to_be_visible()
-            expect(groups.nth(4).get_by_role('button')).to_have_text(['Detailed list', 'Icon grid', 'Visible columns', 'Select all'])
+            expect(menu.get_by_role('button')).to_have_text([
+                'Detailed list', 'Icon grid', '24 px', '48 px', '64 px', '96 px',
+                'Name', 'Size', 'Modified', 'Descending', 'Visible columns',
+            ])
+            search = active.get_by_role('button', name='Search files', exact=True)
+            assert search.evaluate("e => e.nextElementSibling.matches('.path-refresh')")
+            menu.get_by_role('button', name='96 px').click()
+            icon = active.locator('.file-list .file-entry-icon').first
+            def icon_size(pixels):
+                eventually(lambda: abs(icon.evaluate("e => parseFloat(getComputedStyle(e).width)") - pixels) < .1)
+            icon_size(96)
+            slider = menu.get_by_role('slider', name='File icon size')
+            slider.focus()
+            slider.press('ArrowLeft')
+            icon_size(95)
+            slider.press('Escape')
+            expect(menu).not_to_be_visible()
+            pane = active.locator('.files-pane')
+            pane.hover()
+            page.keyboard.down('Control')
+            try:
+                for size in (64, 48, 24):
+                    page.mouse.wheel(0, 100)
+                    icon_size(size)
+                page.mouse.wheel(0, 100)
+                expect(pane).to_have_class(re.compile(r'\bdetails-view\b'))
+                page.mouse.wheel(0, -100)
+                icon_size(24)
+            finally:
+                page.keyboard.up('Control')
+            page.mouse.wheel(0, -100)
+            icon_size(24)
+            original = active.locator('.files-tab-select[aria-pressed=true]').inner_text()
+            page.keyboard.press('Control+t')
+            actions.click()
+            menu.get_by_role('button', name='64 px').click()
+            menu.get_by_role('button', name='Size', exact=True).click()
+            menu.get_by_role('button', name='Descending').click()
+            expect(menu.get_by_role('button', name='Descending')).to_have_attribute('aria-pressed', 'true')
+            page.keyboard.press('Escape')
+            active.locator('.files-tab-select').filter(has_text=original).first.click()
+            icon_size(24)
+            actions.click()
+            expect(menu.get_by_role('button', name='Name', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(menu.get_by_role('button', name='Descending')).to_have_attribute('aria-pressed', 'false')
     print('Files tab navigation, detach, merge, shortcuts, hidden files settings, Trash menus and restore passed.')
 
 

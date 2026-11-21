@@ -93,7 +93,7 @@ export function codeMenuServices() {
     constructor() {
       super({
         id: 'arcnix.files.browse',
-        title: zh ? '打开文件…' : 'Open File…',
+        title: zh ? '打开文件…' : 'Open file…',
       });
     }
     run() {
@@ -101,37 +101,37 @@ export function codeMenuServices() {
     }
   });
   menu('File', '文件', [
-    ['explorer.newFile', 'New File…', '新建文件…'],
-    ['arcnix.files.browse', 'Open File…', '打开文件…'],
+    ['explorer.newFile', 'New file…', '新建文件…'],
+    ['arcnix.files.browse', 'Open file…', '打开文件…'],
     ['workbench.action.files.save', 'Save', '保存', writable],
-    ['workbench.action.closeActiveEditor', 'Close Editor', '关闭编辑器', active],
+    ['workbench.action.closeActiveEditor', 'Close editor', '关闭编辑器', active],
   ]);
   menu('Edit', '编辑', [
     ['undo', 'Undo', '撤销', writable], ['redo', 'Redo', '重做', writable],
     ['actions.find', 'Find', '查找', text], ['editor.action.startFindReplaceAction', 'Replace', '替换', writable],
   ]);
   menu('Selection', '选择', [
-    ['editor.action.selectAll', 'Select All', '全选', text],
-    ['editor.action.copyLinesDownAction', 'Copy Line Down', '向下复制行', writable],
-    ['editor.action.moveLinesUpAction', 'Move Line Up', '向上移动行', writable],
-    ['editor.action.moveLinesDownAction', 'Move Line Down', '向下移动行', writable],
+    ['editor.action.selectAll', 'Select all', '全选', text],
+    ['editor.action.copyLinesDownAction', 'Copy line down', '向下复制行', writable],
+    ['editor.action.moveLinesUpAction', 'Move line up', '向上移动行', writable],
+    ['editor.action.moveLinesDownAction', 'Move line down', '向下移动行', writable],
   ]);
   menu('View', '视图', [
     ['workbench.view.explorer', 'Explorer', '资源管理器'],
     ['workbench.view.search', 'Search', '搜索'],
-    ['arcnix.markdown.preview', 'Open Markdown Preview to the Side', '打开 Markdown 侧边预览',
+    ['arcnix.markdown.preview', 'Open Markdown preview to the side', '打开 Markdown 侧边预览',
       ContextKeyExpr.and(text, ContextKeyExpr.regex('resourceFilename', /\.(md|markdown|mdown|mkdn?)$/i))],
-    ['workbench.action.showCommands', 'Command Palette…', '命令面板…'],
+    ['workbench.action.showCommands', 'Command palette…', '命令面板…'],
   ]);
   menu('Go', '转到', [
     ['workbench.action.navigateBack', 'Back', '后退', ContextKeyExpr.has('canNavigateBack')],
     ['workbench.action.navigateForward', 'Forward', '前进', ContextKeyExpr.has('canNavigateForward')],
-    ['workbench.action.gotoLine', 'Go to Line…', '转到行…', text],
+    ['workbench.action.gotoLine', 'Go to line…', '转到行…', text],
   ]);
   menu('Terminal', '终端', [
-    ['workbench.action.terminal.new', 'New Terminal', '新建终端'],
-    ['workbench.action.terminal.toggleTerminal', 'Toggle Terminal', '显示或隐藏终端'],
-    ['workbench.action.terminal.kill', 'Kill Active Terminal', '关闭活动终端', ContextKeyExpr.has('terminalIsOpen')],
+    ['workbench.action.terminal.new', 'New terminal', '新建终端'],
+    ['workbench.action.terminal.toggleTerminal', 'Toggle terminal', '显示或隐藏终端'],
+    ['workbench.action.terminal.kill', 'Kill active terminal', '关闭活动终端', ContextKeyExpr.has('terminalIsOpen')],
   ]);
   function localThemePicker(id, title, list, current, apply) {
     registerAction2(
@@ -157,14 +157,14 @@ export function codeMenuServices() {
   }
   localThemePicker(
     'arcnix.code.colorTheme',
-    zh ? '颜色主题' : 'Color Theme',
+    zh ? '颜色主题' : 'Color theme',
     (service) => service.getColorThemes(),
     (service) => service.getColorTheme(),
     (service, id) => service.setColorTheme(id, 'auto'),
   );
   localThemePicker(
     'arcnix.code.fileIconTheme',
-    zh ? '文件图标主题' : 'File Icon Theme',
+    zh ? '文件图标主题' : 'File icon theme',
     async (service) => [
       { id: '', label: zh ? '无' : 'None' },
       ...(await service.getFileIconThemes()),
@@ -175,7 +175,7 @@ export function codeMenuServices() {
   MenuRegistry.appendMenuItem(localPreferences, {
     command: {
       id: 'workbench.action.showCommands',
-      title: zh ? '命令面板…' : 'Command Palette…',
+      title: zh ? '命令面板…' : 'Command palette…',
     },
     group: 'commands',
   });

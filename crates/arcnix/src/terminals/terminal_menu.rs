@@ -67,10 +67,11 @@ fn action(
             text()
                 .class("terminal-menu-shortcut")
                 .content(state.map(move |s| {
+                    let keys = desktop_shortcuts_ui::keys(s);
                     shortcut
-                        .and_then(|action| server_apps_ui::current(s).shortcuts.binding(action))
+                        .and_then(|action| keys.chords(action).next())
+                        .map(|chord| keys.preset.display(chord))
                         .unwrap_or_default()
-                        .to_owned()
                 })),
         ))
         .on_press(move || {
@@ -165,9 +166,9 @@ pub(crate) fn menu(ui: Ui) -> impl Widget {
                     when(
                         state.map(|s| {
                             s.terminal.session_count() > 1
-                                && server_apps_ui::current(s)
-                                    .shortcuts
-                                    .binding(Shortcut::TerminalNextTab)
+                                && desktop_shortcuts_ui::keys(s)
+                                    .chords(Shortcut::TerminalNextTab)
+                                    .next()
                                     .is_some()
                         }),
                         move || {
@@ -176,11 +177,11 @@ pub(crate) fn menu(ui: Ui) -> impl Widget {
                                 text()
                                     .class("terminal-menu-shortcut")
                                     .content(state.map(|s| {
-                                        server_apps_ui::current(s)
-                                            .shortcuts
-                                            .binding(Shortcut::TerminalNextTab)
+                                        let keys = desktop_shortcuts_ui::keys(s);
+                                        keys.chords(Shortcut::TerminalNextTab)
+                                            .next()
+                                            .map(|chord| keys.preset.display(chord))
                                             .unwrap_or_default()
-                                            .to_owned()
                                     })),
                             ))
                         },

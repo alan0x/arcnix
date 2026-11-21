@@ -1,12 +1,72 @@
-//! Presets, user overrides and named themes for one remote desktop.
+//! Desktop theme presets and appearance overrides.
 use std::collections::BTreeMap;
 use std::fmt;
 
 use anyhow::{Result, ensure};
-use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Theme as Mode;
 use crate::desktop_customization::{Wallpaper, validate_image_path};
+
+pub(crate) fn appearance_value<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+pub(crate) fn built_in_wallpaper<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Wallpaper>, D::Error> {
+    let wallpaper: Option<Wallpaper> = appearance_value(deserializer)?;
+    Ok(wallpaper.filter(|wallpaper| !matches!(wallpaper, Wallpaper::Remote(_))))
+}
+
+fn appearance_colors<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<ColorRole, Rgb>, D::Error> {
+    let entries: BTreeMap<String, serde_json::Value> = appearance_value(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|(role, color)| {
+            let role = serde_json::from_value(serde_json::Value::String(role)).ok()?;
+            let color = serde_json::from_value(color).ok()?;
+            Some((role, color))
+        })
+        .collect())
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconFamily {
+    #[default]
+    Line,
+    #[serde(alias = "solid")]
+    Color,
+}
+
+impl IconFamily {
+    pub const ALL: [Self; 2] = [Self::Line, Self::Color];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Line => "Line icons",
+            Self::Color => "Color icons",
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::Color => "color",
+        }
+    }
+
+    pub fn supports_tile_background(self) -> bool {
+        self == Self::Line
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,8 +81,8 @@ impl IconStyle {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Outline => "Outline",
-            Self::Filled => "Filled",
+            Self::Outline => "Gradient",
+            Self::Filled => "Solid color",
         }
     }
 
@@ -40,46 +100,43 @@ pub enum Preset {
     #[default]
     Fjord,
     Aurora,
-    Terracotta,
+    #[serde(alias = "terracotta", alias = "afterglow")]
+    Seaside,
 }
 
 impl Preset {
-    pub const ALL: [Self; 3] = [Self::Fjord, Self::Aurora, Self::Terracotta];
+    pub const ALL: [Self; 3] = [Self::Fjord, Self::Aurora, Self::Seaside];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Fjord => "Fjord",
             Self::Aurora => "Aurora",
-            Self::Terracotta => "Terracotta",
+            Self::Seaside => "Seaside",
         }
     }
 
     pub fn theme(self) -> Theme {
-        let (wallpaper, mode, accent, icons) = match self {
-            Self::Fjord => (Wallpaper::Fjord, Mode::System, None, IconStyle::Outline),
+        let (wallpaper, accent, icons) = match self {
+            Self::Fjord => (Wallpaper::Fjord, None, IconStyle::Outline),
             Self::Aurora => (
                 Wallpaper::Aurora,
-                Mode::Dark,
                 Some(Rgb([87, 194, 172])),
                 IconStyle::Outline,
             ),
-            Self::Terracotta => (
-                Wallpaper::Terracotta,
-                Mode::Light,
-                Some(Rgb([176, 78, 49])),
+            Self::Seaside => (
+                Wallpaper::Seaside,
+                Some(Rgb([172, 96, 89])),
                 IconStyle::Filled,
             ),
         };
         Theme {
             wallpaper,
-            mode,
+            mode: Mode::System,
             accent,
             icons,
+            icon_family: IconFamily::default(),
             colors: BTreeMap::new(),
-            light: StyleOverrides {
-                wallpaper: (self == Self::Aurora).then_some(Wallpaper::Fjord),
-                ..Default::default()
-            },
+            light: StyleOverrides::default(),
             dark: StyleOverrides::default(),
         }
     }
@@ -190,6 +247,7 @@ pub struct Theme {
     pub wallpaper: Wallpaper,
     pub mode: Mode,
     pub icons: IconStyle,
+    pub icon_family: IconFamily,
     pub accent: Option<Rgb>,
     pub colors: BTreeMap<ColorRole, Rgb>,
     pub light: StyleOverrides,
@@ -218,9 +276,17 @@ impl Theme {
             || !self.style(dark).colors.is_empty()
     }
 
+    pub fn default_accent(dark: bool) -> Rgb {
+        if dark {
+            Rgb([120, 173, 244])
+        } else {
+            Rgb([61, 115, 186])
+        }
+    }
+
     pub fn palette(&self, dark: bool) -> BTreeMap<ColorRole, Rgb> {
         use ColorRole::*;
-        let (base, surface, input, border, text, muted, accent, error) = if dark {
+        let (base, surface, input, border, text, muted, error) = if dark {
             (
                 [17, 25, 35],
                 [23, 33, 46],
@@ -228,7 +294,6 @@ impl Theme {
                 [41, 54, 71],
                 [226, 234, 244],
                 [146, 163, 185],
-                [120, 173, 244],
                 [240, 148, 148],
             )
         } else {
@@ -239,14 +304,23 @@ impl Theme {
                 [223, 229, 239],
                 [35, 50, 72],
                 [104, 122, 146],
-                [61, 115, 186],
                 [178, 66, 75],
             )
         };
         let main = self.main_color(dark);
-        let tint = |color| main.map_or(Rgb(color), |accent| Rgb(color).mix(accent, 10));
-        let (background, surface, input, text) =
-            (tint(base), tint(surface), tint(input), Rgb(text));
+        // Build tinted neutrals from the base color's luma so a warm accent
+        // gives warm grays even when the application's base palette is blue.
+        let tint = |color: [u8; 3], percent| {
+            main.map_or(Rgb(color), |accent| {
+                let [r, g, b] = color.map(u32::from);
+                let gray = ((21 * r + 72 * g + 7 * b + 50) / 100) as u8;
+                Rgb([gray; 3]).mix(accent, percent)
+            })
+        };
+        let background = tint(base, 7);
+        let surface = tint(surface, 3);
+        let input = tint(input, 2);
+        let text = tint(text, 6);
         let raised = surface.mix(text, 7);
         let luminances = [background, surface, input, raised].map(Rgb::luminance);
         let ink = if dark { Rgb([255; 3]) } else { Rgb([0; 3]) };
@@ -268,10 +342,13 @@ impl Theme {
             (Background, background),
             (Surface, surface),
             (Input, input),
-            (Border, tint(border)),
+            (Border, tint(border, 12)),
             (Text, text),
-            (MutedText, readable(Rgb(muted), false)),
-            (Accent, readable(main.unwrap_or(Rgb(accent)), true)),
+            (MutedText, readable(tint(muted, 10), false)),
+            (
+                Accent,
+                readable(main.unwrap_or_else(|| Self::default_accent(dark)), true),
+            ),
             (Error, readable(Rgb(error), false)),
         ]);
         colors.extend(&self.colors);
@@ -281,13 +358,16 @@ impl Theme {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct StyleOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "built_in_wallpaper")]
     pub wallpaper: Option<Wallpaper>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
     pub accent: Option<Rgb>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "appearance_colors")]
     pub colors: BTreeMap<ColorRole, Rgb>,
 }
 
@@ -298,17 +378,25 @@ impl StyleOverrides {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Overrides {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "built_in_wallpaper")]
     pub wallpaper: Option<Wallpaper>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
     pub mode: Option<Mode>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
     pub icons: Option<IconStyle>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
+    pub icon_family: Option<IconFamily>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
     pub accent: Option<Rgb>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "appearance_colors")]
     pub colors: BTreeMap<ColorRole, Rgb>,
     #[serde(skip_serializing_if = "StyleOverrides::is_empty")]
     pub light: StyleOverrides,
@@ -316,9 +404,25 @@ pub struct Overrides {
     pub dark: StyleOverrides,
 }
 
+impl Overrides {
+    pub(crate) fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        for wallpaper in [&self.wallpaper, &self.light.wallpaper, &self.dark.wallpaper] {
+            if let Some(Wallpaper::Remote(path)) = wallpaper {
+                validate_image_path(path)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct CustomTheme {
+    #[serde(deserialize_with = "appearance_value")]
     pub base: Preset,
     pub overrides: Overrides,
 }
@@ -329,6 +433,7 @@ impl CustomTheme {
         let overrides = &self.overrides;
         theme.mode = overrides.mode.unwrap_or(theme.mode);
         theme.icons = overrides.icons.unwrap_or(theme.icons);
+        theme.icon_family = overrides.icon_family.unwrap_or(theme.icon_family);
         if let Some(wallpaper) = &overrides.wallpaper {
             theme.wallpaper = wallpaper.clone();
             theme.light.wallpaper = None;
@@ -357,16 +462,7 @@ impl CustomTheme {
     }
 
     fn validate(&self) -> Result<()> {
-        for wallpaper in [
-            &self.overrides.wallpaper,
-            &self.overrides.light.wallpaper,
-            &self.overrides.dark.wallpaper,
-        ] {
-            if let Some(Wallpaper::Remote(path)) = wallpaper {
-                validate_image_path(path)?;
-            }
-        }
-        Ok(())
+        self.overrides.validate()
     }
 }
 
@@ -381,8 +477,9 @@ pub enum Selection {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Themes {
+    #[serde(deserialize_with = "appearance_value")]
     pub selection: Selection,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub saved: BTreeMap<String, CustomTheme>,
@@ -395,7 +492,7 @@ impl Themes {
         self == &Self::default()
     }
 
-    pub fn editable(&self, wallpaper: &Wallpaper, mode: Mode) -> CustomTheme {
+    pub(crate) fn editable(&self, wallpaper: Option<&Wallpaper>, mode: Mode) -> CustomTheme {
         let configured = match &self.selection {
             Selection::Preset(base) => Some(CustomTheme {
                 base: *base,
@@ -408,7 +505,9 @@ impl Themes {
         configured.unwrap_or_else(|| CustomTheme {
             base: Preset::default(),
             overrides: Overrides {
-                wallpaper: (*wallpaper != Wallpaper::default()).then(|| wallpaper.clone()),
+                wallpaper: wallpaper
+                    .filter(|&wallpaper| *wallpaper != Wallpaper::default())
+                    .cloned(),
                 mode: (mode != Mode::System).then_some(mode),
                 ..Default::default()
             },
@@ -489,7 +588,7 @@ mod tests {
         let theme = prefs
             .appearance
             .themes
-            .editable(&prefs.appearance.wallpaper, prefs.theme);
+            .editable(prefs.appearance.wallpaper.as_ref(), prefs.theme);
         assert_eq!(theme.resolve(), Preset::default().theme());
         assert!(!prefs.appearance.show_server);
         assert!(prefs.appearance.show_apps);
@@ -504,12 +603,120 @@ mod tests {
         )?;
         let themes = &prefs.appearance.themes;
         let theme = themes
-            .editable(&prefs.appearance.wallpaper, prefs.theme)
+            .editable(prefs.appearance.wallpaper.as_ref(), prefs.theme)
             .resolve();
-        assert_eq!(theme.background(true), &Wallpaper::Terracotta);
+        assert_eq!(theme.background(true), &Wallpaper::Seaside);
         assert_eq!(theme.mode, Mode::Dark);
         assert_eq!(theme.icons, IconStyle::default());
         assert_eq!(themes.selection, Selection::Saved("Missing".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn previous_theme_names_resolve_to_seaside() -> Result<()> {
+        for name in ["terracotta", "afterglow", "seaside"] {
+            let prefs = parse_preferences(&format!(
+                r#"{{"appearance":{{"theme":"{name}","wallpaper":"{name}"}}}}"#
+            ))?;
+            assert_eq!(prefs.appearance.theme, Some(Preset::Seaside));
+            assert_eq!(prefs.appearance.wallpaper, Some(Wallpaper::Seaside));
+        }
+        assert_eq!(serde_json::to_value(Preset::Seaside)?, "seaside");
+        assert_eq!(serde_json::to_value(Wallpaper::Seaside)?, "seaside");
+        Ok(())
+    }
+
+    #[test]
+    fn appearance_wallpaper_and_style_override_the_selected_preset() -> Result<()> {
+        let prefs = parse_preferences(
+            r#"{"appearance":{"theme":"aurora","wallpaper":"fjord","overrides":{"mode":"Light","icons":"filled"}}}"#,
+        )?;
+        let packet = crate::desktop_storage::encode(&prefs)?;
+        let prefs = crate::desktop_storage::decode(&packet)?;
+        let effective = prefs.appearance.theme_settings(prefs.theme).resolve();
+        assert_eq!(effective.mode, Mode::Light);
+        assert_eq!(effective.icons, IconStyle::Filled);
+        assert_eq!(effective.background(false), &Wallpaper::Fjord);
+        assert_eq!(effective.background(true), &Wallpaper::Fjord);
+
+        Ok(())
+    }
+
+    #[test]
+    fn applying_the_same_or_a_different_preset_restores_all_theme_defaults() -> Result<()> {
+        let customized = parse_preferences(
+            r#"{
+            "theme": "Dark",
+            "appearance": {
+                "theme": "aurora", "wallpaper": "afterglow", "show_server": false,
+                "overrides": {
+                    "mode": "Light", "accent": [1,2,3], "colors": {"text": [4,5,6]},
+                    "icons": "filled", "icon_family": "color",
+                    "light": {"wallpaper": "afterglow", "accent": [7,8,9]},
+                    "dark": {"wallpaper": "fjord", "colors": {"border": [10,11,12]}}
+                }
+            }
+        }"#,
+        )?;
+        for preset in Preset::ALL {
+            let mut prefs = customized.clone();
+            prefs.appearance.apply_theme_preset(preset);
+            let saved = crate::desktop_storage::decode(&crate::desktop_storage::encode(&prefs)?)?;
+            assert_eq!(
+                saved.appearance.theme_settings(saved.theme).resolve(),
+                preset.theme()
+            );
+            assert!(saved.appearance.wallpaper.is_none());
+            assert!(saved.appearance.overrides.is_default());
+            assert!(!saved.appearance.show_server);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn retired_appearance_values_fall_back_without_losing_valid_settings() -> Result<()> {
+        let prefs = parse_preferences(
+            r#"{
+            "resource_interval_seconds": 5,
+            "appearance": {
+                "show_server": false,
+                "theme": "retired_theme",
+                "wallpaper": {"remote": "/home/demo/removed.png"},
+                "wallpaper_pictures": {"/home/demo/removed.png": "Old picture"},
+                "layout": {"flow":"rows", "size":"obsolete", "icon_size":100},
+                "dock": {"position":"rotated", "auto_hide":true},
+                "overrides": {
+                    "icon_family": "unavailable",
+                    "mode": "Dark",
+                    "icons": "unknown_fill",
+                    "accent": [50, 20, 280],
+                    "colors": {"future_role": [0, 0, 0]}
+                }
+            }
+        }"#,
+        )?;
+        assert_eq!(prefs.resource_interval_seconds, Some(5));
+        assert!(!prefs.appearance.show_server);
+        assert!(prefs.appearance.dock.auto_hide);
+        assert_eq!(prefs.appearance.dock.position, Default::default());
+        assert_eq!(
+            prefs.appearance.layout.flow,
+            crate::desktop_customization::IconFlow::Rows
+        );
+        assert_eq!(
+            prefs.appearance.layout.icon_pixels(),
+            crate::desktop_customization::Layout::default().icon_pixels()
+        );
+        let theme = prefs.appearance.theme_settings(prefs.theme).resolve();
+        assert_eq!(theme.background(true), &Wallpaper::Fjord);
+        assert_eq!(theme.icon_family, IconFamily::Line);
+        assert_eq!(theme.icons, IconStyle::Outline);
+        assert_eq!(theme.mode, Mode::Dark);
+        assert_eq!(theme.accent, None);
+        assert_eq!(
+            crate::desktop_storage::decode(&crate::desktop_storage::encode(&prefs)?)?,
+            prefs
+        );
         Ok(())
     }
 
@@ -539,7 +746,7 @@ mod tests {
                 accent: Rgb::parse("#508ea7"),
                 colors: BTreeMap::from([(ColorRole::Text, Rgb([35, 45, 53]))]),
                 dark: StyleOverrides {
-                    wallpaper: Some(Wallpaper::Remote("/home/demo/night.png".into())),
+                    wallpaper: Some(Wallpaper::Aurora),
                     colors: BTreeMap::from([(ColorRole::Text, Rgb([240, 251, 255]))]),
                     ..Default::default()
                 },
@@ -556,16 +763,13 @@ mod tests {
         let packet = crate::desktop_storage::encode(&prefs)?;
         let reread = crate::desktop_storage::decode(&packet)?;
         assert_eq!(reread, prefs);
-        let theme = prefs
-            .appearance
-            .themes
-            .editable(&prefs.appearance.wallpaper, prefs.theme)
-            .resolve();
+        let original = prefs.appearance.theme_settings(prefs.theme).resolve();
+        prefs.appearance.edit_theme_settings(prefs.theme);
+        assert_eq!(prefs.appearance.theme, Some(Preset::Fjord));
+        let theme = prefs.appearance.theme_settings(prefs.theme).resolve();
+        assert_eq!(theme, original);
         assert_eq!(theme.background(false), &Wallpaper::Fjord);
-        assert_eq!(
-            theme.background(true),
-            &Wallpaper::Remote("/home/demo/night.png".into())
-        );
+        assert_eq!(theme.background(true), &Wallpaper::Aurora);
         assert_eq!(theme.palette(false)[&ColorRole::Text], Rgb([35, 45, 53]));
         assert_eq!(theme.palette(true)[&ColorRole::Text], Rgb([240, 251, 255]));
         assert_ne!(

@@ -7,7 +7,7 @@ use crate::Theme;
 use crate::browser::Bookmark;
 use crate::desktop_customization::{Appearance, Dock, Layout, Shortcut, Wallpaper};
 use crate::desktop_shortcuts::Shortcuts;
-use crate::desktop_theme::Themes;
+use crate::desktop_theme::{Overrides, Preset, Themes, appearance_value, built_in_wallpaper};
 use crate::server_apps::{
     DesktopApp as App, DesktopClock, DesktopPreferences, DesktopWindow, FilesPreferences,
     TerminalLayout,
@@ -75,13 +75,20 @@ impl Default for System {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 struct Shell {
     show_server: bool,
     show_apps: bool,
     order: Vec<Shortcut>,
     hidden: Vec<App>,
-    wallpaper: Wallpaper,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
+    theme: Option<Preset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "built_in_wallpaper")]
+    wallpaper: Option<Wallpaper>,
+    #[serde(skip_serializing_if = "Overrides::is_default")]
+    overrides: Box<Overrides>,
     #[serde(skip_serializing_if = "Themes::is_default")]
     themes: Box<Themes>,
     #[serde(skip_serializing_if = "Layout::is_default")]
@@ -95,7 +102,9 @@ impl From<&Appearance> for Shell {
             show_apps: value.show_apps,
             order: value.order.clone(),
             hidden: value.hidden.clone(),
+            theme: value.theme,
             wallpaper: value.wallpaper.clone(),
+            overrides: value.overrides.clone(),
             themes: value.themes.clone(),
             layout: value.layout,
         }
@@ -238,7 +247,9 @@ impl Domain {
                     show_apps,
                     order,
                     hidden,
+                    theme,
                     wallpaper,
+                    overrides,
                     themes,
                     layout,
                 } = read_json(bytes)?;
@@ -246,7 +257,9 @@ impl Domain {
                 prefs.appearance.show_apps = show_apps;
                 prefs.appearance.order = order;
                 prefs.appearance.hidden = hidden;
+                prefs.appearance.theme = theme;
                 prefs.appearance.wallpaper = wallpaper;
+                prefs.appearance.overrides = overrides;
                 prefs.appearance.themes = themes;
                 prefs.appearance.layout = layout;
             }

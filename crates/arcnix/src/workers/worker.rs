@@ -31,6 +31,20 @@ pub enum Login {
     Saved,
 }
 
+pub struct FileFailure {
+    pub message: String,
+    pub permission_denied: bool,
+}
+
+impl FileFailure {
+    fn ordinary(message: String) -> Self {
+        Self {
+            message,
+            permission_denied: false,
+        }
+    }
+}
+
 pub enum Action {
     PlayVideo {
         path: String,
@@ -48,6 +62,7 @@ pub enum Action {
         document: arcnix_core::text_files::Document,
         content: String,
         cancel: Arc<AtomicBool>,
+        sudo: Option<zeroize::Zeroizing<String>>,
     },
     Keepalive,
     ServerApps(crate::server_apps_worker::Action),
@@ -82,6 +97,7 @@ pub enum Action {
         remote: bool,
         targets: Vec<arcnix_core::deletion::Target>,
         cancel: Arc<AtomicBool>,
+        sudo: Option<zeroize::Zeroizing<String>>,
     },
     ImportSshConfig(PathBuf),
     RemoteRename(String, String),
@@ -179,14 +195,14 @@ pub enum Update {
     #[cfg(windows)]
     Html(Result<String, String>),
     CodeFile(Result<serde_json::Value, String>),
-    TextFile(Result<arcnix_core::text_files::Document, String>),
+    TextFile(Result<arcnix_core::text_files::Document, FileFailure>),
     #[cfg(windows)]
     BrowserProxy(Result<(u16, String), String>),
     #[cfg(windows)]
     BrowserDiagnosis(arcnix_core::browser_proxy::Diagnosis),
     #[cfg(windows)]
     BrowserForwardingRepaired(Result<(), String>),
-    ServerApps(Result<crate::server_apps_worker::Reply, String>),
+    ServerApps(Box<Result<crate::server_apps_worker::Reply, String>>),
     Alive,
     FileMetadata(Result<arcnix_core::permissions::Metadata, String>),
     Permissions(Result<usize, String>),
@@ -224,7 +240,7 @@ pub enum Update {
     },
     Deleted {
         remote: bool,
-        result: Result<usize, String>,
+        result: Result<usize, FileFailure>,
     },
     Error(String),
     ConnectionError(String),
@@ -270,6 +286,28 @@ fn publish_file_result<T>(
             if lost { Err(error) } else { Ok(()) }
         }
     }
+}
+fn publish_elevatable_result<T>(
+    result: anyhow::Result<T>,
+    allow_elevation: bool,
+    send: impl FnOnce(Result<T, FileFailure>),
+) -> anyhow::Result<()> {
+    match result {
+        Ok(value) => send(Ok(value)),
+        Err(error) => {
+            let lost = arcnix_core::transport_error::is_connection_error(&error);
+            send(Err(FileFailure {
+                message: format!("{error:#}"),
+                permission_denied: allow_elevation
+                    && !lost
+                    && remote::file_permission_denied(&error),
+            }));
+            if lost {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
 }
 fn deletion_progress(
     events: async_channel::Sender<Response>,
@@ -430,6 +468,7 @@ pub(crate) fn start_with_limiter(
                     remote: false,
                     targets,
                     cancel,
+                    ..
                 } => Ok(Update::Deleted {
                     remote: false,
                     result: local::delete_with_progress(
@@ -440,7 +479,7 @@ pub(crate) fn start_with_limiter(
                         },
                         deletion_progress(local_events.clone(), epoch, serial),
                     )
-                    .map_err(|e| format!("{e:#}")),
+                    .map_err(|e| FileFailure::ordinary(format!("{e:#}"))),
                 }),
                 Action::ImportSshConfig(path) => {
                     arcnix_core::ssh_config::import_file(&path).map(Update::Imported)
@@ -690,7 +729,9 @@ pub(crate) fn start_with_limiter(
                     package_environment = None;
                     send(Update::ConnectionLost(format!("{error:#}")));
                 }
-                send(Update::ServerApps(outcome.map_err(|e| format!("{e:#}"))));
+                send(Update::ServerApps(Box::new(
+                    outcome.map_err(|e| format!("{e:#}")),
+                )));
                 continue;
             }
             if let Action::Operations(action) = action {
@@ -1083,7 +1124,7 @@ pub(crate) fn start_with_limiter(
                         match action {
                             Action::TextRead { path, cancel } => {
                                 file_completed = true;
-                                publish_file_result(
+                                publish_elevatable_result(
                                     remote.read_text(&path, || {
                                         anyhow::ensure!(
                                             generation.load(Ordering::Acquire) == epoch
@@ -1092,6 +1133,7 @@ pub(crate) fn start_with_limiter(
                                         );
                                         Ok(())
                                     }),
+                                    false,
                                     |result| send(Update::TextFile(result)),
                                 )?;
                             }
@@ -1099,18 +1141,27 @@ pub(crate) fn start_with_limiter(
                                 document,
                                 content,
                                 cancel,
+                                sudo,
                             } => {
                                 file_completed = true;
                                 let content = zeroize::Zeroizing::new(content);
-                                publish_file_result(
-                                    remote.save_text(&document, &content, || {
-                                        anyhow::ensure!(
-                                            generation.load(Ordering::Acquire) == epoch
-                                                && !cancel.load(Ordering::Relaxed),
-                                            "File save canceled or connection changed"
-                                        );
-                                        Ok(())
-                                    }),
+                                let check = || {
+                                    anyhow::ensure!(
+                                        generation.load(Ordering::Acquire) == epoch
+                                            && !cancel.load(Ordering::Relaxed),
+                                        "File save canceled or connection changed"
+                                    );
+                                    Ok(())
+                                };
+                                let result = match sudo.as_deref() {
+                                    Some(password) => remote.save_text_as_admin(
+                                        &document, &content, password, &cancel, check,
+                                    ),
+                                    None => remote.save_text(&document, &content, check),
+                                };
+                                publish_elevatable_result(
+                                    result,
+                                    sudo.is_none() && check().is_ok(),
                                     |result| send(Update::TextFile(result)),
                                 )?;
                             }
@@ -1257,21 +1308,31 @@ pub(crate) fn start_with_limiter(
                                 remote: true,
                                 targets,
                                 cancel,
+                                sudo,
                             } => {
                                 file_completed = true;
-                                publish_file_result(
-                                    remote.delete_with_progress(
-                                        &targets,
-                                        || {
-                                            anyhow::ensure!(
-                                                generation.load(Ordering::Acquire) == epoch
-                                                    && !cancel.load(Ordering::Relaxed),
-                                                "Deletion canceled or connection changed"
-                                            );
-                                            Ok(())
-                                        },
-                                        deletion_progress(events.clone(), epoch, serial),
-                                    ),
+                                let check = || {
+                                    anyhow::ensure!(
+                                        generation.load(Ordering::Acquire) == epoch
+                                            && !cancel.load(Ordering::Relaxed),
+                                        "Deletion canceled or connection changed"
+                                    );
+                                    Ok(())
+                                };
+                                let mut removed = 0;
+                                let mut progress = deletion_progress(events.clone(), epoch, serial);
+                                let result = match sudo.as_deref() {
+                                    Some(password) => {
+                                        remote.delete_as_admin(&targets, password, &cancel, check)
+                                    }
+                                    None => remote.delete_with_progress(&targets, check, |step| {
+                                        removed = step.removed;
+                                        progress(step);
+                                    }),
+                                };
+                                publish_elevatable_result(
+                                    result,
+                                    sudo.is_none() && removed == 0 && check().is_ok(),
                                     |result| {
                                         send(Update::Deleted {
                                             remote: true,
@@ -1293,7 +1354,7 @@ pub(crate) fn start_with_limiter(
                         send(match kind {
                             0 => Update::Deleted {
                                 remote: true,
-                                result: Err(message),
+                                result: Err(FileFailure::ordinary(message)),
                             },
                             1 => Update::Permissions(Err(message)),
                             3 => Update::CodeFile(Err(message)),
@@ -1303,7 +1364,7 @@ pub(crate) fn start_with_limiter(
                             },
                             5 => Update::ManagedRemoteFiles(Err(message)),
                             6 => Update::FileAlias(Err(message)),
-                            7 => Update::TextFile(Err(message)),
+                            7 => Update::TextFile(Err(FileFailure::ordinary(message))),
                             _ => Update::FileMetadata(Err(message)),
                         });
                     }
@@ -1450,6 +1511,7 @@ mod tests {
                     remote: true,
                     targets: vec![],
                     cancel: Arc::new(AtomicBool::new(false)),
+                    sudo: None,
                 },
             ),
             (
@@ -1489,6 +1551,7 @@ mod tests {
                 remote: true,
                 targets: vec![],
                 cancel: Arc::new(AtomicBool::new(false)),
+                sudo: None,
             },
         })?;
         assert!(matches!(

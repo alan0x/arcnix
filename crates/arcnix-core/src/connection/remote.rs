@@ -22,9 +22,12 @@ use crate::{
 
 #[path = "remote_file_actions.rs"]
 mod file_actions;
+#[path = "remote_file_admin.rs"]
+mod file_admin;
 #[path = "remote_recycle.rs"]
 mod recycle;
 pub use file_actions::{DesktopDrop, FileAction};
+pub use file_admin::file_permission_denied;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -747,6 +750,7 @@ impl RemoteSession {
             );
             self.replace_remote(&partial, &document.path)?;
             self.read_text(&document.path, &check)
+                .context(file_admin::SavePublished)
         })();
         if self.sftp()?.lstat(Path::new(&partial)).is_ok() {
             let _ = self.sftp()?.unlink(Path::new(&partial));
@@ -1559,29 +1563,6 @@ impl RemoteSession {
         file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
         ensure!(bytes.len() <= limit, "Remote image exceeds 8 MiB");
         Ok(bytes)
-    }
-    pub(crate) fn upload_new_bytes(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        validate_path(path)?;
-        self.ensure_absent(path)?;
-        let partial = remote_partial(path)?;
-        let sftp = self.sftp()?;
-        let mut output = sftp.open_mode(
-            Path::new(&partial),
-            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
-            0o600,
-            OpenType::File,
-        )?;
-        let result = (|| {
-            output.write_all(bytes)?;
-            output.flush()?;
-            output.close()?;
-            self.rename(&partial, path)
-        })();
-        drop(output);
-        if result.is_err() {
-            let _ = sftp.unlink(Path::new(&partial));
-        }
-        result
     }
     pub fn file_metadata(&self, path: &str) -> Result<crate::permissions::Metadata> {
         validate_path(path)?;

@@ -44,6 +44,12 @@
         const files = target.closest('.desktop-window.app-files');
         return validPane(files?.querySelector('.files-pane') || target);
     }
+    function keyboardFiles(target) {
+        const window = target.closest('.desktop-window');
+        if (window) return window.matches('.app-files.active') ? window : null;
+        if (target !== document.body && !target.closest('.desktop-canvas')) return null;
+        return document.querySelector('.server-desktop:not(.hidden) .desktop-window.app-files.active');
+    }
     const fileDragType = 'application/x-arcnix-file-transfer';
     const favoriteDragType = 'application/x-arcnix-files-favorite';
     let fileDrag = null;
@@ -446,6 +452,7 @@
         if(!(event.target instanceof Element)||event.isComposing)return;
         const menu=event.target.closest('.file-context-menu,.file-actions-menu');
         if(menu){
+            if (event.target.matches('input[type=range]') && !['Escape','Tab'].includes(event.key)) return;
             const branch = event.target.closest('.file-open-branch');
             const submenu = event.target.closest('.file-open-submenu');
             if (branch && event.key === 'ArrowRight' && !submenu) {
@@ -462,9 +469,9 @@
             const palette=event.target.closest('.file-color-menu');
             const horizontal=palette&&['ArrowLeft','ArrowRight'].includes(event.key);
             if(horizontal||['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
-                const buttons=[...(horizontal ? palette : submenu || menu).querySelectorAll('button:not(:disabled)')]
+                const buttons=[...(horizontal ? palette : submenu || menu).querySelectorAll('button:not(:disabled), input[type=range]:not(:disabled)')]
                     .filter(button => (!button.closest('.file-open-submenu') || submenu) && button.getClientRects().length);
-                const index=buttons.indexOf(event.target.closest('button'));
+                const index=buttons.indexOf(event.target.closest('button,input[type=range]'));
                 const back=event.key==='ArrowUp'||event.key==='ArrowLeft';
                 const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(back?-1:1)+buttons.length)%buttons.length;
                 if (branch && !submenu && buttons[next] !== event.target) setFileSubmenu(branch, false);
@@ -487,6 +494,10 @@
         else if(event.key==='F5')kind='refresh';
         else if(event.altKey&&event.key==='Enter')kind='properties';
         else if(additive(event)&&event.shiftKey&&event.key.toLowerCase()==='c')kind='copy_paths';
+        else if(pane.closest('.desktop-window.app-files')){
+            if(arcnixKeys.matches(event, 'files_copy', 'Ctrl+C'))kind='copy_files';
+            else if(arcnixKeys.matches(event, 'files_paste', 'Ctrl+V'))kind='paste_files';
+        }
         else if(pane.closest('.remote-files')&&additive(event)&&!event.shiftKey&&!event.altKey){
             if(event.key.toLowerCase()==='c')kind='copy_files';
             else if(event.key.toLowerCase()==='v')kind='paste_files';
@@ -522,7 +533,7 @@
     function scheduleMenu(){if(!menuScheduled){menuScheduled=true;requestAnimationFrame(placeFileMenu);}}
     new MutationObserver(scheduleMenu).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
     document.addEventListener('scroll',event=>{
-        if(fileMenu?.opened&&event.target instanceof Element&&!event.target.closest('.pane-menu')&&fileMenu.pane.contains(event.target))dismissMenu(false);
+        if(fileMenu?.opened&&!fileMenu.toolbar&&event.target instanceof Element&&!event.target.closest('.pane-menu')&&fileMenu.pane.contains(event.target))dismissMenu(false);
     },true);
     window.addEventListener('resize',()=>{if(fileMenu?.opened)dismissMenu(false);});
     document.addEventListener('click', event => {
@@ -538,14 +549,14 @@
     }, true);
     document.addEventListener('keydown', event => {
         if (event.isComposing || !(event.target instanceof Element)) return;
-        const files = event.target.closest('.desktop-window.app-files.active')
-            || (event.key === 'Escape' && (event.target === document.body || event.target.matches('.desktop-canvas'))
-                ? document.querySelector('.server-desktop:not(.hidden) .desktop-window.app-files.active')
-                : null);
+        const files = keyboardFiles(event.target);
         const toggle = files?.querySelector('.files-search-toggle:not(:disabled)');
         if (!toggle?.getClientRects().length || toggle.closest('[inert]')) return;
         const input = files.querySelector('.files-search-input');
-        if (event.key === 'Escape' && input) {
+        if (files.querySelector('.file-actions-menu,.file-context-menu')) return;
+        if (event.code === 'F5' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+            files.querySelector('.path-refresh:not(:disabled)')?.click();
+        } else if (event.key === 'Escape' && input) {
             const options = files.querySelector('.files-search-options');
             const control = options ? files.querySelector('.files-search-options-toggle') : toggle;
             control?.click();
@@ -611,7 +622,7 @@
         if (!(event.target instanceof Element) || event.isComposing) return;
         if (event.target.closest(".terminal-module")) return;
         const lastWindow = lastPane?.closest('.desktop-window');
-        const pane = pathPane(event.target) || (editPathShortcut(event, lastPane)
+        const pane = pathPane(event.target) || validPane(keyboardFiles(event.target)?.querySelector('.files-pane')) || (editPathShortcut(event, lastPane)
             && lastPane?.isConnected && (!lastWindow || lastWindow.classList.contains('active')) ? lastPane : null);
         if (!validPane(pane)) return;
         if (editPathShortcut(event, pane)) {
@@ -627,14 +638,15 @@
         if (!row) return;
         const files = !!pane.closest('.desktop-window.app-files');
         const navigationBinding = fileNavigationKeys.find(([action, key]) => {
-            const binding = files ? arcnixKeys.binding(action, key) : key;
+            const binding = files ? arcnixKeys.binding(action, key) : [key];
             // Preserve Shift/Ctrl selection modifiers on the standard navigation keys.
             return window.arcnixChordMatches(event, binding)
-                || (binding === key && !event.altKey && (event.code || event.key) === key);
+                || (binding.includes(key) && !event.altKey && (event.code || event.key) === key);
         });
         const navigation = navigationBinding?.[1];
         const customNavigation = files && navigationBinding
-            && arcnixKeys.binding(navigationBinding[0], navigation) !== navigation;
+            && !(arcnixKeys.binding(navigationBinding[0], navigation).includes(navigation)
+                && (event.code || event.key) === navigation && !event.altKey);
         const selectionEvent = customNavigation ? {} : event;
         let handled = true;
         if (files ? arcnixKeys.matches(event, 'files_select_all', 'Ctrl+A')

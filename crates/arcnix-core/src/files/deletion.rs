@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 
 use crate::FileEntry;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Target {
     pub path: String,
     pub directory: bool,

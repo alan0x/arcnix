@@ -233,7 +233,7 @@ Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口�
 
 **Desktop** 将图标流向、起始方向、大小及主文件夹和回收站开关保存在 `preferences/desktop.json` 的 `layout`。在 **Settings → Dock** 可设置 Dock 的位置、样式、图标大小、时钟及固定快捷方式。Dock 设置保存在 `apps/dock.json`。从同一 SSH 桌面的 Files 拖到桌面时，默认或按 Shift 移动，Ctrl 复制，Alt 或 Ctrl+Shift 在远端 `Desktop` 目录创建符号链接。复制和移动继续使用 Files 的文件操作及冲突处理。
 
-桌面 **Region & Language** 将界面语言保存在远端 `~/.arcnix/desktop/system.json`，缺失时使用客户端语言。数字和文件大小格式沿用客户端偏好。**Date & Time** 仅在识别到系统的时区名称时提供时区选择，在 systemd 上通过 `timedatectl set-timezone` 保存，在其他 Linux 上更新系统时区链接及已有的兼容文件。修改系统时区需要 root 或可非交互使用的 sudo。12／24 小时制可在 **Date & Time** 设置。Dock 位于左侧或右侧时，**Dock clock** 可设置星期、日期和秒数。时钟的显示选项保存在 `system.json` 的 `clock` 中。客户端的更新检查位于主设置的 **Updates**。
+桌面 **Region & language** 将界面语言保存在远端 `~/.arcnix/desktop/system.json`，缺失时使用客户端语言。数字和文件大小格式沿用客户端偏好。**Date & time** 仅在识别到系统的时区名称时提供时区选择，在 systemd 上通过 `timedatectl set-timezone` 保存，在其他 Linux 上更新系统时区链接及已有的兼容文件。修改系统时区需要 root 或可非交互使用的 sudo。12／24 小时制可在 **Date & time** 设置。Dock 位于左侧或右侧时，**Dock clock** 可设置星期、日期和秒数。时钟的显示选项保存在 `system.json` 的 `clock` 中。客户端的更新检查位于主设置的 **Updates**。
 
 **Text Editor** 是已识别文本格式的建议默认应用。用户设置的文件关联优先。编辑器支持独立标签页、Markdown 预览、保存时检查远程版本和关闭前确认未保存修改。从 Files 或桌面拖入文件会直接用 Text Editor 打开。Text Editor、Code 和 Player 使用同一个 Desktop 文件选择器。每个应用提供自己的类型筛选和打开方式。选择器可拖右下角调整宽高，侧栏读取 Files 的位置、收藏、标签及回收站。
 

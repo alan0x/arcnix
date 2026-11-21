@@ -140,7 +140,7 @@ def run(preview=False, binary=None, read_delay=.003):
             eventually(lambda: media()['position'] > seek + .3)
             # Code has its own native surface; the video must yield overlapping pixels.
             player.locator('.window-maximize').click()
-            app.application('Code')
+            app.application('Code Editor')
             app.code()
             def clipped():
                 region = ctypes.windll.gdi32.CreateRectRgn(0,0,1,1)

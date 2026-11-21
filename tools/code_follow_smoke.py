@@ -29,7 +29,7 @@ def main():
 
         with Desktop(out / 'app', peer.config([profile], out)) as app:
             app.connect()
-            app.application('Code')
+            app.application('Code Editor')
             page = app.code()
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))

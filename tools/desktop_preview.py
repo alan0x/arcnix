@@ -25,7 +25,7 @@ def main():
         config = peer.config([profile], out)
         with Desktop(out / "app", config, binary=source, viewport=None) as app:
             app.connect()
-            app.application("Web browser")
+            app.application("Browser")
             browser = app.page.locator(".desktop-window.app-browser")
             address = browser.get_by_role("textbox", name="Web address", exact=True)
             address.fill(f"http://browser-fixture.test:{localhost.server_port}/first")

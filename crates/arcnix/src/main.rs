@@ -46,8 +46,8 @@ enum Dialog {
     TextEditor,
     DesktopTimeZone,
     DesktopIcons,
+    DesktopApps,
     DockShortcuts,
-    CreateDesktopTheme,
     FileAssociation {
         extension: String,
         add: bool,
@@ -96,6 +96,7 @@ enum Dialog {
         remote: bool,
         targets: Vec<arcnix_core::deletion::Target>,
     },
+    FileElevation,
     DeleteServer(String),
     DissolveGroup(String),
     DeleteGroupAndServers(String),
@@ -211,6 +212,7 @@ define_state! {
         file_pending: Option<u64> = None,
         trash: [trash_ui::Bin; 2] = Default::default(),
         deletion: Option<file_context::Deletion> = None,
+        file_elevation: Option<file_elevation::Prompt> = None,
         properties: Option<file_properties::Editor> = None,
         code: code_workbench::Runtime = Default::default(),
         remote_editor: Option<text_editor::Editor> = None,
@@ -327,6 +329,7 @@ define_state! {
 }
 impl State {
     fn advance_epoch(&mut self) {
+        file_elevation::reset(self);
         self.next_epoch += 1;
         self.epoch = self.next_epoch;
     }
@@ -372,7 +375,6 @@ impl State {
 #[derive(Clone)]
 struct Ui {
     player: video_player::Player,
-    wallpapers: Arc<desktop_customization_ui::WallpaperAssets>,
     update_controller: Arc<updates_ui::Controller>,
     transfer_limiter: Arc<transfer_worker::Limiter>,
     batch_controller: Rc<std::cell::RefCell<Option<batch_worker::Controller>>>,
@@ -498,6 +500,9 @@ impl Ui {
             s.file_context = None;
             s.file_menu = None;
             s.file_browser.cancel_drag();
+            if let Some(prompt) = &mut s.file_elevation {
+                prompt.clear_password();
+            }
             s.swap_session(&mut incoming);
             s.code.viewport = None;
             #[cfg(windows)]
@@ -610,10 +615,10 @@ impl Ui {
         let terminal_rename = self
             .state
             .with(|s| matches!(s.dialog, Some(Dialog::TerminalRename { .. })));
-        let creating_theme = self
-            .state
-            .with(|s| s.dialog == Some(Dialog::CreateDesktopTheme));
-        if text_editor::dismiss(self) || file_context::dismiss_deletion(self) {
+        if file_elevation::dismiss(self)
+            || text_editor::dismiss(self)
+            || file_context::dismiss_deletion(self)
+        {
             return;
         }
         if file_properties::dismiss(self) {
@@ -633,9 +638,6 @@ impl Ui {
         self.state.revise(|s| {
             if s.file_pending.is_some() || (!s.background && s.import_pending.is_some()) {
                 return;
-            }
-            if s.dialog == Some(Dialog::CreateDesktopTheme) {
-                desktop_appearance_ui::cancel(s);
             }
             if s.background {
                 s.dialog = None;
@@ -705,9 +707,6 @@ impl Ui {
             && let Some(id) = self.shell_focus.get()
         {
             let _ = self.scope.action(glory::render::Action::Focus(id));
-        }
-        if creating_theme && self.state.with(|s| s.dialog.is_none()) {
-            self.load_desktop_wallpaper();
         }
         if self
             .state
@@ -850,7 +849,7 @@ impl Ui {
             #[cfg(windows)]
             Update::Html(result)=>web_browser::html_result(events,response.serial,result),
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
-            Update::ServerApps(result)=>server_apps_ui::event(events,response.serial,result),
+            Update::ServerApps(result)=>server_apps_ui::event(events,response.serial,*result),
             Update::Operations(event)=>operations::event(events,response.serial,event),
             Update::Terminal(event)=>terminal::update(events,event),
             Update::Fingerprint(fingerprint)=>{
@@ -881,7 +880,8 @@ impl Ui {
             Update::ConnectionLost(message)=>{
                 state.revise(|s| {
                     desktop_file_picker::dismiss(s);
-                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::CreateDesktopTheme)) {
+                    file_elevation::reset(s);
+                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::DesktopApps)) {
                         s.dialog = None;
                     }
                 });
@@ -924,7 +924,8 @@ impl Ui {
             Update::DeletionProgress(progress)=>file_context::deletion_progress(events,response.serial,progress),
             Update::FileMetadata(result)=>file_properties::metadata(events,response.serial,result),
             Update::Permissions(result)=>file_properties::finished(events,response.serial,result),
-            Update::CodeFile(reply)=>code_workbench::reply(events,response.serial,reply),
+            Update::CodeFile(reply)=>state.revise(|s|code_workbench::reply(s,response.serial,reply)),
+            Update::TextFile(reply) if state.with(|s|s.code.pending.contains_key(&response.serial))=>state.revise(|s|code_workbench::saved(s,response.serial,reply)),
             Update::TextFile(reply)=>text_editor::event(events,response.serial,reply),
             Update::Error(message)=>{
                 if file_browser::mutation_failed(events,response.serial,&message) {return;}
@@ -1105,7 +1106,6 @@ impl Ui {
                         | Dialog::DesktopTimeZone
                         | Dialog::DesktopIcons
                         | Dialog::DockShortcuts
-                        | Dialog::CreateDesktopTheme
                 )
             )
         }) {
@@ -1564,6 +1564,9 @@ fn dismiss_menus(s: &mut State) {
 }
 /// Shows `dialog` in place of any open menu. Callers check [`file_task_busy`].
 fn show_dialog(s: &mut State, dialog: Dialog) {
+    if dialog != Dialog::FileElevation {
+        file_elevation::reset(s);
+    }
     if dialog == Dialog::Connect {
         s.remember_ssh_credential = false;
     }
@@ -1693,9 +1696,19 @@ fn modal(
     body: impl IntoChildren + 'static,
     footer: impl IntoChildren + 'static,
 ) -> impl Widget {
-    let mut content = Some((title.into(), body, footer));
+    modal_with_header(ui, title, (), body, footer)
+}
+
+fn modal_with_header(
+    ui: Ui,
+    title: impl Into<String>,
+    header: impl IntoChildren + 'static,
+    body: impl IntoChildren + 'static,
+    footer: impl IntoChildren + 'static,
+) -> impl Widget {
+    let mut content = Some((title.into(), header, body, footer));
     widget(move |scope| {
-        let (title, body, footer) = content
+        let (title, header, body, footer) = content
             .take()
             .expect("dialog builds once per mounted scope");
         let close = ui.clone();
@@ -1709,7 +1722,6 @@ fn modal(
                         | Dialog::OpenDesktopFile(_)
                         | Dialog::DesktopIcons
                         | Dialog::DockShortcuts
-                        | Dialog::CreateDesktopTheme
                 )
             )
         }) {
@@ -1747,11 +1759,9 @@ fn modal(
                                 }
                                 Some(Dialog::DesktopTimeZone) => "modal-card time-zone-dialog",
                                 Some(Dialog::DesktopIcons) => "modal-card shortcut-settings-dialog",
+                                Some(Dialog::DesktopApps) => "modal-card desktop-apps-dialog",
                                 Some(Dialog::DockShortcuts) => {
                                     "modal-card shortcut-settings-dialog dock-shortcut-dialog"
-                                }
-                                Some(Dialog::CreateDesktopTheme) => {
-                                    "modal-card theme-create-dialog"
                                 }
                                 Some(Dialog::OpenDesktopFile(_)) => "modal-card file-picker-dialog",
                                 Some(Dialog::TextEditor) => "modal-card remote-editor-modal",
@@ -1764,18 +1774,21 @@ fn modal(
                         .focus(FocusMode::Programmatic)
                         .node_ref(focus)
                         .fill((
-                            row().class("modal-header").fill((
-                                text().class("dialog-title").content(title),
-                                close_action("关闭对话框")
-                                    .enabled(ui.state.map(|s| {
-                                        (s.file_pending.is_none()
-                                            || file_context::deletion_dialog(s)
-                                            || file_properties::running(s)
-                                            || s.dialog == Some(Dialog::TextEditor))
-                                            && s.import_pending.is_none()
-                                    }))
-                                    .on_press(move || close.close_dialog()),
-                            )),
+                            row()
+                                .class("modal-header")
+                                .fill(text().class("dialog-title").content(title))
+                                .fill(header)
+                                .fill(
+                                    close_action("关闭对话框")
+                                        .enabled(ui.state.map(|s| {
+                                            (s.file_pending.is_none()
+                                                || file_context::deletion_dialog(s)
+                                                || file_properties::running(s)
+                                                || s.dialog == Some(Dialog::TextEditor))
+                                                && s.import_pending.is_none()
+                                        }))
+                                        .on_press(move || close.close_dialog()),
+                                ),
                             col()
                                 .class("modal-body")
                                 .semantics(ui.state.map(|s| {
@@ -1997,9 +2010,10 @@ fn app(ui: Ui) -> impl Widget {
                     fragment((
                         desktop_system_settings::time_zone_dialog(ui.clone()),
                         desktop_customization_ui::shortcut_settings_dialog(ui.clone()),
+                        desktop_apps::dialog(ui.clone()),
                         text_editor::dialogs(ui.clone()),
-                        desktop_appearance_ui::create_theme_dialog(ui.clone()),
                         file_context::dialogs(ui.clone()),
+                        file_elevation::dialog(ui.clone()),
                         file_open::dialog(ui.clone()),
                         file_open::settings_dialog(ui.clone()),
                         trash_ui::dialog(ui.clone()),
@@ -2150,7 +2164,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
         player: video_player::Player::new(window.renderer().clone(), scope),
-        wallpapers: Arc::new(desktop_customization_ui::WallpaperAssets::default()),
         update_controller,
         transfer_limiter: Default::default(),
         batch_controller: Rc::new(std::cell::RefCell::new(None)),
@@ -2222,7 +2235,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Locale bindings patch the existing document. Remounting it would retire
     // live button identities while their browser activations are still queued.
     window.mount(app(ui.clone()))?;
-    let wallpapers = ui.wallpapers.clone();
     let shell = Shell::new();
     // Tao creates its NSApplication subclass when it constructs the event loop.
     #[cfg(target_os = "macos")]
@@ -2231,8 +2243,29 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         window,
         Config {
             native: Some(Box::new(app_icon::DesktopWindow::new(ui.clone()))),
+            assets: [
+                ("fjord", include_bytes!("../assets/fjord.webp").as_slice()),
+                (
+                    "seaside-sunrise",
+                    include_bytes!("../assets/seaside-sunrise.webp").as_slice(),
+                ),
+                (
+                    "seaside-moonrise",
+                    include_bytes!("../assets/seaside-moonrise.webp").as_slice(),
+                ),
+            ]
+            .into_iter()
+            .map(|(name, bytes)| {
+                (
+                    format!("/wallpapers/{name}.webp"),
+                    glory::wry::shell::Asset {
+                        mime: "image/webp".into(),
+                        bytes: bytes.to_vec(),
+                    },
+                )
+            })
+            .collect(),
             asset_provider: Some(Arc::new(video_player::Assets {
-                wallpapers,
                 player: ui.player.source.clone(),
             })),
             initialization_script: Some(
@@ -2248,8 +2281,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/desktop-geometry.js"),
                     include_str!("../assets/window-tabs.js"),
                     include_str!("../assets/files-tabs.js"),
+                    if cfg!(windows) {
+                        "const nativeSurfaceRegionClipping = true;"
+                    } else {
+                        "const nativeSurfaceRegionClipping = false;"
+                    },
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),
+                    include_str!("../assets/vendor/codemirror/modes.js"),
                     include_str!("../assets/text-editor-events.js"),
                     include_str!("../assets/desktop-motion.js"),
                     include_str!("../assets/desktop-shortcuts.js"),

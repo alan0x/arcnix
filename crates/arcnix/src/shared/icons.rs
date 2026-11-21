@@ -1,5 +1,7 @@
 //! Sapid action primitives with decorative SVG masks for the Wry host.
 //! Wry does not render Glory Graphic yet; CSS masks retain currentColor.
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use glory::prelude::*;
 
 use crate::i18n;
@@ -302,35 +304,51 @@ pub fn css() -> String {
         Icon::WindowMaximize,
         Icon::WindowRestore,
     ] {
-        let encoded = icon
-            .svg()
-            .bytes()
-            .map(|byte| format!("%{byte:02X}"))
-            .collect::<String>();
+        let encoded = STANDARD.encode(icon.svg());
         css.push_str(&format!(
-            ".glyph-{}{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n",
+            ".glyph-{}{{mask-image:url(\"data:image/svg+xml;base64,{encoded}\")}}\n",
             icon.name()
         ));
-        if let Some(app) = match icon {
-            Icon::Home => Some("home"),
-            Icon::Folder => Some("files"),
-            Icon::File => Some("document"),
-            Icon::Edit => Some("editor"),
-            Icon::Code => Some("code"),
-            Icon::Play => Some("player"),
-            Icon::Clear => Some("trash"),
-            Icon::Browser => Some("browser"),
-            Icon::Docker => Some("docker"),
-            Icon::Monitor => Some("monitor"),
-            Icon::AppCenter => Some("center"),
-            Icon::Terminal => Some("terminal"),
-            Icon::Settings => Some("settings"),
-            _ => None,
-        } {
-            css.push_str(&format!(
-                ".app-{app} .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml,{encoded}\")}}\n"
-            ));
-        }
+    }
+    macro_rules! app_icons {
+        ($($icon:ident => $app:literal),+ $(,)?) => {
+            [$((
+                Icon::$icon,
+                $app,
+                include_str!(concat!("../../assets/icons/color/", $app, ".svg")),
+            )),+]
+        };
+    }
+    for (icon, app, color) in app_icons! {
+        Home => "home",
+        Folder => "files",
+        File => "document",
+        Edit => "editor",
+        Code => "code",
+        Play => "player",
+        Clear => "trash",
+        Browser => "browser",
+        Docker => "docker",
+        Monitor => "monitor",
+        AppCenter => "center",
+        Terminal => "terminal",
+        Settings => "settings",
+    } {
+        // Recenter app artwork without shifting the original toolbar glyphs.
+        let line = match icon {
+            Icon::Play => STANDARD.encode(icon.svg().replace("0 0 24 24", "2 0 24 24")),
+            Icon::Docker => STANDARD.encode(icon.svg().replace("0 0 24 24", "0 1 24 24")),
+            Icon::AppCenter => STANDARD.encode(icon.svg().replace("0 0 24 24", "0 -0.5 24 24")),
+            _ => STANDARD.encode(icon.svg()),
+        };
+        let color = STANDARD.encode(color);
+        css.push_str(&format!(
+            ".app-{app} .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n"
+        ));
+        let folder = if app == "files" { ",.glyph-folder" } else { "" };
+        css.push_str(&format!(
+            ".app-{app}{folder}{{--color-app-icon:url(\"data:image/svg+xml;base64,{color}\")}}\n"
+        ));
     }
     for (name, icon) in [
         ("right", sapid::Icon::ChevronRight),

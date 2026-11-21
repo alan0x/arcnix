@@ -156,8 +156,8 @@ def main():
             preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
             eventually(lambda: desktop_mode(read_desktop_settings(preferences)) == 'Dark')
             dialog.get_by_role('button', name='Desktop', exact=True).click()
-            dialog.get_by_role('button', name='Visible icons', exact=True).click()
-            shortcuts = page.get_by_role('dialog', name='Visible icons', exact=True)
+            dialog.get_by_role('button', name='App icons', exact=True).click()
+            shortcuts = page.get_by_role('dialog', name='App icons', exact=True)
             expect(shortcuts.locator('.preference-check').first).to_have_css('color', 'rgb(226, 234, 244)')
             close_dialog(shortcuts)
             close_settings()
@@ -197,9 +197,9 @@ def main():
             set_desktop_mode(dialog, 'Light')
             eventually(lambda: desktop_mode(read_desktop_settings(preferences)) == 'Light')
             dialog.get_by_role('button', name='Desktop', exact=True).click()
-            shortcut_entry = dialog.get_by_role('button', name='Visible icons', exact=True)
+            shortcut_entry = dialog.get_by_role('button', name='App icons', exact=True)
             shortcut_entry.click()
-            shortcuts = page.get_by_role('dialog', name='Visible icons', exact=True)
+            shortcuts = page.get_by_role('dialog', name='App icons', exact=True)
             expect(shortcuts.locator('.preference-check').first).to_have_css('color', 'rgb(35, 50, 72)')
             close_dialog(shortcuts)
             close_settings()
@@ -293,7 +293,7 @@ def main():
             expect(page.locator('.connection-state')).to_have_text('SSH connected')
             expect(page.locator('.desktop-shortcuts .app-docker')).to_have_count(0)
             expect(page.locator('.desktop-shortcuts').get_by_role(
-                'button', name='Web browser', exact=True,
+                'button', name='Browser', exact=True,
             )).to_be_visible()
             expect(page.locator('.docker-page')).to_have_count(0)
             expect(page.locator('.server-desktop')).to_have_class('server-desktop theme-light desktop-light')

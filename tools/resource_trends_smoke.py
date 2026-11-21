@@ -98,7 +98,7 @@ with Peer(out/'peer') as peer:
         assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
         assert not p.locator('.resource-trends *:visible').evaluate_all("els=>els.filter(el=>!el.children.length&&el.textContent.trim()&&parseFloat(getComputedStyle(el).fontSize)<12).map(el=>el.textContent)")
         app.screenshot('resources-chinese-narrow.png')
-        dock.get_by_role('button',name='资源管理器',exact=True).click();dock.get_by_role('button',name='监控',exact=True).click()
+        dock.get_by_role('button',name='文件管理',exact=True).click();dock.get_by_role('button',name='监控',exact=True).click()
         expect(p.locator('.resource-trend-chart svg')).to_have_count(3)
         passed('Chinese labels, both themes, 900px layouts and remounting preserve readable charts without duplicated renderers')
 

@@ -25,7 +25,7 @@ def main():
         profile = {**peer.profile('Code format'), 'initial_remote_path': '/project'}
         with Desktop(out / 'desktop', peer.config([profile], out)) as app:
             app.connect()
-            app.application('Code')
+            app.application('Code Editor')
             code = app.code()
             lines = code.locator('.monaco-editor:visible .view-lines').last
             editor = code.locator('.monaco-editor:visible textarea.inputarea').last

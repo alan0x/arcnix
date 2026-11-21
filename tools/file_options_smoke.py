@@ -5,6 +5,7 @@ import json, os, re, socket, subprocess, sys, time, urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'artifacts/python'))
 from playwright.sync_api import sync_playwright, expect
+from desktop_fixture import executable
 
 
 def main():
@@ -38,8 +39,7 @@ def main():
         config = out / 'config.json'
         profile = dict(id='options-first', name='Options first', host=host, port=int(port), username='arcnix', auth='PrivateKey', private_key=peer['client_key_ed25519'], initial_remote_path='/')
         config.write_text(json.dumps(dict(version=1, config=dict(servers=[profile, dict(profile, id='options-second', name='Options second')], groups=[], trusted_hosts=[dict(host=host, port=int(port), fingerprint=peer['host_key_rsa_fingerprint'])], local_directory=str(local), settings=dict(language='English', theme='Light', show_hidden_files=True, resource_interval_seconds=3)))))
-        metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=ROOT))
-        executable = Path(metadata['target_directory']) / 'debug/arcnix.exe'
+        binary = executable()
         with sync_playwright() as p:
             def launch():
                 nonlocal app, browser, page
@@ -50,7 +50,7 @@ def main():
                 env = os.environ.copy()
                 env['WEBVIEW2_USER_DATA_FOLDER'] = str(out / f'webview-{time.time_ns()}')
                 env['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = f'--remote-debugging-port={debug} --remote-debugging-address=127.0.0.1'
-                app = subprocess.Popen([str(executable), '--config', str(config)], cwd=ROOT, env=env, stdout=log, stderr=log)
+                app = subprocess.Popen([str(binary), '--config', str(config)], cwd=ROOT, env=env, stdout=log, stderr=log)
                 deadline = time.monotonic() + 20
                 while True:
                     try:
@@ -209,7 +209,7 @@ def main():
             expect(page.locator('.local-slot .column-size')).to_be_visible()
             dialog = columns('.remote-slot')
             dialog.get_by_role('checkbox', name='Type', exact=True).check()
-            dialog.get_by_role('button', name='Restore defaults', exact=True).click()
+            dialog.get_by_role('button', name='Reset', exact=True).click()
             dialog.get_by_role('button', name='Done', exact=True).click()
             expect(page.locator('.remote-slot .column-type')).to_have_count(0)
             page.set_viewport_size(dict(width=1000, height=700))

@@ -1,17 +1,26 @@
-use arcnix_core::desktop_shortcuts::{Action as Shortcut, GROUPS, Scope as ShortcutScope};
+use arcnix_core::desktop_shortcuts::{
+    Action as Shortcut, GROUPS, Keymap, Preset, Profile, Scheme, Scope as ShortcutScope,
+};
 use serde::Deserialize;
 
 use crate::i18n::desktop as i18n;
-use crate::i18n::desktop::{close_action, icon_action};
+use crate::i18n::desktop::close_action;
 use crate::*;
 
-fn can_run(s: &State, action: Shortcut) -> bool {
+pub(crate) fn keys(s: &State) -> Keymap<'_> {
+    server_apps_ui::current(s)
+        .shortcuts
+        .resolved(s.config.settings.shortcut_scheme.preset())
+}
+
+pub(super) fn can_run(s: &State, action: Shortcut) -> bool {
     match action {
         Shortcut::NextApp | Shortcut::PreviousApp => !s.workbench.apps.is_empty(),
         Shortcut::Maximize | Shortcut::Minimize => {
             server_desktop::app_id(s.workspace_page).is_some()
         }
-        Shortcut::Fullscreen => true,
+        Shortcut::Fullscreen | Shortcut::ShowDesktop => true,
+        Shortcut::CloseWindow | Shortcut::CloseTab => s.workbench.window_visible(s.workspace_page),
         Shortcut::ExitFullscreen => server_desktop::fullscreen(s),
         Shortcut::OpenFiles => files_tabs::available(s),
         Shortcut::FilesDuplicateWindow => s.workspace_page.is_files() && files_tabs::available(s),
@@ -19,7 +28,7 @@ fn can_run(s: &State, action: Shortcut) -> bool {
     }
 }
 
-fn desktop_active(s: &State) -> bool {
+pub(super) fn desktop_active(s: &State) -> bool {
     server_desktop::visible(s) && s.dialog.is_none() && s.fingerprint.is_none()
 }
 
@@ -41,8 +50,21 @@ struct Packet {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Intent {
-    Run { action: Shortcut },
-    Record { action: Shortcut, chord: String },
+    Recording {
+        active: bool,
+    },
+    Run {
+        action: Shortcut,
+        preset: Preset,
+        chord: String,
+    },
+    Record {
+        action: Shortcut,
+        chord: String,
+        preset: Preset,
+        add: bool,
+        previous: Option<String>,
+    },
 }
 
 fn receive(ui: &Ui, value: &str) {
@@ -52,91 +74,129 @@ fn receive(ui: &Ui, value: &str) {
     let Ok(packet) = serde_json::from_str::<Packet>(value) else {
         return;
     };
-    if !ui
-        .state
-        .with(|s| desktop_active(s) && s.epoch == packet.epoch)
-    {
+    if !ui.state.with(|s| s.epoch == packet.epoch) {
         return;
     }
     match packet.intent {
-        Intent::Run { action } => {
+        Intent::Recording { active } => {
+            ui.state
+                .revise(|s| s.server_apps.recording_shortcut = active && editing(s));
+        }
+        _ if !ui.state.with(desktop_active) => {}
+        Intent::Run { action, preset, chord } => {
             if !ui.state.with(|s| {
-                can_run(s, action)
-                    && server_apps_ui::current(s)
-                        .shortcuts
-                        .binding(action)
-                        .is_some()
+                let keys = keys(s);
+                keys.preset == preset && can_run(s, action) && keys.chords(action).any(|key| key == chord)
             }) {
                 return;
             }
-            match action {
-                Shortcut::NextApp => ui.cycle_desktop_apps(false),
-                Shortcut::PreviousApp => ui.cycle_desktop_apps(true),
-                Shortcut::Maximize => ui.toggle_desktop_maximize(),
-                Shortcut::Minimize => ui.minimize_desktop_window(),
-                Shortcut::Fullscreen | Shortcut::ExitFullscreen => ui.toggle_desktop_fullscreen(),
-                Shortcut::OpenFiles => files_tabs::new_window(ui, files_tabs::WindowStart::Default),
-                Shortcut::FilesDuplicateWindow => {
-                    files_tabs::new_window(ui, files_tabs::WindowStart::Current)
-                }
-                _ => {}
+            run(ui, action);
+        }
+        Intent::Record {
+            action,
+            chord,
+            preset,
+            add,
+            previous,
+        } => {
+            if ui.state.with(|s| keys(s).preset == preset) {
+                record(ui, action, chord, add, previous);
             }
         }
-        Intent::Record { action, chord } => change(ui, |keys| {
-            if cfg!(windows)
-                && (chord.split('+').any(|part| part == "Meta")
-                    || matches!(
-                        chord.as_str(),
-                        "Alt+Tab"
-                            | "Alt+Shift+Tab"
-                            | "Alt+F4"
-                            | "Ctrl+Alt+Delete"
-                            | "Ctrl+Escape"
-                            | "Ctrl+Shift+Escape"
-                            | "Alt+Space"
-                            | "Ctrl+Alt+Tab"
-                    ))
-            {
-                anyhow::bail!("This shortcut is reserved by Windows.");
-            }
-            let occupied = match action.scope() {
-                ShortcutScope::Files => matches!(
-                    chord.as_str(),
-                    "Ctrl+T"
-                        | "Ctrl+W"
-                        | "Ctrl+F"
-                        | "F2"
-                        | "F5"
-                        | "Delete"
-                        | "Shift+Delete"
-                        | "Alt+Enter"
-                        | "Ctrl+Shift+C"
-                        | "Ctrl+C"
-                        | "Ctrl+V"
-                        | "Shift+F10"
-                ),
-                ShortcutScope::Code => matches!(
-                    chord.as_str(),
-                    "Ctrl+P"
-                        | "Ctrl+F"
-                        | "Ctrl+H"
-                        | "Ctrl+Z"
-                        | "Ctrl+Y"
-                        | "Ctrl+A"
-                        | "Ctrl+X"
-                        | "Ctrl+C"
-                        | "Ctrl+V"
-                        | "Ctrl+Shift+S"
-                        | "Ctrl+Shift+P"
-                        | "Ctrl+K"
-                        | "F2"
-                ),
-                _ => false,
-            };
-            anyhow::ensure!(!occupied, "This shortcut is already in use.");
-            keys.set(action, Some(chord))
-        }),
     }
+}
+
+pub(super) fn run(ui: &Ui, action: Shortcut) {
+    match action {
+        Shortcut::NextApp => ui.cycle_desktop_apps(false),
+        Shortcut::PreviousApp => ui.cycle_desktop_apps(true),
+        Shortcut::Maximize => ui.toggle_desktop_maximize(),
+        Shortcut::Minimize => ui.minimize_desktop_window(),
+        Shortcut::Fullscreen | Shortcut::ExitFullscreen => ui.toggle_desktop_fullscreen(),
+        Shortcut::ShowDesktop => ui.toggle_show_desktop(),
+        Shortcut::CloseWindow | Shortcut::CloseTab => {
+            ui.close_active_desktop(action == Shortcut::CloseTab)
+        }
+        Shortcut::OpenFiles => files_tabs::new_window(ui, files_tabs::WindowStart::Default),
+        Shortcut::FilesDuplicateWindow => {
+            files_tabs::new_window(ui, files_tabs::WindowStart::Current)
+        }
+        _ => {}
+    }
+}
+
+fn record(ui: &Ui, action: Shortcut, chord: String, add: bool, previous: Option<String>) {
+    change(ui, |keys, preset| {
+        if cfg!(windows)
+            && preset == Preset::Windows
+            && !matches!(
+                (action, chord.as_str()),
+                (Shortcut::ShowDesktop, "Meta+D") | (Shortcut::CloseWindow, "Alt+F4")
+            )
+            && (chord.split('+').any(|part| part == "Meta")
+                || matches!(
+                    chord.as_str(),
+                    "Alt+Tab"
+                        | "Alt+Shift+Tab"
+                        | "Alt+F4"
+                        | "Ctrl+Alt+Delete"
+                        | "Ctrl+Escape"
+                        | "Ctrl+Shift+Escape"
+                        | "Alt+Space"
+                        | "Ctrl+Alt+Tab"
+                ))
+        {
+            anyhow::bail!("This shortcut is reserved by Windows.");
+        }
+        // Fixed editor/file commands use the primary modifier of the selected scheme.
+        let portable = if preset == Preset::MacOs {
+            chord
+                .replace("Shift+Meta+", "Ctrl+Shift+")
+                .replace("Meta+", "Ctrl+")
+        } else {
+            chord.clone()
+        };
+        let occupied = match action.scope() {
+            ShortcutScope::Files => matches!(
+                portable.as_str(),
+                "Ctrl+T"
+                    | "Ctrl+W"
+                    | "Ctrl+F"
+                    | "F2"
+                    | "F5"
+                    | "Delete"
+                    | "Shift+Delete"
+                    | "Alt+Enter"
+                    | "Ctrl+Shift+C"
+                    | "Shift+F10"
+            ),
+            ShortcutScope::Code => matches!(
+                portable.as_str(),
+                "Ctrl+P"
+                    | "Ctrl+F"
+                    | "Ctrl+H"
+                    | "Ctrl+Z"
+                    | "Ctrl+Y"
+                    | "Ctrl+A"
+                    | "Ctrl+X"
+                    | "Ctrl+C"
+                    | "Ctrl+V"
+                    | "Ctrl+Shift+S"
+                    | "Ctrl+Shift+P"
+                    | "Ctrl+K"
+                    | "F2"
+            ),
+            _ => false,
+        };
+        anyhow::ensure!(!occupied, "This shortcut is already in use.");
+        if let Some(previous) = previous {
+            keys.replace_extra(preset, action, &previous, chord)
+        } else if add {
+            keys.add(preset, action, chord)
+        } else {
+            keys.set(preset, action, Some(chord))
+        }
+    });
 }
 
 pub(crate) fn bridge(ui: Ui) -> impl Widget {
@@ -145,13 +205,18 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
         text()
             .class("desktop-shortcut-state hidden")
             .content(state.map(|s| {
-                let keys = &server_apps_ui::current(s).shortcuts;
+                let keys = keys(s);
                 let actions = GROUPS
                     .iter()
                     .flat_map(|(_, definitions)| definitions.iter());
                 let bindings = actions
                     .clone()
-                    .map(|definition| (definition.action, keys.binding(definition.action)))
+                    .map(|definition| {
+                        (
+                            definition.action,
+                            keys.chords(definition.action).collect::<Vec<_>>(),
+                        )
+                    })
                     .collect::<std::collections::BTreeMap<_, _>>();
                 let commands = actions
                     .filter(|definition| can_run(s, definition.action))
@@ -160,6 +225,8 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
                 serde_json::json!({
                     "epoch": s.epoch,
                     "active": desktop_active(s),
+                    "preset": keys.preset,
+                    "windowsHost": cfg!(windows),
                     "bindings": bindings,
                     "commands": commands,
                 })
@@ -176,17 +243,15 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
     ))
 }
 
-fn change(
-    ui: &Ui,
-    apply: impl FnOnce(&mut arcnix_core::desktop_shortcuts::Shortcuts) -> anyhow::Result<()>,
-) {
+fn change(ui: &Ui, apply: impl FnOnce(&mut Profile, Preset) -> anyhow::Result<()>) {
     let Some(mut prefs) = ui
         .state
         .with(|s| editing(s).then(|| server_apps_ui::desired(s)))
     else {
         return;
     };
-    let result = apply(&mut prefs.shortcuts);
+    let preset = ui.state.with(|s| keys(s).preset);
+    let result = apply(prefs.shortcuts.profile_mut(preset), preset);
     ui.state.revise(|s| {
         s.server_apps.shortcut_error = result
             .as_ref()
@@ -201,7 +266,7 @@ fn change(
 
 pub(crate) fn controls(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let reset = ui.clone();
+    let capture = ui.clone();
     let error = text()
         .class("error desktop-shortcut-error")
         .content(i18n::bind(
@@ -210,27 +275,69 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
     col().class("desktop-settings-pane desktop-custom-keys").fill((
         row().class("section-heading").fill((
             text().class("section-title").content(i18n::bind("Keyboard shortcuts")),
-            help_ui::tip("Change shortcut", if cfg!(windows) {
-                "Click a shortcut and press the new keys to save. Esc cancels. Windows shortcuts such as Alt+Tab and Win+L are handled by the system."
-            } else {
-                "Click a shortcut and press the new keys to save. Esc cancels."
+            help_ui::tip("Change shortcut", "Click a shortcut to change it, or + to add another. Esc cancels. Changes to this preset are saved on the server."),
+        )),
+        col().class("desktop-settings-card desktop-shortcut-scheme").fill((
+            row().class("desktop-setting-row").fill((
+                text().class("section-title").content(i18n::bind("Shortcut scheme")),
+                row().class("desktop-setting-controls").fill(fragment([
+                    (Scheme::Auto, "Auto"), (Scheme::Windows, "Windows"), (Scheme::MacOs, "macOS"),
+                ].into_iter().map(|(scheme, label)| {
+                    let ui = ui.clone();
+                    sapid::button().class("button appearance-option").label(i18n::bind(label))
+                        .pressed(state.map(move |s| s.config.settings.shortcut_scheme == scheme))
+                        .on_press(move || {
+                            state.revise(|s| {
+                                s.config.settings.shortcut_scheme = scheme;
+                                s.server_apps.recording_shortcut = false;
+                                s.server_apps.shortcut_error.clear();
+                            });
+                            ui.save();
+                        })
+                }).collect::<Vec<_>>())),
+            )),
+            when(state.map(|s| s.config.settings.shortcut_scheme == Scheme::Auto), move || {
+                text().class("subtle").content(i18n::bind(match Scheme::Auto.preset() {
+                    Preset::Windows => "Active preset: Windows",
+                    Preset::MacOs => "Active preset: macOS",
+                }))
             }),
         )),
+        when(state.map(|s| cfg!(windows) && keys(s).preset == Preset::Windows), move || {
+            let capture = capture.clone();
+            col().class("desktop-settings-card").fill((
+                sapid::checkbox().class("preference-check desktop-capture-shortcuts")
+                    .name(i18n::bind("Use Windows shortcuts on the desktop"))
+                    .label(i18n::bind("Use Windows shortcuts on the desktop"))
+                    .checked(state.map(|s| s.config.settings.capture_desktop_shortcuts))
+                    .on_checked_change(move |on| {
+                        state.revise(|s| s.config.settings.capture_desktop_shortcuts = on);
+                        capture.save();
+                    }),
+                text().class("subtle").content(i18n::bind("When the desktop is active, Win+D shows the desktop. Press it again to restore windows. Alt+F4 closes the active window and Ctrl+F4 closes the active tab. Alt+Tab and Alt+Shift+Tab switch apps, Win+E opens Files, and Win+Up / Win+Down maximize or minimize a window. Changing an action’s shortcut also releases its Windows shortcut.")),
+            ))
+        }),
         error,
         fragment(GROUPS.iter().map(move |(scope, definitions)| {
+            let scope = *scope;
             let title = match scope {
                 ShortcutScope::Desktop => "Desktop",
                 ShortcutScope::Terminal => "Terminal",
-                ShortcutScope::Files => "资源管理器",
-                ShortcutScope::Code => "Code",
+                ShortcutScope::Files => server_desktop::app_label(WorkspacePage::Files(0)),
+                ShortcutScope::Code => server_desktop::app_label(WorkspacePage::Code),
             };
+            let reset = ui.clone();
             col().class("desktop-settings-card desktop-shortcut-group").fill((
-                text().class("section-title").content(i18n::bind(title)),
+                settings::section_heading(title, true, settings::reset_button(true, move || {
+                    change(&reset, |keys, _| {
+                        keys.reset_scope(scope);
+                        Ok(())
+                    });
+                }).enabled(state.map(move |s| editing(s) && definitions.iter().any(|definition| keys(s).overridden(definition.action) || !keys(s).additions(definition.action).is_empty())))),
                 fragment(definitions.iter().map(|definition| {
                     let action = definition.action;
                     let label = definition.label;
                     let clear = ui.clone();
-                    let restore = ui.clone();
                     row().class("desktop-key-binding").fill((
                         text().content(i18n::bind(label)),
                         row().class("desktop-key-controls").fill((
@@ -243,33 +350,48 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                                 .enabled(state.map(editing))
                                 .fill((
                                     text().class("desktop-key-combination").content(i18n::bind(state.map(move |s| {
-                                        server_apps_ui::current(s).shortcuts.binding(action).unwrap_or("Unassigned").to_owned()
+                                        keys(s).binding(action).map(|chord| keys(s).preset.display(chord)).unwrap_or_else(|| "Unassigned".into())
                                     }))),
                                     text().class("desktop-key-recording").content(i18n::bind("Press shortcut…")),
                                 )),
-                            when(state.map(move |s| server_apps_ui::current(s).shortcuts.overridden(action)), move || {
-                                let restore = restore.clone();
-                                icon_action(format!("Restore default: {label}"), Icon::Refresh)
-                                    .class("icon-button")
-                                    .enabled(state.map(editing))
-                                    .on_press(move || change(&restore, |keys| keys.restore(action)))
-                            }),
                             close_action(format!("Disable shortcut: {label}"))
                                 .class("icon-button desktop-shortcut-disable")
-                                .enabled(state.map(move |s| editing(s) && server_apps_ui::current(s).shortcuts.binding(action).is_some()))
-                                .on_press(move || change(&clear, |keys| keys.set(action, None))),
+                                .enabled(state.map(move |s| editing(s) && keys(s).binding(action).is_some()))
+                                .on_press(move || change(&clear, |keys, preset| keys.set(preset, action, None))),
+                            each(state.map(move |s| keys(s).additions(action).to_vec()))
+                                .key(|chord| chord.clone())
+                                .children({
+                                    let ui = ui.clone();
+                                    move |item| {
+                                        let chord = item.value.get();
+                                        let remove = ui.clone();
+                                        let old = chord.clone();
+                                        row().class("desktop-shortcut-extra").fill((
+                                            text().class("desktop-shortcut-previous hidden").content(chord.clone()),
+                                            sapid::button().class("button desktop-shortcut-record")
+                                                .name(i18n::bind(format!("Change shortcut: {label} ({chord})")))
+                                                .enabled(state.map(editing))
+                                                .fill((
+                                                    text().class("desktop-key-combination").content(state.map(move |s| keys(s).preset.display(&chord))),
+                                                    text().class("desktop-key-recording").content(i18n::bind("Press shortcut…")),
+                                                )),
+                                            close_action("Remove shortcut").class("icon-button")
+                                                .enabled(state.map(editing))
+                                                .on_press(move || change(&remove, |keys, _| { keys.remove_extra(action, &old); Ok(()) })),
+                                        ))
+                                    }
+                                }),
+                            sapid::button().class("button desktop-shortcut-record desktop-shortcut-add")
+                                .name(i18n::bind(format!("Add shortcut: {label}")))
+                                .enabled(state.map(editing))
+                                .fill((
+                                    text().class("desktop-key-combination").content("+"),
+                                    text().class("desktop-key-recording").content(i18n::bind("Press shortcut…")),
+                                )),
                         )),
                     ))
                 }).collect::<Vec<_>>()),
             ))
         }).collect::<Vec<_>>()),
-        sapid::button()
-            .class("button desktop-shortcut-restore")
-            .label(i18n::bind("Restore defaults"))
-            .enabled(state.map(|s| editing(s) && !server_apps_ui::current(s).shortcuts.is_default()))
-            .on_press(move || change(&reset, |keys| {
-                *keys = Default::default();
-                Ok(())
-            })),
     ))
 }

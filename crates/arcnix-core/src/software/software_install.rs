@@ -152,7 +152,7 @@ pub fn template(
                     && channel
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b)),
-                "Invalid Snap channel"
+                "Invalid snap channel"
             );
             let command = match action {
                 Action::Install => format!(

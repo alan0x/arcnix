@@ -85,9 +85,12 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                 state.with(|s| matches!(s.dialog, Some(Dialog::FileColumns { remote: true })));
             let reset = ui.clone();
             let close = ui.clone();
-            modal(
+            modal_with_header(
                 ui.clone(),
                 "显示列",
+                settings::reset_button(false, move || {
+                    set(&reset, remote, |c| *c = VisibleFileColumns::default())
+                }),
                 col().class("column-settings").fill((
                     text().class("subtle").content(state.map(move |s| {
                         let name = s
@@ -126,18 +129,10 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                         |c| c.permissions = !c.permissions,
                     ),
                 )),
-                (
-                    sapid::button()
-                        .class("button")
-                        .label(i18n::bind("恢复默认"))
-                        .on_press(move || {
-                            set(&reset, remote, |c| *c = VisibleFileColumns::default())
-                        }),
-                    sapid::button()
-                        .class("button primary")
-                        .label(i18n::bind("完成"))
-                        .on_press(move || close.close_dialog()),
-                ),
+                sapid::button()
+                    .class("button primary")
+                    .label(i18n::bind("完成"))
+                    .on_press(move || close.close_dialog()),
             )
         },
     )

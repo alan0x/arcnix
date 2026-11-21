@@ -15,6 +15,10 @@ def main():
         home = peer.root / 'home/arcnix'
         (home / 'Music').mkdir(parents=True, exist_ok=True)
         prefs = home / '.arcnix/desktop.json'
+        prefs.parent.mkdir(parents=True, exist_ok=True)
+        prefs.write_text(json.dumps({'version': 1, 'theme': 'System', 'appearance': {'dock': {
+            'order': ['player', 'editor', 'code'],
+        }, 'overrides': {'icon_family': 'solid'}}}), encoding='utf-8')
         profile = {**peer.profile('Files launchers'), 'initial_remote_path': '/Start'}
 
         def dock_preferences():
@@ -24,6 +28,7 @@ def main():
             page = app.page
             app.connect()
             app.workspace('Desktop')
+            expect(page.locator('.server-desktop')).to_have_attribute('data-desktop-icon-family', 'color')
             canvas = page.locator('.desktop-canvas')
             windows = page.locator('.desktop-window.app-files')
             active = page.locator('.desktop-window.app-files.active')
@@ -63,20 +68,20 @@ def main():
             location('/Start/Nested')
 
             dock_files.click(button='right')
-            choose('New Window')
+            choose('New window')
             expect(windows).to_have_count(3)
             location('/Start')
-            icon('.desktop-dock', 'Show desktop').click()
+            app.show_desktop()
             desktop_files = icon('.desktop-shortcuts', 'Files')
             desktop_files.focus()
             page.keyboard.press('Shift+F10')
-            expect(menu.get_by_role('button', name='New Window', exact=True)).to_be_visible()
+            expect(menu.get_by_role('button', name='New window', exact=True)).to_be_visible()
             choose('Music')
             expect(windows).to_have_count(4)
             location('/home/arcnix/Music')
 
             dock_files.click(button='right')
-            choose('Remove from Dock')
+            choose('Remove from dock')
             eventually(lambda: 'files' in dock_preferences().get('unpinned', []))
             expect(dock_files).to_be_visible()
             for remaining in range(3, -1, -1):
@@ -85,27 +90,60 @@ def main():
                 expect(windows).to_have_count(remaining)
             expect(dock_files).to_have_count(0)
 
-            player = icon('.desktop-shortcuts', 'Player')
-            dock_player = icon('.desktop-dock', 'Player')
-            player.click(button='right')
-            choose('Keep in Dock')
-            eventually(lambda: 'player' in dock_preferences().get('order', []))
-            expect(dock_player).to_be_visible()
-            dock_player.click(button='right')
-            expect(menu.get_by_role('button', name='Open video', exact=True)).to_be_visible()
+            for label in ('Player', 'Text Editor', 'Code Editor'):
+                expect(icon('.desktop-shortcuts', label)).to_have_count(0)
+                expect(icon('.desktop-dock', label)).to_have_count(0)
+            catalog = app.apps()
+            search = catalog.get_by_role('textbox', name='Search apps', exact=True)
+            expect(search).to_be_focused()
+            app_tiles = catalog.locator('.desktop-app-catalog-grid').get_by_role('button')
+            expected_apps = ['Files', 'Terminal', 'Code Editor', 'Browser', 'Player', 'Monitor', 'App Center', 'Settings', 'Text Editor']
+            expect(app_tiles).to_have_text(expected_apps)
+            search.fill('not an app')
+            expect(catalog.get_by_text('No matching apps')).to_be_visible()
+            search.fill('player')
+            expect(app_tiles).to_have_text(['Player'])
+            search.press('Enter')
+            expect(catalog).to_have_count(0)
+            expect(page.locator('.desktop-window.app-player.active')).to_be_visible()
+            expect(icon('.desktop-dock', 'Player')).to_have_count(0)
+            page.locator('.desktop-window.app-player .window-close').click()
+
+            app.application('Files')
+            active.locator('.files-sidebar').get_by_role('button', name='Home', exact=True).click()
+            location('/home/arcnix')
+            active.locator('.files-sidebar').get_by_role('button', name='Apps', exact=True).click()
+            files_catalog = active.locator('.desktop-app-catalog')
+            expect(files_catalog.locator('.desktop-app-catalog-grid').get_by_role('button')).to_have_text(expected_apps)
+            expect(active.locator('.files-tab-select')).to_have_text('Apps')
+            files_catalog.get_by_role('textbox', name='Search apps', exact=True).fill('text editor')
+            files_catalog.get_by_role('button', name='Text Editor', exact=True).click()
+            expect(page.locator('.desktop-window.app-editor.active')).to_be_visible()
+            expect(icon('.desktop-dock', 'Text Editor')).to_have_count(0)
+            page.locator('.desktop-window.app-editor .window-close').click()
+            expect(files_catalog).to_be_visible()
+            active.get_by_role('button', name='Back to folder', exact=True).click()
+            expect(files_catalog).to_have_count(0)
+            location('/home/arcnix')
+            active.locator('.window-close').click()
+
+            page.locator('.desktop-dock').get_by_role('button', name='Apps', exact=True).click(button='right')
             choose('Dock settings')
             tabs = page.locator('.desktop-settings-tabs')
             expect(tabs.get_by_role('button', name='Dock', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings = page.locator('.desktop-settings-pane')
-            settings.get_by_role('button', name='Pinned shortcuts', exact=True).click()
-            pins = page.get_by_role('dialog', name='Pinned shortcuts', exact=True)
+            settings.get_by_role('button', name='App icons', exact=True).click()
+            pins = page.get_by_role('dialog', name='App icons', exact=True)
+            options = pins.locator('.preference-check')
+            initial_order = options.all_text_contents()
+            assert initial_order[:3] == ['Home', 'Files', 'Terminal']
+            for label in ('Player', 'Text Editor', 'Code Editor'):
+                expect(pins.get_by_role('checkbox', name=label, exact=True)).to_have_count(0)
             pins.get_by_role('checkbox', name='Files', exact=True).check()
             eventually(lambda: 'files' not in dock_preferences().get('unpinned', []))
-            pins.get_by_role('checkbox', name='Player', exact=True).uncheck()
-            eventually(lambda: 'player' not in dock_preferences().get('order', []))
+            expect(options).to_have_text(initial_order)
             close_dialog(pins)
             expect(dock_files).to_be_visible()
-            expect(dock_player).to_have_count(0)
 
             dock_terminal = icon('.desktop-dock', 'Terminal')
             dock_terminal.click(button='right')

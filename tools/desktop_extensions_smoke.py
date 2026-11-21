@@ -35,7 +35,7 @@ def main():
                 expect(d.locator('.task-status')).to_have_text(['Succeeded'],timeout=25000)
                 d.get_by_role('button',name='Close',exact=True).click()
             app.connect();app.workspace('Desktop')
-            expect(p.locator('.desktop-shortcuts').get_by_role('button',name='Player',exact=True)).to_be_visible()
+            expect(p.locator('.desktop-shortcuts').get_by_role('button',name='Player',exact=True)).to_have_count(0)
             expect(p.locator('.desktop-dock').get_by_role('button',name='Monitor',exact=True)).to_be_visible()
             expect(p.locator('.desktop-dock').get_by_role('button',name='Services',exact=True)).to_have_count(0)
             expect(p.locator('.desktop-dock').get_by_role('button',name='Logs',exact=True)).to_have_count(0)

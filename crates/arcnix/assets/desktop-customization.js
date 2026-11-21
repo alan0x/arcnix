@@ -16,7 +16,7 @@
             themeTokens = JSON.parse(source);
             themeSource = source;
         }
-        const {colors, icons} = themeTokens;
+        const {colors, icons, iconFamily} = themeTokens;
         const roots = [data.closest('.server-desktop'), ...document.querySelectorAll('.desktop-modal-backdrop')];
         for (const root of roots) {
             const old = themed.get(root);
@@ -24,6 +24,7 @@
             for (const key of old?.keys || []) root.style.removeProperty(key);
             for (const [key, value] of colors) root.style.setProperty(key, value);
             root.dataset.desktopIconStyle = icons;
+            root.dataset.desktopIconFamily = iconFamily;
             themed.set(root, {source, keys: colors.map(([key]) => key)});
         }
     }
@@ -56,7 +57,9 @@
     function openContextMenu(canvas, target, x, y) {
         const slot = target.closest('.desktop-icon-slot');
         const menuZone = zone(target);
-        dockMenuAnchor = menuZone === 'dock' ? slot?.querySelector('.desktop-dock-app') : null;
+        dockMenuAnchor = menuZone === 'dock'
+            ? slot?.querySelector('.desktop-dock-app') ?? target.closest('.desktop-dock-home')
+            : null;
         const frame = canvas.getBoundingClientRect();
         send(canvas, {kind: 'context', zone: menuZone, item: shortcut(slot),
             x: Math.round(x - frame.left), y: Math.round(y - frame.top)});
@@ -213,10 +216,10 @@
         const changed = sample !== clockSample;
         if (changed) {
             clockSample = sample;
-            const [, seconds, offset] = (sample || '').split(',').map(Number);
+            const [, seconds, offset, zoneName] = sample ? JSON.parse(sample) : [];
             const unixTime = seconds * 1000;
             clockAnchor = Number.isFinite(new Date(unixTime).getTime()) && Number.isFinite(offset)
-                ? {unixTime, offset, received: performance.now()}
+                ? {unixTime, offset, zoneName, received: performance.now()}
                 : null;
         }
         if (!changed && options === clockOptions && views.length === clockViews.length
@@ -240,7 +243,7 @@
 
         const [locale, hourCycle, showWeekday, showDate, showSeconds] =
             (options || 'en-US,h12,false,true,true').split(',');
-        const {unixTime, offset, received} = clockAnchor;
+        const {unixTime, offset, zoneName, received} = clockAnchor;
         const wallTime = unixTime + offset * 60_000;
         const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
         const minutes = String(Math.abs(offset) % 60).padStart(2, '0');
@@ -249,20 +252,21 @@
         const timeFields = {hour: 'numeric', minute: '2-digit', hourCycle};
         const fullTime = formatter({...timeFields, second: '2-digit'});
         const fullDate = formatter({year: 'numeric', month: 'numeric', day: 'numeric'});
+        const detailDate = formatter({weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'});
+        const detailZone = zoneName ? `${zoneName} (${zone})` : zone;
         const dockTime = showSeconds === 'true' ? fullTime : formatter(timeFields);
         const compactTime = formatter({...timeFields, hour: '2-digit',
             second: showSeconds === 'true' ? '2-digit' : undefined});
         const compactDate = formatter({month: '2-digit', day: '2-digit'});
         const weekday = formatter({weekday: 'short'});
         const displays = views.map(({node, compact, label, preview}) => {
-            if (compact) node.removeAttribute('title');
-            else node.title = `${label} (${zone})`;
+            if (preview) node.title = `${label} (${zone})`;
+            else node.removeAttribute('title');
             return {
-                compact,
                 time: node.querySelector('.desktop-panel-time'),
                 weekday: node.querySelector('.desktop-panel-weekday'),
                 date: node.querySelector('.desktop-panel-date'),
-                tooltip: node.querySelector('.desktop-clock-tooltip'),
+                tooltip: preview ? null : node.querySelector('.desktop-clock-tooltip'),
                 timeFormatter: preview ? fullTime : compact ? compactTime : dockTime,
                 dateFormatter: preview || showDate === 'true' ? (compact ? compactDate : fullDate) : null,
                 showWeekday: !preview && showWeekday === 'true',
@@ -274,8 +278,8 @@
                 setClockText(display.time, display.timeFormatter.format(now));
                 setClockText(display.weekday, display.showWeekday ? weekday.format(now) : '');
                 setClockText(display.date, display.dateFormatter?.format(now) ?? '');
-                if (display.compact) {
-                    setClockText(display.tooltip, `${fullTime.format(now)} · ${fullDate.format(now)} (${zone})`);
+                if (display.tooltip) {
+                    setClockText(display.tooltip, `${detailDate.format(now)}\n${fullTime.format(now)}\n${detailZone}`);
                 }
             }
             clockTimer = setTimeout(tick, 1000 - now.getUTCMilliseconds());
@@ -421,7 +425,7 @@
 
     function updateSizeControl(settings, selector, targetSelector, preview) {
         const host = settings?.querySelector(selector);
-        const target = canvasFor(host)?.querySelector(targetSelector);
+        const target = host?.closest(targetSelector) || canvasFor(host)?.querySelector(targetSelector);
         const bridge = host?.querySelector('.icon-size-bridge');
         const state = host?.querySelector('.icon-size-state');
         let control = sizeControls.get(selector);
@@ -487,6 +491,13 @@
         const settings = document.querySelector('.desktop-window.app-settings.active');
         updateSizeControl(settings, '.dock-size-control', '.desktop-dock', '--dock-preview');
         updateSizeControl(settings, '.desktop-size-control', '.desktop-shortcuts', '--desktop-icon-preview');
+        for (const pixels of document.querySelectorAll('.server-desktop:not(.hidden) .files-icon-pixels')) {
+            const pane = pixels.closest('.files-pane,.files-inactive-preview');
+            const size = pixels.textContent + 'px';
+            if (pane && pane.style.getPropertyValue('--saved-file-size') !== size) pane.style.setProperty('--saved-file-size', size);
+        }
+        const viewMenu = document.querySelector('.server-desktop:not(.hidden) .files-pane .file-actions-menu');
+        updateSizeControl(viewMenu, '.files-size-control', '.files-pane', '--files-icon-preview');
         for (const slot of document.querySelectorAll('.desktop-icon-slot:not([draggable])')) slot.draggable = true;
         const menu = document.querySelector('.desktop-context-menu');
         const canvas = menu && canvasFor(menu);

@@ -9,9 +9,9 @@ from server_apps_fixture import read_desktop_settings
 from update_smoke import ReleaseServer
 
 
-def set_clock(peer, epoch, offset, dock, **preferences):
+def set_clock(peer, epoch, offset, dock, *, zone='', **preferences):
     (peer.root / 'desktop-clock.json').write_text(json.dumps({
-        'unix_seconds': epoch, 'offset': offset,
+        'unix_seconds': epoch, 'offset': offset, 'zone': zone,
     }), encoding='utf-8')
     settings = peer.root / 'home/arcnix/.arcnix/desktop.json'
     settings.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +31,7 @@ def main():
         updates.mode = 'none'
         epoch = int(datetime(2026, 11, 17, 22, 17, tzinfo=timezone.utc).timestamp())
         set_clock(east, epoch, '+0545', {'panel_mode': True}, time_zone='Asia/Shanghai')
-        set_clock(west, epoch, '-0700', {'floating_status': True}, clock={'timezone': 'local', 'show_seconds': True})
+        set_clock(west, epoch, '-0700', {'floating_status': True}, zone='MST', clock={'timezone': 'local', 'show_seconds': True})
         locale = west.root / 'system-locale'
         system_locale = 'LANG="zh_CN.utf8"\nLC_TIME=de_DE.UTF-8\n'
         locale.write_text(system_locale, encoding='utf-8')
@@ -59,7 +59,11 @@ def main():
             app.connect(0)
             app.workspace('Desktop')
             clock = page.locator('.dock-panel-zone .desktop-panel-clock')
-            expect(clock).to_have_attribute('title', 'Server time (UTC+05:45)')
+            clock.hover()
+            detail = clock.locator('.desktop-clock-tooltip')
+            expect(detail).to_be_visible()
+            expect(detail).to_contain_text('Wednesday, November 18, 2026')
+            expect(detail).to_contain_text('UTC+05:45')
             expect(clock.locator('.desktop-panel-date')).to_have_text('11/18/2026')
             display = clock.locator('.desktop-panel-time')
             expect(display).to_have_text(re.compile(r'^4:02:[0-5]\d\s+AM$'))
@@ -71,9 +75,12 @@ def main():
             app.connect(1)
             app.workspace('Desktop')
             clock = page.locator('.desktop-dock-status .desktop-panel-clock')
-            expect(clock).to_have_attribute('title', 'Server time (UTC-07:00)')
-            expect(clock.locator('.desktop-panel-date')).to_have_text('11/17/2026')
-            expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^3:17:[0-5]\d\s+PM$'))
+            dock_date = clock.locator('.desktop-panel-date')
+            dock_time = clock.locator('.desktop-panel-time')
+            expect(dock_date).to_have_text('11/17/2026')
+            expect(dock_date).to_have_css('opacity', '1')
+            expect(dock_date).to_have_css('font-weight', dock_time.evaluate('el => getComputedStyle(el).fontWeight'))
+            expect(dock_time).to_have_text(re.compile(r'^3:17:[0-5]\d\s+PM$'))
 
             app.application('Settings')
             panel = page.locator('.desktop-settings-page')
@@ -98,7 +105,7 @@ def main():
                 picker.get_by_role('button', name=name, exact=True).click()
                 expect(picker).to_have_count(0)
 
-            button('Date & Time').click()
+            button('Date & time').click()
             preview = panel.locator('.desktop-time-preview')
             expect(preview).to_have_attribute('title', 'Server time (UTC-07:00)')
             expect(zone).to_have_text('America/Phoenix')
@@ -134,13 +141,39 @@ def main():
             panel.screenshot(path=str(out / 'date-and-time.png'))
             button('Dock').click()
             clock_settings = panel.locator('.dock-clock-settings')
-            expect(clock_settings).to_have_count(0)
-            button('Left side').click()
-            side_clock = page.locator('.dock-left .desktop-panel-clock')
-            expect(clock_settings.get_by_text('Dock clock', exact=True)).to_be_visible()
-            weekday = clock_settings.get_by_role('switch', name='Weekday', exact=True)
+            expect(clock_settings.get_by_role('button', name='24-hour', exact=True)).to_have_attribute('aria-pressed', 'true')
+            clock_settings.get_by_role('button', name='AM / PM', exact=True).click()
+            expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^3:17:[0-5]\d\s+PM$'))
+            clock_settings.get_by_role('button', name='24-hour', exact=True).click()
+            expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^15:17:[0-5]\d$'))
             date = clock_settings.get_by_role('switch', name='Date', exact=True)
             seconds = clock_settings.get_by_role('switch', name='Seconds', exact=True)
+            expect(clock_settings.get_by_role('switch', name='Weekday', exact=True)).to_have_count(0)
+            date.uncheck()
+            seconds.uncheck()
+            expect(clock.locator('.desktop-panel-date')).to_be_hidden()
+            expect(clock.locator('.desktop-panel-time')).to_have_text('15:17')
+            clock.hover()
+            detail = clock.locator('.desktop-clock-tooltip')
+            expect(detail).to_be_visible()
+            expect(detail).to_contain_text('Tuesday, November 17, 2026')
+            expect(detail).to_contain_text(re.compile(r'15:17:[0-5]\d'))
+            expect(detail).to_contain_text('MST (UTC-07:00)')
+            assert detail.evaluate('''el => {
+                const box = el.getBoundingClientRect();
+                return box.top >= 0 && box.bottom < el.parentElement.getBoundingClientRect().top;
+            }''')
+            date.check()
+            seconds.check()
+            status_switch = panel.get_by_role('switch', name='Show dock status bar', exact=True)
+            status_switch.click()
+            expect(clock_settings).to_have_count(0)
+            button('Left side').click()
+            expect(clock_settings).to_have_count(0)
+            status_switch.click()
+            side_clock = page.locator('.dock-left .desktop-panel-clock')
+            expect(panel.locator('.dock-status-settings').get_by_text('Status bar', exact=True)).to_be_visible()
+            weekday = clock_settings.get_by_role('switch', name='Weekday', exact=True)
             expect(weekday).not_to_be_checked()
             expect(date).to_be_checked()
             expect(seconds).to_be_checked()
@@ -158,8 +191,9 @@ def main():
                 expect(panel.get_by_text('Saving…', exact=True)).to_have_count(0)
                 assert status.evaluate('''element => {
                     const note = element.getBoundingClientRect();
-                    const bar = element.parentElement.getBoundingClientRect();
-                    return Math.abs(note.left + note.right - bar.left - bar.right) < 1;
+                    const bar = element.parentElement;
+                    return note.left >= bar.querySelector('.desktop-settings-sidebar-heading').getBoundingClientRect().right - 1
+                        && note.right <= bar.querySelector('.desktop-window-actions').getBoundingClientRect().left + 1;
                 }''')
             finally:
                 hold.unlink()
@@ -173,12 +207,14 @@ def main():
                 'format': 'twenty_four_hour', 'show_weekday': True, 'show_date': False, 'show_seconds': False,
             })
             button('Bottom').click()
-            expect(clock_settings).to_have_count(0)
-            expect(clock.locator('.desktop-panel-date')).to_have_text('11/17/2026')
+            expect(clock_settings.get_by_role('button', name='24-hour', exact=True)).to_be_visible()
+            expect(date).not_to_be_checked()
+            expect(seconds).not_to_be_checked()
+            expect(clock.locator('.desktop-panel-date')).to_be_hidden()
             expect(clock.locator('.desktop-panel-weekday')).to_be_hidden()
-            expect(clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^15:17:[0-5]\d$'))
+            expect(clock.locator('.desktop-panel-time')).to_have_text('15:17')
             button('Left side').click()
-            button('Date & Time').click()
+            button('Date & time').click()
             expect(preview.locator('.desktop-panel-date')).to_have_text('11/17/2026')
             zone_denied = west.root / 'system-time-zone-denied'
             zone_denied.touch()
@@ -194,7 +230,7 @@ def main():
             assert system_zone.read_text(encoding='utf-8').strip() == 'Asia/Shanghai'
             assert 'time_zone' not in read_desktop_settings(west_prefs)
 
-            button('Region & Language').click()
+            button('Region & language').click()
             expect(panel.get_by_role('button', name='Exact bytes', exact=True)).to_be_visible()
             expect(button('English')).to_have_attribute('aria-pressed', 'true')
             expect(panel.get_by_text(language_scope, exact=True)).to_be_visible()
@@ -209,7 +245,7 @@ def main():
             log = (west.root / 'server-app-queries.jsonl').read_text(encoding='utf-8')
             assert '# arcnix:desktop:locale' not in log and '# arcnix:desktop:set-locale' not in log
             button('English').click()
-            expect(button('Region & Language')).to_have_attribute('aria-pressed', 'true')
+            expect(button('Region & language')).to_have_attribute('aria-pressed', 'true')
 
             set_desktop_mode(panel, 'Dark')
             page.locator('.workbench-tabs').get_by_role('button', name='Fullscreen desktop').click()
@@ -217,7 +253,7 @@ def main():
             button('Dock').click()
             expect(seconds).to_be_visible()
             clock_settings.screenshot(path=str(out / 'compact-dock-clock.png'))
-            button('Date & Time').click()
+            button('Date & time').click()
             assert panel.locator('.desktop-preferences').evaluate('el => el.scrollWidth <= el.clientWidth + 1')
             panel.screenshot(path=str(out / 'compact-date-and-time.png'))
             open_zones()
@@ -244,16 +280,16 @@ def main():
             page.get_by_role('button', name='Disconnect', exact=True).click()
             app.connect(0)
             app.application('Settings')
-            button('Date & Time').click()
+            button('Date & time').click()
             east_prefs = east.root / 'home/arcnix/.arcnix/desktop.json'
             expect(zone).to_have_count(0)
             expect(panel.locator('.desktop-time-preview .desktop-panel-time')).to_have_text(re.compile(r'^4:02:[0-5]\d\s+AM$'))
             assert not (east.root / 'system-time-zone').exists()
             # A system file with no identifiable zone also leaves the picker hidden.
             (east.root / 'system-time-zone').touch()
-            button('Date & Time').click()
+            button('Date & time').click()
             expect(zone).to_have_count(0)
-            button('Region & Language').click()
+            button('Region & language').click()
             expect(panel.get_by_text(language_scope, exact=True)).to_be_visible()
             button('简体中文').click()
             eventually(lambda: read_desktop_settings(east_prefs).get('language') == 'SimplifiedChinese')

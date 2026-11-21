@@ -13,6 +13,7 @@ pub(crate) struct Deletion {
     remote: bool,
     cancel: Arc<AtomicBool>,
     progress: Option<arcnix_core::deletion::Progress>,
+    elevated: bool,
 }
 pub(crate) fn deletion_dialog(s: &State) -> bool {
     s.deletion.is_some() && matches!(s.dialog, Some(Dialog::DeleteFiles { .. }))
@@ -48,6 +49,7 @@ fn progress_text(s: &State) -> String {
         return i18n::translate("正在停止删除，等待当前文件请求结束…");
     }
     match &task.progress {
+        None if task.elevated => i18n::translate("Deleting as administrator…"),
         None => i18n::translate("正在准备删除…"),
         Some(p) => {
             let status = if p.phase == arcnix_core::deletion::Phase::Scanning {
@@ -273,8 +275,9 @@ pub(crate) fn targets(s: &State, remote: bool) -> Vec<arcnix_core::deletion::Tar
         .map(arcnix_core::deletion::Target::from)
         .collect()
 }
-fn confirm_delete(ui: &Ui) {
+pub(crate) fn confirm_delete(ui: &Ui, sudo: Option<zeroize::Zeroizing<String>>) {
     let cancel = Arc::new(AtomicBool::new(false));
+    let elevated = sudo.is_some();
     let action = ui.state.with(|s| {
         let Some(Dialog::DeleteFiles { remote, targets }) = &s.dialog else {
             return None;
@@ -283,6 +286,7 @@ fn confirm_delete(ui: &Ui) {
             remote: *remote,
             targets: targets.clone(),
             cancel: cancel.clone(),
+            sudo,
         })
     });
     if let Some(action) = action {
@@ -296,6 +300,7 @@ fn confirm_delete(ui: &Ui) {
                 remote,
                 cancel,
                 progress: None,
+                elevated,
             });
             s.dialog_error.clear();
         });
@@ -305,7 +310,7 @@ pub(crate) fn deleted(
     ui: &Ui,
     serial: u64,
     remote: bool,
-    result: std::result::Result<usize, String>,
+    result: std::result::Result<usize, worker::FileFailure>,
 ) {
     if !ui.state.with(|s| s.file_pending == Some(serial)) {
         return;
@@ -315,13 +320,27 @@ pub(crate) fn deleted(
             .as_ref()
             .is_some_and(|d| d.cancel.load(Ordering::Relaxed))
     });
-    let (current, removed) = ui.state.revise(|s| {
+    let finished = ui.state.revise(|s| {
         let current = s
             .deletion
             .as_ref()
             .is_none_or(|d| d.epoch == s.epoch || !d.remote);
         s.deletion = None;
         s.file_pending = None;
+        if remote
+            && current
+            && !canceled
+            && s.connected
+            && result.as_ref().is_err_and(|error| error.permission_denied)
+            && matches!(s.dialog, Some(Dialog::DeleteFiles { remote: true, .. }))
+            && let Some(Dialog::DeleteFiles {
+                remote: true,
+                targets,
+            }) = s.dialog.take()
+        {
+            file_elevation::show(s, file_elevation::Retry::Delete(targets));
+            return None;
+        }
         let removed = if matches!(s.dialog, Some(Dialog::DeleteFiles { .. })) {
             match s.dialog.take() {
                 Some(Dialog::DeleteFiles { targets, .. })
@@ -338,13 +357,17 @@ pub(crate) fn deleted(
         if current {
             file_browser::clear_selection(s, remote);
         }
-        (current, removed)
+        Some((current, removed))
     });
+    let Some((current, removed)) = finished else {
+        ui.schedule();
+        return;
+    };
     files_ui::check_permanently_deleted(ui, &removed);
     match result {
         Ok(count) => ui.log(format!("已删除 {count} 个项目")),
-        Err(message) if canceled => ui.log(format!("删除已停止：{message}")),
-        Err(message) => ui.error(format!("删除未完成：{message}")),
+        Err(error) if canceled => ui.log(format!("删除已停止：{}", error.message)),
+        Err(error) => ui.error(format!("删除未完成：{}", error.message)),
     }
     if current && (!remote || ui.state.with(|s| s.connected)) {
         ui.refresh(remote);
@@ -479,7 +502,7 @@ fn edit_actions(ui: Ui, remote: bool) -> impl Widget {
                     [
                         ("复制", file_actions::copy as fn(&Ui), false),
                         ("Duplicate", file_actions::duplicate, true),
-                        ("Make Alias", file_actions::make_alias, true),
+                        ("Make alias", file_actions::make_alias, true),
                         ("Compress", file_actions::compress, true),
                     ]
                     .into_iter()
@@ -651,22 +674,6 @@ fn view_actions(ui: Ui, remote: bool) -> impl Widget {
     let columns = ui.clone();
     let defaults = ui.clone();
     menu_group((
-        when(
-            state.map(move |s| remote && s.workspace_page.is_files() && s.file_context.is_none()),
-            {
-                let ui = ui.clone();
-                move || {
-                    fragment((
-                        action(&ui, remote, "详细列表", workspace::ready, move || {
-                            state.revise(|s| file_browser::set_icons(s, remote, false));
-                        }),
-                        action(&ui, remote, "平铺图标", workspace::ready, move || {
-                            state.revise(|s| file_browser::set_icons(s, remote, true));
-                        }),
-                    ))
-                }
-            },
-        ),
         action(
             &ui,
             remote,
@@ -711,12 +718,9 @@ fn view_actions(ui: Ui, remote: bool) -> impl Widget {
     ))
 }
 
-pub(crate) fn menu(ui: Ui, remote: bool) -> impl Widget {
+pub(crate) fn menu(ui: Ui, remote: bool, files: bool) -> impl Widget {
     let state = ui.state;
-    let item = state.map(move |s| has_item(s, remote));
-    let directory = state.map(move |s| directory_menu(s, remote));
-    let tools = ui.clone();
-    let remove = ui.clone();
+    let view = ui.clone();
     col()
         .class(state.map(move |s| {
             if s.file_menu != Some(remote) {
@@ -729,47 +733,67 @@ pub(crate) fn menu(ui: Ui, remote: bool) -> impl Widget {
             .to_owned()
         }))
         .focus(FocusMode::Programmatic)
-        .name(i18n::bind(if remote {
-            "远程文件操作"
-        } else {
-            "本地文件操作"
-        }))
-        .fill((
-            open_actions(ui.clone(), remote),
+        .name(i18n::bind(state.map(move |s| {
+            if files && s.file_context.is_none() {
+                "File view options"
+            } else if remote {
+                "远程文件操作"
+            } else {
+                "本地文件操作"
+            }
+            .to_owned()
+        })))
+        .fill(
             when(
-                state.map(move |s| remote && s.workspace_page.is_files() && has_item(s, remote)),
-                {
-                    let ui = ui.clone();
-                    move || edit_actions(ui.clone(), remote)
-                },
-            ),
-            when(item, {
+                state.map(move |s| files && s.file_context.is_none()),
+                move || files_view::options(view.clone()),
+            )
+            .otherwise(move || context_actions(ui.clone(), remote)),
+        )
+}
+
+fn context_actions(ui: Ui, remote: bool) -> impl Widget {
+    let state = ui.state;
+    let item = state.map(move |s| has_item(s, remote));
+    let directory = state.map(move |s| directory_menu(s, remote));
+    let tools = ui.clone();
+    let remove = ui.clone();
+    fragment((
+        open_actions(ui.clone(), remote),
+        when(
+            state.map(move |s| remote && s.workspace_page.is_files() && has_item(s, remote)),
+            {
                 let ui = ui.clone();
-                move || item_actions(ui.clone(), remote)
-            }),
-            when(directory, {
-                let ui = ui.clone();
-                move || directory_actions(ui.clone(), remote)
-            }),
-            when(remote, move || remote_tools(tools.clone())),
-            when(remote, {
-                let ui = ui.clone();
-                move || files_ui::appearance_menu(ui.clone(), files_ui::item_target, close, true)
-            }),
-            when(directory, move || view_actions(ui.clone(), remote)),
-            when(item, move || {
-                let recycle = remove.clone();
-                let delete = remove.clone();
-                menu_group((
-                    action(&remove, remote, "移入回收站", can_delete, move || {
-                        trash_ui::move_items(&recycle, remote)
-                    }),
-                    action(&remove, remote, "永久删除", can_delete, move || {
-                        begin_delete(&delete, remote)
-                    }),
-                ))
-            }),
-        ))
+                move || edit_actions(ui.clone(), remote)
+            },
+        ),
+        when(item, {
+            let ui = ui.clone();
+            move || item_actions(ui.clone(), remote)
+        }),
+        when(directory, {
+            let ui = ui.clone();
+            move || directory_actions(ui.clone(), remote)
+        }),
+        when(remote, move || remote_tools(tools.clone())),
+        when(remote, {
+            let ui = ui.clone();
+            move || files_ui::appearance_menu(ui.clone(), files_ui::item_target, close, true)
+        }),
+        when(directory, move || view_actions(ui.clone(), remote)),
+        when(item, move || {
+            let recycle = remove.clone();
+            let delete = remove.clone();
+            menu_group((
+                action(&remove, remote, "移入回收站", can_delete, move || {
+                    trash_ui::move_items(&recycle, remote)
+                }),
+                action(&remove, remote, "永久删除", can_delete, move || {
+                    begin_delete(&delete, remote)
+                }),
+            ))
+        }),
+    ))
 }
 pub(crate) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
@@ -832,7 +856,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                                     false
                                 }
                             }))
-                            .on_press(move || confirm_delete(&apply)),
+                            .on_press(move || confirm_delete(&apply, None)),
                     ),
                 )
             },

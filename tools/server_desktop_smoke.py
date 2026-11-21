@@ -76,7 +76,7 @@ def main():
             expect(page.locator('.desktop-menubar')).to_have_count(0)
             assert page.locator('.workspace-header').bounding_box()['height'] <= 46
             expect(page.locator('.desktop-shortcuts .desktop-app-label')).to_have_text([
-                'Files', 'Terminal', 'Code', 'Web browser', 'Player', 'Monitor', 'App Center', 'Settings', 'Text Editor',
+                'Files', 'Terminal', 'Browser', 'Monitor', 'App Center', 'Settings',
             ])
             expect(page.locator('.server-desktop .files-module')).to_have_count(0)
             expect(page.locator('.desktop-window.active')).to_be_hidden()
@@ -224,7 +224,7 @@ def main():
                 expect(titlebar.locator('.files-tab.selected')).to_have_css('border-top-left-radius', '8px')
                 expect(titlebar.locator('.pathbar')).to_have_count(0)
                 expect(new_tab).to_be_visible()
-                actions = tab_tools.get_by_role('button', name='Remote file actions', exact=True)
+                actions = tab_tools.get_by_role('button', name='File view options', exact=True)
                 expect(actions).to_be_in_viewport()
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 app.screenshot(f'files-compact-{size["width"]}.png')
@@ -261,8 +261,8 @@ def main():
             page.locator('.desktop-window.active .window-close').click()
             launch('Files')
             tab_tools.get_by_role('button', name='Icon grid', exact=True).click()
-            tab_tools.get_by_role('button', name='Remote file actions', exact=True).click()
-            page.locator('.file-actions-menu').get_by_role('button', name='New folder', exact=True).click()
+            page.locator('.files-pane .file-list-container').click(button='right', position={'x': 2, 'y': 2})
+            app.action('New folder')
             field = page.locator('.files-pane .file-inline-name')
             expect(field).to_be_focused()
             expect(field).to_have_value('New folder')
@@ -391,7 +391,7 @@ def main():
 
             for width in (1100, 900):
                 page.set_viewport_size(dict(width=width, height=740))
-                page.get_by_role('button', name='Show desktop', exact=True).click()
+                app.show_desktop()
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 box = page.locator('.desktop-dock').bounding_box()
                 assert box and box['x'] >= 0 and box['x'] + box['width'] <= width
@@ -412,7 +412,7 @@ def main():
             app.servers()
             expect(tabs.locator('.workbench-tab-select')).to_have_text(['首页', '传输文件', '桌面'])
             expect(tabs.get_by_role('button', name='全屏桌面', exact=True)).to_be_visible()
-            expect(page.locator('.desktop-window.active .desktop-window-title')).to_have_text('资源管理器')
+            expect(page.locator('.desktop-window.active .desktop-window-title')).to_have_text('文件管理')
             tabs.get_by_role('button', name='全屏桌面', exact=True).click()
             expect(page.get_by_role('button', name='退出桌面全屏', exact=True)).to_be_visible()
             app.screenshot('desktop-chinese-dark.png')

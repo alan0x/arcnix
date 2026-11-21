@@ -95,16 +95,18 @@ def read_desktop_settings(legacy):
 
 
 def desktop_mode(preferences):
-    themes = preferences.get('appearance', {}).get('themes', {})
+    appearance = preferences.get('appearance', {})
+    if 'theme' in appearance:
+        return appearance.get('overrides', {}).get('mode', 'System')
+    themes = appearance.get('themes', {})
     selection = themes.get('selection', {})
     value = selection.get('value')
     kind = selection.get('kind')
-    modes = {'fjord': 'System', 'aurora': 'Dark', 'terracotta': 'Light'}
     if kind == 'preset':
-        return modes[value]
+        return 'System'
     if kind in ('saved', 'custom'):
         custom = themes['saved'][value] if kind == 'saved' else value
-        return custom.get('overrides', {}).get('mode', modes[custom['base']])
+        return custom.get('overrides', {}).get('mode', 'System')
     return preferences.get('theme', 'System')
 
 
@@ -241,10 +243,11 @@ def reply(server, channel, command):
         assert time_zone.exists()
         zone = re.search(r"^zone='([^']+)'$", command, re.M)[1]
         offsets = {'America/Phoenix': '-0700', 'Asia/Shanghai': '+0800', 'Etc/UTC': '+0000'}
+        abbreviations = {'America/Phoenix': 'MST', 'Asia/Shanghai': 'CST', 'Etc/UTC': 'UTC'}
         time_zone.write_text(zone + '\n', encoding='utf-8')
         clock_file = root / 'desktop-clock.json'
         clock = json.loads(clock_file.read_text(encoding='utf-8')) if clock_file.exists() else {}
-        clock_file.write_text(json.dumps(dict(clock, offset=offsets[zone])), encoding='utf-8')
+        clock_file.write_text(json.dumps(dict(clock, offset=offsets[zone], zone=abbreviations[zone])), encoding='utf-8')
         return send('')
     preferences = root / 'home' / server.username / '.arcnix' / 'desktop.json'
     if marker.startswith('# arcnix:desktop:domains:'):
@@ -333,7 +336,7 @@ def reply(server, channel, command):
     if marker == '# arcnix:desktop:clock':
         state = root / 'desktop-clock.json'
         clock = json.loads(state.read_text(encoding='utf-8')) if state.exists() else {}
-        return send(f"{clock.get('unix_seconds', int(time.time()))} {clock.get('offset', '+0000')}\n")
+        return send(f"{clock.get('unix_seconds', int(time.time()))} {clock.get('offset', '+0000')} {clock.get('zone', '')}\n")
     if marker == '# arcnix:desktop:home':
         return send(f'/home/{server.username}')
     if marker == '# arcnix:desktop:wallpapers':

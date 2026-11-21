@@ -1,40 +1,19 @@
-use arcnix_core::desktop_customization::Wallpaper;
+use arcnix_core::desktop_customization::{Appearance, Wallpaper};
 use arcnix_core::desktop_theme::{
-    ColorRole, CustomTheme, IconStyle, Overrides, Preset, Rgb, Selection, StyleOverrides, Themes,
+    ColorRole, CustomTheme, IconFamily, IconStyle, Overrides, Preset, Rgb, Theme as DesktopTheme,
 };
 
-use crate::desktop_customization_ui::{appearance, pending_wallpaper, settings_row, update};
+use crate::desktop_customization_ui::{settings_row, update};
 use crate::i18n::desktop as i18n;
-use crate::i18n::desktop::btn;
 use crate::*;
-
-#[derive(Clone, Default)]
-pub(crate) struct Editor {
-    draft: Option<CustomTheme>,
-}
-
-fn editor(s: &State) -> &Editor {
-    &s.server_apps.theme_editor
-}
-
-pub(crate) fn editing(s: &State) -> bool {
-    editor(s).draft.is_some()
-}
 
 fn selected(s: &State) -> CustomTheme {
     let prefs = server_apps_ui::current(s);
-    prefs
-        .appearance
-        .themes
-        .editable(&prefs.appearance.wallpaper, prefs.theme)
+    prefs.appearance.theme_settings(prefs.theme)
 }
 
-pub(crate) fn theme(s: &State) -> arcnix_core::desktop_theme::Theme {
-    editor(s)
-        .draft
-        .clone()
-        .unwrap_or_else(|| selected(s))
-        .resolve()
+pub(crate) fn theme(s: &State) -> DesktopTheme {
+    selected(s).resolve()
 }
 
 fn client_dark(s: &State) -> bool {
@@ -46,14 +25,14 @@ pub(crate) fn dark(s: &State) -> bool {
 }
 
 pub(crate) fn background(s: &State) -> Wallpaper {
-    theme(s).background(dark(s)).clone()
+    let theme = theme(s);
+    theme.background(theme.mode.is_dark(client_dark(s))).clone()
 }
 
 pub(crate) fn variables(s: &State) -> String {
     use ColorRole::{Accent, Background, Border, MutedText, Surface, Text};
-
     let theme = theme(s);
-    let dark = dark(s);
+    let dark = theme.mode.is_dark(client_dark(s));
     let mut vars = std::collections::BTreeMap::new();
     if theme.has_palette(dark) {
         let palette = theme.palette(dark);
@@ -76,380 +55,157 @@ pub(crate) fn variables(s: &State) -> String {
         .into_iter()
         .map(|(key, value)| (key, value.to_string()))
         .collect::<Vec<_>>();
-    serde_json::json!({"icons": theme.icons.slug(), "colors": colors}).to_string()
+    serde_json::json!({"icons": theme.icons.slug(), "iconFamily": theme.icon_family.slug(), "colors": colors}).to_string()
 }
 
-fn select(ui: &Ui, value: Selection) {
-    update(ui, move |prefs| prefs.themes.selection = value);
-    ui.load_desktop_wallpaper();
-}
-
-fn edit(ui: &Ui, change: impl FnOnce(&mut Overrides)) {
-    ui.state.revise(|s| {
-        if let Some(draft) = s.server_apps.theme_editor.draft.as_mut() {
-            change(&mut draft.overrides);
-        }
-    });
-}
-
-pub(crate) fn set_background(ui: &Ui, wallpaper: Wallpaper) {
-    edit(ui, |overrides| {
-        let style = if overrides.mode == Some(Theme::Dark) {
-            &mut overrides.dark
-        } else {
-            &mut overrides.light
-        };
-        style.wallpaper = Some(wallpaper);
-    });
-    ui.load_desktop_wallpaper();
-}
-
-pub(crate) fn set_active_background(ui: &Ui, wallpaper: Wallpaper) {
-    if ui.state.with(editing) {
-        set_background(ui, wallpaper);
-    } else {
-        let (mut theme, dark) = ui.state.with(|s| (selected(s), self::dark(s)));
-        update(ui, |prefs| {
-            if prefs.themes.selection == Selection::Legacy {
-                prefs.wallpaper = wallpaper;
-            } else {
-                let style = if dark {
-                    &mut theme.overrides.dark
-                } else {
-                    &mut theme.overrides.light
-                };
-                style.wallpaper = Some(wallpaper);
-                prefs.themes.selection = Selection::Custom(Box::new(theme));
-            }
-        });
-        ui.load_desktop_wallpaper();
-    }
-}
-
-fn begin(ui: &Ui) {
-    if !ui.state.with(choices_ready) || ui.file_task_blocks_dialog() {
-        return;
-    }
-    ui.state.revise(|s| {
-        let selected = selected(s);
-        let theme = selected.resolve();
-        let dark = theme.mode.is_dark(client_dark(s));
-        let accent = theme
-            .main_color(dark)
-            .unwrap_or_else(|| theme.palette(dark)[&ColorRole::Accent]);
-        s.server_apps.theme_editor.draft = Some(CustomTheme {
-            base: selected.base,
-            overrides: Overrides {
-                wallpaper: Some(theme.wallpaper),
-                mode: Some(if dark { Theme::Dark } else { Theme::Light }),
-                icons: Some(theme.icons),
-                accent: Some(accent),
-                light: StyleOverrides {
-                    wallpaper: theme.light.wallpaper,
-                    ..Default::default()
-                },
-                dark: StyleOverrides {
-                    wallpaper: theme.dark.wallpaper,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        });
-        show_dialog(s, Dialog::CreateDesktopTheme);
-    });
-    ui.load_desktop_wallpaper();
-}
-
-pub(crate) fn cancel(s: &mut State) {
-    s.server_apps.theme_editor.draft = None;
-}
-
-fn choices_ready(s: &State) -> bool {
+pub(crate) fn choices_ready(s: &State) -> bool {
     server_apps_ui::preferences_ready(s)
-        && s.server_apps.preferences_pending.is_none()
-        && !pending_wallpaper(s)
 }
 
-fn save(ui: &Ui, name: String, accent: Rgb) {
-    let Some(mut draft) = ui
-        .state
-        .with(|s| choices_ready(s).then(|| editor(s).draft.clone()).flatten())
-    else {
-        return;
-    };
-    draft.overrides.accent = Some(accent);
-    let selection = Selection::Saved(name.clone());
+fn edit(ui: &Ui, change: impl FnOnce(&mut Appearance)) {
+    let legacy_mode = ui.state.with(|s| server_apps_ui::current(s).theme);
     update(ui, |prefs| {
-        prefs.themes.saved.insert(name, draft);
-        prefs.themes.selection = selection.clone();
+        prefs.edit_theme_settings(legacy_mode);
+        change(prefs);
     });
-    if ui
-        .state
-        .with(|s| appearance(s).themes.selection == selection)
-    {
-        ui.close_dialog();
-    } else {
-        ui.state.revise(|s| {
-            s.dialog_error = s.server_apps.preferences_error.clone();
-        });
-    }
 }
 
-fn accent_swatch(color: Rgb) -> glory::style::Style {
-    let Rgb([red, green, blue]) = color;
+fn select_preset(ui: &Ui, preset: Preset) {
+    update(ui, |prefs| prefs.apply_theme_preset(preset));
+}
+
+pub(crate) fn set_background(ui: &Ui, wallpaper: Option<Wallpaper>) {
+    edit(ui, |prefs| {
+        prefs.wallpaper = wallpaper;
+        prefs.overrides.wallpaper = None;
+        prefs.overrides.light.wallpaper = None;
+        prefs.overrides.dark.wallpaper = None;
+    });
+}
+
+fn set_accent(ui: &Ui, color: Rgb) {
+    edit(ui, |prefs| {
+        let overrides = &mut prefs.overrides;
+        overrides.accent = Some(color);
+        overrides.light.accent = None;
+        overrides.dark.accent = None;
+        overrides.colors.remove(&ColorRole::Accent);
+        overrides.light.colors.remove(&ColorRole::Accent);
+        overrides.dark.colors.remove(&ColorRole::Accent);
+    });
+}
+
+fn accent_color(s: &State) -> Rgb {
+    let theme = theme(s);
+    let dark = theme.mode.is_dark(client_dark(s));
+    let style = if dark { &theme.dark } else { &theme.light };
+    style
+        .colors
+        .get(&ColorRole::Accent)
+        .copied()
+        .or_else(|| theme.colors.get(&ColorRole::Accent).copied())
+        .or_else(|| theme.main_color(dark))
+        .unwrap_or_else(|| DesktopTheme::default_accent(dark))
+}
+
+fn accent_swatch(Rgb([red, green, blue]): Rgb) -> glory::style::Style {
     glory::style::Style {
         background: Some(glory::style::Color(red, green, blue, 255)),
         ..Default::default()
     }
 }
 
-fn accent_options(ui: Ui, hex: Cage<String>) -> impl Widget {
-    row()
-        .class("theme-accent-options")
-        .role(Role::Group)
-        .name(i18n::bind("Accent color"))
-        .fill(fragment(
-            [
-                Rgb([59, 122, 211]),
-                Rgb([36, 150, 136]),
-                Rgb([66, 151, 80]),
-                Rgb([204, 138, 41]),
-                Rgb([191, 71, 73]),
-                Rgb([139, 102, 203]),
-            ]
-            .into_iter()
-            .map(|color| {
+fn accent_controls(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let ready = state.map(choices_ready);
+    let input_ui = ui.clone();
+    row().class("theme-accent-controls").fill((
+        row()
+            .class("theme-accent-options")
+            .role(Role::Group)
+            .name(i18n::bind("Accent color"))
+            .fill(fragment(
+                [
+                    Rgb([59, 122, 211]),
+                    Rgb([36, 150, 136]),
+                    Rgb([66, 151, 80]),
+                    Rgb([204, 138, 41]),
+                    Rgb([191, 71, 73]),
+                    Rgb([139, 102, 203]),
+                ]
+                .into_iter()
+                .map(|color| {
+                    let ui = ui.clone();
+                    sapid::button()
+                        .class("button theme-accent-choice")
+                        .name(color.to_string())
+                        .pressed(state.map(move |s| accent_color(s) == color))
+                        .enabled(ready)
+                        .fill(
+                            text()
+                                .class("theme-color-swatch")
+                                .style(accent_swatch(color)),
+                        )
+                        .on_press(move || set_accent(&ui, color))
+                })
+                .collect::<Vec<_>>(),
+            )),
+        row().class("theme-accent-value").fill((
+            text()
+                .class("theme-color-swatch")
+                .style(state.map(|s| accent_swatch(accent_color(s)))),
+            input()
+                .class("theme-color-value")
+                .name(i18n::bind("Accent color"))
+                .value(state.map(|s| accent_color(s).to_string()))
+                .enabled(ready)
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event
+                        && let Some(color) = Rgb::parse(&value)
+                    {
+                        set_accent(&input_ui, color);
+                    }
+                }),
+        )),
+    ))
+}
+
+fn options<T: Copy + PartialEq + 'static>(
+    ui: &Ui,
+    options: &[(T, &'static str)],
+    read: fn(&DesktopTheme) -> T,
+    write: fn(&mut Overrides, T),
+) -> impl Widget + use<T> {
+    let state = ui.state;
+    fragment(
+        options
+            .iter()
+            .map(|&(value, label)| {
                 let ui = ui.clone();
                 sapid::button()
-                    .class("button theme-accent-choice")
-                    .name(color.to_string())
-                    .pressed(hex.map(move |value| Rgb::parse(value) == Some(color)))
-                    .fill(
-                        text()
-                            .class("theme-color-swatch")
-                            .style(accent_swatch(color)),
-                    )
+                    .class("button appearance-option")
+                    .label(i18n::bind(label))
+                    .pressed(state.map(move |s| read(&theme(s)) == value))
+                    .enabled(state.map(choices_ready))
                     .on_press(move || {
-                        hex.revise(|value| *value = color.to_string());
-                        edit(&ui, |overrides| overrides.accent = Some(color));
+                        edit(&ui, |prefs| write(&mut prefs.overrides, value));
                     })
             })
             .collect::<Vec<_>>(),
-        ))
-}
-
-pub(crate) fn create_theme_dialog(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    when(
-        state.map(|s| s.dialog == Some(Dialog::CreateDesktopTheme)),
-        move || {
-            let ui = ui.clone();
-            widget(move |scope| {
-                let name = scope.cage(String::new());
-                let hex = scope.cage(state.with(|s| {
-                    editor(s)
-                        .draft
-                        .as_ref()
-                        .and_then(|draft| draft.overrides.accent)
-                        .map_or_else(String::new, |color| color.to_string())
-                }));
-                let error = scope.cage("");
-                let field = scope.cage(None);
-                let wallpaper_open = scope.cage(false);
-                let save_ui = ui.clone();
-                let submit = move || {
-                    let name = name.get().trim().to_owned();
-                    let result = state.with(|s| {
-                        let themes = &appearance(s).themes.saved;
-                        if !Themes::valid_name(&name) {
-                            Err("Enter a theme name.")
-                        } else if themes.contains_key(&name) {
-                            Err("This theme name is already in use.")
-                        } else if themes.len() >= Themes::LIMIT {
-                            Err("The saved theme limit has been reached.")
-                        } else {
-                            Rgb::parse(&hex.get()).ok_or("Enter an accent color in #RRGGBB format.")
-                        }
-                    });
-                    match result {
-                        Ok(accent) => save(&save_ui, name, accent),
-                        Err(message) => error.revise(|current| *current = message),
-                    }
-                };
-                let mounted = scope.mount_with(|| {
-                    let escape = ui.clone();
-                    let cancel = ui.clone();
-                    let enter = submit.clone();
-                    let accent_ui = ui.clone();
-                    let wallpaper_ui = ui.clone();
-                    modal(
-                        ui.clone(),
-                        "Create theme",
-                        (
-                            col().class("field").fill((
-                                text()
-                                    .class("field-label")
-                                    .content(i18n::bind("Theme name")),
-                                input()
-                                    .node_ref(field)
-                                    .name(i18n::bind("Theme name"))
-                                    .on(value_changed, move |event| {
-                                        if let Event::ValueChanged { value, .. } = event {
-                                            name.revise(|current| *current = value);
-                                            error.revise(|current| *current = "");
-                                        }
-                                    })
-                                    .on(keyboard, move |event| {
-                                        if let Event::Keyboard { command, .. } = event {
-                                            match command {
-                                                glory::render::KeyboardCommand::Submit => enter(),
-                                                glory::render::KeyboardCommand::Dismiss => {
-                                                    escape.close_dialog()
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }),
-                            )),
-                            col()
-                                .class("theme-create-options desktop-settings-rows")
-                                .fill((
-                                    settings_row(
-                                        "Color scheme",
-                                        fragment(
-                                            [(Theme::Light, "Light"), (Theme::Dark, "Dark")]
-                                                .into_iter()
-                                                .map(|(mode, label)| {
-                                                    let choose = ui.clone();
-                                                    sapid::button()
-                                                        .class("button")
-                                                        .label(i18n::bind(label))
-                                                        .pressed(state.map(move |s| {
-                                                            editor(s).draft.as_ref().is_some_and(
-                                                                |draft| {
-                                                                    draft.overrides.mode
-                                                                        == Some(mode)
-                                                                },
-                                                            )
-                                                        }))
-                                                        .enabled(
-                                                            state.map(|s| !pending_wallpaper(s)),
-                                                        )
-                                                        .on_press(move || {
-                                                            edit(&choose, |overrides| {
-                                                                overrides.mode = Some(mode);
-                                                            });
-                                                            choose.load_desktop_wallpaper();
-                                                        })
-                                                })
-                                                .collect::<Vec<_>>(),
-                                        ),
-                                    ),
-                                    settings_row(
-                                        "Icon style",
-                                        fragment(
-                                            IconStyle::ALL
-                                                .into_iter()
-                                                .map(|style| {
-                                                    let choose = ui.clone();
-                                                    sapid::button()
-                                                        .class("button")
-                                                        .label(i18n::bind(style.label()))
-                                                        .pressed(
-                                                            state.map(move |s| {
-                                                                theme(s).icons == style
-                                                            }),
-                                                        )
-                                                        .on_press(move || {
-                                                            edit(&choose, |overrides| {
-                                                                overrides.icons = Some(style);
-                                                            });
-                                                        })
-                                                })
-                                                .collect::<Vec<_>>(),
-                                        ),
-                                    ),
-                                )),
-                            col().class("field").fill((
-                                text()
-                                    .class("field-label")
-                                    .content(i18n::bind("Accent color")),
-                                row().class("theme-accent-controls").fill((
-                                    accent_options(ui.clone(), hex),
-                                    row().class("theme-accent-value").fill((
-                                        text().class("theme-color-swatch").style(hex.map(
-                                            |value| {
-                                                Rgb::parse(value)
-                                                    .map_or_else(Default::default, accent_swatch)
-                                            },
-                                        )),
-                                        input()
-                                            .class("theme-color-value")
-                                            .name(i18n::bind("Accent color"))
-                                            .value(hex.map(Clone::clone))
-                                            .on(value_changed, move |event| {
-                                                if let Event::ValueChanged { value, .. } = event {
-                                                    if let Some(color) = Rgb::parse(&value) {
-                                                        edit(&accent_ui, |overrides| {
-                                                            overrides.accent = Some(color);
-                                                        });
-                                                    }
-                                                    hex.revise(|current| *current = value);
-                                                    error.revise(|current| *current = "");
-                                                }
-                                            }),
-                                    )),
-                                )),
-                            )),
-                            sapid::button()
-                                .class("button theme-wallpaper-toggle")
-                                .label(i18n::bind("Wallpaper options"))
-                                .pressed(wallpaper_open.map(|open| *open))
-                                .on_press(move || wallpaper_open.revise(|open| *open = !*open)),
-                            when(wallpaper_open, move || {
-                                crate::desktop_customization_ui::wallpaper_controls(
-                                    wallpaper_ui.clone(),
-                                    background,
-                                )
-                            }),
-                            when(error.map(|message| !message.is_empty()), move || {
-                                text()
-                                    .class("error")
-                                    .content(i18n::bind(error.map(|message| message.to_string())))
-                            }),
-                        ),
-                        (
-                            btn("Cancel", move || cancel.close_dialog()),
-                            btn("Create theme", submit.clone())
-                                .class("button primary")
-                                .enabled(state.map(choices_ready)),
-                        ),
-                    )
-                })?;
-                scope.retain(mounted)?;
-                if let Some(id) = field.get() {
-                    scope.action(glory::render::Action::Focus(id))?;
-                }
-                Ok(())
-            })
-        },
     )
 }
-fn thumbnail(
-    state: Cage<State>,
-    read: impl Fn(&State) -> arcnix_core::desktop_theme::Theme + Copy + 'static,
-) -> impl Widget {
-    let swatch = move |dark| {
-        let background = move |s: &State| read(s).background(dark).clone();
-        crate::desktop_customization_ui::wallpaper_preview(state, background)
+
+fn thumbnail(preset: Preset) -> impl Widget {
+    let theme = preset.theme();
+    let preview = |dark| {
+        crate::desktop_customization_ui::wallpaper_preview_class(theme.background(dark), dark)
     };
-    let split = state.map(move |s| {
-        let theme = read(s);
-        theme.background(false) != theme.background(true)
-    });
+    let (light, dark) = (preview(false), preview(true));
+    let split = light != dark;
+    let swatch = |class: &str| col().class(format!("theme-wallpaper-swatch {class}"));
     row().class("theme-thumbnail").fill((
-        swatch(false),
-        when(split, move || swatch(true)),
+        swatch(light),
+        when(split, move || swatch(dark)),
         when(split, || {
             row().class("theme-thumbnail-labels").fill((
                 text().content(i18n::bind("Light")),
@@ -459,97 +215,124 @@ fn thumbnail(
     ))
 }
 
-fn active_selection(s: &State) -> Selection {
-    let themes = &appearance(s).themes;
-    match &themes.selection {
-        Selection::Preset(_) => themes.selection.clone(),
-        Selection::Saved(name) if themes.saved.contains_key(name) => themes.selection.clone(),
-        _ if selected(s) == CustomTheme::default() => Selection::Preset(Preset::default()),
-        _ => Selection::Legacy,
-    }
-}
-
 pub(crate) fn controls(ui: Ui) -> impl Widget {
     let state = ui.state;
     let ready = state.map(choices_ready);
-    let saved = ui.clone();
-    let customize = ui.clone();
-    col().class("desktop-settings-pane").fill(
-        col().class("desktop-settings-card").fill((
-            text().class("section-title").content(i18n::bind("Themes")),
-            row()
-                .class("theme-preset-grid")
-                .role(Role::Group)
-                .name(i18n::bind("Themes"))
-                .fill((
-                    fragment(
+    let theme_reset = ui.clone();
+    let style_reset = ui.clone();
+    col()
+        .class("desktop-settings-pane desktop-appearance")
+        .fill((
+            col().class("desktop-settings-card").fill((
+                settings::section_heading(
+                    "Themes",
+                    true,
+                    settings::reset_button(true, move || {
+                        select_preset(&theme_reset, Preset::default());
+                    })
+                    .enabled(ready),
+                ),
+                row()
+                    .class("theme-preset-grid")
+                    .role(Role::Group)
+                    .name(i18n::bind("Themes"))
+                    .fill(fragment(
                         Preset::ALL
                             .into_iter()
                             .map(|preset| {
                                 let choose = ui.clone();
                                 col().class("theme-preview-choice").fill((
-                                    thumbnail(state, move |_| preset.theme()),
+                                    thumbnail(preset),
                                     sapid::button()
                                         .class("button theme-preset-select")
                                         .label(i18n::bind(preset.label()))
-                                        .pressed(state.map(move |s| {
-                                            active_selection(s) == Selection::Preset(preset)
-                                        }))
+                                        .pressed(state.map(move |s| selected(s).base == preset))
                                         .enabled(ready)
-                                        .on_press(move || {
-                                            select(&choose, Selection::Preset(preset))
-                                        }),
+                                        .on_press(move || select_preset(&choose, preset)),
                                 ))
                             })
                             .collect::<Vec<_>>(),
+                    )),
+            )),
+            col()
+                .class("desktop-settings-card desktop-settings-rows appearance-color-settings")
+                .fill((
+                    settings::section_heading(
+                        "Colors",
+                        true,
+                        settings::reset_button(true, move || {
+                            edit(&style_reset, |prefs| {
+                                let overrides = &mut prefs.overrides;
+                                overrides.mode = None;
+                                overrides.accent = None;
+                                overrides.colors.clear();
+                                for style in [&mut overrides.light, &mut overrides.dark] {
+                                    style.accent = None;
+                                    style.colors.clear();
+                                }
+                            });
+                        })
+                        .enabled(ready),
                     ),
-                    each(state.map(|s| {
-                        appearance(s)
-                            .themes
-                            .saved
-                            .keys()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    }))
-                    .key(Clone::clone)
-                    .children(move |item| {
-                        let name = item.value;
-                        let choose = saved.clone();
-                        col().class("theme-preview-choice").fill((
-                            thumbnail(state, move |s| {
-                                appearance(s)
-                                    .themes
-                                    .saved
-                                    .get(&name.get())
-                                    .map_or_else(|| Preset::default().theme(), CustomTheme::resolve)
-                            }),
-                            sapid::button()
-                                .class("button theme-preset-select")
-                                .label(name.get())
-                                .enabled(ready)
-                                .pressed(state.map(move |s| {
-                                    active_selection(s) == Selection::Saved(name.get())
-                                }))
-                                .on_press(move || select(&choose, Selection::Saved(name.get()))),
-                        ))
-                    }),
-                    when(
-                        state.map(|s| active_selection(s) == Selection::Legacy),
-                        move || {
-                            col().class("theme-preview-choice").fill((
-                                thumbnail(state, |s| selected(s).resolve()),
-                                sapid::button()
-                                    .class("button theme-preset-select")
-                                    .label(i18n::bind("Current theme"))
-                                    .pressed(true)
-                                    .enabled(ready),
-                            ))
-                        },
+                    settings_row(
+                        "Color scheme",
+                        options(
+                            &ui,
+                            &[
+                                (Theme::System, "Auto"),
+                                (Theme::Light, "Light"),
+                                (Theme::Dark, "Dark"),
+                            ],
+                            |o| o.mode,
+                            |o, mode| o.mode = Some(mode),
+                        ),
                     ),
+                    settings_row("Accent color", accent_controls(ui.clone())),
                 )),
-            row()
-                .class("theme-create-action")
-                .fill(btn("Customize", move || begin(&customize)).enabled(ready)),
-        )),
-    )
+            icon_controls(ui.clone()),
+            crate::desktop_customization_ui::wallpaper_controls(ui),
+        ))
+}
+
+fn icon_controls(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let reset = ui.clone();
+    col()
+        .class("desktop-settings-card desktop-settings-rows appearance-icon-settings")
+        .fill((
+            settings::section_heading(
+                "Icons",
+                true,
+                settings::reset_button(true, move || {
+                    edit(&reset, |prefs| {
+                        prefs.overrides.icon_family = None;
+                        prefs.overrides.icons = None;
+                    });
+                })
+                .enabled(state.map(choices_ready)),
+            ),
+            settings_row(
+                "Icon family",
+                options(
+                    &ui,
+                    &IconFamily::ALL.map(|family| (family, family.label())),
+                    |theme| theme.icon_family,
+                    |overrides, family| overrides.icon_family = Some(family),
+                ),
+            ),
+            when(
+                state.map(|s| theme(s).icon_family.supports_tile_background()),
+                move || {
+                    settings_row(
+                        "Tile background",
+                        options(
+                            &ui,
+                            &IconStyle::ALL.map(|style| (style, style.label())),
+                            |theme| theme.icons,
+                            |overrides, style| overrides.icons = Some(style),
+                        ),
+                    )
+                },
+            ),
+        ))
 }

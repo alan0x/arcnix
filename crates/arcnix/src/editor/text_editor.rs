@@ -7,7 +7,7 @@ use pulldown_cmark::{Event as MarkdownEvent, Options, Parser, Tag, TagEnd, html}
 use crate::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Surface {
+pub(crate) enum Surface {
     Desktop(u64),
     Transfer,
 }
@@ -43,6 +43,10 @@ pub(crate) struct Tabs {
 }
 
 impl Tabs {
+    pub(crate) fn confirming_close(&self) -> bool {
+        self.confirm_close.is_some()
+    }
+
     fn select(&mut self, id: u64) {
         if self.documents.contains_key(&id) {
             self.active = Some(id);
@@ -295,6 +299,12 @@ pub(crate) fn close_desktop(ui: &Ui) -> bool {
     })
 }
 
+pub(crate) fn close_selected(ui: &Ui) {
+    if let Some(id) = ui.state.with(|s| s.desktop_editor.active) {
+        close_tab(ui, id);
+    }
+}
+
 fn close_tab(ui: &Ui, id: u64) {
     ui.state.revise(|s| {
         let tabs = &mut s.desktop_editor;
@@ -363,7 +373,7 @@ fn can_save(s: &State, surface: Surface) -> bool {
         })
 }
 
-fn save(ui: &Ui, surface: Surface) {
+pub(crate) fn save(ui: &Ui, surface: Surface, sudo: Option<zeroize::Zeroizing<String>>) {
     let action = ui.state.with(|s| {
         if !can_save(s, surface) {
             return None;
@@ -374,6 +384,7 @@ fn save(ui: &Ui, surface: Surface) {
             document,
             content: e.draft.clone(),
             cancel: e.cancel.clone(),
+            sudo,
         })
     });
     if let Some(action) = action {
@@ -391,7 +402,11 @@ fn save(ui: &Ui, surface: Surface) {
         });
     }
 }
-pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Document, String>) {
+pub(crate) fn event(
+    ui: &Ui,
+    serial: u64,
+    result: std::result::Result<Document, worker::FileFailure>,
+) {
     let current = ui.state.revise(|s| {
         let matches = |e: &Editor| e.pending.is_some_and(|p| p.serial == serial);
         let surface = if s.remote_editor.as_ref().is_some_and(matches) {
@@ -411,6 +426,11 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Document, 
         let current = editor.epoch == epoch;
         let saved = editor.pending.take()?.saving;
         let success = result.is_ok();
+        let retry = (current
+            && saved
+            && !editor.cancel.load(Ordering::Relaxed)
+            && result.as_ref().is_err_and(|error| error.permission_denied))
+        .then(|| file_elevation::Retry::Save(surface, editor.path.clone()));
         let opened = (current && success && !saved).then(|| editor.path.clone());
         match result {
             Ok(document) => {
@@ -421,10 +441,15 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Document, 
                 editor.error.clear();
                 editor.render_preview();
             }
-            Err(error) => editor.error = error,
+            Err(error) => editor.error = error.message,
         }
         if surface == Surface::Transfer && s.dialog != Some(Dialog::TextEditor) {
             s.remote_editor = None;
+        } else if let Some(retry) = retry
+            && s.connected
+            && (s.dialog.is_none() || s.dialog == Some(Dialog::TextEditor))
+        {
+            file_elevation::show(s, retry);
         }
         Some((current && saved && success, opened))
     });
@@ -440,7 +465,15 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Document, 
             );
         }
     }
+    read_queued(ui);
+    ui.schedule();
+}
+
+pub(crate) fn read_queued(ui: &Ui) {
     let queued = ui.state.with(|s| {
+        if s.dialog == Some(Dialog::FileElevation) {
+            return None;
+        }
         s.desktop_editor
             .documents
             .iter()
@@ -449,7 +482,6 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Document, 
     if let Some(id) = queued {
         read(ui, Surface::Desktop(id));
     }
-    ui.schedule();
 }
 fn feedback(editor: &Editor) -> String {
     if !editor.error.is_empty() {
@@ -500,11 +532,56 @@ fn mode_controls(ui: Ui, surface: Surface) -> impl Widget {
     )
 }
 
+fn editor_status(state: Cage<State>, surface: Surface) -> impl Widget {
+    let feedback = text()
+        .class("editor-feedback")
+        .content(state.map(move |s| surface.editor(s).map(feedback).unwrap_or_default()));
+    if surface == Surface::Transfer {
+        return fragment(feedback);
+    }
+    fragment(
+        row().class("editor-statusbar").fill((
+            feedback,
+            when(
+                state.map(move |s| {
+                    surface
+                        .editor(s)
+                        .is_some_and(|e| !e.preview && e.document.is_some())
+                }),
+                || {
+                    row().class("editor-position").fill((
+                        text().content(i18n::desktop::bind("Line")),
+                        text().class("editor-line-value").content("1"),
+                        text().content(i18n::desktop::bind("Column")),
+                        text().class("editor-column-value").content("1"),
+                    ))
+                },
+            ),
+            text().class("editor-mode-name"),
+            text()
+                .class("editor-plain-label")
+                .content(i18n::desktop::bind("Plain text")),
+            text().class("editor-format").content(state.map(move |s| {
+                surface
+                    .editor(s)
+                    .and_then(|e| e.document.as_ref())
+                    .map(|doc| {
+                        let encoding = if doc.bom { "UTF-8 BOM" } else { "UTF-8" };
+                        let ending = if doc.crlf { "CRLF" } else { "LF" };
+                        format!("{encoding}  ·  {ending}")
+                    })
+                    .unwrap_or_default()
+            })),
+        )),
+    )
+}
+
 fn body(ui: Ui, surface: Surface) -> impl Widget {
     let state = ui.state;
     let discard_ui = ui.clone();
     col().class("remote-editor").fill((
         row().class("editor-toolbar").fill((
+            icons::glyph(Icon::File),
             text()
                 .class("editor-path")
                 .selectable(true)
@@ -519,7 +596,7 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
         when(
             state.map(move |s| surface.editor(s).is_some_and(|e| !e.preview)),
             move || {
-                input()
+                let contents = input()
                     .multiline(true)
                     .class("remote-editor-content")
                     .name(i18n::bind("File contents"))
@@ -554,7 +631,11 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                                 }
                             })
                         }
-                    })
+                    });
+                match surface {
+                    Surface::Desktop(_) => fragment(col().class("editor-sheet").fill(contents)),
+                    Surface::Transfer => fragment(contents),
+                }
             },
         ),
         when(
@@ -588,9 +669,7 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                 ))
             },
         ),
-        text()
-            .class("editor-feedback")
-            .content(state.map(move |s| surface.editor(s).map(feedback).unwrap_or_default())),
+        editor_status(state, surface),
         when(
             state.map(move |s| {
                 surface == Surface::Transfer && surface.editor(s).is_some_and(|e| e.discard)
@@ -654,7 +733,7 @@ fn buttons(ui: Ui, surface: Surface) -> impl Widget {
             .class("button primary remote-editor-save")
             .label(i18n::bind("Save to server"))
             .enabled(state.map(move |s| can_save(s, surface)))
-            .on_press(move || save(&ui, surface)),
+            .on_press(move || save(&ui, surface, None)),
     ))
 }
 
@@ -689,7 +768,7 @@ pub(crate) fn title_actions(ui: Ui) -> impl Widget {
                 i18n::desktop::icon_action("Save", Icon::Save)
                     .class("icon-button remote-editor-save")
                     .enabled(state.map(move |s| can_save(s, surface)))
-                    .on_press(move || save(&save_ui, surface)),
+                    .on_press(move || save(&save_ui, surface, None)),
             ))
         })
 }

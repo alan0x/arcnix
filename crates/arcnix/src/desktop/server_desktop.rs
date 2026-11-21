@@ -227,11 +227,11 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
 pub(crate) fn app_label(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "Docker",
-        WorkspacePage::Files(_) => "资源管理器",
-        WorkspacePage::Code => "Code",
+        WorkspacePage::Files(_) => "文件管理",
+        WorkspacePage::Code => "Code Editor",
         WorkspacePage::Editor => "Text Editor",
         WorkspacePage::Player => "Player",
-        WorkspacePage::Browser => "Web browser",
+        WorkspacePage::Browser => "Browser",
         WorkspacePage::Terminal => "终端",
         WorkspacePage::Monitor => "Monitor",
         WorkspacePage::AppCenter => "App Center",
@@ -257,6 +257,14 @@ pub(crate) fn can_close_app(s: &State, page: WorkspacePage) -> bool {
         && (page != WorkspacePage::Editor || !text_editor::desktop_busy(s))
 }
 
+pub(crate) fn show_desktop_label(s: &State) -> &'static str {
+    if s.workbench.stack.is_empty() && !s.workbench.desktop_restore.is_empty() {
+        "Restore windows"
+    } else {
+        "Show desktop"
+    }
+}
+
 fn window_class(page: WorkspacePage) -> String {
     match page.files_window_id() {
         Some(id) => format!("files-window-{id}"),
@@ -272,7 +280,7 @@ fn window_mut(s: &mut State, page: WorkspacePage, app: DesktopApp) -> &mut Deskt
     }
 }
 
-fn app_class(page: WorkspacePage) -> &'static str {
+pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
     match page {
         WorkspacePage::Docker => "app-docker",
         WorkspacePage::Files(_) => "app-files",
@@ -351,8 +359,8 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::OpenDesktopFile(_)
                     | Dialog::DesktopTimeZone
                     | Dialog::DesktopIcons
+                    | Dialog::DesktopApps
                     | Dialog::DockShortcuts
-                    | Dialog::CreateDesktopTheme
                     | Dialog::FileAssociation { .. }
                     | Dialog::OpenWith { .. }
                     | Dialog::SoftwareAction(..)
@@ -371,6 +379,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::Trash { remote: true }
                     | Dialog::FileColumns { remote: true }
                     | Dialog::DeleteFiles { remote: true, .. }
+                    | Dialog::FileElevation
                     | Dialog::TransferProgress(_)
                     | Dialog::FilesDownload { .. }
                     | Dialog::TransferDefaults
@@ -414,7 +423,7 @@ fn front_window(s: &mut State) {
 
 pub(crate) fn remove_window(s: &mut State, page: WorkspacePage) {
     if page == WorkspacePage::Settings {
-        desktop_appearance_ui::cancel(s);
+        desktop_customization_ui::close_settings_search(s);
     }
     s.workbench.apps.retain(|&open| open != page);
     s.workbench.stack.retain(|&open| open != page);
@@ -427,7 +436,7 @@ pub(crate) fn remove_window(s: &mut State, page: WorkspacePage) {
 }
 
 impl Ui {
-    fn toggle_show_desktop(&self) {
+    pub(crate) fn toggle_show_desktop(&self) {
         let hiding = self.state.revise(|s| {
             let workbench = &mut s.workbench;
             let hiding = !workbench.stack.is_empty();
@@ -495,7 +504,6 @@ impl Ui {
         self.close_desktop_menu();
         if self.state.with(visible) {
             self.refresh_desktop_items(false);
-            self.load_desktop_wallpaper();
         }
         self.docker_enter();
         self.terminal_enter();
@@ -505,6 +513,7 @@ impl Ui {
         if self.state.with(|s| {
             visible(s)
                 && s.workspace_page.is_files()
+                && !files_tabs::apps_active(s)
                 && s.sftp_available
                 && s.remote_request == 0
                 && !s.remote_ready
@@ -606,6 +615,43 @@ impl Ui {
         });
         if changed && page.files_window_id().is_none_or(|id| id == 0) {
             self.remember_desktop_layout();
+        }
+    }
+
+    pub(super) fn close_active_desktop(&self, tab: bool) {
+        let Some(page) = self.state.with(|s| {
+            let page = s.workspace_page;
+            (s.workbench.window_visible(page)
+                && can_close_app(s, page)
+                && !(page == WorkspacePage::Code && s.code.confirm)
+                && !(page == WorkspacePage::Editor && s.desktop_editor.confirming_close()))
+            .then_some(page)
+        }) else {
+            return;
+        };
+        if !tab {
+            self.close_desktop_app(page);
+            return;
+        }
+        match page {
+            WorkspacePage::Files(id) => files_tabs::close_selected(self, id),
+            WorkspacePage::Terminal => {
+                let id = self.state.with(|s| s.terminal.id);
+                if id > 0 {
+                    self.terminal_close_tab(id);
+                }
+            }
+            WorkspacePage::Editor => text_editor::close_selected(self),
+            WorkspacePage::Code => self.state.revise(|s| {
+                s.code.commands.push("workbench.action.closeActiveEditor");
+            }),
+            #[cfg(windows)]
+            WorkspacePage::Browser => self.state.revise(|s| {
+                if let Some(id) = s.web_browser.active {
+                    s.web_browser.close_tab(id);
+                }
+            }),
+            _ => {}
         }
     }
 
@@ -831,12 +877,34 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         )),
         WorkspacePage::Editor => fragment((text_editor::file_tabs(ui.clone()), tab_overflow())),
         WorkspacePage::Monitor => fragment(monitor_ui::window_tools(ui.clone())),
-        WorkspacePage::Settings => fragment(text().class("desktop-settings-saving").content(
-            i18n::desktop::bind(state.map(server_apps_ui::settings_save_status)),
-        )),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone())),
         _ => fragment(()),
+    };
+    let mark = row()
+        .class("desktop-window-mark")
+        .fill(icons::glyph(app_icon(page)));
+    let title = title.class("desktop-window-title");
+    let titlebar = if page == WorkspacePage::Settings {
+        fragment((
+            row().class("desktop-settings-sidebar-heading").fill((
+                mark,
+                title,
+                desktop_customization_ui::settings_search_toggle(ui.clone()),
+            )),
+            text()
+                .class("desktop-settings-section-title")
+                .content(i18n::desktop::bind(
+                    state.map(desktop_customization_ui::settings_section_label),
+                )),
+            text()
+                .class("desktop-settings-saving")
+                .content(i18n::desktop::bind(
+                    state.map(server_apps_ui::settings_save_status),
+                )),
+        ))
+    } else {
+        fragment((mark, title, tools))
     };
     let content = match page {
         WorkspacePage::Terminal => fragment(terminal::page(ui)),
@@ -881,15 +949,13 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             row()
                 .class(if page.is_files() {
                     "desktop-window-titlebar files-titlebar"
+                } else if page == WorkspacePage::Settings {
+                    "desktop-window-titlebar desktop-settings-titlebar"
                 } else {
                     "desktop-window-titlebar"
                 })
                 .fill((
-                    row()
-                        .class("desktop-window-mark")
-                        .fill(icons::glyph(app_icon(page))),
-                    title.class("desktop-window-title"),
-                    tools,
+                    titlebar,
                     row().class("desktop-window-actions").fill((
                         when(page == WorkspacePage::Editor, move || {
                             text_editor::title_actions(editor_actions.clone())
@@ -1004,7 +1070,7 @@ fn dock_clock() -> impl Widget {
 
 pub(crate) fn desktop(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let show_desktop = ui.clone();
+    let apps = ui.clone();
     let exit_fullscreen = ui.clone();
     let geometry = ui.clone();
     let desktop_drop = ui.clone();
@@ -1032,8 +1098,15 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                 .content(state.map(|s| {
                     s.server_apps
                         .clock
+                        .as_ref()
                         .map_or_else(String::new, |(serial, clock)| {
-                            format!("{serial},{},{}", clock.unix_seconds, clock.offset_minutes)
+                            serde_json::json!([
+                                serial,
+                                clock.unix_seconds,
+                                clock.offset_minutes,
+                                clock.zone
+                            ])
+                            .to_string()
                         })
                 })),
             input().class("desktop-bounds-input hidden").value("").on(
@@ -1143,14 +1216,15 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                                     row().class("desktop-dock-leading").fill((
                                         sapid::button()
                                             .class("desktop-dock-home")
-                                            .name(i18n::desktop::bind("Show desktop"))
+                                            .name(i18n::desktop::bind("Apps"))
                                             .pressed(
-                                                state.map(|s| {
-                                                    !s.workbench.desktop_restore.is_empty()
-                                                }),
+                                                state
+                                                    .map(|s| s.dialog == Some(Dialog::DesktopApps)),
                                             )
                                             .fill(icons::glyph(Icon::Grid))
-                                            .on_press(move || show_desktop.toggle_show_desktop()),
+                                            .on_press(move || {
+                                                apps.open_dialog(Dialog::DesktopApps)
+                                            }),
                                         text().class("desktop-dock-divider").content(""),
                                     )),
                                     row().class("desktop-dock-apps").fill(

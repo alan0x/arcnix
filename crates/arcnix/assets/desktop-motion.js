@@ -72,7 +72,7 @@
         const app=appClass(button.closest('.desktop-window')) || before.app;
         if(!app)return null;
         if(button.matches('.window-close'))return {motion:'close',app};
-        if(button.matches('.window-minimize,.desktop-dock-home'))return {motion:'minimize',app};
+        if(button.matches('.window-minimize'))return {motion:'minimize',app};
         if(button.matches('.window-maximize'))return {motion:'resize',app};
         return null;
     }
@@ -165,7 +165,7 @@
         if(pendingDeliver){transition?.skipTransition();pendingDeliver();}
         if(event.button!==0
             || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)return;
-        const button=event.target.closest('.desktop-shortcut,.desktop-dock-app,.desktop-dock-home,.window-minimize,.window-close,.window-maximize');
+        const button=event.target.closest('.desktop-shortcut,.desktop-dock-app,.window-minimize,.window-close,.window-maximize');
         if(!button || button.disabled || forwarded.has(button))return;
         const before=state();
         if(!before?.shown || document.visibilityState!=='visible')return;

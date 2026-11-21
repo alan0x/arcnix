@@ -342,7 +342,6 @@ pub(crate) fn serve(
 
 type CurrentSource = Arc<Mutex<Option<Arc<Source>>>>;
 pub(crate) struct Assets {
-    pub wallpapers: Arc<desktop_customization_ui::WallpaperAssets>,
     pub player: CurrentSource,
 }
 impl AssetProvider for Assets {
@@ -357,7 +356,7 @@ impl AssetProvider for Assets {
         {
             return Some(source.clone());
         }
-        self.wallpapers.get(path)
+        None
     }
 }
 

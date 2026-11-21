@@ -125,7 +125,7 @@ def main():
             app.file('Documents').click(button='right')
             menu = files.locator('.file-context-menu')
             expect(menu.locator('.file-color-menu').get_by_role('button', name='Red', exact=True)).to_be_visible()
-            expect(menu.get_by_role('button', name='Customize Folder…', exact=True)).to_be_visible()
+            expect(menu.get_by_role('button', name='Customize folder…', exact=True)).to_be_visible()
             expect(menu.get_by_role('button', name='Terminal here', exact=True)).to_be_enabled()
             menu.evaluate("""element => {
                 window.filesMenuChanges = [];
@@ -155,7 +155,7 @@ def main():
                 path.write_text(json.dumps(files), encoding='utf-8')
             favorite = sidebar.locator('.files-favorite-row button[aria-label="Open favorite /home/arcnix/Documents"]')
             expect(favorite).to_be_visible(timeout=22000)
-            expect(menu.get_by_role('button', name='Customize Folder…', exact=True)).to_be_enabled()
+            expect(menu.get_by_role('button', name='Customize folder…', exact=True)).to_be_enabled()
             assert page.evaluate('window.filesMenuChanges') == []
             page.keyboard.press('Escape')
             expect(menu).to_have_count(0)

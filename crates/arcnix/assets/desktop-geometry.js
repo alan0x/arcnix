@@ -19,18 +19,18 @@ const desktopGeometry = (() => {
         return { width, right: limits.width, top: height - titlebarHeight, bottom: limits.height - height };
     }
 
-    function positionRange(bounds, limits, range) {
+    function positionRange(bounds, range) {
         const widthToKeep = Math.min(range.width, bounds.width);
         return {
-            left: limits.left ? 0 : widthToKeep - bounds.width,
-            right: limits.right ? limits.width - bounds.width : range.right - widthToKeep,
+            left: widthToKeep - bounds.width,
+            right: range.right - widthToKeep,
             top: range.top,
-            bottom: limits.bottom ? limits.height - bounds.height : range.bottom,
+            bottom: range.bottom,
         };
     }
 
-    function fit(bounds, limits, range) {
-        const position = positionRange(bounds, limits, range);
+    function fit(bounds, range) {
+        const position = positionRange(bounds, range);
         return {
             ...bounds,
             x: clamp(bounds.x, position.left, position.right),
@@ -81,7 +81,7 @@ const desktopGeometry = (() => {
             y: projectAxis(bounds.y, bounds.height, reference.height, limits.height, hasSnapshot),
             width,
             height,
-        }, limits, range);
+        }, range);
     }
 
     function draw(element, bounds, limits) {
@@ -264,7 +264,7 @@ const desktopGeometry = (() => {
         }
         const { start, edge, limits, range } = drag;
         if (!edge) {
-            const position = positionRange(start, limits, range);
+            const position = positionRange(start, range);
             drag.current = {
                 ...start,
                 x: moveWithin(start.x, dx, position.left, position.right),

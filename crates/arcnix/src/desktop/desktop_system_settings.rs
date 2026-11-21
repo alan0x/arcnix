@@ -124,9 +124,7 @@ pub(crate) fn region(ui: Ui) -> impl Widget {
     });
     col().class("desktop-settings-pane desktop-region").fill((
         col().class("desktop-settings-card").fill((
-            text()
-                .class("section-title")
-                .content(i18n::bind("Desktop language")),
+            settings::section_heading("Desktop language", true, settings::desktop_reset(&ui, |prefs| prefs.language = None)),
             row()
                 .class("choice-list")
                 .fill(fragment(Vec::from(languages))),
@@ -135,9 +133,7 @@ pub(crate) fn region(ui: Ui) -> impl Widget {
             )),
         )),
         col().class("desktop-settings-card").fill((
-            text()
-                .class("section-title")
-                .content(i18n::bind("Numbers and file sizes")),
+            settings::section_heading("Numbers and file sizes", true, preferences_ui::file_sizes_reset(&ui, true)),
             preferences_ui::size_options(&ui, true),
         )),
         settings::feedback(&ui, |s| s.settings.error.clone(), "error"),
@@ -205,6 +201,13 @@ fn clock_format(s: &State) -> ClockFormat {
     }
 }
 
+fn clock_shows_seconds(s: &State) -> bool {
+    server_apps_ui::current(s)
+        .clock
+        .show_seconds
+        .unwrap_or_else(|| !side_dock(s))
+}
+
 pub(crate) fn clock_options_data(s: &State) -> String {
     let clock = server_apps_ui::current(s).clock;
     let side = side_dock(s);
@@ -220,8 +223,8 @@ pub(crate) fn clock_options_data(s: &State) -> String {
     format!(
         "{locale},{format},{},{},{}",
         side && clock.show_weekday,
-        !side || clock.show_date,
-        !side || clock.show_seconds.unwrap_or(false),
+        clock.show_date,
+        clock_shows_seconds(s),
     )
 }
 
@@ -272,7 +275,7 @@ fn time_zone_choices(s: &State) -> Vec<TimeZoneChoice> {
 }
 
 fn time_zone_offset(s: &State) -> String {
-    let Some((_, clock)) = s.server_apps.clock else {
+    let Some((_, clock)) = &s.server_apps.clock else {
         return "Server clock unavailable".to_owned();
     };
     let offset = clock.offset_minutes.unsigned_abs();
@@ -384,26 +387,37 @@ pub(crate) fn date_time(ui: Ui) -> impl Widget {
                 )),
             col()
                 .class("desktop-settings-card desktop-settings-rows")
-                .fill(settings_row("Time format", time_format_choices(&ui))),
+                .fill((
+                    settings::section_heading(
+                        "Time format",
+                        true,
+                        settings::desktop_reset(&ui, |prefs| {
+                            prefs.clock.format = ClockFormat::default()
+                        }),
+                    ),
+                    row().class("choice-list").fill(time_format_choices(&ui)),
+                )),
         ))
 }
 
 pub(crate) fn dock_clock_settings(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let weekday = ui.clone();
     col()
-        .class("desktop-settings-card dock-clock-settings desktop-settings-rows")
+        .class("dock-clock-settings desktop-settings-rows")
         .fill((
-            text()
-                .class("section-title")
-                .content(i18n::bind("Dock clock")),
-            settings_row(
-                "Weekday",
-                clock_switch(
-                    &ui,
+            settings_row("Time format", time_format_choices(&ui)),
+            when(state.map(side_dock), move || {
+                settings_row(
                     "Weekday",
-                    |s| server_apps_ui::current(s).clock.show_weekday,
-                    |clock, show| clock.show_weekday = show,
-                ),
-            ),
+                    clock_switch(
+                        &weekday,
+                        "Weekday",
+                        |s| server_apps_ui::current(s).clock.show_weekday,
+                        |clock, show| clock.show_weekday = show,
+                    ),
+                )
+            }),
             settings_row(
                 "Date",
                 clock_switch(
@@ -415,17 +429,9 @@ pub(crate) fn dock_clock_settings(ui: Ui) -> impl Widget {
             ),
             settings_row(
                 "Seconds",
-                clock_switch(
-                    &ui,
-                    "Seconds",
-                    |s| {
-                        server_apps_ui::current(s)
-                            .clock
-                            .show_seconds
-                            .unwrap_or(false)
-                    },
-                    |clock, show| clock.show_seconds = Some(show),
-                ),
+                clock_switch(&ui, "Seconds", clock_shows_seconds, |clock, show| {
+                    clock.show_seconds = Some(show)
+                }),
             ),
         ))
 }

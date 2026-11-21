@@ -40,5 +40,12 @@
     "integrity": "sha512-70vp3ZUYoPlFbF9uiTdXHUUCGEIp7d4+6p+8DYbkm2jP7x/3i/paXVF6dopSI3zd/CEitrZN1rc4i85xWmmXlg==",
     "source": "https://registry.npmjs.org/prettier/-/prettier-3.10.1.tgz",
     "license": "MIT"
+  },
+  {
+    "name": "codemirror",
+    "version": "5.65.20",
+    "integrity": "sha512-i5dLDDxwkFCbhjvL2pNjShsojoL3XHyDwsGv1jqETUoW+lzpBKKqNTUWgQwVAOa0tUm4BwekT455ujafi8payA==",
+    "source": "https://registry.npmjs.org/codemirror/-/codemirror-5.65.20.tgz",
+    "license": "MIT"
   }
 ]

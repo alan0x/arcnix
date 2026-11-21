@@ -51,7 +51,6 @@ pub struct DesktopPreferences {
     pub clock: DesktopClock,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_interval_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "Shortcuts::is_default")]
     pub shortcuts: Shortcuts,
     #[serde(skip_serializing_if = "TerminalLayout::is_empty")]
     pub terminal: TerminalLayout,
@@ -436,27 +435,31 @@ fn execute_bytes(
     Ok((stdout, stderr, output.exit_code))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClockSample {
     pub unix_seconds: i64,
     pub offset_minutes: i16,
+    pub zone: Option<String>,
 }
 
 pub fn clock(session: &RemoteSession) -> Result<ClockSample> {
     let output = execute(
         session,
-        "# arcnix:desktop:clock\nunset TZ\nLC_ALL=C date '+%s %z'",
+        "# arcnix:desktop:clock\nunset TZ\nLC_ALL=C date '+%s %z %Z'",
         256,
     )?;
     ensure!(output.exit_code == 0, "Cannot read the server clock");
-    let mut fields = output.stdout.split_ascii_whitespace();
+    let mut fields = output.stdout.trim().splitn(3, ' ');
     let seconds = fields
         .next()
         .ok_or_else(|| anyhow::anyhow!("Missing server time"))?;
     let offset = fields
         .next()
         .ok_or_else(|| anyhow::anyhow!("Missing server time zone"))?;
-    ensure!(fields.next().is_none(), "Invalid server clock response");
+    let zone = fields
+        .next()
+        .map(str::trim)
+        .filter(|zone| !zone.is_empty() && zone.len() <= 64 && !zone.chars().any(char::is_control));
     let [
         sign @ (b'+' | b'-'),
         hours_tens @ b'0'..=b'9',
@@ -474,6 +477,7 @@ pub fn clock(session: &RemoteSession) -> Result<ClockSample> {
     Ok(ClockSample {
         unix_seconds: seconds.parse()?,
         offset_minutes: multiplier * (hours * 60 + minutes),
+        zone: zone.map(str::to_owned),
     })
 }
 
@@ -506,16 +510,6 @@ pub fn discover(session: &RemoteSession) -> Result<Applications> {
     }
     Ok(apps)
 }
-
-pub(crate) const DIRECTORY: &str = r#"set -eu
-case "${HOME:-}" in /*) ;; *) printf 'Remote login home is unavailable\n' >&2; exit 1;; esac
-arcnix_dir="$HOME/.arcnix"
-if [ -L "$arcnix_dir" ]; then printf 'Refusing linked .arcnix directory\n' >&2; exit 1; fi
-if [ -e "$arcnix_dir" ] && { [ ! -d "$arcnix_dir" ] || [ ! -O "$arcnix_dir" ]; }; then printf 'Invalid .arcnix directory owner or type\n' >&2; exit 1; fi
-arcnix_file="$arcnix_dir/desktop.json"
-if [ -L "$arcnix_file" ]; then printf 'Refusing linked desktop preferences\n' >&2; exit 1; fi
-if [ -e "$arcnix_file" ] && { [ ! -f "$arcnix_file" ] || [ ! -O "$arcnix_file" ]; }; then printf 'Invalid desktop preferences owner or type\n' >&2; exit 1; fi
-"#;
 
 pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
     let prefs: Option<DesktopPreferences> = serde_json::from_str(text)?;

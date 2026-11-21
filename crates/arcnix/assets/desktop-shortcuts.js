@@ -22,8 +22,12 @@ const arcnixKeys = (() => {
         '[role=dialog]', '[role=menu]',
     ].join(',');
     let recording;
+    let origin;
 
     function stopRecording() {
+        if (!recording) return;
+        const root = arcnixKeys.desktop();
+        if (root) send(root, arcnixKeys.state(root).epoch, {kind: 'recording', active: false});
         recording?.removeAttribute('data-recording');
         recording?.removeAttribute('aria-pressed');
         recording = null;
@@ -43,6 +47,9 @@ const arcnixKeys = (() => {
         stopRecording();
         if (wasRecording) return;
         recording = button;
+        const root = arcnixKeys.desktop();
+        origin = arcnixKeys.state(root);
+        send(root, arcnixKeys.state(root).epoch, {kind: 'recording', active: true});
         button.setAttribute('data-recording', '');
         button.setAttribute('aria-pressed', 'true');
         button.focus({ preventScroll: true });
@@ -78,12 +85,21 @@ const arcnixKeys = (() => {
             event.preventDefault();
             event.stopImmediatePropagation();
             if (event.repeat) return;
-            const action = JSON.parse(recording.parentElement.querySelector('.desktop-shortcut-id').textContent);
+            const action = JSON.parse(recording.closest('.desktop-key-controls').querySelector('.desktop-shortcut-id').textContent);
+            const add = recording.classList.contains('desktop-shortcut-add');
+            const previous = recording.closest('.desktop-shortcut-extra')?.querySelector('.desktop-shortcut-previous').textContent;
+            const {epoch, preset} = origin;
             stopRecording();
-            if (chord !== 'Escape') send(desktop, state.epoch, {kind: 'record', action, chord});
+            if (chord !== 'Escape' && state.epoch === epoch && state.preset === preset)
+                send(desktop, epoch, {kind: 'record', action, chord, preset, add, previous});
             return;
         }
 
+        // The native host decides whether to capture these shell shortcuts,
+        // including when capture is disabled or a native child owns focus.
+        if (state.windowsHost && state.preset === 'windows'
+            && (chord === 'Meta+D' || chord === 'Alt+F4'
+                || (chord === 'Ctrl+F4' && state.bindings.close_tab.includes(chord)))) return;
         const modifiedTab = chord === 'Ctrl+Tab' || chord === 'Ctrl+Shift+Tab';
         if (target.closest(protectedFocus)
             || (!modifiedTab && chord !== 'Escape' && target.closest(editableFocus))
@@ -93,16 +109,16 @@ const arcnixKeys = (() => {
         const canvas = desktop.querySelector('.desktop-canvas');
         const {bindings, commands} = state;
         if (canvas.contains(target)) {
-            const focus = (bindings.focus_next === chord && chord !== 'Tab') ? 1
-                : (bindings.focus_previous === chord && chord !== 'Shift+Tab') ? -1 : 0;
+            const focus = (bindings.focus_next.includes(chord) && chord !== 'Tab') ? 1
+                : (bindings.focus_previous.includes(chord) && chord !== 'Shift+Tab') ? -1 : 0;
             if (focus) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 moveFocus(canvas, focus);
                 return;
             }
-            if ((bindings.activate === chord && chord !== 'Enter')
-                || (bindings.activate_space === chord && chord !== 'Space')) {
+            if ((bindings.activate.includes(chord) && chord !== 'Enter')
+                || (bindings.activate_space.includes(chord) && chord !== 'Space')) {
                 const control = target.closest('button:not(:disabled), a[href], [role=button]');
                 if (control) {
                     event.preventDefault();
@@ -114,7 +130,7 @@ const arcnixKeys = (() => {
             const nativeAction = {Tab: 'focus_next', 'Shift+Tab': 'focus_previous',
                 Enter: 'activate', Space: 'activate_space'}[chord];
             const actionable = target.closest('button, a[href], [role=button]');
-            if (nativeAction && bindings[nativeAction] !== chord
+            if (nativeAction && !bindings[nativeAction].includes(chord)
                 && (chord.endsWith('Tab') || actionable)) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
@@ -133,14 +149,14 @@ const arcnixKeys = (() => {
         }
 
         const duplicate = 'files_duplicate_window';
-        const action = commands.includes(duplicate) && bindings[duplicate] === chord
-            ? duplicate : commands.find(id => bindings[id] === chord);
+        const action = commands.includes(duplicate) && bindings[duplicate].includes(chord)
+            ? duplicate : commands.find(id => bindings[id].includes(chord));
         if (!action) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         if (!event.repeat) {
             canvas.focus({preventScroll: true});
-            send(desktop, state.epoch, {kind: 'run', action});
+            send(desktop, state.epoch, {kind: 'run', action, chord, preset: state.preset});
         }
     }, true);
 })();

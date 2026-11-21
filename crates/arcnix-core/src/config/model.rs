@@ -159,6 +159,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub theme: Theme,
     pub show_hidden_files: bool,
+    #[serde(default = "capture_desktop_shortcuts_default")]
+    pub capture_desktop_shortcuts: bool,
+    #[serde(default)]
+    pub shortcut_scheme: crate::desktop_shortcuts::Scheme,
     pub resource_interval_seconds: u64,
     #[serde(default)]
     pub connection: crate::preferences::ConnectionSettings,
@@ -183,12 +187,17 @@ impl AppSettings {
 fn default_transfer_concurrency() -> u8 {
     5
 }
+fn capture_desktop_shortcuts_default() -> bool {
+    true
+}
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             language: Language::English,
             theme: Theme::System,
             show_hidden_files: true,
+            capture_desktop_shortcuts: capture_desktop_shortcuts_default(),
+            shortcut_scheme: Default::default(),
             resource_interval_seconds: 3,
             connection: Default::default(),
             display: Default::default(),

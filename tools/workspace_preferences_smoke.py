@@ -56,7 +56,7 @@ def main():
             assert 'Paths copied' in content and content.startswith('[')
             checks.append('Display sizes and timestamps update live; connection defaults and timestamped file logging persist and write to the selected directory')
 
-            app.file('config.txt').click(button='right'); app.action('Open with'); app.action('Code')
+            app.file('config.txt').click(button='right'); app.action('Open with'); app.action('Code Editor')
             code = app.code()
             expect(code.locator('.view-lines')).to_contain_text('value=old')
             app.replace_code('token=fixture-editor-secret\nvalue=new\n').press('Control+s')
@@ -78,7 +78,7 @@ def main():
             app.workspace('Transfer files')
             app.file('binary.bin').click(button='right'); app.action('Open with'); app.action('Choose another app')
             chooser = page.get_by_role('dialog', name='Open with', exact=True)
-            chooser.get_by_role('button', name='Code', exact=True).click()
+            chooser.get_by_role('button', name='Code Editor', exact=True).click()
             chooser.get_by_role('button', name='Open once', exact=True).click()
             expect(app.code().locator('body')).to_contain_text('UTF-8')
             window.locator('.window-close').click()

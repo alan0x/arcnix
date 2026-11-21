@@ -37,7 +37,7 @@ def main():
         profile['initial_remote_path'] = '/project'
         with Desktop(out / 'app', peer.config([profile], out)) as app:
             app.connect()
-            app.application('Code')
+            app.application('Code Editor')
             page = app.code()
             errors = []
             page.on('pageerror', lambda e: errors.append(e.stack or str(e)))
@@ -70,9 +70,9 @@ def main():
                 window.releaseIndex = () => { hold = false; original(held.splice(0)); };
             }""")
             toolbar = app.page.locator('.app-code .desktop-window-titlebar')
-            expect(toolbar.get_by_role('button', name='Quick Open')).to_have_text('project')
+            expect(toolbar.get_by_role('button', name='Quick open')).to_have_text('project')
             expect(page.get_by_role('menubar')).to_be_visible()
-            slot = toolbar.get_by_role('button', name='Quick Open')
+            slot = toolbar.get_by_role('button', name='Quick open')
             picker = page.locator('.quick-input-widget input:visible').first
             def check_title_input():
                 expect(picker).to_be_focused()
@@ -118,9 +118,9 @@ def main():
             expect(picker).to_have_count(0)
             page.evaluate("arcnixCommand('workbench.action.closeActiveEditor')")
             expect(page.locator('.tab').filter(has_text='quick-open.txt')).to_have_count(0)
-            toolbar.get_by_role('button', name='Toggle Side Bar').click()
+            toolbar.get_by_role('button', name='Toggle sidebar').click()
             expect(page.locator('.explorer-viewlet')).not_to_be_visible()
-            toolbar.get_by_role('button', name='Toggle Side Bar').click()
+            toolbar.get_by_role('button', name='Toggle sidebar').click()
             tree_file = page.get_by_role('treeitem', name='server.log', exact=True)
             tree_file.dblclick()
             viewer = page.locator('.arcnix-paged-file')

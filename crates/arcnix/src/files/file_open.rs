@@ -19,9 +19,9 @@ const APPS: &[FileApp] = if cfg!(windows) {
 fn label(app: FileApp) -> &'static str {
     match app {
         FileApp::TextEditor => "Text Editor",
-        FileApp::Code => "Code",
+        FileApp::Code => server_desktop::app_label(WorkspacePage::Code),
         FileApp::Player => "Player",
-        FileApp::Browser => "Web browser",
+        FileApp::Browser => server_desktop::app_label(WorkspacePage::Browser),
     }
 }
 
@@ -578,6 +578,12 @@ fn matching_extensions(s: &State) -> Vec<ExtensionRow> {
         .collect()
 }
 
+pub(crate) fn reset_settings(ui: &Ui, desktop: bool) -> sapid::Button {
+    settings::local_reset(ui, desktop, |s, defaults| {
+        s.file_associations = defaults.file_associations
+    })
+}
+
 pub(crate) fn settings(ui: Ui, desktop: bool) -> impl Widget {
     let state = ui.state;
     let add = ui.clone();
@@ -875,9 +881,18 @@ pub(crate) fn settings_dialog(ui: Ui) -> impl Widget {
         move || {
             let reset = ui.clone();
             let done = ui.clone();
-            modal(
+            modal_with_header(
                 ui.clone(),
                 "File association",
+                settings::reset_button(state.with(server_desktop::visible), move || {
+                    if let Some(ext) = state.with(edited_extension) {
+                        set_default(&reset, &ext, None);
+                    }
+                })
+                .enabled(state.map(|s| {
+                    edited_extension(s)
+                        .is_some_and(|ext| explicit_default(&s.config.settings, &ext).is_some())
+                })),
                 (
                     when(
                         state.map(|s| {
@@ -936,25 +951,7 @@ pub(crate) fn settings_dialog(ui: Ui) -> impl Widget {
                         move || association_apps(ui.clone())
                     }),
                 ),
-                (
-                    when(
-                        state.map(|s| {
-                            edited_extension(s).is_some_and(|ext| {
-                                explicit_default(&s.config.settings, &ext).is_some()
-                            })
-                        }),
-                        move || {
-                            let reset = reset.clone();
-                            btn("Restore suggested default", move || {
-                                if let Some(ext) = state.with(edited_extension) {
-                                    set_default(&reset, &ext, None);
-                                }
-                            })
-                            .class("button")
-                        },
-                    ),
-                    btn("Done", move || done.close_dialog()).class("button primary"),
-                ),
+                btn("Done", move || done.close_dialog()).class("button primary"),
             )
         },
     )

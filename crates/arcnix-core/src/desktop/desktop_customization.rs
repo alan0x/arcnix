@@ -1,15 +1,15 @@
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::FileEntry;
-use crate::desktop_theme::Themes;
+use crate::desktop_theme::{
+    CustomTheme, Overrides, Preset, Themes, appearance_value, built_in_wallpaper,
+};
 use crate::remote::RemoteSession;
-use crate::server_apps::{DIRECTORY, DesktopApp, execute};
+use crate::server_apps::DesktopApp;
 
 const MAX_FILES: usize = 128;
 pub const MAX_ICONS: usize = MAX_FILES + DesktopApp::COUNT + 2;
@@ -51,8 +51,8 @@ impl From<DockItem> for Shortcut {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Wallpaper {
-    #[serde(alias = "arcnix")]
-    Terracotta,
+    #[serde(alias = "terracotta", alias = "arcnix", alias = "afterglow")]
+    Seaside,
     Aurora,
     #[default]
     #[serde(alias = "dunes")]
@@ -101,7 +101,7 @@ fn discard_magnification<'de, D: serde::Deserializer<'de>>(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 #[allow(
     clippy::manual_non_exhaustive,
     reason = "The unit field accepts legacy serialized dock settings"
@@ -109,10 +109,13 @@ fn discard_magnification<'de, D: serde::Deserializer<'de>>(
 pub struct Dock {
     pub order: Vec<DockItem>,
     pub unpinned: Vec<DesktopApp>,
+    #[serde(deserialize_with = "appearance_value")]
     pub size: DockSize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "dock_icon_size")]
     pub icon_size: Option<u8>,
     #[serde(skip_serializing_if = "DockPosition::is_bottom")]
+    #[serde(deserialize_with = "appearance_value")]
     pub position: DockPosition,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub panel_mode: bool,
@@ -206,17 +209,31 @@ impl DesktopIconSize {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Layout {
+    #[serde(deserialize_with = "appearance_value")]
     pub flow: IconFlow,
+    #[serde(deserialize_with = "appearance_value")]
     pub direction: IconDirection,
+    #[serde(deserialize_with = "appearance_value")]
     pub size: DesktopIconSize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "desktop_icon_size")]
     pub icon_size: Option<u8>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub show_home: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub show_trash: bool,
+}
+
+fn dock_icon_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u8>, D::Error> {
+    let size: Option<u8> = appearance_value(deserializer)?;
+    Ok(size.filter(|size| (24..=Dock::MAX_ICON_SIZE).contains(size)))
+}
+
+fn desktop_icon_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u8>, D::Error> {
+    let size: Option<u8> = appearance_value(deserializer)?;
+    Ok(size.filter(|size| (Layout::MIN_ICON_SIZE..=88).contains(size)))
 }
 
 impl Layout {
@@ -252,13 +269,20 @@ impl Layout {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Appearance {
     pub show_server: bool,
     pub show_apps: bool,
     pub order: Vec<Shortcut>,
     pub hidden: Vec<DesktopApp>,
-    pub wallpaper: Wallpaper,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "appearance_value")]
+    pub theme: Option<Preset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "built_in_wallpaper")]
+    pub wallpaper: Option<Wallpaper>,
+    #[serde(skip_serializing_if = "Overrides::is_default")]
+    pub overrides: Box<Overrides>,
     #[serde(skip_serializing_if = "Themes::is_default")]
     pub themes: Box<Themes>,
     #[serde(skip_serializing_if = "Layout::is_default")]
@@ -273,7 +297,9 @@ impl Default for Appearance {
             show_apps: true,
             order: vec![],
             hidden: vec![],
-            wallpaper: Wallpaper::default(),
+            theme: None,
+            wallpaper: None,
+            overrides: Box::default(),
             themes: Box::default(),
             layout: Layout::default(),
             dock: Dock::default(),
@@ -282,6 +308,44 @@ impl Default for Appearance {
 }
 
 impl Appearance {
+    pub fn apply_theme_preset(&mut self, preset: Preset) {
+        self.theme = Some(preset);
+        self.wallpaper = None;
+        *self.overrides = Overrides::default();
+    }
+
+    pub fn theme_settings(&self, legacy_mode: crate::Theme) -> CustomTheme {
+        if self.theme.is_none() && self.overrides.is_default() {
+            return self.themes.editable(self.wallpaper.as_ref(), legacy_mode);
+        }
+        let base = self.theme.unwrap_or_default();
+        let mut overrides = self.overrides.as_ref().clone();
+        if let Some(wallpaper) = &self.wallpaper {
+            overrides.wallpaper = Some(wallpaper.clone());
+            overrides.light.wallpaper = None;
+            overrides.dark.wallpaper = None;
+        }
+        CustomTheme { base, overrides }
+    }
+
+    pub fn edit_theme_settings(&mut self, legacy_mode: crate::Theme) {
+        if self.theme.is_some() {
+            return;
+        }
+        let CustomTheme {
+            base,
+            mut overrides,
+        } = self.theme_settings(legacy_mode);
+        self.theme = Some(base);
+        self.wallpaper =
+            if overrides.light.wallpaper.is_none() && overrides.dark.wallpaper.is_none() {
+                overrides.wallpaper.take()
+            } else {
+                None
+            };
+        *self.overrides = overrides;
+    }
+
     pub(crate) fn is_default(&self) -> bool {
         self == &Self::default()
     }
@@ -304,7 +368,7 @@ impl Appearance {
         }
         ensure!(
             self.dock.order.len() <= DesktopApp::COUNT + 2 && unique(&self.dock.order),
-            "Invalid Dock shortcut order"
+            "Invalid dock shortcut order"
         );
         // Continue accepting sizes saved by earlier clients. Display and edits use the current
         // range.
@@ -312,7 +376,7 @@ impl Appearance {
             self.dock
                 .icon_size
                 .is_none_or(|size| (24..=Dock::MAX_ICON_SIZE).contains(&size)),
-            "Invalid Dock icon size"
+            "Invalid dock icon size"
         );
         ensure!(
             self.layout
@@ -320,9 +384,10 @@ impl Appearance {
                 .is_none_or(|size| (Layout::MIN_ICON_SIZE..=88).contains(&size)),
             "Invalid desktop icon size"
         );
-        if let Wallpaper::Remote(path) = &self.wallpaper {
+        if let Some(Wallpaper::Remote(path)) = &self.wallpaper {
             validate_image_path(path)?;
         }
+        self.overrides.validate()?;
         self.themes.validate()?;
         Ok(())
     }
@@ -393,10 +458,6 @@ fn format(path: &Path) -> Result<(&'static str, &'static str)> {
         .context("Supported wallpaper formats: PNG, JPEG, WebP, GIF, BMP, AVIF and SVG")
 }
 
-pub fn is_wallpaper(path: &str) -> bool {
-    format(Path::new(path)).is_ok()
-}
-
 pub(crate) fn validate_image_path(path: &str) -> Result<()> {
     ensure!(
         path.starts_with('/')
@@ -457,51 +518,5 @@ pub fn read_wallpaper(session: &RemoteSession, path: &str) -> Result<WallpaperIm
     let (extension, mime) = format(Path::new(&path))?;
     let bytes = session.read_bounded_file(&path, MAX_WALLPAPER)?;
     validate_image(extension, &bytes)?;
-    Ok(WallpaperImage { path, mime, bytes })
-}
-
-pub fn import_wallpaper(session: &RemoteSession, local: &Path) -> Result<WallpaperImage> {
-    let (extension, mime) = format(local)?;
-    let metadata = std::fs::symlink_metadata(local).context("Cannot inspect local wallpaper")?;
-    ensure!(
-        metadata.is_file() && metadata.len() <= MAX_WALLPAPER as u64,
-        "Wallpaper must be a regular image at most 8 MiB"
-    );
-    let file = std::fs::File::open(local).context("Cannot open local wallpaper")?;
-    let mut bytes = Vec::new();
-    file.take(MAX_WALLPAPER as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    validate_image(extension, &bytes)?;
-    let command = format!(
-        r#"# arcnix:desktop:wallpapers
-{DIRECTORY}
-umask 077
-if [ ! -d "$arcnix_dir" ]; then mkdir -m 700 -- "$arcnix_dir" || [ -d "$arcnix_dir" ]; fi
-wallpapers="$arcnix_dir/wallpapers"
-if [ ! -d "$wallpapers" ]; then mkdir -m 700 -- "$wallpapers" || [ -d "$wallpapers" ]; fi
-if [ -L "$arcnix_dir" ] || [ ! -O "$arcnix_dir" ] || [ -L "$wallpapers" ] || [ ! -O "$wallpapers" ]; then exit 1; fi
-printf '%s' "$wallpapers"
-"#
-    );
-    let output = execute(session, &command, 8192)?;
-    ensure!(
-        output.exit_code == 0,
-        "Cannot prepare ~/.arcnix/wallpapers: {}",
-        output.stderr.trim()
-    );
-    crate::terminal::validate_directory(&output.stdout)?;
-    let path = format!(
-        "{}/{:x}.{extension}",
-        output.stdout.trim_end_matches('/'),
-        Sha256::digest(&bytes)
-    );
-    validate_image_path(&path)?;
-    if let Err(error) = session.upload_new_bytes(&path, &bytes)
-        && !session
-            .read_bounded_file(&path, MAX_WALLPAPER)
-            .is_ok_and(|existing| existing == bytes)
-    {
-        return Err(error);
-    }
     Ok(WallpaperImage { path, mime, bytes })
 }

@@ -111,7 +111,7 @@ pub(crate) fn open(ui: &Ui, remote: bool) {
             ui.open_desktop_app(WorkspacePage::Files(0));
         }
         ui.state.revise(|s| {
-            s.workbench.files.trash = true;
+            s.workbench.files.location = files_tabs::Location::Trash;
             s.server_apps.files_tag = None;
             s.server_apps.files_open_pending = None;
             s.file_context = None;
@@ -192,7 +192,7 @@ pub(crate) fn location_tools(ui: Ui) -> impl Widget {
             .class("icon-button files-history-back")
             .on_press(move || {
                 state.revise(|s| {
-                    s.workbench.files.trash = false;
+                    s.workbench.files.location = files_tabs::Location::Directory;
                     s.trash[1].confirm = None;
                 })
             }),

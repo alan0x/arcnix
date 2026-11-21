@@ -143,11 +143,9 @@ def main():
         expect(monitor).to_have_class(re.compile(r'\bactive\b'))
         bounds = {app: page.locator(f'.desktop-window.app-{app}').bounding_box()
                   for app in ('files', 'monitor')}
-        show_desktop = page.locator('.desktop-dock-home')
-        show_desktop.click()
+        app.show_desktop()
         expect(windows).to_have_count(0)
-        expect(show_desktop).to_have_attribute('aria-pressed', 'true')
-        show_desktop.click()
+        app.show_desktop()
         expect(windows).to_have_count(2)
         expect(monitor).to_have_class(re.compile(r'\bactive\b'))
         expect(settings).to_be_hidden()

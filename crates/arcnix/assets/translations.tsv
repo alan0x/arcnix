@@ -552,7 +552,7 @@ Ctrl+C 中断 · Ctrl+Shift+C 复制 · Ctrl+Shift+V 粘贴	Ctrl+C interrupt · 
 一个活动连接	One active connection
 {} 个活动连接	{} active connections
 当前没有活动连接	No active connections
-你的工作空间	YOUR WORKSPACE
+你的工作空间	Your workspace
 服务器管理，轻松有序。	Your servers. Within reach.
 连接你的服务器，在一个工作台中管理文件、软件与系统状态。	Connect to your servers and manage files, software and system health in one workspace.
 浏览服务器	Browse servers
@@ -670,7 +670,7 @@ Shell 命令	Shell command
 删除已停止：{message}	Deletion stopped: {message}
 文件任务仍在处理当前请求，请稍后重试。	A file task is finishing its current request. Please try again shortly.
 名称始终显示。设置会自动保存到当前服务器。	Name is always visible. Changes are saved automatically for this server.
-恢复默认	Restore defaults
+重置	Reset
 完成	Done
 多个项目	Multiple items
 所有者 / 组	Owner / Group
@@ -2122,7 +2122,10 @@ SIGKILL 会立即结束此进程，未保存的数据可能丢失。此进程的
 切换最大化	Toggle maximize
 关闭应用	Close application
 显示桌面	Show desktop
-资源管理器	Files
+恢复窗口	Restore windows
+应用列表	Apps
+搜索应用	Search apps
+没有匹配的应用	No matching apps
 全屏桌面	Fullscreen desktop
 退出桌面全屏	Exit desktop fullscreen
 Docker	Docker
@@ -2133,7 +2136,7 @@ Docker	Docker
 已保存到服务器	Saved on server
 检测到 Docker	Docker detected
 未检测到 Docker	Docker not detected
-为当前 SSH 用户保存到 ~/.arcnix/desktop/。跟随应用使用客户端主题，其他服务器和用户各自保存设置。	Saved under ~/.arcnix/desktop/ for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings.
+为当前 SSH 用户保存到 ~/.arcnix/desktop/。选择自动配色会跟随客户端。其他服务器和用户各自保存设置。	Saved under ~/.arcnix/desktop/ for this SSH user. The Auto color scheme follows the client app. Other servers and users keep their own settings.
 容器	Containers
 卷	Volumes
 端口	Ports
@@ -2282,7 +2285,7 @@ Snap 权限模式	Snap confinement
 版本	Version
 应用中心	App Center
 发现	Discover
-服务器常用应用	SERVER ESSENTIALS
+服务器常用应用	Server essentials
 为服务器添加好用的工具	Build your server workspace
 Web 服务、数据库与日常运维工具。	Web services, databases and everyday tools.
 应用分类	Application categories
@@ -2312,7 +2315,7 @@ Web 与网络	Web & networking
 需要 Snap	Requires Snap
 暂无 Compose 模板	No Compose template
 需要 Docker Compose	Requires Docker Compose
-此 Snap 需要允许经典模式	This Snap requires classic confinement
+此 Snap 需要允许经典模式	This snap requires classic confinement
 Web 服务器与反向代理	Web server and reverse proxy
 静态网站 · 反向代理 · 负载均衡	Static websites · Reverse proxy · Load balancing
 支持自动 HTTPS 的 Web 服务器	Web server with automatic HTTPS
@@ -2349,7 +2352,7 @@ CPU · 内存 · 磁盘与网络	CPU · Memory · Disks and network
 SSH 防护 · 日志规则 · 临时封禁	SSH protection · Log rules · Temporary bans
 无需常驻守护进程的容器管理工具	Daemonless container management
 OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
-内置应用介绍可以离线浏览。安装使用服务器已启用的软件仓库，或所选发布者的 Snap／镜像；可用版本和包名因环境而异，系统包可能还需要初始化服务。不会自动添加第三方软件源。	Built-in application descriptions are available offline. Installation uses the server's enabled repositories or the selected publisher's Snap/image. Versions and package availability vary; package installation may require additional service initialization. No third-party repository is added automatically.
+内置应用介绍可以离线浏览。安装使用服务器已启用的软件仓库，或所选发布者的 Snap／镜像；可用版本和包名因环境而异，系统包可能还需要初始化服务。不会自动添加第三方软件源。	Built-in application descriptions are available offline. Installation uses the server's enabled repositories or the selected publisher's snap/image. Versions and package availability vary; package installation may require additional service initialization. No third-party repository is added automatically.
 系统软件包使用已启用的发行版仓库，包名与版本会有差异。Snap 和 Compose 属于独立安装，更新、服务和数据继续按原来源管理。	System packages use enabled distribution repositories; package names and versions differ. Snap and Compose are separate installations. Updates, services and data remain with their original source.
 主目录	Home
 后退	Back
@@ -2377,8 +2380,8 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 位置	Locations
 文件系统	Filesystem
 收藏文件夹	Favorite folders
-资源管理器侧栏	Files sidebar
-切换资源管理器侧栏	Toggle Files sidebar
+文件管理侧栏	Files sidebar
+切换文件管理侧栏	Toggle Files sidebar
 收藏当前文件夹	Add current folder to favorites
 取消收藏当前文件夹	Remove current folder from favorites
 打开收藏 {p}	Open favorite {p}
@@ -2396,17 +2399,17 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 灰色	Gray
 文档	Documents
 标签	Tags
-所有标签	All Tags
+所有标签	All tags
 暂无标记项目	No tagged items
 返回文件夹	Back to folder
 清除标签	Clear tag
 制作副本	Duplicate
-创建替身	Make Alias
+创建替身	Make alias
 打开替身	Open alias
 压缩	Compress
 文件操作已完成	File operation completed
-自定义文件夹…	Customize Folder…
-自定义文件夹	Customize Folder
+自定义文件夹…	Customize folder…
+自定义文件夹	Customize folder
 文件夹图标	Folder icon
 文件元数据	Files metadata
 清理失效条目	Clean up missing entries
@@ -2442,7 +2445,6 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 植物	Plant
 宠物	Pets
 购物	Shopping
-恢复默认图标	Restore default icon
 照片	Photos
 音乐	Music
 归档	Archive
@@ -2454,20 +2456,20 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 壁纸	Wallpaper
 程序坞	Dock
 显示服务器信息	Show server info
-重置桌面图标	Reset desktop icons
 隐藏桌面图标	Hide desktop shortcut
-保留在程序坞	Keep in Dock
-从程序坞移除	Remove from Dock
-固定的快捷方式	Pinned shortcuts
+保留在程序坞	Keep in dock
+从程序坞移除	Remove from dock
+应用图标	App icons
 显示窗口	Show window
 关闭窗口	Close window
-用作壁纸	Use as wallpaper
 刷新桌面	Refresh desktop
 打开桌面文件夹	Open Desktop folder
 程序坞设置	Dock settings
 关闭菜单	Close menu
 程序坞图标大小	Dock icon size
 程序坞样式	Dock style
+程序坞布局	Dock layout
+程序坞图标	Dock icons
 程序坞位置	Dock position
 左侧	Left side
 右侧	Right side
@@ -2475,7 +2477,7 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 程序坞行为	Dock behavior
 桌面布局	Desktop layout
 内置壁纸	Built-in wallpapers
-悬浮程序坞	Floating Dock
+悬浮程序坞	Floating dock
 面板模式	Panel mode
 应用图标对齐	App icon alignment
 靠左	Align left
@@ -2483,22 +2485,15 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 居中	Center icons
 本地时间	Local time
 服务器时间	Server time
-显示程序坞状态栏	Show Dock status bar
+显示程序坞状态栏	Show dock status bar
 小	Small
 中	Medium
 大	Large
-自动隐藏程序坞	Automatically hide Dock
-重置程序坞	Reset Dock
+自动隐藏程序坞	Automatically hide the dock
 极光	Aurora
 峡湾	Fjord
-赤陶	Terracotta
-自定义壁纸	Custom wallpaper
-服务器图片路径	Server image path
-本机图片路径	Local image path
+海滨	Seaside
 应用	Apply
-上传并应用	Upload & apply
-选择壁纸	Choose wallpaper
-正在加载壁纸…	Loading wallpaper…
 编辑器	Editor
 打开文件…	Open file…
 编辑源码	Edit source
@@ -2511,7 +2506,6 @@ Markdown 预览过大，可切换到源码查看。	Markdown preview is too larg
 要放弃所有已打开文件中的未保存修改吗？	Discard unsaved changes in all open files?
 监控分类	Monitor sections
 {} 个逻辑处理器	{} logical processors
-支持不超过 8 MiB 的 PNG、JPEG、WebP、GIF、BMP、AVIF 或 SVG。本机图片会上传到 ~/.arcnix/wallpapers。	PNG, JPEG, WebP, GIF, BMP, AVIF or SVG, up to 8 MiB. Local images are uploaded to ~/.arcnix/wallpapers.
 服务器桌面设置	Server desktop settings
 服务器桌面	Server desktop
 设置分类	Settings sections
@@ -2528,7 +2522,7 @@ Markdown 预览过大，可切换到源码查看。	Markdown preview is too larg
 服务日志需要当前账号能够读取 systemd journal。	Service logs require a readable systemd journal.
 服务器桌面的默认资源刷新间隔。	Default resource refresh interval for server desktops.
 此服务器默认沿用客户端的刷新间隔，也可在此单独设置。打开监控的资源页面时才会采样。	This server uses the application default until you select an interval here. Sampling runs while the resource views in Monitor are open.
-可在窗口标题栏或 Dock 使用桌面快捷键。终端保留自己的快捷键。切换到终端后，按 Enter 聚焦输入区。	Use desktop shortcuts from the window title bar or Dock. Terminal keeps its own shortcuts. After switching to Terminal, press Enter to focus its input.
+可在窗口标题栏或 Dock 使用桌面快捷键。终端保留自己的快捷键。切换到终端后，按 Enter 聚焦输入区。	Use desktop shortcuts from the window title bar or dock. Terminal keeps its own shortcuts. After switching to Terminal, press Enter to focus its input.
 桌面快捷键	Desktop shortcuts
 切换到下一个应用	Switch to next app
 切换到上一个应用	Switch to previous app
@@ -2536,7 +2530,6 @@ Markdown 预览过大，可切换到源码查看。	Markdown preview is too larg
 修改快捷键	Change shortcut
 修改快捷键：{label}	Change shortcut: {label}
 禁用快捷键：{label}	Disable shortcut: {label}
-恢复默认快捷键：{label}	Restore default: {label}
 焦点移到下一项	Move focus forward
 焦点移到上一项	Move focus backward
 切换到下一终端标签页	Next tab
@@ -2564,7 +2557,7 @@ Docker 显示发布和暴露的端口。使用主机网络的容器直接使用�
 已暂停	Paused
 拖到此处下载	Drop here to download
 处理文件冲突	Resolve file conflict
-浏览器	Web browser
+浏览器	Browser
 网页地址	Web address
 输入网页地址	Enter web address
 打开网页地址	Open web address
@@ -2610,6 +2603,11 @@ SSH 转发检查超时	The SSH forwarding check timed out
 配置 SSH 转发	Configure SSH forwarding
 允许 SSH 账号 {user} 转发到服务器可访问的任意主机和端口。Arcnix 会校验并重载 OpenSSH，然后重连浏览器。	Allow SSH account {user} to forward TCP connections to any host and port the server can reach. Arcnix will validate and reload OpenSSH, then reconnect the browser.
 root 或免密码 sudo 可留空。	Leave blank for root or passwordless sudo.
+需要管理员权限	Administrator permission required
+以管理员身份永久删除所选远程项目。	Permanently delete the selected remote items as administrator.
+以管理员身份保存此远程文件。	Save this remote file as administrator.
+以管理员身份重试	Retry as administrator
+正在以管理员身份删除…	Deleting as administrator…
 应用并重连	Apply and reconnect
 正在更新 SSH 转发配置…	Updating SSH forwarding…
 服务器拒绝了 TCP 转发。为当前 SSH 账号启用一次即可。	The server denied TCP forwarding. Enable it once for the current SSH account.
@@ -2619,12 +2617,12 @@ OpenSSH 配置已更新，但转发仍被拒绝。请检查 SSH 密钥或证书�
 OpenSSH 已允许转发到任意目标，请检查 authorized_keys、SSH 证书或服务器策略。	OpenSSH already allows forwarding to any destination. Check authorized_keys, SSH certificates, or server policy.
 更早的 SSH Match 规则覆盖了此改动，请管理员修改对应规则。	An earlier SSH Match rule overrides this change. Ask the administrator to update that rule.
 SSH 阻止了部分网页资源	SSH blocked some page resources
-用 Code 打开	Open in Code
-快速打开	Quick Open
-自定义布局	Customize Layout
-切换侧边栏	Toggle Side Bar
-切换面板	Toggle Panel
-切换辅助侧边栏	Toggle Secondary Side Bar
+用 Code Editor 打开	Open in Code Editor
+快速打开	Quick open
+自定义布局	Customize layout
+切换侧边栏	Toggle sidebar
+切换面板	Toggle panel
+切换辅助侧边栏	Toggle secondary sidebar
 播放	Play
 暂停播放	Pause playback
 播放位置	Playback position
@@ -2672,7 +2670,7 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 文件标签页	File tabs
 在新标签页中打开	Open in new tab
 在新窗口中打开	Open in new window
-新建窗口	New Window
+新建窗口	New window
 复制当前文件窗口	Duplicate current Files window
 打开文件窗口	Open a Files window
 图片	Pictures
@@ -2692,7 +2690,6 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 输入扩展名，例如 .html 或 .webm。	Enter an extension such as .html or .webm.
 请输入有效的文件扩展名。	Enter a valid file extension.
 询问使用哪个应用	Ask which app to use
-恢复推荐的默认应用	Restore suggested default
 搜索扩展名	Search extensions
 添加扩展名	Add extension
 没有匹配的扩展名。	No matching extensions.
@@ -2722,7 +2719,8 @@ Player 无法识别受支持的视频格式	Player could not identify a supporte
 从右到左	Right to left
 桌面图标	Desktop icons
 桌面图标大小	Desktop icon size
-显示的图标	Visible icons
+搜索设置	Search settings
+没有匹配的设置	No matching settings
 可从文件拖到桌面。Ctrl 复制，Shift 移动，Alt 或 Ctrl+Shift 创建快捷方式。	Drag from Files. Ctrl copies, Shift moves, and Alt or Ctrl+Shift creates a shortcut.
 状态栏	Status bar
 主题	Themes
@@ -2730,6 +2728,19 @@ Player 无法识别受支持的视频格式	Player could not identify a supporte
 创建主题	Create theme
 当前主题	Current theme
 配色方案	Color scheme
+自动	Auto
+图标	Icons
+图标系列	Icon family
+图标底板	Tile background
+线条图标	Line icons
+彩色图标	Color icons
+渐变	Gradient
+纯色	Solid color
+默认	Default
+样式	Style
+峡湾壁纸	Fjord wallpaper
+极光壁纸	Aurora wallpaper
+海滨壁纸	Seaside wallpaper
 壁纸选项	Wallpaper options
 请输入 #RRGGBB 格式的强调色。	Enter an accent color in #RRGGBB format.
 自定义主题	Customize theme
@@ -2761,8 +2772,8 @@ Player 无法识别受支持的视频格式	Player could not identify a supporte
 该主题名称已被使用。	This theme name is already in use.
 已达到主题保存数量上限。	The saved theme limit has been reached.
 壁纸预览	Wallpaper preview
-区域与语言	Region & Language
-日期与时间	Date & Time
+区域与语言	Region & language
+日期与时间	Date & time
 界面语言	Interface language
 桌面语言	Desktop language
 仅影响当前 Arcnix 桌面的界面语言。服务器的系统语言独立管理。	Changes the display language of this Arcnix desktop only. The server manages its system language separately.
@@ -2789,3 +2800,23 @@ Dock 时钟	Dock clock
 日期	Date
 秒数	Seconds
 在应用中心查看已安装的服务器软件包并审查升级。	Review upgrades for installed server packages in App Center.
+文件视图选项	File view options
+文件图标大小	File icon size
+排序依据	Sort by
+降序	Descending
+在桌面内使用 Windows 快捷键	Use Windows shortcuts on the desktop
+这个 Windows 快捷键已分配。	This Windows shortcut is already mapped.
+桌面处于前台时，按 Win+D 显示桌面，再按一次恢复窗口。Alt+F4 关闭当前窗口，Ctrl+F4 关闭当前标签页。Alt+Tab 和 Alt+Shift+Tab 切换应用，Win+E 打开文件，Win+↑ 和 Win+↓ 最大化或最小化窗口。更改某个操作的快捷键后，对应的 Windows 组合键将交还给系统。	When the desktop is active, Win+D shows the desktop. Press it again to restore windows. Alt+F4 closes the active window and Ctrl+F4 closes the active tab. Alt+Tab and Alt+Shift+Tab switch apps, Win+E opens Files, and Win+Up / Win+Down maximize or minimize a window. Changing an action’s shortcut also releases its Windows shortcut.
+快捷键方案	Shortcut scheme
+当前预设：Windows	Active preset: Windows
+当前预设：macOS	Active preset: macOS
+添加快捷键：{label}	Add shortcut: {label}
+移除快捷键	Remove shortcut
+此快捷键已更改。	This shortcut has changed.
+关闭当前标签页	Close active tab
+复制文件	Copy files
+粘贴文件	Paste files
+点击快捷键可修改，点击 + 可添加另一组按键。Esc 取消。当前方案的修改保存在服务器上。	Click a shortcut to change it, or + to add another. Esc cancels. Changes to this preset are saved on the server.
+行	Line
+列	Column
+纯文本	Plain text

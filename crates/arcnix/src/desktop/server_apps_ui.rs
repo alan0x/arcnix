@@ -40,10 +40,10 @@ pub(crate) struct DesktopState {
     pub files_search: files_search::Search,
     pub files_cleanup: files_ui::Cleanup,
     pub customization: desktop_customization_ui::Runtime,
-    pub theme_editor: desktop_appearance_ui::Editor,
     pub network: network_ui::Runtime,
     pub processes: processes_ui::Runtime,
     pub shortcut_error: String,
+    pub recording_shortcut: bool,
 }
 
 pub(crate) fn desktop_dark(s: &State) -> bool {
@@ -401,7 +401,7 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         return;
     }
     if desktop_customization_ui::pending(ui, serial) {
-        desktop_customization_ui::event(ui, serial, result);
+        desktop_customization_ui::event(ui, result);
         return;
     }
     if files_ui::cleanup_pending(ui, serial) {
@@ -445,7 +445,6 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
     let mut save_local_geometry = false;
     if kind == 2 {
         finish_desktop_sync(ui, result);
-        ui.load_desktop_wallpaper();
         return;
     }
     ui.state.revise(|s| match (kind, result) {
@@ -540,9 +539,6 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
     if kind <= 1 {
         ui.terminal_enter();
     }
-    if matches!(kind, 1 | 2) {
-        ui.load_desktop_wallpaper();
-    }
     if save_local_geometry {
         ui.remember_desktop_layout();
     }
@@ -624,9 +620,7 @@ pub(crate) fn settings(ui: Ui) -> impl Widget {
                     SettingsPage::DefaultApps => fragment(
                         col().class("desktop-settings-pane").fill(
                             col().class("desktop-settings-card").fill((
-                                text()
-                                    .class("section-title")
-                                    .content(i18n::bind("Default apps")),
+                                settings::section_heading("Default apps", true, file_open::reset_settings(&ui, true)),
                                 text().class("subtle").content(i18n::bind(
                                     "Manage default and alternative apps for remote file extensions.",
                                 )),
@@ -638,17 +632,7 @@ pub(crate) fn settings(ui: Ui) -> impl Widget {
                         ),
                     ),
                     SettingsPage::Desktop => fragment(desktop_settings(ui.clone())),
-                    SettingsPage::Dock => fragment(
-                        col()
-                            .class("desktop-settings-pane")
-                            .fill((
-                                desktop_customization_ui::dock_controls(ui.clone()),
-                                when(state.map(desktop_system_settings::side_dock), {
-                                    let clock = ui.clone();
-                                    move || desktop_system_settings::dock_clock_settings(clock.clone())
-                                }),
-                            )),
-                    ),
+                    SettingsPage::Dock => fragment(desktop_customization_ui::dock_settings(ui.clone())),
                     SettingsPage::Appearance => fragment(desktop_appearance_ui::controls(ui.clone())),
                     SettingsPage::Region => fragment(desktop_system_settings::region(ui.clone())),
                     SettingsPage::DateTime => fragment(desktop_system_settings::date_time(ui.clone())),
@@ -734,9 +718,9 @@ fn general_settings(ui: Ui) -> impl Widget {
     let detect = ui.clone();
     col().class("desktop-settings-pane").fill((
       col().class("desktop-settings-card").fill((
-        row().class("section-heading").fill((
-            text().class("section-title").content(i18n::bind("Resource refresh interval")),
+        settings::section_heading("Resource refresh interval", true, (
             help_ui::tip("Resource refresh interval", "This server uses the application default until you select an interval here. Sampling runs while the resource views in Monitor are open."),
+            settings::desktop_reset(&ui, |prefs| prefs.resource_interval_seconds = None),
         )),
         row()
           .class("choice-list resource-interval-options")
@@ -764,7 +748,7 @@ fn general_settings(ui: Ui) -> impl Widget {
       col().class("desktop-settings-card").fill((
         row().class("section-heading").fill((
             text().class("section-title").content(i18n::bind("Server desktop")),
-            help_ui::tip("Server desktop settings", "Saved under ~/.arcnix/desktop/ for this SSH user. Follow application uses the client theme. Other servers and users keep their own settings."),
+            help_ui::tip("Server desktop settings", "Saved under ~/.arcnix/desktop/ for this SSH user. The Auto color scheme follows the client app. Other servers and users keep their own settings."),
         )),
         row().class("choice-list").fill((
             text_action("Reload settings", Icon::Refresh)

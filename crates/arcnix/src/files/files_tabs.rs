@@ -31,13 +31,21 @@ struct TabDrag {
     epoch: u64,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Location {
+    #[default]
+    Directory,
+    Trash,
+    Apps,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Windows {
     windows: BTreeMap<u32, Window>,
     live: Option<u32>,
     next_id: u32,
     drag: Option<TabDrag>,
-    pub trash: bool,
+    pub location: Location,
     pub clipboard: Vec<String>,
     refreshes: BTreeMap<u64, String>,
 }
@@ -123,12 +131,16 @@ pub(crate) fn remove(s: &mut State, id: u32) {
     s.workbench.files.windows.remove(&id);
     if s.workbench.files.live == Some(id) {
         s.workbench.files.live = None;
-        s.workbench.files.trash = false;
+        s.workbench.files.location = Location::Directory;
     }
 }
 
 pub(crate) fn trash_active(s: &State) -> bool {
-    s.workspace_page.is_files() && s.workbench.files.trash
+    s.workspace_page.is_files() && s.workbench.files.location == Location::Trash
+}
+
+pub(crate) fn apps_active(s: &State) -> bool {
+    s.workspace_page.is_files() && s.workbench.files.location == Location::Apps
 }
 
 fn snapshot(s: &State, id: u32) -> Option<&file_browser::TabSnapshot> {
@@ -142,10 +154,45 @@ fn snapshot(s: &State, id: u32) -> Option<&file_browser::TabSnapshot> {
 }
 
 pub(crate) fn showing_trash(s: &State, id: u32) -> bool {
+    location(s, id) == Location::Trash
+}
+
+pub(crate) fn showing_apps(s: &State, id: u32) -> bool {
+    location(s, id) == Location::Apps
+}
+
+fn location(s: &State, id: u32) -> Location {
     if s.workbench.files.is_live(id) {
-        s.workbench.files.trash
+        s.workbench.files.location
     } else {
-        snapshot(s, id).is_some_and(file_browser::TabSnapshot::trash)
+        snapshot(s, id).map_or_default(file_browser::TabSnapshot::view)
+    }
+}
+
+pub(crate) fn open_apps(ui: &Ui) {
+    ui.state.revise(|s| {
+        if !available(s) || !s.workspace_page.is_files() {
+            return;
+        }
+        s.workbench.files.location = Location::Apps;
+        s.server_apps.files_tag = None;
+        s.server_apps.files_open_pending = None;
+        s.file_context = None;
+        s.file_menu = None;
+        file_browser::clear_selection(s, true);
+    });
+}
+
+pub(crate) fn leave_apps(ui: &Ui) {
+    let left = ui.state.revise(|s| {
+        if !apps_active(s) {
+            return false;
+        }
+        s.workbench.files.location = Location::Directory;
+        true
+    });
+    if left {
+        after_change(ui);
     }
 }
 
@@ -159,8 +206,10 @@ pub(crate) fn showing_tag(s: &State, id: u32) -> Option<files_ui::TagFilter> {
 
 pub(crate) fn directory(s: &State, id: u32) -> Option<&str> {
     if s.workbench.files.live == Some(id) {
-        (s.remote_ready && !s.workbench.files.trash && s.server_apps.files_tag.is_none())
-            .then_some(s.remote_path.as_str())
+        (s.remote_ready
+            && s.workbench.files.location == Location::Directory
+            && s.server_apps.files_tag.is_none())
+        .then_some(s.remote_path.as_str())
     } else {
         snapshot(s, id)?.directory()
     }
@@ -185,6 +234,9 @@ pub(crate) fn dragged_entries(
     id: u32,
     path: &str,
 ) -> Vec<arcnix_core::deletion::Target> {
+    if showing_apps(s, id) {
+        return Vec::new();
+    }
     if !s.workbench.files.is_live(id) {
         return snapshot(s, id)
             .map(|tab| tab.dragged_entries(path))
@@ -290,7 +342,7 @@ pub(crate) fn new_window(ui: &Ui, start: WindowStart) {
             s.remote_path = path;
             s.remote.clear();
             s.server_apps.files_tag = None;
-            s.workbench.files.trash = false;
+            s.workbench.files.location = Location::Directory;
         }
         true
     });
@@ -308,7 +360,7 @@ fn after_change(ui: &Ui) {
         trash_ui::enter(ui);
     } else if ui
         .state
-        .with(|s| s.workspace_page.is_files() && !s.remote_ready)
+        .with(|s| s.workspace_page.is_files() && !apps_active(s) && !s.remote_ready)
     {
         ui.refresh(true);
     }
@@ -372,6 +424,15 @@ fn select(ui: &Ui, window: u32, tab: u32) {
     after_change(ui);
 }
 
+pub(crate) fn close_selected(ui: &Ui, id: u32) {
+    if let Some(tab) = ui
+        .state
+        .with(|s| s.workbench.files.windows.get(&id).map(|w| w.selected))
+    {
+        close(ui, id, tab);
+    }
+}
+
 fn close(ui: &Ui, id: u32, tab: u32) {
     if !ui.state.with(available) {
         return;
@@ -408,6 +469,7 @@ enum Gesture {
     New { window: u32 },
     Close { window: u32, tab: u32 },
     ToggleHidden { window: u32 },
+    Zoom { window: u32, tab: u32, larger: bool },
 }
 
 fn move_tab(ui: &Ui, source: u32, tab: u32, target: Option<u32>, before: Option<u32>) {
@@ -585,6 +647,29 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
                 match gesture {
                     Gesture::New { window } => new_tab(&ui, window),
                     Gesture::Close { window, tab } => close(&ui, window, tab),
+                    Gesture::Zoom {
+                        window,
+                        tab,
+                        larger,
+                    } => {
+                        let page = WorkspacePage::Files(window);
+                        if ui.state.with(|s| {
+                            available(s)
+                                && s.workbench.window_visible(page)
+                                && s.workbench
+                                    .files
+                                    .windows
+                                    .get(&window)
+                                    .is_some_and(|w| w.selected == tab)
+                                && directory(s, window).is_some()
+                                && s.file_menu.is_none()
+                        }) {
+                            if ui.state.with(|s| s.workspace_page != page) {
+                                ui.focus_desktop_app(page);
+                            }
+                            ui.state.revise(|s| files_view::step(s, larger));
+                        }
+                    }
                     Gesture::ToggleHidden { window } => {
                         if let Some(show) = ui.state.with(|s| {
                             (server_desktop::visible(s)
@@ -761,7 +846,13 @@ pub(crate) fn preview_header(state: Cage<State>, id: u32) -> impl Widget {
 }
 
 pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
-    col().class("files-inactive-preview").fill(
+    col().class(state.map(move |s| {
+        if snapshot(s, id).is_some_and(|tab| tab.icons) { "files-inactive-preview icons-view" }
+        else { "files-inactive-preview" }.to_owned()
+    })).fill((
+        text().class("files-icon-pixels hidden").content(state.map(move |s| {
+            snapshot(s, id).map(|tab| tab.icon_size.pixels().to_string()).unwrap_or_default()
+        })),
         each(state.map(move |s| {
             snapshot(s, id)
                 .map(|tab| tab.preview_entries(s.config.settings.show_hidden_files))
@@ -790,16 +881,16 @@ pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
                                 if !file.is_symlink
                                     && let Some(class) = files_ui::folder_icon_class(s, &file.path)
                                 {
-                                    return format!("action-glyph folder-custom-mark {class}");
+                                    return format!("action-glyph file-entry-icon folder-custom-mark {class}");
                                 }
-                                "action-glyph glyph-folder".to_owned()
+                                "action-glyph file-entry-icon glyph-folder".to_owned()
                             } else {
-                                "action-glyph glyph-file".to_owned()
+                                "action-glyph file-entry-icon glyph-file".to_owned()
                             }
                         }))
                         .content(""),
-                    text().content(value.map(|file| file.name.clone())),
+                    text().class("file-label").content(value.map(|file| file.name.clone())),
                 ))
         }),
-    )
+    ))
 }

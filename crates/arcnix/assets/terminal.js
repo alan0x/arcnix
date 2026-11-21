@@ -114,7 +114,7 @@
                 else term.input('\x03');
                 return false;
             }
-            if (arcnixKeys.matches(event, 'terminal_paste', 'Ctrl+Shift+V')) {
+            if (matchesPaste(event)) {
                 event.preventDefault(); emit({kind:'paste', id}); return false;
             }
             return true;
@@ -149,6 +149,18 @@
     }
     function copy() {
         if(engine?.term.hasSelection()) emit({kind:"copy",id:engine.id,text:engine.term.getSelection()});
+    }
+    function matchesPaste(event) {
+        if (navigator.platform === 'Win32' && window.arcnixChordMatches(event, 'Ctrl+V')) {
+            const layout = arcnixKeys.state();
+            const bindings = layout?.bindings;
+            // The Windows alias follows the default. Explicit terminal bindings take priority.
+            if (!bindings || (layout.preset === 'windows' && bindings.terminal_paste[0] === 'Ctrl+Shift+V'
+                && !Object.entries(bindings).some(([id, key]) => id.startsWith('terminal_') && key.includes('Ctrl+V')))) {
+                return true;
+            }
+        }
+        return arcnixKeys.matches(event, 'terminal_paste', 'Ctrl+Shift+V');
     }
     function terminalModule(target) {
         const module=target instanceof Element ? (target.closest('.terminal-module') || (target.closest('.terminal-controls') ? document.querySelector('.terminal-module:not(.hidden)') : null)) : null;
@@ -230,7 +242,7 @@
         const menu=event.target.closest('.terminal-context-menu');
         if(!menu && !terminalModule(event.target))return false;
         const copyKey = arcnixKeys.matches(event, 'terminal_copy', 'Ctrl+Shift+C');
-        const pasteKey = arcnixKeys.matches(event, 'terminal_paste', 'Ctrl+Shift+V');
+        const pasteKey = matchesPaste(event);
         const newTab = arcnixKeys.matches(event, 'terminal_new_tab', 'Ctrl+Shift+T');
         const closeTab = arcnixKeys.matches(event, 'terminal_close_tab', 'Ctrl+Shift+W');
         const context = event.key === 'ContextMenu' || arcnixKeys.matches(event, 'terminal_context', 'Shift+F10');

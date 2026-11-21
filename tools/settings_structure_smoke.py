@@ -14,7 +14,7 @@ def main():
             expected={
                 'General':['Language','Theme','Configuration backup'],
                 'Connection':['Timeout and keepalive'],
-                'Files':['Hidden files','File sizes','Dates and times'],
+                'Files':['Hidden files','File sizes','Dates and times','Default apps'],
                 'Transfers':['Concurrent transfers','Existing files'], 'Monitoring':['Resource refresh interval'],
                 'Logging':['Operation log','Log files'], 'Updates':['Updates'], 'About':['Application'],
             }
@@ -60,6 +60,11 @@ def main():
             sizes=page.locator('.settings-section').filter(has=page.get_by_text('File sizes',exact=True))
             expect(sizes.get_by_role('button',name='2',exact=True)).to_be_disabled()
             expect(sizes.locator('.preference-preview')).to_contain_text('Preview:')
+            dates=page.locator('.settings-section').filter(has=page.get_by_text('Dates and times',exact=True))
+            dates.get_by_role('button', name='ISO 8601', exact=True).click()
+            sizes.locator('.settings-card-heading').get_by_role('button', name='Reset', exact=True).click()
+            eventually(lambda: json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['display']['units']=='Iec')
+            assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['display']['dates']=='Iso'
             app.screenshot('files-light.png')
             app.settings('General'); page.get_by_role('button',name='Dark',exact=True).click()
             app.settings('Logging'); app.screenshot('logging-dark.png')

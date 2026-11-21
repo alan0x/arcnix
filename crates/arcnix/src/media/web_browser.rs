@@ -172,7 +172,7 @@ impl Browser {
         }
     }
 
-    fn close_tab(&mut self, id: u64) {
+    pub(crate) fn close_tab(&mut self, id: u64) {
         let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
             return;
         };

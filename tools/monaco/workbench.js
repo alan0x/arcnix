@@ -254,7 +254,7 @@ class PreviewPane extends SimpleEditorPane {
     };
   }
 }
-registerEditorPane(previewId, 'Markdown Preview', PreviewPane, [PreviewInput]);
+registerEditorPane(previewId, 'Markdown preview', PreviewPane, [PreviewInput]);
 const isMarkdown = ContextKeyExpr.and(
   ContextKeyExpr.regex('resourceFilename', /\.(md|markdown|mdown|mkdn?)$/i),
   ContextKeyExpr.notEquals('activeEditor', previewId),
@@ -267,7 +267,7 @@ registerAction2(
         id: previewId,
         title: zh
           ? 'Markdown: 打开侧边预览'
-          : 'Markdown: Open Preview to the Side',
+          : 'Markdown: Open preview to the side',
         icon: Codicon.openPreview,
         f1: true,
         precondition: isMarkdown,
@@ -395,17 +395,19 @@ const textFiles = await getService(ITextFileService);
 const saveCommand = 'workbench.action.files.save';
 const keybindings = await getService(IKeybindingService);
 const saveShortcutChanged = new Emitter();
+const nativeSave = /Mac/.test(navigator.platform) ? 'Meta+S' : 'Ctrl+S';
 keybindings.registerKeybindingProvider({
   onDidChangeKeybindings: saveShortcutChanged.event,
   provideKeybindings: () => {
-    const binding = window.arcnixWorkspace.saveShortcut;
-    if (binding === 'Ctrl+S') return [];
-    const layout = binding?.toLowerCase().replace(/arrow(up|down|left|right)/, '$1');
-    const custom = layout ? keybindings.resolveUserBinding(layout) : [];
-    return [
-      new ResolvedKeybindingItem(undefined, '-' + saveCommand, undefined, undefined, false, null, false),
-      ...custom.map((key) => new ResolvedKeybindingItem(key, saveCommand, undefined, undefined, false, null, false)),
-    ];
+    const bindings = window.arcnixWorkspace.saveShortcut;
+    const custom = bindings.filter((binding) => binding !== nativeSave).flatMap((binding) => {
+      const layout = binding.toLowerCase().replace('meta+', 'cmd+').replace(/arrow(up|down|left|right)/, '$1');
+      return keybindings.resolveUserBinding(layout);
+    });
+    const items = custom.map((key) => new ResolvedKeybindingItem(key, saveCommand, undefined, undefined, false, null, false));
+    if (!bindings.includes(nativeSave))
+      items.unshift(new ResolvedKeybindingItem(undefined, '-' + saveCommand, undefined, undefined, false, null, false));
+    return items;
   },
 });
 window.arcnixSetSaveShortcut = (binding) => {
@@ -432,7 +434,7 @@ document.addEventListener(
     if (event.target.closest?.('.terminal-wrapper, .xterm')) return;
     const save = window.arcnixChordMatches(event, window.arcnixWorkspace.saveShortcut);
     // Suppress the bundled workbench's original binding after remapping it.
-    if (!save && !window.arcnixChordMatches(event, 'Ctrl+S')) return;
+    if (!save && !window.arcnixChordMatches(event, nativeSave)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!save || event.repeat) return;

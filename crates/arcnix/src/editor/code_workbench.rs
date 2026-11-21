@@ -3,6 +3,7 @@ use arcnix_core::remote::RemoteSession;
 use arcnix_core::text_files::{Document, Version};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::result::Result;
 
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, icon_action};
@@ -16,7 +17,7 @@ pub(crate) struct Runtime {
     pub root: String,
     pub terminals: crate::code_terminal::Sessions,
     pub commands: Vec<&'static str>,
-    pub pending: std::collections::BTreeMap<u64, u64>,
+    pub pending: std::collections::BTreeMap<u64, Pending>,
     pub background: std::collections::BTreeMap<u64, u64>,
     pub replies: Vec<Value>,
     pub dirty: bool,
@@ -69,13 +70,29 @@ pub enum FileRequest {
     Image {
         path: String,
     },
-    Write {
-        path: String,
-        version: Version,
-        bom: bool,
-        crlf: bool,
-        content: String,
-    },
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Write {
+    path: String,
+    version: Version,
+    bom: bool,
+    crlf: bool,
+    content: String,
+    #[serde(skip)]
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Write {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum Pending {
+    File(u64),
+    Save { id: u64, write: Arc<Write> },
 }
 
 fn page_snapshot(
@@ -195,41 +212,62 @@ impl FileRequest {
                 remote.close_search_reader(cursor);
                 Ok(Value::Null)
             }
-            Self::Write {
-                path,
-                version,
-                bom,
-                crlf,
-                content,
-            } => {
-                let baseline = Document {
-                    path,
-                    content: String::new(),
-                    version,
-                    bom,
-                    crlf,
-                };
-                let saved = remote.save_text(&baseline, &content, check)?;
-                Ok(json!(saved.version))
-            }
         }
     }
 }
 
-pub(crate) fn reply(ui: &Ui, serial: u64, result: std::result::Result<Value, String>) {
-    ui.state.revise(|s| {
-        if let Some(id) = s
-            .code
-            .pending
-            .remove(&serial)
-            .or_else(|| s.code.background.remove(&serial))
-        {
-            s.code.replies.push(match result {
-                Ok(value) => json!({"id":id,"value":value}),
-                Err(error) => json!({"id":id,"error":error}),
-            });
-        }
+pub(crate) fn save(ui: &Ui, id: u64, write: Arc<Write>, sudo: Option<zeroize::Zeroizing<String>>) {
+    let serial = ui.send(Action::TextSave {
+        document: Document {
+            path: write.path.clone(),
+            version: write.version.clone(),
+            bom: write.bom,
+            crlf: write.crlf,
+            content: String::new(),
+        },
+        content: write.content.clone(),
+        cancel: write.cancel.clone(),
+        sudo,
     });
+    ui.state
+        .revise(|s| s.code.pending.insert(serial, Pending::Save { id, write }));
+}
+
+pub(crate) fn retry_save(ui: &Ui, serial: u64, password: zeroize::Zeroizing<String>) {
+    if let Some(Pending::Save { id, write }) = ui.state.revise(|s| s.code.pending.remove(&serial)) {
+        save(ui, id, write, Some(password));
+    }
+}
+
+pub(crate) fn saved(s: &mut State, serial: u64, result: Result<Document, worker::FileFailure>) {
+    if result.as_ref().is_err_and(|error| error.permission_denied)
+        && available(s)
+        && let Some(Pending::Save { write, .. }) = s.code.pending.get(&serial)
+    {
+        file_elevation::show(
+            s,
+            file_elevation::Retry::CodeSave(serial, write.path.clone()),
+        );
+    } else {
+        reply(
+            s,
+            serial,
+            result.map(|d| json!(d.version)).map_err(|e| e.message),
+        );
+    }
+}
+
+pub(crate) fn reply(s: &mut State, serial: u64, result: Result<Value, String>) {
+    let id = match s.code.pending.remove(&serial) {
+        Some(Pending::File(id) | Pending::Save { id, .. }) => Some(id),
+        None => s.code.background.remove(&serial),
+    };
+    if let Some(id) = id {
+        s.code.replies.push(match result {
+            Ok(value) => json!({"id":id,"value":value}),
+            Err(error) => json!({"id":id,"error":error}),
+        });
+    }
 }
 pub(crate) fn available(s: &State) -> bool {
     s.connected && s.sftp_available && s.dialog.is_none() && !s.system_task_running
@@ -266,23 +304,23 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
             .class("icon-button")
             .on_press(command("workbench.action.navigateForward")),
         sapid::button()
-            .name(i18n::bind("Quick Open"))
+            .name(i18n::bind("Quick open"))
             .class("code-quick-open")
             .fill((
                 icons::glyph(Icon::Search),
                 text().content(state.map(|s| s.code.folder.clone())),
             ))
             .on_press(command("workbench.action.quickOpen")),
-        icon_action("Customize Layout", Icon::Grid)
+        icon_action("Customize layout", Icon::Grid)
             .class("icon-button code-layout")
             .on_press(command("workbench.action.customizeLayout")),
-        icon_action("Toggle Side Bar", Icon::Sidebar)
+        icon_action("Toggle sidebar", Icon::Sidebar)
             .class("icon-button")
             .on_press(command("workbench.action.toggleSidebarVisibility")),
-        icon_action("Toggle Panel", Icon::Sidebar)
+        icon_action("Toggle panel", Icon::Sidebar)
             .class("icon-button code-panel")
             .on_press(command("workbench.action.togglePanel")),
-        icon_action("Toggle Secondary Side Bar", Icon::Sidebar)
+        icon_action("Toggle secondary sidebar", Icon::Sidebar)
             .class("icon-button code-secondary")
             .on_press(command("workbench.action.toggleAuxiliaryBar")),
     ))

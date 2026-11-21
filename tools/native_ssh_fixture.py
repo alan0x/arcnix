@@ -9,7 +9,7 @@ import base64,hashlib,json,os,re,shlex,socket,subprocess,sys,time,uuid
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'artifacts/python'))
 DISTRIBUTION=os.environ.get('ARCNIX_TEST_SYSTEMD_DISTRIBUTION','Ubuntu')
-TOOLS='/mnt/d/Works/arcnix/artifacts/ssh-native-tools/extracted'
+TOOLS=f'/mnt/{ROOT.drive[0].lower()}/{ROOT.relative_to(ROOT.anchor).as_posix()}/artifacts/ssh-native-tools/extracted'
 AUTH=['/etc/passwd','/etc/group','/etc/shadow','/etc/sudoers']
 
 def q(value):return shlex.quote(str(value))

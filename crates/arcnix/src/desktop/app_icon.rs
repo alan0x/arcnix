@@ -4,7 +4,6 @@ use std::task::Waker;
 
 use glory::wry::shell::{Fullscreen, NativeLifecycle, NativeWindow, ShellError};
 
-use crate::desktop_customization_ui::wallpaper_assets;
 use crate::{Ui, WorkspacePage, code_native};
 
 pub(crate) struct DesktopWindow {
@@ -19,6 +18,8 @@ pub(crate) struct DesktopWindow {
     video: crate::mpv_native::Host,
     #[cfg(windows)]
     exiting: bool,
+    #[cfg(windows)]
+    shortcuts: super::windows_shortcuts::Capture,
 }
 
 impl DesktopWindow {
@@ -35,6 +36,8 @@ impl DesktopWindow {
             browsers: HashMap::new(),
             #[cfg(windows)]
             exiting: false,
+            #[cfg(windows)]
+            shortcuts: Default::default(),
         }
     }
 }
@@ -43,7 +46,6 @@ impl NativeLifecycle for DesktopWindow {
     fn poll(&mut self, window: &NativeWindow) -> Result<bool, ShellError> {
         let state = self.ui.state;
         let fullscreen = state.with(crate::server_desktop::fullscreen);
-        self.ui.wallpapers.show(state.with(wallpaper_assets));
         self.ui.player.sync_surface(&self.ui);
         if self.fullscreen != fullscreen {
             window.set_fullscreen(
@@ -87,6 +89,7 @@ impl NativeLifecycle for DesktopWindow {
         }
         #[cfg(windows)]
         {
+            self.shortcuts.poll(&self.ui, window, self.wake.as_ref());
             self.video.poll(window);
             if self.exiting {
                 return Ok(self
@@ -124,7 +127,6 @@ impl NativeLifecycle for DesktopWindow {
     }
 
     fn closed(&mut self, _window: &NativeWindow) {
-        self.ui.wallpapers.show(Vec::new());
         #[cfg(windows)]
         for browser in self.browsers.values_mut() {
             browser.close();
@@ -144,6 +146,9 @@ impl NativeLifecycle for DesktopWindow {
     #[cfg(windows)]
     fn opened(&mut self, window: &NativeWindow, wake: &std::task::Waker) -> Result<(), ShellError> {
         self.wake = Some(wake.clone());
+        if let Err(error) = super::windows_shortcuts::use_window_keyboard_input() {
+            self.ui.log(format!("Windows shortcut setup: {error}"));
+        }
         use glory::wry::shell::NativeWindowExtWindows;
         use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;

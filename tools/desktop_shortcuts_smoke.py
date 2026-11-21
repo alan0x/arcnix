@@ -11,7 +11,8 @@ def main():
     out = ROOT / 'artifacts' / 'desktop-shortcuts' / f'run-{time.time_ns()}'
     out.mkdir(parents=True)
     with Peer(out / 'peer') as peer, Desktop(
-        out / 'desktop', peer.config([peer.profile('Shortcut test')], out),
+        out / 'desktop', peer.config([peer.profile('Shortcut test')], out,
+                                     file_associations={'txt': {'default': 'code'}}),
     ) as app:
         (peer.root / '.shortcut-example').touch()
         (peer.root / 'shortcut-test.txt').write_text('initial', encoding='utf-8')
@@ -21,7 +22,7 @@ def main():
         preferences = peer.root / 'home/arcnix/.arcnix/desktop.json'
 
         def bindings():
-            return read_desktop_settings(preferences).get('shortcuts', {})
+            return read_desktop_settings(preferences).get('shortcuts', {}).get('windows', {}).get('overrides', {})
 
         def settings():
             app.application('Settings')
@@ -30,8 +31,8 @@ def main():
             ).click()
             return page.locator('.desktop-custom-keys')
 
-        def record(action, chord):
-            button = page.get_by_role('button', name=f'Change shortcut: {action}', exact=True)
+        def record(action, chord, operation='Change'):
+            button = page.get_by_role('button', name=f'{operation} shortcut: {action}', exact=True)
             button.click()
             expect(button).to_have_attribute('aria-pressed', 'true')
             page.keyboard.press(chord)
@@ -75,6 +76,13 @@ def main():
 
         panel = settings()
         tabs = page.locator('.desktop-settings-tabs')
+        capture = panel.get_by_role('checkbox', name='Use Windows shortcuts on the desktop')
+        if capture.count():
+            expect(capture).to_be_checked()
+            capture.click()
+            eventually(lambda: not json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['capture_desktop_shortcuts'])
+            capture.click()
+            expect(capture).to_be_checked()
         expect(tabs.get_by_role('button').last).to_have_text('About')
         tabs.get_by_role('button', name='About', exact=True).click()
         about = page.locator('.desktop-settings-page .about-details')
@@ -142,6 +150,10 @@ def main():
         page.keyboard.press('Control+l')
         expect(exit_fullscreen).to_have_count(0)
 
+        def reset_group(panel, name):
+            group = panel.locator('.desktop-shortcut-group').filter(has=page.get_by_text(name, exact=True))
+            return group.locator('.settings-card-heading').get_by_role('button', name='Reset', exact=True)
+
         app.stop()
         app.launch()
         page = app.page
@@ -155,20 +167,20 @@ def main():
         )).to_contain_text('Unassigned')
         page.keyboard.press('Control+l')
         expect(exit_fullscreen).to_be_visible()
-        panel.get_by_role('button', name='Restore defaults', exact=True).click()
+        reset_group(panel, 'Desktop').click()
         eventually(lambda: not bindings())
         page.keyboard.press('Control+Shift+F')
         expect(exit_fullscreen).to_have_count(0)
         expect(page.get_by_text('Saved on server', exact=True)).to_have_count(0)
         focus = record('Move focus forward', 'Control+Alt+j')
         shortcut_state = page.locator('.desktop-shortcut-state')
-        eventually(lambda: json.loads(shortcut_state.text_content())['bindings']['focus_next'] == 'Ctrl+Alt+J')
+        eventually(lambda: json.loads(shortcut_state.text_content())['bindings']['focus_next'] == ['Ctrl+Alt+J'])
         expect(focus).to_be_focused()
         page.keyboard.press('Tab')
         expect(focus).to_be_focused()
         page.keyboard.press('Control+Alt+j')
         expect(focus).not_to_be_focused()
-        panel.get_by_role('button', name='Restore default: Move focus forward', exact=True).click()
+        reset_group(panel, 'Desktop').click()
         record('Minimize window', 'Meta+l')
         expect(panel.locator('.desktop-shortcut-error')).to_have_text('This shortcut is reserved by Windows.')
         record('Open tab', 'Control+Shift+w')
@@ -183,10 +195,10 @@ def main():
         page.keyboard.press('Control+Shift+y')
         expect(terminal_tabs).to_have_count(count + 1)
         panel = settings()
-        panel.get_by_role('button', name='Restore default: Open tab', exact=True).click()
+        reset_group(panel, 'Terminal').click()
         eventually(lambda: 'terminal_new_tab' not in bindings())
         expect(panel.get_by_role('button', name='Change shortcut: Open tab')).to_contain_text('Ctrl+Shift+T')
-        expect(panel.get_by_role('button', name='Restore default: Open tab', exact=True)).to_have_count(0)
+        expect(reset_group(panel, 'Terminal')).to_be_disabled()
         record('Toggle hidden files', 'Control+Shift+h')
         eventually(lambda: bindings().get('files_hidden') == 'Ctrl+Shift+H')
         app.application('Files')
@@ -208,8 +220,68 @@ def main():
         editor.press('Control+Alt+s')
         eventually(lambda: (peer.root / 'shortcut-test.txt').read_text(encoding='utf-8') == 'saved using a remapped shortcut\n')
         record_button = settings()
-        record_button.get_by_role('button', name='Restore defaults', exact=True).click()
+        reset_group(record_button, 'Code Editor').click()
+        eventually(lambda: 'code_save' not in bindings())
+        assert bindings().get('files_hidden') == 'Ctrl+Shift+H'
+        reset_group(record_button, 'Files').click()
         eventually(lambda: not bindings())
+        panel = settings()
+        auto = panel.get_by_role('button', name='Auto', exact=True)
+        mac = panel.get_by_role('button', name='macOS', exact=True)
+        windows = panel.get_by_role('button', name='Windows', exact=True)
+        save = panel.get_by_role('button', name='Change shortcut: Save', exact=True)
+        expect(auto).to_have_attribute('aria-pressed', 'true')
+        expect(save).to_contain_text('Ctrl+S')
+        windows.click()
+        record('Toggle desktop fullscreen', 'F7', 'Add')
+        mac.click()
+        expect(save).to_contain_text('Cmd+S')
+        expect(panel.get_by_text('F7', exact=True)).to_have_count(0)
+        record('Toggle desktop fullscreen', 'F8', 'Add')
+        record('Toggle desktop fullscreen (F8)', 'F9')
+        record('Save', 'Control+Alt+m')
+        record('Save', 'F6', 'Add')
+        app.application('Code Editor')
+        area = app.replace_code('saved with a macOS secondary binding')
+        area.press('F6')
+        eventually(lambda: (peer.root / 'shortcut-test.txt').read_text() == 'saved with a macOS secondary binding')
+        panel = settings()
+        layout = page.locator('.desktop-shortcut-state')
+        eventually(lambda: json.loads(layout.text_content())['bindings']['fullscreen'] == ['Ctrl+Meta+F', 'F9'])
+        page.keyboard.press('F9')
+        expect(page.locator('.desktop-fullscreen-exit')).to_be_visible()
+        page.keyboard.press('F9')
+        expect(page.locator('.desktop-fullscreen-exit')).to_have_count(0)
+        profiles = lambda: read_desktop_settings(preferences).get('shortcuts', {})
+        eventually(lambda: profiles().get('macos', {}).get('overrides', {}).get('code_save') == 'Ctrl+Alt+M')
+        assert profiles()['windows']['additions']['fullscreen'] == ['F7']
+        assert profiles()['macos']['additions']['fullscreen'] == ['F9']
+        app.stop()
+        with Desktop(out / 'other-client', peer.config([peer.profile('Other client')], out),
+                     runtime=app.runtime) as other:
+            other.connect()
+            other.application('Settings')
+            other.page.locator('.desktop-settings-tabs').get_by_role('button', name='Keyboard shortcuts').click()
+            other_keys = other.page.locator('.desktop-custom-keys')
+            expect(other_keys.get_by_role('button', name='Auto', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(other_keys.get_by_role('button', name='Change shortcut: Toggle desktop fullscreen (F7)')).to_be_visible()
+            other_keys.get_by_role('button', name='macOS', exact=True).click()
+            expect(other_keys.get_by_role('button', name='Change shortcut: Toggle desktop fullscreen (F9)')).to_be_visible()
+            expect(other_keys.get_by_role('button', name='Change shortcut: Save', exact=True)).to_contain_text('Ctrl+Option+M')
+        app.launch()
+        page = app.page
+        app.connect()
+        panel = settings()
+        tabs = page.locator('.desktop-settings-tabs')
+        expect(panel.get_by_role('button', name='macOS', exact=True)).to_have_attribute('aria-pressed', 'true')
+        expect(panel.get_by_role('button', name='Change shortcut: Save', exact=True)).to_contain_text('Ctrl+Option+M')
+        panel.get_by_role('button', name='Auto', exact=True).click()
+        expect(panel.get_by_role('button', name='Change shortcut: Save', exact=True)).to_contain_text('Ctrl+S')
+        expect(panel.get_by_role('button', name='Change shortcut: Toggle desktop fullscreen (F7)', exact=True)).to_be_visible()
+        panel.locator('.desktop-shortcut-extra').filter(has_text='F7').get_by_role('button', name='Remove shortcut').click()
+        eventually(lambda: not profiles()['windows']['additions'])
+        assert profiles()['macos']['additions']['fullscreen'] == ['F9']
+        panel.get_by_role('button', name='Auto', exact=True).scroll_into_view_if_needed()
         app.screenshot('desktop-shortcuts.png')
         assert not errors, errors
         print('Desktop About, Ctrl+Tab in maximized and fullscreen modes, terminal focus, recording and persistence passed.')

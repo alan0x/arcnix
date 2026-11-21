@@ -177,7 +177,7 @@ def main():
             expect(reader).to_contain_text('/terminal-folder')
             checks.append('The Files folder menu starts the remote terminal in the selected directory')
 
-            page.locator('.desktop-dock').get_by_role('button', name='Show desktop', exact=True).click()
+            app.show_desktop()
             page.locator('.desktop-shortcuts').get_by_role('button', name='desktop-terminal', exact=True).click(button='right')
             page.locator('.desktop-context-menu').get_by_role('button', name='Terminal here', exact=True).click()
             terminal_running()

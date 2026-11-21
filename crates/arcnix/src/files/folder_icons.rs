@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use arcnix_core::desktop_theme::IconStyle as Style;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
@@ -34,14 +33,15 @@ impl Icon {
         })
     }
 
-    pub fn class(&self, style: Style) -> String {
-        format!("folder-icon-{}-{}", style.slug(), self.id)
+    pub fn class(&self) -> String {
+        format!("folder-icon-{}", self.id)
     }
 }
 
 pub(crate) struct Group {
     pub label: &'static str,
     pub icons: &'static [Icon],
+    colors: [&'static str; 3],
 }
 
 impl Group {
@@ -54,6 +54,7 @@ impl Group {
 pub(crate) const GROUPS: &[Group] = &[
     Group {
         label: "Files & work",
+        colors: ["#ffdd83", "#f0ad44", "#ae6529"],
         icons: &[
             Icon::new("projects", "puzzle-piece", "Projects", "puzzle 项目 拼图"),
             Icon::new("work", "briefcase", "Work", "office business 工作 办公 公文包"),
@@ -69,6 +70,7 @@ pub(crate) const GROUPS: &[Group] = &[
     },
     Group {
         label: "Media & design",
+        colors: ["#fcb7ef", "#c979dd", "#844da8"],
         icons: &[
             Icon::new("photos", "camera", "Photos", "images pictures album 照片 摄影 相机 相册 图片"),
             Icon::new("images", "image", "Images", "picture landscape wallpaper 图片 图像 壁纸"),
@@ -82,6 +84,7 @@ pub(crate) const GROUPS: &[Group] = &[
     },
     Group {
         label: "Storage & transfers",
+        colors: ["#87e7ff", "#429fd5", "#3165ba"],
         icons: &[
             Icon::new("archive", "archive", "Archive", "zip compressed 归档 压缩 存档"),
             Icon::new("downloads", "download-simple", "Download", "downloads receive 下载 接收"),
@@ -95,6 +98,7 @@ pub(crate) const GROUPS: &[Group] = &[
     },
     Group {
         label: "Development & systems",
+        colors: ["#a5f4d8", "#47bcae", "#1c7d85"],
         icons: &[
             Icon::new("code", "code", "Code", "source programming 代码 源码 编程 开发"),
             Icon::new("terminal", "terminal-window", "Terminal", "ssh shell command 终端 命令行"),
@@ -111,6 +115,7 @@ pub(crate) const GROUPS: &[Group] = &[
     },
     Group {
         label: "Personal",
+        colors: ["#ffc0a1", "#fb8a76", "#b64365"],
         icons: &[
             Icon::new("home", "house", "Home", "house 家 主页 主目录"),
             Icon::new("heart", "heart", "Heart", "love 爱心 心形"),
@@ -128,12 +133,32 @@ pub(crate) fn name(id: &str) -> &str {
     id.split_once(':').map_or(id, |(_, name)| name)
 }
 
-pub(crate) fn class(id: &str, style: Style) -> Option<String> {
+pub(crate) fn class(id: &str) -> Option<String> {
     GROUPS
         .iter()
         .flat_map(|group| group.icons)
         .find(|icon| icon.id == name(id))
-        .map(|icon| icon.class(style))
+        .map(Icon::class)
+}
+
+fn centered_mask(source: &str, svg: &str) -> String {
+    // These Phosphor silhouettes share the same visual bounds in both weights.
+    let (x, y) = match source {
+        "puzzle-piece" => (-12, -8),
+        "music-notes" => (-12, -4),
+        "film-slate" => (-4, -8),
+        "books" => (8, -4),
+        "key" | "note-pencil" => (4, -4),
+        "headphones" | "lock-key" => (0, -12),
+        "briefcase" | "calendar" | "download-simple" | "upload-simple" => (0, -8),
+        "camera" | "clipboard-text" | "house" | "palette" | "presentation-chart" | "star" => {
+            (0, -4)
+        }
+        "graduation-cap" | "heart" | "plant" | "users-three" => (0, 8),
+        _ => (0, 0),
+    };
+    let view_box = format!("{} {} 264 264", x - 4, y - 4);
+    STANDARD.encode(svg.replace("0 0 256 256", &view_box))
 }
 
 pub(crate) fn css() -> String {
@@ -149,14 +174,18 @@ pub(crate) fn css() -> String {
         })
         .collect::<BTreeMap<_, _>>();
     let mut css = String::new();
-    for icon in GROUPS.iter().flat_map(|group| group.icons) {
-        let (outline, filled) = assets[icon.source];
-        for (style, svg) in Style::ALL.into_iter().zip([outline, filled]) {
+    for group in GROUPS {
+        let [light, middle, dark] = group.colors;
+        for icon in group.icons {
+            let (outline, filled) = assets[icon.source];
             writeln!(
                 css,
-                ".{}{{--folder-icon-mask:url(\"data:image/svg+xml;base64,{}\")}}",
-                icon.class(style),
-                STANDARD.encode(svg),
+                ".{}{{--folder-icon-mask:url(\"data:image/svg+xml;base64,{}\");\
+                 --folder-color-mask:url(\"data:image/svg+xml;base64,{}\");\
+                 --folder-icon-colors:linear-gradient(145deg,{light},{middle} 48%,{dark})}}",
+                icon.class(),
+                centered_mask(icon.source, outline),
+                centered_mask(icon.source, filled),
             )
             .unwrap();
         }
