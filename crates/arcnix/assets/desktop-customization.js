@@ -64,6 +64,7 @@
 
     function clearMarker() {
         marker?.removeAttribute('data-desktop-drop');
+        marker?.removeAttribute('data-files-item-target');
         marker = null;
     }
 
@@ -87,13 +88,20 @@
         return {slot, after};
     }
 
+    function editorTarget(event) {
+        const canvas = canvasFor(event.target);
+        return drag.editorFile && canvas === drag.canvas && epoch(canvas) === drag.epoch
+            ? event.target.closest('.editor-file-drop') : null;
+    }
+
     document.addEventListener('dragstart', event => {
         const slot = event.target.closest?.('.desktop-icon-slot');
         const canvas = canvasFor(slot);
         if (!canvas || !event.dataTransfer) return;
         clearDrag();
         drag = {slot, canvas, epoch: epoch(canvas), zone: zone(slot), item: shortcut(slot)};
-        event.dataTransfer.effectAllowed = 'move';
+        drag.editorFile = drag.item?.kind === 'file' && !!slot.querySelector('.desktop-file.app-document');
+        event.dataTransfer.effectAllowed = drag.editorFile ? 'copyMove' : 'move';
         event.dataTransfer.setData(dragType, String(drag.epoch));
         slot.setAttribute('data-desktop-dragging', '');
     }, true);
@@ -102,6 +110,13 @@
         if (!drag) return;
         clearMarker();
         event.preventDefault();
+        const editor = editorTarget(event);
+        if (editor) {
+            event.dataTransfer.dropEffect = 'copy';
+            marker = editor;
+            marker.setAttribute('data-files-item-target', '');
+            return;
+        }
         const target = dropTarget(event);
         event.dataTransfer.dropEffect = target ? 'move' : 'none';
         if (!target) return;
@@ -113,8 +128,12 @@
         if (!drag) return;
         event.preventDefault();
         const target = dropTarget(event);
-        if (target && event.dataTransfer.getData(dragType) === String(drag.epoch)) {
-            send(drag.canvas, {kind: 'reorder', zone: drag.zone, item: drag.item, anchor: shortcut(target.slot), after: target.after});
+        if (event.dataTransfer.getData(dragType) === String(drag.epoch)) {
+            if (editorTarget(event)) {
+                send(drag.canvas, {kind: 'open_in_text_editor', name: drag.item.id});
+            } else if (target) {
+                send(drag.canvas, {kind: 'reorder', zone: drag.zone, item: drag.item, anchor: shortcut(target.slot), after: target.after});
+            }
         }
         clearDrag();
     }, true);

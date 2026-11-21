@@ -215,6 +215,10 @@ fn known(path: &str, app: FileApp) -> bool {
         || extension(path).is_some_and(|ext| built_in(&ext, app))
 }
 
+pub(crate) fn is_text_file(path: &str) -> bool {
+    known(path, FileApp::TextEditor)
+}
+
 fn explicit_default(settings: &AppSettings, ext: &str) -> Option<FileApp> {
     settings
         .file_associations

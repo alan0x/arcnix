@@ -146,6 +146,7 @@ enum DropTarget {
     Tag { color: FolderColor },
     Favorite { anchor: Option<String>, after: bool },
     Desktop { action: DesktopDrop },
+    TextEditor,
 }
 
 #[derive(Deserialize)]
@@ -174,8 +175,11 @@ pub(crate) fn drop_input(ui: Ui, window: u32) -> impl Widget {
 
 fn drop_files(ui: &Ui, window: u32, drop: Drop) {
     let valid = ui.state.with(|s| {
-        available(s)
-            && s.workbench.window_visible(WorkspacePage::Files(window))
+        (if matches!(drop.target, DropTarget::TextEditor) {
+            text_editor::accepts_drop(s)
+        } else {
+            available(s)
+        }) && s.workbench.window_visible(WorkspacePage::Files(window))
             && s.workbench
                 .window_visible(WorkspacePage::Files(drop.source))
             && s.epoch == drop.epoch
@@ -194,6 +198,14 @@ fn drop_files(ui: &Ui, window: u32, drop: Drop) {
         .map(|item| item.path.clone())
         .collect();
     match drop.target {
+        DropTarget::TextEditor => {
+            for entry in entries
+                .iter()
+                .filter(|entry| !entry.directory && !entry.symlink)
+            {
+                text_editor::open(ui, &entry.path);
+            }
+        }
         DropTarget::Desktop { action } => start(ui, FileAction::Desktop(action), paths),
         DropTarget::Trash if !drop.copy => trash_ui::move_targets(ui, true, entries),
         DropTarget::Trash => (),

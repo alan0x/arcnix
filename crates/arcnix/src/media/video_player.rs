@@ -7,11 +7,9 @@ use arcnix_core::remote::RemoteSession;
 use glory::wry::shell::{AssetProvider, AssetSource};
 use glory::wry::{LocalMedia, MediaKind, Renderer};
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::text_action;
-mod picker;
-pub(crate) use picker::Directory;
+use crate::*;
 
 const WEB_FORMATS: &[(&str, &str)] = &[
     ("mp4", "video/mp4"),
@@ -398,7 +396,16 @@ impl Player {
         self.open_media(ui, path, false);
     }
 
-    fn open_from_picker(&self, ui: &Ui, path: &str) {
+    pub(crate) fn browse(&self, ui: &Ui) {
+        let start = ui.state.with(|s| {
+            s.video
+                .as_ref()
+                .and_then(|video| desktop_file_picker::parent(&video.path))
+        });
+        desktop_file_picker::open(ui, desktop_file_picker::Purpose::Video, start);
+    }
+
+    pub(crate) fn open_from_picker(&self, ui: &Ui, path: &str) {
         self.open_media(ui, path, true);
     }
 
@@ -431,10 +438,8 @@ impl Player {
     }
     pub fn stop(&self, ui: &Ui) {
         ui.state.revise(|s| {
-            s.video_picker = None;
-            if s.dialog == Some(Dialog::OpenVideo) {
-                s.dialog = None;
-                s.dialog_error.clear();
+            if desktop_file_picker::current(s) == Some(desktop_file_picker::Purpose::Video) {
+                desktop_file_picker::dismiss(s);
             }
             if let Some(video) = s.video.take() {
                 video.active.store(false, Ordering::Release);
@@ -583,8 +588,4 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
             "Could not play this video. Check the connection and video codec.",
         )),
     ))
-}
-
-pub(crate) fn picker_dialog(ui: Ui) -> impl Widget {
-    picker::dialog(ui)
 }

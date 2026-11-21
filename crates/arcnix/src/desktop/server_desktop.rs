@@ -348,7 +348,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
             s.dialog,
             Some(
                 Dialog::SoftwareInstall
-                    | Dialog::OpenVideo
+                    | Dialog::OpenDesktopFile(_)
                     | Dialog::DesktopTimeZone
                     | Dialog::DesktopIcons
                     | Dialog::DockShortcuts

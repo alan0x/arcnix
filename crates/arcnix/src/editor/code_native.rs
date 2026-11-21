@@ -344,6 +344,23 @@ impl Host {
                     .state
                     .revise(|s| s.code.dirty = msg["value"] == true),
                 Some("terminal") => crate::code_terminal::request(&self.ui, msg),
+                Some("browseFiles") => {
+                    if self
+                        .ui
+                        .state
+                        .with(|s| s.workspace_page == WorkspacePage::Code)
+                    {
+                        let start = self
+                            .ui
+                            .state
+                            .with(|s| (!s.code.root.is_empty()).then(|| s.code.root.clone()));
+                        desktop_file_picker::open(
+                            &self.ui,
+                            desktop_file_picker::Purpose::Code,
+                            start,
+                        );
+                    }
+                }
                 Some("fileOpened") => {
                     if let Some(path) = msg["path"].as_str().filter(|path| path.len() <= 4096) {
                         file_open::remember(

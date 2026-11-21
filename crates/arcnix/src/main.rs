@@ -42,7 +42,7 @@ use workers::*;
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
-    OpenVideo,
+    OpenDesktopFile(desktop_file_picker::Purpose),
     TextEditor,
     DesktopTimeZone,
     DesktopIcons,
@@ -216,8 +216,8 @@ define_state! {
         remote_editor: Option<text_editor::Editor> = None,
         desktop_editor: text_editor::Tabs = Default::default(),
         video: Option<video_player::Playback> = None,
-        video_picker: Option<video_player::Directory> = None,
-        video_picker_sidebar_hidden: bool = false,
+        desktop_file_picker: Option<desktop_file_picker::Directory> = None,
+        desktop_file_picker_sidebar_hidden: bool = false,
         activity_tab: u8 = 0,
         activity_open: bool = true,
         local_filter_open: bool = false,
@@ -651,9 +651,7 @@ impl Ui {
             if matches!(s.dialog, Some(Dialog::ScriptImport | Dialog::ScriptExport)) {
                 script_exchange_ui::forget(s);
             }
-            if s.dialog == Some(Dialog::OpenVideo) {
-                s.video_picker = None;
-            }
+            desktop_file_picker::dismiss(s);
             cleanup_records_ui::dismiss(s);
             record_maintenance_ui::dismiss(s);
             if s.dialog == Some(Dialog::Connect) {
@@ -868,8 +866,8 @@ impl Ui {
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
-            Update::Children{remote:true,result,..} if events.player.awaiting_directory(events, response.serial) =>
-                events.player.listed(events,result),
+            Update::Children{remote:true,result,..} if desktop_file_picker::awaiting_directory(events, response.serial) =>
+                desktop_file_picker::listed(events,result),
             Update::Children{remote:true,parent,result} if files_tabs::awaiting_refresh(events, response.serial) =>
                 files_tabs::refreshed(events, response.serial, &parent, result),
             Update::Children{remote,parent,result}=>file_browser::accept_children(events,remote,parent,response.serial,result),
@@ -882,6 +880,7 @@ impl Ui {
             Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(events,response.serial,result),
             Update::ConnectionLost(message)=>{
                 state.revise(|s| {
+                    desktop_file_picker::dismiss(s);
                     if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::CreateDesktopTheme)) {
                         s.dialog = None;
                     }
@@ -1113,6 +1112,7 @@ impl Ui {
             self.close_dialog();
         }
         self.state.revise(|s| {
+            desktop_file_picker::dismiss(s);
             s.advance_epoch();
             s.terminal = Default::default();
             s.cancels.clear();
@@ -1706,6 +1706,7 @@ fn modal(
                 s.dialog,
                 Some(
                     Dialog::DesktopTimeZone
+                        | Dialog::OpenDesktopFile(_)
                         | Dialog::DesktopIcons
                         | Dialog::DockShortcuts
                         | Dialog::CreateDesktopTheme
@@ -1752,7 +1753,7 @@ fn modal(
                                 Some(Dialog::CreateDesktopTheme) => {
                                     "modal-card theme-create-dialog"
                                 }
-                                Some(Dialog::OpenVideo) => "modal-card file-picker-dialog",
+                                Some(Dialog::OpenDesktopFile(_)) => "modal-card file-picker-dialog",
                                 Some(Dialog::TextEditor) => "modal-card remote-editor-modal",
                                 _ => "modal-card",
                             }
@@ -1989,7 +1990,7 @@ fn app(ui: Ui) -> impl Widget {
                 servers::dialogs(ui.clone()),
                 updates_ui::overlay(ui.clone()),
                 settings::files_dialog(ui.clone()),
-                video_player::picker_dialog(ui.clone()),
+                desktop_file_picker::dialog(ui.clone()),
                 files_ui::folder_icon_dialog(ui.clone()),
                 network_ui::dialog(ui.clone()),
                 fragment((

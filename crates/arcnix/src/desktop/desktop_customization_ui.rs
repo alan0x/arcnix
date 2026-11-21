@@ -763,6 +763,10 @@ enum Gesture {
         name: String,
         permanent: bool,
     },
+    OpenInTextEditor {
+        epoch: u64,
+        name: String,
+    },
     Context {
         epoch: u64,
         zone: Zone,
@@ -806,6 +810,7 @@ fn gesture(ui: &Ui, value: &str) {
     };
     let epoch = match &gesture {
         Gesture::RemoveFile { epoch, .. }
+        | Gesture::OpenInTextEditor { epoch, .. }
         | Gesture::Context { epoch, .. }
         | Gesture::Dismiss { epoch }
         | Gesture::Reorder { epoch, .. } => *epoch,
@@ -817,6 +822,18 @@ fn gesture(ui: &Ui, value: &str) {
         return;
     }
     match gesture {
+        Gesture::OpenInTextEditor { name, .. } => {
+            let file = ui.state.with(|s| {
+                find_file(s, &name)
+                    .filter(|entry| {
+                        text_editor::accepts_drop(s) && !entry.is_dir && !entry.is_symlink
+                    })
+                    .map(|entry| entry.path.clone())
+            });
+            if let Some(path) = file {
+                text_editor::open(ui, &path);
+            }
+        }
         Gesture::RemoveFile {
             name, permanent, ..
         } => {

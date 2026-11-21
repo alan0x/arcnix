@@ -89,9 +89,20 @@ export function codeMenuServices() {
   const active = ContextKeyExpr.has('activeEditor');
   const text = ContextKeyExpr.equals('activeEditor', TEXT_FILE_EDITOR_ID);
   const writable = ContextKeyExpr.and(text, ContextKeyExpr.not('activeEditorReadonly'));
+  registerAction2(class extends Action2 {
+    constructor() {
+      super({
+        id: 'arcnix.files.browse',
+        title: zh ? '打开文件…' : 'Open File…',
+      });
+    }
+    run() {
+      window.ipc.postMessage(JSON.stringify({ op: 'browseFiles' }));
+    }
+  });
   menu('File', '文件', [
     ['explorer.newFile', 'New File…', '新建文件…'],
-    ['workbench.action.quickOpen', 'Open File…', '打开文件…'],
+    ['arcnix.files.browse', 'Open File…', '打开文件…'],
     ['workbench.action.files.save', 'Save', '保存', writable],
     ['workbench.action.closeActiveEditor', 'Close Editor', '关闭编辑器', active],
   ]);

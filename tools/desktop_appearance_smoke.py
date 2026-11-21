@@ -53,13 +53,20 @@ def main():
                     const side = rules.direction === 'rtl' ? 'right' : 'left';
                     const start = grid.closest('.desktop-canvas').getBoundingClientRect()[side];
                     const dock = parseFloat(rules.getPropertyValue(`--desktop-dock-${side}`)) || 0;
-                    const icons = [...grid.querySelectorAll('.desktop-app-icon')]
-                        .map(node => node.getBoundingClientRect())
-                        .map(rect => ({width: rect.width, inset: Math.abs(rect[side] - start) - dock}))
-                        .sort((a, b) => a.inset - b.inset);
-                    const first = icons[0];
-                    const next = first && icons.find(icon => icon.inset > first.inset + 1);
-                    return !!next && Math.abs(first.inset * 2 - (next.inset - first.inset - first.width)) <= 1;
+                    const icons = [...grid.querySelectorAll('.desktop-app-icon')].map(node => node.getBoundingClientRect());
+                    const testAxis = (dimension, limit, inset, pitch) => {
+                        const positions = icons.map(rect => ({size: rect[dimension], inset: inset(rect)}))
+                            .sort((a, b) => a.inset - b.inset);
+                        const first = positions[0];
+                        if (!first) return false;
+                        const next = positions.find(icon => icon.inset > first.inset + 1);
+                        const gap = (next ? next.inset - first.inset : pitch) - first.size;
+                        return gap < limit && Math.abs(first.inset * 2 - gap) <= 2;
+                    };
+                    const top = grid.getBoundingClientRect().top;
+                    return testAxis('width', 50, rect => Math.abs(rect[side] - start) - dock)
+                        && testAxis('height', 66, rect => rect.top - top,
+                            parseFloat(rules.gridAutoRows) + parseFloat(rules.rowGap));
                 }'''))
 
             def check_filled_icons():

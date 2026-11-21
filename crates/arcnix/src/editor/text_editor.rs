@@ -153,6 +153,10 @@ pub(crate) fn open(ui: &Ui, path: &str) {
     open_path(ui, path, true);
 }
 
+pub(crate) fn accepts_drop(s: &State) -> bool {
+    available(s) && server_desktop::visible(s) && s.workbench.window_visible(WorkspacePage::Editor)
+}
+
 fn open_path(ui: &Ui, path: &str, preview: bool) {
     if !ui.state.with(available) {
         return;
@@ -653,9 +657,15 @@ fn buttons(ui: Ui, surface: Surface) -> impl Widget {
 }
 
 fn browse(ui: Ui) -> impl Widget {
-    text_action("Open file…", Icon::Folder)
-        .enabled(ui.state.map(|s| s.sftp_available))
-        .on_press(move || ui.open_desktop_app(WorkspacePage::Files(0)))
+    i18n::desktop::text_action("Open file…", Icon::Folder)
+        .enabled(ui.state.map(available))
+        .on_press(move || {
+            let start = ui.state.with(|s| {
+                let id = s.desktop_editor.active?;
+                desktop_file_picker::parent(&s.desktop_editor.documents.get(&id)?.path)
+            });
+            desktop_file_picker::open(&ui, desktop_file_picker::Purpose::TextEditor, start);
+        })
 }
 
 fn filename(path: &str) -> &str {
@@ -761,10 +771,17 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let open = ui.clone();
     let actions = ui.clone();
-    col().class("desktop-editor").fill((
+    col().class("desktop-editor editor-file-drop").fill((
         when(
             state.map(|s| s.desktop_editor.active.is_none()),
-            move || col().class("editor-empty").fill(browse(open.clone())),
+            move || {
+                col().class("editor-empty").fill((
+                    browse(open.clone()),
+                    text()
+                        .class("subtle")
+                        .content(i18n::desktop::bind("Drop files here")),
+                ))
+            },
         ),
         when(
             state.map(|s| s.desktop_editor.active.is_some()),

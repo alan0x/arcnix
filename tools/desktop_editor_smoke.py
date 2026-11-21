@@ -21,6 +21,8 @@ def main():
         for number in range(28):
             (home_desktop / f'sample-{number:02}.txt').write_text('sample', encoding='utf-8')
         (peer.root / 'plain.txt').write_text('plain text from SSH', encoding='utf-8')
+        (peer.root / 'drag.html').write_text('<p>dragged from Files</p>', encoding='utf-8')
+        (home_desktop / 'drop.html').write_text('<p>dragged from Desktop</p>', encoding='utf-8')
         with Desktop(out / 'desktop', peer.config([peer.profile('Editor fixture')], local)) as app:
             p = app.page
             errors = []
@@ -55,9 +57,26 @@ def main():
             p.set_viewport_size(dict(width=1440, height=980))
             launcher.click()
             editor = p.locator('.desktop-editor')
-            editor.get_by_role('button', name='Open file…', exact=True).click()
-            app.file('plain.txt').dblclick()
             contents = editor.get_by_role('textbox', name='File contents', exact=True)
+            picker = p.get_by_role('dialog', name='Open file', exact=True)
+
+            def choose_file(name):
+                editor.get_by_role('button', name='Open file…', exact=True).click()
+                expect(picker.get_by_role('button', name='File types', exact=True)).to_have_text('All supported text files')
+                confirm = picker.get_by_role('button', name='Open', exact=True)
+                expect(confirm).to_be_disabled()
+                picker.get_by_role('button', name='Filesystem', exact=True).click()
+                picker.get_by_role('button', name=name, exact=True).click()
+                expect(confirm).to_be_enabled()
+                confirm.click()
+                expect(picker).to_have_count(0)
+
+            expect(editor.get_by_text('Drop files here', exact=True)).to_be_visible()
+            choose_file('drag.html')
+            expect(contents).to_have_value('<p>dragged from Files</p>')
+            expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
+            editor.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            choose_file('plain.txt')
             expect(contents).to_have_value('plain text from SSH')
             p.locator('.desktop-window.active .window-minimize').click()
             p.locator('.desktop-dock-home').click()
@@ -98,8 +117,7 @@ def main():
             notes_tab.click()
             expect(editor.locator('.editor-feedback')).to_have_text('Remote file saved')
 
-            editor.get_by_role('button', name='Open file…', exact=True).click()
-            app.file('plain.txt').dblclick()
+            choose_file('plain.txt')
             expect(strip.locator('.editor-tab')).to_have_count(2)
             expect(contents).to_have_value('unsaved plain draft')
             notes_tab.click()
@@ -123,10 +141,36 @@ def main():
             editor.get_by_role('button', name='Discard changes', exact=True).click()
             expect(p.locator('.desktop-window.app-editor')).to_have_count(0)
             assert b'Unsaved draft' not in notes.read_bytes()
+
+            def move_window(app_class, delta):
+                mark = p.locator(f'.desktop-window.{app_class} .desktop-window-mark')
+                box = mark.bounding_box()
+                x, y = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+                p.mouse.move(x, y)
+                p.mouse.down()
+                p.mouse.move(x + delta, y, steps=8)
+                p.mouse.up()
+
+            launcher.click()
+            app.application('Files')
+            move_window('app-files', 320)
+            files_source = p.locator('.app-files.active .file-row[aria-label="/drag.html"]')
+            files_source.drag_to(editor, source_position={'x': 25, 'y': 12},
+                                 target_position={'x': 110, 'y': 160})
+            expect(contents).to_have_value('<p>dragged from Files</p>')
+            expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
+            editor.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            move_window('app-editor', 320)
+            shortcuts.get_by_role('button', name='drop.html', exact=True).drag_to(
+                editor, target_position={'x': 150, 'y': 160})
+            expect(contents).to_have_value('<p>dragged from Desktop</p>')
+            expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
+            assert (peer.root / 'drag.html').is_file() and (home_desktop / 'drop.html').is_file()
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Desktop icons fill a column before growing right, with no vertical scroll or visible scrollbar',
-        'Text Editor launcher, Files and Desktop file icons open independent tabs without duplicating a file',
+        'The shared picker confirms selection and opens HTML directly in Text Editor',
+        'Dragging files from Files and Desktop opens them directly without moving their originals',
         'Markdown renders headings, emphasis, tables and code offline with raw HTML shown as text',
         'Source editing, preview, minimize and Ctrl+S retain the draft and source encoding',
         'Switching tabs preserves each draft and preview mode, and saving targets the original tab',

@@ -1,6 +1,132 @@
-use super::*;
+use std::result::Result;
+
 use crate::files_ui::TagFilter;
+use crate::i18n::desktop as i18n;
 use crate::server_apps_worker::Action as AppAction;
+use crate::*;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    Video,
+    TextEditor,
+    #[cfg(windows)]
+    Code,
+}
+
+#[derive(Clone, Copy)]
+struct Formats {
+    label: &'static str,
+    empty: &'static str,
+    includes: fn(&str) -> bool,
+    extensions: fn() -> Vec<&'static str>,
+}
+
+impl Purpose {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Video => "Open video",
+            _ => "Open file",
+        }
+    }
+
+    fn formats(self) -> Formats {
+        match self {
+            Self::Video => Formats {
+                label: "All supported videos",
+                empty: "No playable videos in this folder.",
+                includes: video_player::supports,
+                extensions: || video_player::supported_extensions().collect(),
+            },
+            _ => Formats {
+                label: "All supported text files",
+                empty: "No text files in this folder.",
+                includes: file_open::is_text_file,
+                extensions: || {
+                    vec![
+                        "txt", "md", "log", "json", "yaml", "toml", "ini", "conf", "csv", "html",
+                        "xml",
+                    ]
+                },
+            },
+        }
+    }
+}
+
+pub(crate) fn current(s: &State) -> Option<Purpose> {
+    match s.dialog {
+        Some(Dialog::OpenDesktopFile(purpose)) => Some(purpose),
+        _ => None,
+    }
+}
+
+pub(crate) fn open(ui: &Ui, purpose: Purpose, start: Option<String>) {
+    if !ui.state.with(|s| {
+        s.connected
+            && s.sftp_available
+            && server_desktop::visible(s)
+            && s.dialog.is_none()
+            && !s.system_task_running
+    }) {
+        return;
+    }
+    ui.open_dialog(Dialog::OpenDesktopFile(purpose));
+    if ui.state.with(current) == Some(purpose) {
+        let path = start.unwrap_or_else(|| ui.state.with(|s| s.remote_path.clone()));
+        read_directory(ui, path);
+        ui.files_enter();
+    }
+}
+
+pub(crate) fn dismiss(s: &mut State) {
+    if current(s).is_some() {
+        s.desktop_file_picker = None;
+        s.dialog = None;
+        s.dialog_error.clear();
+    }
+}
+
+pub(crate) fn dialog(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    each(state.map(|s| current(s).into_iter().collect::<Vec<_>>()))
+        .key(|purpose| *purpose as u8)
+        .children(move |item| {
+            let purpose = item.value.get();
+            let formats = purpose.formats();
+            let cancel = ui.clone();
+            let choose = ui.clone();
+            modal(
+                ui.clone(),
+                purpose.title(),
+                panel(ui.clone(), formats),
+                (
+                    format_filter(state, formats),
+                    row().class("file-picker-actions").fill((
+                        i18n::btn("取消", move || cancel.close_dialog()),
+                        i18n::btn("打开", move || {
+                            let Some(path) = state.with(|s| selected_path(s).map(str::to_owned))
+                            else {
+                                return;
+                            };
+                            choose.close_dialog();
+                            if !state
+                                .with(|s| s.connected && s.sftp_available && s.dialog.is_none())
+                            {
+                                return;
+                            }
+                            match purpose {
+                                Purpose::Video => choose.player.open_from_picker(&choose, &path),
+                                Purpose::TextEditor => text_editor::open(&choose, &path),
+                                #[cfg(windows)]
+                                Purpose::Code => code_workbench::open(&choose, &path),
+                            }
+                        })
+                        .class("button primary")
+                        .enabled(state.map(|s| selected_path(s).is_some())),
+                    )),
+                ),
+            )
+        })
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct Directory {
@@ -30,20 +156,20 @@ enum Filter {
 }
 
 impl Filter {
-    fn label(&self) -> String {
+    fn label(&self, formats: Formats) -> String {
         match self {
-            Self::Supported => "All supported videos".into(),
+            Self::Supported => formats.label.into(),
             Self::All => "All files".into(),
             Self::Extension(ext) => format!("*.{ext}"),
             Self::Custom(_) => "Custom extensions".into(),
         }
     }
 
-    fn includes(&self, entry: &FileEntry) -> bool {
+    fn includes(&self, entry: &FileEntry, formats: Formats) -> bool {
         use arcnix_core::file_associations::extension;
         entry.is_dir
             || match self {
-                Self::Supported => supports(&entry.path),
+                Self::Supported => (formats.includes)(&entry.path),
                 Self::All => true,
                 Self::Extension(ext) => extension(&entry.path).as_deref() == Some(*ext),
                 Self::Custom(suffixes) => {
@@ -83,7 +209,7 @@ fn custom_extensions(input: &str) -> Option<Vec<String>> {
     (!suffixes.is_empty()).then_some(suffixes)
 }
 
-fn parent(path: &str) -> Option<String> {
+pub(crate) fn parent(path: &str) -> Option<String> {
     match path.trim_end_matches('/').rsplit_once('/') {
         Some(("", _)) => Some("/".into()),
         Some((parent, _)) => Some(parent.to_owned()),
@@ -92,146 +218,99 @@ fn parent(path: &str) -> Option<String> {
     }
 }
 
-impl Player {
-    pub(crate) fn browse(&self, ui: &Ui) {
-        ui.open_dialog(Dialog::OpenVideo);
-        if let Some(path) = ui.state.with(|s| {
-            (s.dialog == Some(Dialog::OpenVideo)).then(|| {
-                s.video
-                    .as_ref()
-                    .and_then(|video| parent(&video.path))
-                    .unwrap_or_else(|| s.remote_path.clone())
-            })
-        }) {
-            self.read_directory(ui, path);
-            ui.files_enter();
-        }
-    }
-
-    fn read_directory(&self, ui: &Ui, path: String) {
-        let serial = ui.send(Action::Children {
-            remote: true,
-            path: path.clone(),
-        });
-        self.load(ui, serial, Some(path), None);
-    }
-
-    fn read_collection(&self, ui: &Ui, collection: Collection) {
-        let action = match &collection {
-            Collection::Favorite(path) => AppAction::PickerEntries(vec![path.clone()]),
-            Collection::Tag(tag) => {
-                AppAction::PickerEntries(ui.state.with(|s| files_ui::paths_for_tag(s, *tag)))
-            }
-            Collection::Trash => AppAction::PickerTrash,
-        };
-        let serial = ui.send(Action::ServerApps(action));
-        self.load(ui, serial, None, Some(collection));
-    }
-
-    fn load(&self, ui: &Ui, serial: u64, path: Option<String>, collection: Option<Collection>) {
-        ui.state.revise(|s| {
-            let directory = s.video_picker.get_or_insert_with(Directory::default);
-            if let Some(path) = path {
-                directory.path = path;
-            }
-            directory.collection = collection;
-            directory.request = Some(serial);
-            directory.entries.clear();
-            directory.error.clear();
-            directory.selected = None;
-        });
-    }
-
-    pub(crate) fn awaiting_directory(&self, ui: &Ui, serial: u64) -> bool {
-        ui.state.with(|s| {
-            s.dialog == Some(Dialog::OpenVideo)
-                && s.video_picker
-                    .as_ref()
-                    .is_some_and(|d| d.request == Some(serial))
-        })
-    }
-
-    pub(crate) fn listed(&self, ui: &Ui, result: Result<Vec<FileEntry>, String>) {
-        let show_hidden = ui.state.with(|s| s.config.settings.show_hidden_files);
-        let favorite = ui
-            .state
-            .with(|s| matches!(collection(s), Some(Collection::Favorite(_))));
-        if favorite
-            && let Ok(entries) = &result
-            && let [entry] = entries.as_slice()
-            && entry.is_dir
-        {
-            self.read_directory(ui, entry.path.clone());
-            return;
-        }
-        ui.state.revise(|s| {
-            let Some(directory) = &mut s.video_picker else {
-                return;
-            };
-            directory.request = None;
-            match result {
-                Ok(mut entries) => {
-                    entries.retain(|e| {
-                        !e.is_symlink
-                            && (directory.collection.is_some()
-                                || show_hidden
-                                || !e.name.starts_with('.'))
-                    });
-                    directory.entries = entries;
-                }
-                Err(error) => directory.error = error,
-            }
-        });
-    }
+fn read_directory(ui: &Ui, path: String) {
+    let serial = ui.send(Action::Children {
+        remote: true,
+        path: path.clone(),
+    });
+    load(ui, serial, Some(path), None);
 }
 
-pub(super) fn dialog(ui: Ui) -> impl Widget {
-    when(
-        ui.state.map(|s| s.dialog == Some(Dialog::OpenVideo)),
-        move || {
-            let state = ui.state;
-            let cancel = ui.clone();
-            let open = ui.clone();
-            modal(
-                ui.clone(),
-                "Open video",
-                panel(ui.clone()),
-                (
-                    format_filter(state),
-                    row().class("file-picker-actions").fill((
-                        i18n::btn("取消", move || cancel.close_dialog()),
-                        i18n::btn("打开", move || {
-                            if let Some(path) = state.with(|s| selected_path(s).map(str::to_owned))
-                            {
-                                open.player.open_from_picker(&open, &path);
-                            }
-                        })
-                        .class("button primary")
-                        .enabled(state.map(|s| selected_path(s).is_some())),
-                    )),
-                ),
-            )
-        },
-    )
+fn read_collection(ui: &Ui, collection: Collection) {
+    let action = match &collection {
+        Collection::Favorite(path) => AppAction::PickerEntries(vec![path.clone()]),
+        Collection::Tag(tag) => {
+            AppAction::PickerEntries(ui.state.with(|s| files_ui::paths_for_tag(s, *tag)))
+        }
+        Collection::Trash => AppAction::PickerTrash,
+    };
+    let serial = ui.send(Action::ServerApps(action));
+    load(ui, serial, None, Some(collection));
+}
+
+fn load(ui: &Ui, serial: u64, path: Option<String>, collection: Option<Collection>) {
+    ui.state.revise(|s| {
+        let directory = s.desktop_file_picker.get_or_insert_with(Directory::default);
+        if let Some(path) = path {
+            directory.path = path;
+        }
+        directory.collection = collection;
+        directory.request = Some(serial);
+        directory.entries.clear();
+        directory.error.clear();
+        directory.selected = None;
+    });
+}
+
+pub(crate) fn awaiting_directory(ui: &Ui, serial: u64) -> bool {
+    ui.state.with(|s| {
+        current(s).is_some()
+            && s.desktop_file_picker
+                .as_ref()
+                .is_some_and(|d| d.request == Some(serial))
+    })
+}
+
+pub(crate) fn listed(ui: &Ui, result: Result<Vec<FileEntry>, String>) {
+    let show_hidden = ui.state.with(|s| s.config.settings.show_hidden_files);
+    let favorite = ui
+        .state
+        .with(|s| matches!(collection(s), Some(Collection::Favorite(_))));
+    if favorite
+        && let Ok(entries) = &result
+        && let [entry] = entries.as_slice()
+        && entry.is_dir
+    {
+        read_directory(ui, entry.path.clone());
+        return;
+    }
+    ui.state.revise(|s| {
+        let Some(directory) = &mut s.desktop_file_picker else {
+            return;
+        };
+        directory.request = None;
+        match result {
+            Ok(mut entries) => {
+                entries.retain(|e| {
+                    !e.is_symlink
+                        && (directory.collection.is_some()
+                            || show_hidden
+                            || !e.name.starts_with('.'))
+                });
+                directory.entries = entries;
+            }
+            Err(error) => directory.error = error,
+        }
+    });
 }
 
 fn selected_path(s: &State) -> Option<&str> {
-    s.video_picker.as_ref()?.selected.as_deref()
+    s.desktop_file_picker.as_ref()?.selected.as_deref()
 }
 
 fn location(s: &State) -> &str {
-    s.video_picker
+    s.desktop_file_picker
         .as_ref()
         .filter(|d| d.collection.is_none())
         .map_or("", |d| d.path.as_str())
 }
 
 fn collection(s: &State) -> Option<&Collection> {
-    s.video_picker.as_ref()?.collection.as_ref()
+    s.desktop_file_picker.as_ref()?.collection.as_ref()
 }
 
 fn up_path(s: &State) -> Option<String> {
-    let directory = s.video_picker.as_ref()?;
+    let directory = s.desktop_file_picker.as_ref()?;
     if directory.collection.is_some() {
         Some(directory.path.clone())
     } else {
@@ -246,7 +325,7 @@ fn tag(s: &State) -> Option<TagFilter> {
     }
 }
 
-fn format_filter(state: Cage<State>) -> impl Widget {
+fn format_filter(state: Cage<State>, formats: Formats) -> impl Widget {
     widget(move |scope| {
         let expanded = scope.cage(false);
         let trigger = scope.cage(None);
@@ -254,7 +333,7 @@ fn format_filter(state: Cage<State>) -> impl Widget {
         let draft = scope.cage(String::new());
         let choose = move |filter| {
             state.revise(|s| {
-                if let Some(directory) = &mut s.video_picker
+                if let Some(directory) = &mut s.desktop_file_picker
                     && directory.filter != filter
                 {
                     directory.filter = filter;
@@ -276,10 +355,11 @@ fn format_filter(state: Cage<State>) -> impl Widget {
                     .pressed(expanded)
                     .fill((
                         icons::glyph(Icon::Filter),
-                        text().content(i18n::bind(state.map(|s| {
-                            s.video_picker
-                                .as_ref()
-                                .map_or_else(|| Filter::Supported.label(), |d| d.filter.label())
+                        text().content(i18n::bind(state.map(move |s| {
+                            s.desktop_file_picker.as_ref().map_or_else(
+                                || Filter::Supported.label(formats),
+                                |d| d.filter.label(formats),
+                            )
                         }))),
                     ))
                     .on_press(move || expanded.revise(|open| *open = !*open)),
@@ -295,15 +375,15 @@ fn format_filter(state: Cage<State>) -> impl Widget {
                         row().class("choice-list").fill(fragment(
                             [Filter::Supported, Filter::All]
                                 .into_iter()
-                                .chain(supported_extensions().map(Filter::Extension))
+                                .chain((formats.extensions)().into_iter().map(Filter::Extension))
                                 .map(|option| {
                                     let choose = choose.clone();
                                     let current = option.clone();
                                     sapid::button()
                                         .class("button compact files-filter-choice")
-                                        .label(i18n::bind(option.label()))
+                                        .label(i18n::bind(option.label(formats)))
                                         .pressed(state.map(move |s| {
-                                            s.video_picker
+                                            s.desktop_file_picker
                                                 .as_ref()
                                                 .is_some_and(|d| d.filter == current)
                                         }))
@@ -348,14 +428,14 @@ fn sidebar(ui: Ui) -> impl Widget {
         .name(i18n::bind("Files sidebar"))
         .fill((
             fragment(files_ui::location_links(state, location, false, move |path| {
-                places.player.read_directory(&places, path);
+                read_directory(&places, path);
             })),
             sapid::button()
                 .class("files-place files-trash-place")
                 .name(i18n::bind("回收站"))
                 .pressed(state.map(|s| matches!(collection(s), Some(Collection::Trash))))
                 .fill((icons::glyph(Icon::Clear), text().content(i18n::bind("回收站"))))
-                .on_press(move || trash.player.read_collection(&trash, Collection::Trash)),
+                .on_press(move || read_collection(&trash, Collection::Trash)),
             text().class("files-sidebar-heading").content(i18n::bind("Favorites")),
             each(state.map(|s| files_ui::preferences(s).favorites.clone()))
                 .key(String::clone)
@@ -370,15 +450,15 @@ fn sidebar(ui: Ui) -> impl Widget {
                                 || matches!(collection(s), Some(Collection::Favorite(selected)) if selected == path))
                         }))
                         .fill((icons::glyph(Icon::Star), text().content(path.map(|path| files_ui::item_name(path).to_owned()))))
-                        .on_press(move || open.player.read_collection(&open, Collection::Favorite(path.get())))
+                        .on_press(move || read_collection(&open, Collection::Favorite(path.get())))
                 }),
             fragment(files_ui::tag_links(state, tag, move |tag| {
-                ui.player.read_collection(&ui, Collection::Tag(tag));
+                read_collection(&ui, Collection::Tag(tag));
             })),
         ))
 }
 
-fn panel(ui: Ui) -> impl Widget {
+fn panel(ui: Ui, formats: Formats) -> impl Widget {
     let state = ui.state;
     let up = ui.clone();
     let refresh = ui.clone();
@@ -390,16 +470,18 @@ fn panel(ui: Ui) -> impl Widget {
             sapid::button()
                 .class("icon-button files-sidebar-toggle")
                 .name(i18n::bind("Toggle file picker sidebar"))
-                .pressed(state.map(|s| !s.video_picker_sidebar_hidden))
+                .pressed(state.map(|s| !s.desktop_file_picker_sidebar_hidden))
                 .fill(icons::glyph(Icon::Sidebar))
                 .on_press(move || {
-                    state.revise(|s| s.video_picker_sidebar_hidden = !s.video_picker_sidebar_hidden)
+                    state.revise(|s| {
+                        s.desktop_file_picker_sidebar_hidden = !s.desktop_file_picker_sidebar_hidden
+                    })
                 }),
             i18n::icon_action("Parent folder", Icon::Up)
                 .enabled(state.map(|s| up_path(s).is_some()))
                 .on_press(move || {
                     if let Some(path) = state.with(up_path) {
-                        up.player.read_directory(&up, path);
+                        read_directory(&up, path);
                     }
                 }),
             col().class("path-location").fill((
@@ -412,7 +494,7 @@ fn panel(ui: Ui) -> impl Widget {
                         i18n::bind("远程路径"),
                         |_| false,
                         enabled,
-                        move |path| jump.player.read_directory(&jump, path),
+                        move |path| read_directory(&jump, path),
                     )
                 }),
                 when(state.map(|s| collection(s).is_some()), move || {
@@ -430,33 +512,34 @@ fn panel(ui: Ui) -> impl Widget {
                 }),
             )),
             i18n::icon_action("Refresh", Icon::Refresh)
-                .enabled(state.map(|s| s.video_picker.is_some()))
+                .enabled(state.map(|s| s.desktop_file_picker.is_some()))
                 .on_press(move || {
                     if let Some(selected) = state.with(|s| collection(s).cloned()) {
-                        refresh.player.read_collection(&refresh, selected);
+                        read_collection(&refresh, selected);
                     } else {
                         let path = state.with(|s| location(s).to_owned());
-                        refresh.player.read_directory(&refresh, path);
+                        read_directory(&refresh, path);
                     }
                 }),
         )),
         row().class("files-body").fill((
-            when(state.map(|s| !s.video_picker_sidebar_hidden), move || {
-                sidebar(places.clone())
-            }),
-            listing(ui),
+            when(
+                state.map(|s| !s.desktop_file_picker_sidebar_hidden),
+                move || sidebar(places.clone()),
+            ),
+            listing(ui, formats),
         )),
     ))
 }
 
-fn listing(ui: Ui) -> impl Widget {
+fn listing(ui: Ui, formats: Formats) -> impl Widget {
     let state = ui.state;
     let entries = state
-        .map(|s| {
-            s.video_picker.as_ref().map_or_else(Vec::new, |d| {
+        .map(move |s| {
+            s.desktop_file_picker.as_ref().map_or_else(Vec::new, |d| {
                 d.entries
                     .iter()
-                    .filter(|entry| d.filter.includes(entry))
+                    .filter(|entry| d.filter.includes(entry, formats))
                     .cloned()
                     .collect()
             })
@@ -504,10 +587,10 @@ fn listing(ui: Ui) -> impl Widget {
                                 .on(activate, move |_| {
                                     let e = entry.get();
                                     if e.is_dir {
-                                        open.player.read_directory(&open, e.path);
+                                        read_directory(&open, e.path);
                                     } else {
                                         state.revise(|s| {
-                                            if let Some(directory) = &mut s.video_picker {
+                                            if let Some(directory) = &mut s.desktop_file_picker {
                                                 directory.selected = Some(e.path);
                                             }
                                         });
@@ -521,7 +604,7 @@ fn listing(ui: Ui) -> impl Widget {
             text()
                 .class("file-picker-message")
                 .content(i18n::bind(state.map(move |s| {
-                    let Some(d) = &s.video_picker else {
+                    let Some(d) = &s.desktop_file_picker else {
                         return String::new();
                     };
                     if d.request.is_some() {
@@ -533,7 +616,7 @@ fn listing(ui: Ui) -> impl Widget {
                             return "没有匹配的项目".into();
                         }
                         match d.filter {
-                            Filter::Supported => "No playable videos in this folder.".into(),
+                            Filter::Supported => formats.empty.into(),
                             Filter::All => "此文件夹为空".into(),
                             _ => "没有匹配的项目".into(),
                         }

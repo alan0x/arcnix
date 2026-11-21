@@ -1,4 +1,5 @@
 pub(crate) mod browser;
+pub(crate) mod desktop_file_picker;
 pub(crate) mod file_actions;
 pub(crate) mod file_browser;
 pub(crate) mod file_columns;

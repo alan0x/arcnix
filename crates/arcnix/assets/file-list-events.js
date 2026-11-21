@@ -97,6 +97,12 @@
     function itemTarget(event) {
         if (!favoriteDrag?.sourcePane) return null;
         const canvas = event.target.closest?.('.desktop-canvas');
+        const editor = event.target.closest?.('.editor-file-drop');
+        if (editor && canvas === favoriteDrag.window.closest('.desktop-canvas')
+            && !editor.closest('[inert],.hidden,[hidden]')) {
+            return {bridge: favoriteDrag.window.querySelector('.files-item-drop-input'),
+                mark: editor, copy: true, effect: 'copy', data: {kind: 'text_editor'}};
+        }
         if (canvas && !event.target.closest('.desktop-window,.desktop-dock-zone,.desktop-context-menu,[inert],.hidden,[hidden]')
             && canvas === favoriteDrag.window.closest('.desktop-canvas') && !favoriteDrag.fromFavorites) {
             const shortcut = event.altKey || ((event.ctrlKey || event.metaKey) && event.shiftKey);

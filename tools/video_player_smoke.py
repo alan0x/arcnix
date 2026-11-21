@@ -243,6 +243,11 @@ def run(preview, binary=None, read_delay=.003):
             expect(root_video).to_have_attribute('aria-pressed', 'true')
             expect(confirm).to_be_enabled()
             formats.click()
+            assert picker.locator('.file-picker-formats').evaluate('''menu => {
+                const card = menu.closest('.file-picker-dialog').getBoundingClientRect();
+                const box = menu.getBoundingClientRect();
+                return box.width >= card.width - 31 && box.left >= card.left && box.right <= card.right;
+            }''')
             picker_button('*.webm').click()
             expect(root_video).to_have_count(0)
             expect(confirm).to_be_disabled()
