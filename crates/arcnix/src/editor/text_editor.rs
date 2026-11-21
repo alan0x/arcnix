@@ -633,6 +633,14 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
     ))
 }
 
+fn can_reload(s: &State, surface: Surface) -> bool {
+    s.connected
+        && s.file_pending.is_none()
+        && surface
+            .editor(s)
+            .is_some_and(|e| !e.dirty && e.pending.is_none() && e.epoch == s.epoch)
+}
+
 fn buttons(ui: Ui, surface: Surface) -> impl Widget {
     let state = ui.state;
     let reload = ui.clone();
@@ -640,13 +648,7 @@ fn buttons(ui: Ui, surface: Surface) -> impl Widget {
         sapid::button()
             .class("button")
             .label(i18n::bind("Reload from server"))
-            .enabled(state.map(move |s| {
-                s.connected
-                    && s.file_pending.is_none()
-                    && surface
-                        .editor(s)
-                        .is_some_and(|e| !e.dirty && e.pending.is_none() && e.epoch == s.epoch)
-            }))
+            .enabled(state.map(move |s| can_reload(s, surface)))
             .on_press(move || read(&reload, surface)),
         sapid::button()
             .class("button primary remote-editor-save")
@@ -656,15 +658,39 @@ fn buttons(ui: Ui, surface: Surface) -> impl Widget {
     ))
 }
 
-fn browse(ui: Ui) -> impl Widget {
-    i18n::desktop::text_action("Open file…", Icon::Folder)
-        .enabled(ui.state.map(available))
-        .on_press(move || {
-            let start = ui.state.with(|s| {
-                let id = s.desktop_editor.active?;
-                desktop_file_picker::parent(&s.desktop_editor.documents.get(&id)?.path)
-            });
-            desktop_file_picker::open(&ui, desktop_file_picker::Purpose::TextEditor, start);
+fn can_browse(s: &State) -> bool {
+    available(s) && !file_task_busy(s)
+}
+
+fn browse(ui: &Ui) {
+    let start = ui.state.with(|s| {
+        let id = s.desktop_editor.active?;
+        desktop_file_picker::parent(&s.desktop_editor.documents.get(&id)?.path)
+    });
+    desktop_file_picker::open(ui, desktop_file_picker::Purpose::TextEditor, start);
+}
+
+pub(crate) fn title_actions(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    each(state.map(|s| s.desktop_editor.active.into_iter().collect::<Vec<_>>()))
+        .key(|id| *id)
+        .children(move |item| {
+            let surface = Surface::Desktop(item.value.get());
+            let open = ui.clone();
+            let reload = ui.clone();
+            let save_ui = ui.clone();
+            fragment((
+                i18n::desktop::icon_action("Open file…", Icon::Folder)
+                    .enabled(state.map(can_browse))
+                    .on_press(move || browse(&open)),
+                i18n::desktop::icon_action("Reload from server", Icon::Refresh)
+                    .enabled(state.map(move |s| can_reload(s, surface)))
+                    .on_press(move || read(&reload, surface)),
+                i18n::desktop::icon_action("Save", Icon::Save)
+                    .class("icon-button remote-editor-save")
+                    .enabled(state.map(move |s| can_save(s, surface)))
+                    .on_press(move || save(&save_ui, surface)),
+            ))
         })
 }
 
@@ -672,10 +698,10 @@ fn filename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn file_tabs(ui: Ui) -> impl Widget {
+pub(crate) fn file_tabs(ui: Ui) -> impl Widget {
     let state = ui.state;
     row()
-        .class("editor-tab-strip")
+        .class("editor-tab-strip window-tab-strip")
         .name(i18n::bind("Open files"))
         .fill(
             each(state.map(|s| {
@@ -709,9 +735,9 @@ fn file_tabs(ui: Ui) -> impl Widget {
                         sapid::button()
                             .class(state.map(move |s| {
                                 if surface.editor(s).is_some_and(|e| e.dirty) {
-                                    "editor-tab dirty"
+                                    "editor-tab window-tab-select dirty"
                                 } else {
-                                    "editor-tab"
+                                    "editor-tab window-tab-select"
                                 }
                                 .to_owned()
                             }))
@@ -770,38 +796,25 @@ fn close_confirmation(ui: Ui) -> impl Widget {
 pub(crate) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let open = ui.clone();
-    let actions = ui.clone();
     col().class("desktop-editor editor-file-drop").fill((
         when(
             state.map(|s| s.desktop_editor.active.is_none()),
             move || {
+                let open = open.clone();
                 col().class("editor-empty").fill((
-                    browse(open.clone()),
+                    i18n::desktop::text_action("Open file…", Icon::Folder)
+                        .enabled(state.map(can_browse))
+                        .on_press(move || browse(&open)),
                     text()
                         .class("subtle")
                         .content(i18n::desktop::bind("Drop files here")),
                 ))
             },
         ),
-        when(
-            state.map(|s| s.desktop_editor.active.is_some()),
-            move || file_tabs(actions.clone()),
-        ),
         close_confirmation(ui.clone()),
         each(state.map(|s| s.desktop_editor.active.into_iter().collect::<Vec<_>>()))
             .key(|id| *id)
-            .children(move |item| {
-                let surface = Surface::Desktop(item.value.get());
-                fragment((
-                    body(ui.clone(), surface),
-                    row().class("editor-actions").fill((
-                        browse(ui.clone()),
-                        row()
-                            .class("choice-list")
-                            .fill(buttons(ui.clone(), surface)),
-                    )),
-                ))
-            }),
+            .children(move |item| body(ui.clone(), Surface::Desktop(item.value.get()))),
     ))
 }
 

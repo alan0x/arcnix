@@ -3,8 +3,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use arcnix_core::metrics::{self, ResourceSnapshot, ResourceUsage};
 use arcnix_core::system_logs::{JournalPeriod, LogCapabilities, LogQuery, LogSnapshot, LogSource};
 
-use crate::*;
 use crate::log_text::{LogSpan, Spans};
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct MetricState {

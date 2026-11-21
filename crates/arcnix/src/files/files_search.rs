@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, close_action};
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct Search {

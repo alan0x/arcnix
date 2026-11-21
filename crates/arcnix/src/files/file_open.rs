@@ -472,6 +472,12 @@ fn finish(ui: &Ui, always: bool) {
     launch(ui, &path, app);
 }
 
+fn app_choice(app: FileApp, selected: Bond<bool>) -> sapid::Button {
+    text_action(label(app), icon(app))
+        .class("choice with-icon file-app-option")
+        .pressed(selected)
+}
+
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
     let state = ui.state;
     when(
@@ -505,12 +511,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                             let selected = state.map(move |s| {
                                 matches!(s.dialog, Some(Dialog::OpenWith { selected: Some(selected), .. }) if selected == app)
                             });
-                            text_action(label(app), icon(app))
-                                .class(state.map(move |s| {
-                                    let active = matches!(s.dialog, Some(Dialog::OpenWith { selected: Some(selected), .. }) if selected == app);
-                                    if active { "choice with-icon file-app-option active" } else { "choice with-icon file-app-option" }.to_string()
-                                }))
-                                .pressed(selected)
+                            app_choice(app, selected)
                                 .on_press(move || choose.state.revise(|s| {
                                     if let Some(Dialog::OpenWith { selected, .. }) = &mut s.dialog {
                                         *selected = Some(app);
@@ -675,6 +676,92 @@ fn edited_extension(s: &State) -> Option<String> {
     normalize(extension)
 }
 
+fn add_app_picker(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    each(state.map(|s| edited_extension(s).into_iter().collect::<Vec<_>>()))
+        .key(Clone::clone)
+        .children(move |item| {
+            let extension = item.value.get();
+            let ui = ui.clone();
+            widget(move |scope| {
+                let expanded = scope.cage(false);
+                let selected = scope.cage(None::<FileApp>);
+                let ui = ui.clone();
+                let extension = extension.clone();
+                let confirm_extension = extension.clone();
+                let candidates = state
+                    .map(move |s| {
+                        APPS.iter()
+                            .copied()
+                            .filter(|app| !associated(&s.config.settings, &extension, *app))
+                            .collect::<Vec<_>>()
+                    })
+                    .with_partial_eq();
+                let has_candidates = scope.bond(move || candidates.with(|apps| !apps.is_empty()));
+                when(has_candidates, move || {
+                    let ui = ui.clone();
+                    let extension = confirm_extension.clone();
+                    col().class("file-association-extra-apps").fill((
+                        text_action("Add another app", Icon::Plus)
+                            .class("button with-icon file-association-add-trigger")
+                            .pressed(expanded)
+                            .on_press(move || {
+                                expanded.revise(|open| *open = !*open);
+                                selected.revise(|choice| *choice = None);
+                            }),
+                        when(expanded, move || {
+                            let save = ui.clone();
+                            let extension = extension.clone();
+                            col().class("file-association-picker").fill((
+                                col()
+                                    .class("file-app-options")
+                                    .name(i18n::bind("Apps to add"))
+                                    .fill(each(candidates).key(|app| *app).children(move |item| {
+                                        let app = item.value.get();
+                                        app_choice(
+                                            app,
+                                            selected.map(move |choice| *choice == Some(app)),
+                                        )
+                                        .on_press(
+                                            move || selected.revise(|choice| *choice = Some(app)),
+                                        )
+                                    })),
+                                row().class("file-association-picker-actions").fill((
+                                    btn("取消", move || {
+                                        expanded.revise(|open| *open = false);
+                                        selected.revise(|choice| *choice = None);
+                                    }),
+                                    btn("Add app", move || {
+                                        if let Some(app) = selected.get()
+                                            && candidates.with(|apps| apps.contains(&app))
+                                        {
+                                            edit_association(&save, &extension, |rule| {
+                                                rule.added_apps.insert(app);
+                                            });
+                                            if state.with(|s| s.dialog_error.is_empty()) {
+                                                expanded.revise(|open| *open = false);
+                                                selected.revise(|choice| *choice = None);
+                                            }
+                                        }
+                                    })
+                                    .class("button primary")
+                                    .enabled(selected.map(
+                                        move |choice| {
+                                            choice.is_some_and(|app| {
+                                                candidates.with(|apps| apps.contains(&app))
+                                            })
+                                        },
+                                    )),
+                                )),
+                            ))
+                        }),
+                    ))
+                })
+                .show_in(scope)
+            })
+        })
+}
+
 fn association_apps(ui: Ui) -> impl Widget {
     let state = ui.state;
     let candidates = state.map(|s| {
@@ -691,20 +778,11 @@ fn association_apps(ui: Ui) -> impl Widget {
         candidates.sort_by_key(|app| Some(*app) != default);
         candidates
     });
-    let extras = state.map(|s| {
-        let Some(ext) = edited_extension(s) else {
-            return Vec::new();
-        };
-        APPS.iter()
-            .copied()
-            .filter(|app| !associated(&s.config.settings, &ext, *app))
-            .collect::<Vec<_>>()
-    });
-    let add = ui.clone();
+    let picker = add_app_picker(ui.clone());
     col().class("file-association-editor").fill((
         text()
             .class("field-label")
-            .content(i18n::bind("Available apps")),
+            .content(i18n::bind("Associated apps")),
         when(state.map(move |_| candidates.with(Vec::is_empty)), || {
             text()
                 .class("subtle")
@@ -786,30 +864,7 @@ fn association_apps(ui: Ui) -> impl Widget {
                 ),
             ))
         }),
-        when(
-            state.map(move |_| extras.with(|apps| !apps.is_empty())),
-            move || {
-                let add = add.clone();
-                col().class("file-association-extra-apps").fill((
-                    text()
-                        .class("field-label")
-                        .content(i18n::bind("Add another app")),
-                    row()
-                        .class("choice-list")
-                        .fill(each(extras).key(|app| *app).children(move |item| {
-                            let app = item.value.get();
-                            let add = add.clone();
-                            text_action(label(app), icon(app)).on_press(move || {
-                                if let Some(ext) = state.with(edited_extension) {
-                                    edit_association(&add, &ext, |rule| {
-                                        rule.added_apps.insert(app);
-                                    });
-                                }
-                            })
-                        })),
-                ))
-            },
-        ),
+        picker,
     ))
 }
 

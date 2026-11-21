@@ -1,9 +1,9 @@
 //! Application-owned terminal menus; actions remain bound to their session.
 use arcnix_core::desktop_shortcuts::Action as Shortcut;
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::btn;
+use crate::*;
 
 #[derive(Clone)]
 pub(crate) struct Context {

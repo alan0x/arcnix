@@ -1,9 +1,9 @@
 use arcnix_core::desktop_shortcuts::{Action as Shortcut, GROUPS, Scope as ShortcutScope};
 use serde::Deserialize;
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{close_action, icon_action};
+use crate::*;
 
 fn can_run(s: &State, action: Shortcut) -> bool {
     match action {

@@ -571,9 +571,9 @@ def main():
                     const box = window.getBoundingClientRect();
                     const near = (a, b) => Math.abs(a - b) <= 1;
                     return near(box.top, frame.top)
-                        && near(box.left, edge === 'left' ? dock.right + 8 : frame.left)
-                        && near(box.right, edge === 'right' ? dock.left - 8 : frame.right)
-                        && near(box.bottom, edge === 'bottom' ? dock.top - 8 : frame.bottom);
+                        && near(box.left, edge === 'left' ? dock.right : frame.left)
+                        && near(box.right, edge === 'right' ? dock.left : frame.right)
+                        && near(box.bottom, edge === 'bottom' ? dock.top : frame.bottom);
                 }''', edge)
 
             eventually(lambda: maximized_fits_dock('bottom'))

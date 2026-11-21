@@ -4,10 +4,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{close_action, icon_action};
 use crate::terminal_worker::{Action as TerminalAction, Event as TerminalEvent};
+use crate::*;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -758,7 +758,7 @@ fn tabs(ui: Ui) -> impl Widget {
             .to_owned()
         }))
         .fill((
-            row().class("terminal-tab-list").fill(
+            row().class("terminal-tab-list window-tab-strip").fill(
                 each(state.map(|s| s.terminal.tabs()))
                     .key(|tab| tab.id)
                     .children(move |item| {
@@ -773,9 +773,9 @@ fn tabs(ui: Ui) -> impl Widget {
                                 .pressed(state.map(move |s| s.terminal.id == tab.get().id))
                                 .class(state.map(move |s| {
                                     if s.terminal.id == tab.get().id {
-                                        "terminal-tab active"
+                                        "terminal-tab window-tab-select active"
                                     } else {
-                                        "terminal-tab"
+                                        "terminal-tab window-tab-select"
                                     }
                                     .to_owned()
                                 }))
@@ -788,6 +788,7 @@ fn tabs(ui: Ui) -> impl Widget {
                         ))
                     }),
             ),
+            server_desktop::tab_overflow(),
             icon_action("新建终端标签", Icon::Plus)
                 .class("icon-button terminal-new-tab")
                 .enabled(state.map(|s| {

@@ -56,26 +56,33 @@ def main():
             app.screenshot('desktop-icon-columns.png')
             p.set_viewport_size(dict(width=1440, height=980))
             launcher.click()
+            window = p.locator('.desktop-window.app-editor')
+            titlebar = window.locator('.desktop-window-titlebar')
             editor = p.locator('.desktop-editor')
             contents = editor.get_by_role('textbox', name='File contents', exact=True)
             picker = p.get_by_role('dialog', name='Open file', exact=True)
 
-            def choose_file(name):
-                editor.get_by_role('button', name='Open file…', exact=True).click()
+            def choose_file(name, *, double=False, filesystem=True):
+                window.get_by_role('button', name='Open file…', exact=True).click()
                 expect(picker.get_by_role('button', name='File types', exact=True)).to_have_text('All supported text files')
                 confirm = picker.get_by_role('button', name='Open', exact=True)
                 expect(confirm).to_be_disabled()
-                picker.get_by_role('button', name='Filesystem', exact=True).click()
-                picker.get_by_role('button', name=name, exact=True).click()
-                expect(confirm).to_be_enabled()
-                confirm.click()
+                if filesystem:
+                    picker.get_by_role('button', name='Filesystem', exact=True).click()
+                entry = picker.get_by_role('button', name=name, exact=True)
+                if double:
+                    entry.dblclick()
+                else:
+                    entry.click()
+                    expect(confirm).to_be_enabled()
+                    confirm.click()
                 expect(picker).to_have_count(0)
 
             expect(editor.get_by_text('Drop files here', exact=True)).to_be_visible()
-            choose_file('drag.html')
+            choose_file('drag.html', double=True)
             expect(contents).to_have_value('<p>dragged from Files</p>')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
-            editor.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            titlebar.get_by_role('button', name='Close file tab drag.html', exact=True).click()
             choose_file('plain.txt')
             expect(contents).to_have_value('plain text from SSH')
             p.locator('.desktop-window.active .window-minimize').click()
@@ -83,7 +90,11 @@ def main():
             p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).click()
             expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Text Editor')
             preview = editor.locator('.markdown-preview')
-            strip = editor.locator('.editor-tab-strip')
+            strip = titlebar.locator('.editor-tab-strip')
+            actions = titlebar.locator('.desktop-window-actions button')
+            assert actions.evaluate_all("nodes => nodes.map(node => node.getAttribute('aria-label'))")[:4] == [
+                'Open file…', 'Reload from server', 'Save', 'Minimize window',
+            ]
             plain_tab = strip.get_by_role('button', name='/plain.txt', exact=True)
             notes_tab = strip.get_by_role('button', name='/home/arcnix/Desktop/Notes.md', exact=True)
             expect(strip.locator('.editor-tab')).to_have_count(2)
@@ -159,17 +170,34 @@ def main():
                                  target_position={'x': 110, 'y': 160})
             expect(contents).to_have_value('<p>dragged from Files</p>')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
-            editor.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            titlebar.get_by_role('button', name='Close file tab drag.html', exact=True).click()
             move_window('app-editor', 320)
             shortcuts.get_by_role('button', name='drop.html', exact=True).drag_to(
                 editor, target_position={'x': 150, 'y': 160})
             expect(contents).to_have_value('<p>dragged from Desktop</p>')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
             assert (peer.root / 'drag.html').is_file() and (home_desktop / 'drop.html').is_file()
+            move_window('app-editor', -320)
+            titlebar.get_by_role('button', name='Toggle maximize', exact=True).click()
+            for number in range(12):
+                choose_file(f'sample-{number:02}.txt', double=True, filesystem=False)
+                expect(contents).to_be_enabled()
+            p.set_viewport_size(dict(width=720, height=650))
+            more = titlebar.get_by_role('button', name='More tabs', exact=True)
+            more.click()
+            tabs = titlebar.get_by_role('group', name='More tabs', exact=True)
+            expect(tabs).to_be_visible()
+            expect(tabs.get_by_role('button')).to_have_count(13)
+            menu_height = tabs.evaluate('menu => [menu.scrollHeight, menu.clientHeight]')
+            assert menu_height[0] > menu_height[1], menu_height
+            tabs.get_by_role('button', name='drop.html', exact=True).click()
+            expect(tabs).to_be_hidden()
+            expect(contents).to_have_value('<p>dragged from Desktop</p>')
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Desktop icons fill a column before growing right, with no vertical scroll or visible scrollbar',
         'The shared picker confirms selection and opens HTML directly in Text Editor',
+        'Text Editor puts tabs and actions in the titlebar and opens a scrollable tab picker when space runs out',
         'Dragging files from Files and Desktop opens them directly without moving their originals',
         'Markdown renders headings, emphasis, tables and code offline with raw HTML shown as text',
         'Source editing, preview, minimize and Ctrl+S retain the draft and source encoding',

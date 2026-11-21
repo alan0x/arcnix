@@ -2,8 +2,8 @@ use arcnix_core::compose_apps;
 use arcnix_core::packages::{PackageAction, PackageManager};
 use arcnix_core::software_install::{self, Action as InstallAction, Source};
 
-use crate::*;
 use crate::scripts_ui::Submission;
+use crate::*;
 
 #[derive(Clone)]
 pub(crate) struct InstallState {

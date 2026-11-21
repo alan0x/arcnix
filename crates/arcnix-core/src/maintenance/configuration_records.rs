@@ -27,7 +27,9 @@ pub fn command(query: &Query) -> Result<String> {
     };
     Ok(format!(
         "# arcnix:configuration-records:{action}\nexec python3 -I -c {} {action} {}",
-        remote_tasks::quote(&include_str!("../automation/configuration_records.py").replace("\r\n", "\n")),
+        remote_tasks::quote(
+            &include_str!("../automation/configuration_records.py").replace("\r\n", "\n")
+        ),
         remote_tasks::quote(&argument)
     ))
 }

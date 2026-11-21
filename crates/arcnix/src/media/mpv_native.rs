@@ -13,8 +13,8 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::w;
 
-use crate::*;
 use crate::native_viewport::Viewport;
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct Playback {

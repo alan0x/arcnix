@@ -318,7 +318,9 @@ print(hashlib.sha256(json.dumps(rows).encode()).hexdigest())
                 if maintenance {
                     format!(
                         "exec(compile({},'<storage-reader>','exec'),ns)",
-                        serde_json::to_string(include_str!("../src/automation/record_maintenance.py"))?
+                        serde_json::to_string(include_str!(
+                            "../src/automation/record_maintenance.py"
+                        ))?
                     )
                 } else {
                     String::new()

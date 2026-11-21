@@ -6,9 +6,9 @@ use arcnix_core::server_apps::DesktopWindow;
 use glory::render::{DragCapture, DragPhase, EventKind, NodeId, Query, QueryValue, Semantics};
 use serde::Deserialize;
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::close_action;
+use crate::*;
 
 #[derive(Clone)]
 struct Tab {
@@ -622,7 +622,7 @@ pub(crate) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
     let choose = ui.clone();
     let strip = ui.clone();
     row()
-        .class("files-tabs")
+        .class("files-tabs window-tab-strip")
         .name(i18n::bind("File tabs"))
         .on(EventKind::Drag, move |event| {
             drop_on_strip(&strip, id, event)
@@ -710,7 +710,7 @@ pub(crate) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
                                 })
                                 .fill(
                                     sapid::button()
-                                        .class("files-tab-select")
+                                        .class("files-tab-select window-tab-select")
                                         .name(state.map(move |s| title(s, id, tab)))
                                         .pressed(state.map(move |s| {
                                             s.workbench

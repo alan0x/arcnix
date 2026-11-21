@@ -2285,7 +2285,7 @@ Snap 权限模式	Snap confinement
 服务器常用应用	SERVER ESSENTIALS
 为服务器添加好用的工具	Build your server workspace
 Web 服务、数据库与日常运维工具。	Web services, databases and everyday tools.
-了解 Nginx	Explore Nginx
+应用分类	Application categories
 全部应用	All applications
 浏览应用	Explore applications
 没有匹配的应用	No matching applications
@@ -2505,6 +2505,8 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 Markdown 预览	Markdown preview
 Markdown 预览过大，可切换到源码查看。	Markdown preview is too large. Open the source to read the file.
 已打开的文件	Open files
+更多标签页	More tabs
+从服务器重新载入	Reload from server
 关闭文件标签 {}	Close file tab {}
 要放弃所有已打开文件中的未保存修改吗？	Discard unsaved changes in all open files?
 监控分类	Monitor sections
@@ -2697,7 +2699,7 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 默认打开应用	Default app
 其他应用	Other apps
 文件关联	File association
-可用应用	Available apps
+已关联的应用	Associated apps
 此扩展名还没有关联应用。	No apps associated with this extension.
 内置支持	Built-in support
 手动添加	Added manually
@@ -2705,6 +2707,8 @@ SSH 阻止了部分网页资源	SSH blocked some page resources
 设为默认	Use as default
 移除关联	Remove association
 添加其他应用	Add another app
+可添加的应用	Apps to add
+添加应用	Add app
 管理远程文件各扩展名的默认应用和其他打开方式。	Manage default and alternative apps for remote file extensions.
 请关闭一个网页标签页后再打开新标签页	Close a web tab before opening another
 HTML 预览 · 脚本和外部资源已停用	HTML preview · Scripts and external resources are disabled

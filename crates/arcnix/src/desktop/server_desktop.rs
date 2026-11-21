@@ -793,6 +793,13 @@ pub(crate) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
         .on_press(move || ui.open_desktop_app(page))
 }
 
+pub(crate) fn tab_overflow() -> impl Widget {
+    row().class("window-tabs-overflow").fill((
+        i18n::desktop::icon_action("More tabs", Icon::More).class("icon-button window-tabs-more"),
+        col().class("window-tabs-menu"),
+    ))
+}
+
 fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let files = page.files_window_id();
     let state = ui.state;
@@ -803,6 +810,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let files_settings = ui.clone();
     let window_drop = ui.clone();
     let browse_video = ui.clone();
+    let editor_actions = ui.clone();
     let title = if page == WorkspacePage::Player {
         text().content(state.map(|s| {
             s.video
@@ -819,7 +827,9 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Files(id) => fragment((
             files_ui::sidebar_toggle(ui.clone()),
             files_tabs::tab_strip(ui.clone(), id),
+            tab_overflow(),
         )),
+        WorkspacePage::Editor => fragment((text_editor::file_tabs(ui.clone()), tab_overflow())),
         WorkspacePage::Monitor => fragment(monitor_ui::window_tools(ui.clone())),
         WorkspacePage::Settings => fragment(text().class("desktop-settings-saving").content(
             i18n::desktop::bind(state.map(server_apps_ui::settings_save_status)),
@@ -881,6 +891,9 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     title.class("desktop-window-title"),
                     tools,
                     row().class("desktop-window-actions").fill((
+                        when(page == WorkspacePage::Editor, move || {
+                            text_editor::title_actions(editor_actions.clone())
+                        }),
                         when(page == WorkspacePage::Player, move || {
                             let ui = browse_video.clone();
                             i18n::desktop::icon_action("Open video", Icon::OpenVideo)

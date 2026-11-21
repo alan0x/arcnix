@@ -25,17 +25,39 @@ def main():
             expect(p.locator('.app-center-app-card')).to_have_count(18)
             expect(p.locator('.install-sources')).to_have_count(0)
             expect(p.locator('.software-sources')).to_have_count(0)
-            expect(p.locator('.app-center-featured')).to_be_visible()
+            expect(p.locator('.app-center-featured')).to_have_count(0)
+            expect(p.get_by_role('button',name='Nginx',exact=True)).to_have_count(1)
+            sidebar=p.get_by_role('group',name='Application categories',exact=True)
+            catalog=p.locator('.app-center-catalog')
+            assert catalog.evaluate('''node => {
+                const left = node.querySelector('.app-center-categories').getBoundingClientRect();
+                const right = node.querySelector('.app-center-discover').getBoundingClientRect();
+                return left.right < right.left && Math.abs(left.top - right.top) < 2;
+            }''')
             app.screenshot('app-center-light.png')
-            p.locator('.app-center-categories').get_by_role('button',name='Databases',exact=True).click();expect(p.locator('.app-center-app-card')).to_have_count(4)
-            p.locator('.app-center-categories').get_by_role('button',name='All applications',exact=True).click()
+            databases=sidebar.get_by_role('button',name='Databases',exact=True)
+            databases.click();expect(p.locator('.app-center-app-card')).to_have_count(4)
+            expect(databases).to_have_attribute('aria-pressed','true')
+            expect(card('Nginx')).to_have_count(0)
+            p.set_viewport_size(dict(width=500,height=680))
+            expect(sidebar).to_have_css('flex-direction','row')
+            assert catalog.evaluate('''node => {
+                const categories = node.querySelector('.app-center-categories').getBoundingClientRect();
+                const results = node.querySelector('.app-center-discover').getBoundingClientRect();
+                return categories.bottom < results.top && node.scrollWidth <= node.clientWidth + 1;
+            }''')
+            app.screenshot('app-center-compact.png')
+            p.set_viewport_size(dict(width=1440,height=980))
+            expect(sidebar).to_have_css('flex-direction','column')
+            sidebar.get_by_role('button',name='All applications',exact=True).click()
             p.get_by_role('textbox',name='Search applications',exact=True).fill('restic');expect(p.locator('.app-center-app-card')).to_have_count(1)
             card('restic').get_by_role('button',name='restic',exact=True).click();expect(p.locator('.app-center-detail')).to_contain_text('Encrypted snapshots')
+            expect(sidebar).to_be_visible()
             expect(p.locator('.app-center-detail .app-center-website')).to_have_text('https://restic.net/')
             expect(p.locator('.install-sources')).to_have_count(0)
             p.get_by_role('textbox',name='Search applications',exact=True).fill('unfindable-application');expect(p.locator('.app-center-empty')).to_be_visible()
             p.get_by_role('textbox',name='Search applications',exact=True).fill('')
-            checks.append('Catalog shows 18 application cards, categories, search, product details and an empty state without exposing provider tabs during browsing')
+            checks.append('Catalog shows categories beside 18 application cards and above them on narrow windows, with one Nginx card, search, details and an empty state')
 
             d=install('Caddy');expect(d.locator('.install-app-name')).to_have_text('Caddy')
             for source in ['System packages','Snap','Docker Compose']:expect(d.get_by_role('button',name=source,exact=True)).to_be_enabled()

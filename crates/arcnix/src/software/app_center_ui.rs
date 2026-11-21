@@ -1,9 +1,9 @@
 use arcnix_core::software_catalog::{self as catalog, App, Category, Inventory};
 use arcnix_core::software_install::{self, Source};
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, icon_action, text_action};
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct AppCenterState {
@@ -246,33 +246,35 @@ fn card(ui: Ui, app: App) -> impl Widget {
         )),
     ))
 }
+fn categories(state: Cage<State>) -> impl Widget {
+    col()
+        .class("app-center-categories")
+        .name(i18n::bind("Application categories"))
+        .fill(
+            std::iter::once(None)
+                .chain(Category::ALL.into_iter().map(Some))
+                .map(move |category| {
+                    sapid::button()
+                        .class("button compact")
+                        .label(i18n::bind(
+                            category.map_or("All applications", Category::label),
+                        ))
+                        .pressed(state.map(move |s| s.software.app_center.category == category))
+                        .on_press(move || {
+                            state.revise(|s| {
+                                s.software.app_center.category = category;
+                                s.software.app_center.view = 0;
+                            })
+                        })
+                })
+                .collect::<Vec<_>>(),
+        )
+}
+
 fn discover(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let featured = ui.clone();
     let all = ui.clone();
     col().class("app-center-discover").fill((
-        when(
-            state.map(|s| {
-                s.software.app_center.query.is_empty()
-                    && s.software.app_center.category.is_none()
-                    && !s.software.app_center.compose_only
-            }),
-            move || {
-                row().class("app-center-featured").fill((
-                    col().fill((
-                        text().class("app-center-featured-title").content("Nginx"),
-                        text()
-                            .class("app-center-featured-caption")
-                            .content(i18n::bind("Web server and reverse proxy")),
-                    )),
-                    btn("Explore Nginx", {
-                        let featured = featured.clone();
-                        move || featured.app_center_details("nginx")
-                    })
-                    .class("button app-center-featured-action"),
-                ))
-            },
-        ),
         when(
             state.map(|s| s.software.app_center.compose_only),
             move || {
@@ -288,30 +290,6 @@ fn discover(ui: Ui) -> impl Widget {
                 ))
             },
         ),
-        row().class("app-center-categories").fill((
-            sapid::button()
-                .class("button compact")
-                .label(i18n::bind("All applications"))
-                .pressed(state.map(|s| s.software.app_center.category.is_none()))
-                .on_press(move || state.revise(|s| s.software.app_center.category = None)),
-            fragment(
-                Category::ALL
-                    .into_iter()
-                    .map(move |category| {
-                        sapid::button()
-                            .class("button compact")
-                            .label(i18n::bind(category.label()))
-                            .pressed(
-                                state
-                                    .map(move |s| s.software.app_center.category == Some(category)),
-                            )
-                            .on_press(move || {
-                                state.revise(|s| s.software.app_center.category = Some(category))
-                            })
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        )),
         row().class("app-center-section-heading").fill((
             text()
                 .class("section-title")
@@ -337,7 +315,7 @@ fn detail(ui: Ui) -> impl Widget {
     each(state.map(|s|s.software.app_center.selected.and_then(catalog::get).into_iter().collect::<Vec<_>>())).key(|a|a.id).children(move|item|{
         let app=item.value.get();let install=ui.clone();
         col().class("app-center-detail").fill((
-            text_action("All applications",Icon::ChevronRight).class("button with-icon app-center-back").on_press(move||state.revise(|s|s.software.app_center.view=0)),
+            text_action("Back",Icon::ChevronRight).class("button with-icon app-center-back").on_press(move||state.revise(|s|s.software.app_center.view=0)),
             row().class("app-center-detail-header").fill((badge(app),col().class("app-center-detail-identity").fill((text().class("app-center-detail-name").content(app.name),text().class("subtle").content(i18n::bind(app.category.label())),text().class("app-center-detail-summary").content(i18n::bind(app.summary)))),btn("Install…",move||install.install_catalog_app(app.id)).class("button primary app-center-install-button").enabled(state.map(|s|s.connected&&!scripts_ui::busy(s))))),
             col().class("app-center-detail-section").fill((text().class("section-title").content(i18n::bind("Common uses")),text().class("app-center-detail-uses").content(i18n::bind(app.uses)))),
             col().class("app-center-detail-section").fill((text().class("section-title").content(i18n::bind("Project website")),text().class("app-center-website").selectable(true).content(app.website))),
@@ -452,7 +430,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     let custom = ui.clone();
     let refresh = ui.clone();
     let search = ui.clone();
-    let discover_ui = ui.clone();
+    let catalog_ui = ui.clone();
     let installed_ui = ui.clone();
     let packages_ui = ui.clone();
     col().class("app-center-content").fill((
@@ -513,14 +491,22 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
         text()
             .class("error app-center-error")
             .content(state.map(|s| s.software.app_center.error.clone())),
-        when(state.map(|s| s.software.app_center.view == 0), move || {
-            discover(discover_ui.clone())
-        }),
+        when(
+            state.map(|s| matches!(s.software.app_center.view, 0 | 2)),
+            move || {
+                let discover_ui = catalog_ui.clone();
+                let detail_ui = catalog_ui.clone();
+                row().class("app-center-catalog").fill((
+                    categories(state),
+                    when(state.map(|s| s.software.app_center.view == 0), move || {
+                        discover(discover_ui.clone())
+                    })
+                    .otherwise(move || detail(detail_ui.clone())),
+                ))
+            },
+        ),
         when(state.map(|s| s.software.app_center.view == 1), move || {
             installed_page(installed_ui.clone())
-        }),
-        when(state.map(|s| s.software.app_center.view == 2), move || {
-            detail(ui.clone())
         }),
         when(state.map(|s| s.software.app_center.view == 3), move || {
             software::packages(packages_ui.clone())

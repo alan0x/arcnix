@@ -8,7 +8,7 @@ const desktopGeometry = (() => {
     const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
     const moveWithin = (start, delta, minimum, maximum) =>
         clamp(start + delta, Math.min(start, minimum), Math.max(start, maximum));
-    let canvas, layout, gesture, observedArea;
+    let canvas, layout, gesture, observedArea, areaFrame;
     let lastDragEnd = -Infinity;
     const pending = new Map();
     const openingAreas = new Map();
@@ -19,12 +19,22 @@ const desktopGeometry = (() => {
         return { width, right: limits.width, top: height - titlebarHeight, bottom: limits.height - height };
     }
 
-    function fit(bounds, range) {
+    function positionRange(bounds, limits, range) {
         const widthToKeep = Math.min(range.width, bounds.width);
         return {
+            left: limits.left ? 0 : widthToKeep - bounds.width,
+            right: limits.right ? limits.width - bounds.width : range.right - widthToKeep,
+            top: range.top,
+            bottom: limits.bottom ? limits.height - bounds.height : range.bottom,
+        };
+    }
+
+    function fit(bounds, limits, range) {
+        const position = positionRange(bounds, limits, range);
+        return {
             ...bounds,
-            x: clamp(bounds.x, widthToKeep - bounds.width, range.right - widthToKeep),
-            y: clamp(bounds.y, range.top, range.bottom),
+            x: clamp(bounds.x, position.left, position.right),
+            y: clamp(bounds.y, position.top, position.bottom),
         };
     }
 
@@ -71,7 +81,7 @@ const desktopGeometry = (() => {
             y: projectAxis(bounds.y, bounds.height, reference.height, limits.height, hasSnapshot),
             width,
             height,
-        }, range);
+        }, limits, range);
     }
 
     function draw(element, bounds, limits) {
@@ -159,8 +169,14 @@ const desktopGeometry = (() => {
         finish(false);
         drawWindows();
     }
-    const observer = new ResizeObserver(updateArea);
-    const dockPosition = new MutationObserver(updateArea);
+    function scheduleAreaUpdate() {
+        if (!areaFrame) areaFrame = requestAnimationFrame(() => {
+            areaFrame = 0;
+            updateArea();
+        });
+    }
+    const observer = new ResizeObserver(scheduleAreaUpdate);
+    const dockPosition = new MutationObserver(scheduleAreaUpdate);
 
     function sync(next) {
         if (next?.epoch !== layout?.epoch) openingAreas.clear();
@@ -248,21 +264,24 @@ const desktopGeometry = (() => {
         }
         const { start, edge, limits, range } = drag;
         if (!edge) {
-            const widthToKeep = Math.min(range.width, start.width);
+            const position = positionRange(start, limits, range);
             drag.current = {
                 ...start,
-                x: moveWithin(start.x, dx, widthToKeep - start.width, range.right - widthToKeep),
-                y: moveWithin(start.y, dy, range.top, range.bottom),
+                x: moveWithin(start.x, dx, position.left, position.right),
+                y: moveWithin(start.y, dy, position.top, position.bottom),
             };
         } else {
             const minWidth = Math.min(minimumWidth, limits.width, start.width);
             const minHeight = Math.min(minimumHeight, limits.height, start.height);
             const right = start.x + start.width;
             const bottom = start.y + start.height;
-            const left = edge.includes('w') ? moveWithin(start.x, dx, right - limits.width, Math.min(right - minWidth, limits.width - range.width)) : start.x;
+            const farLeft = Math.max(right - limits.width, limits.left ? 0 : -Infinity);
+            const left = edge.includes('w') ? moveWithin(start.x, dx, farLeft, Math.min(right - minWidth, limits.width - range.width)) : start.x;
             const top = edge.includes('n') ? moveWithin(start.y, dy, Math.max(bottom - limits.height, range.top), Math.min(bottom - minHeight, range.bottom)) : start.y;
-            const newRight = edge.includes('e') ? moveWithin(right, dx, Math.max(left + minWidth, range.width), left + limits.width) : right;
-            const newBottom = edge.includes('s') ? moveWithin(bottom, dy, top + minHeight, top + limits.height) : bottom;
+            const farRight = Math.min(left + limits.width, limits.right ? limits.width : Infinity);
+            const farBottom = Math.min(top + limits.height, limits.bottom ? limits.height : Infinity);
+            const newRight = edge.includes('e') ? moveWithin(right, dx, Math.max(left + minWidth, range.width), farRight) : right;
+            const newBottom = edge.includes('s') ? moveWithin(bottom, dy, top + minHeight, farBottom) : bottom;
             drag.current = { x: left, y: top, width: newRight - left, height: newBottom - top };
         }
         draw(drag.element, drag.current, limits);

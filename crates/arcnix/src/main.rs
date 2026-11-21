@@ -2246,6 +2246,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/desktop-geometry.js"),
+                    include_str!("../assets/window-tabs.js"),
                     include_str!("../assets/files-tabs.js"),
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),

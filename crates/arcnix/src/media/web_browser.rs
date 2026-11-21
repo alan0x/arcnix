@@ -5,9 +5,9 @@ use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT, normalize_addres
 use arcnix_core::browser_proxy::Diagnosis;
 use zeroize::Zeroizing;
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, close_action, icon_action, text_action};
+use crate::*;
 
 pub(crate) const TAB_LIMIT: usize = 12;
 
@@ -688,7 +688,7 @@ pub(crate) fn address_bar(ui: Ui) -> impl Widget {
 fn browser_tabs(ui: Ui) -> impl Widget {
     let state = ui.state;
     row().class("browser-tabs").fill((
-        row().class("browser-tab-strip").fill(
+        row().class("browser-tab-strip window-tab-strip").fill(
             each(state.map(|s| s.web_browser.tabs.clone()))
                 .key(|tab| tab.id)
                 .children(move |item| {
@@ -705,7 +705,7 @@ fn browser_tabs(ui: Ui) -> impl Widget {
                         }))
                         .fill((
                             sapid::button()
-                                .class("browser-tab-label")
+                                .class("browser-tab-label window-tab-select")
                                 .label(tab.map(|tab| {
                                     if tab.title.is_empty() {
                                         parse_address(&tab.url)
@@ -724,6 +724,7 @@ fn browser_tabs(ui: Ui) -> impl Widget {
                         ))
                 }),
         ),
+        server_desktop::tab_overflow(),
         icon_action("New web tab", Icon::Plus)
             .enabled(state.map(|s| s.web_browser.tabs.len() < TAB_LIMIT))
             .on_press(move || {

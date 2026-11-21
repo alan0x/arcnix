@@ -59,7 +59,7 @@ function observeNativeSurface(app) {
         const rank = Number(getComputedStyle(browser).zIndex) || 0;
         const blockers = windows.filter(other => other !== browser && (Number(getComputedStyle(other).zIndex) || 0) > rank);
         const overlays = canvas.querySelectorAll(
-            '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip'
+            '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip,.window-tabs-menu:popover-open'
         );
         const clip = area ? [...blockers, ...overlays].map(rect).filter(box => box
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom

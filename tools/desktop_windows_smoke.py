@@ -103,7 +103,7 @@ def main():
             def work_area():
                 canvas = p.locator('.desktop-canvas').bounding_box()
                 dock = p.locator('.desktop-dock-zone').bounding_box()
-                return dict(canvas, height=dock['y'] - canvas['y'] - 8)
+                return dict(canvas, height=dock['y'] - canvas['y'])
 
             def projected(window, reference, area=None):
                 area = area or work_area()
@@ -393,14 +393,14 @@ def main():
                       original['x'] - partly_hidden['x'], original['y'] - partly_hidden['y'])
             eventually(lambda: same(bounds(), original))
             max_x = area['x'] + area['width'] - 64
-            max_y = area['y'] + area['height'] - 18
+            max_y = area['y'] + area['height'] - original['height']
             drag_from(original['x'] + 13, original['y'] + 20,
                       max_x - original['x'] + 12, max_y - original['y'] + 12)
             bottom_right = bounds()
             assert abs(bottom_right['x'] - max_x) <= 2, (original, bottom_right, max_x, max_y)
             assert abs(bottom_right['y'] - max_y) <= 2, bottom_right
             assert bottom_right['x'] + bottom_right['width'] > area['x'] + area['width'], bottom_right
-            assert bottom_right['y'] + bottom_right['height'] > area['y'] + area['height'], bottom_right
+            assert abs(bottom_right['y'] + bottom_right['height'] - area['y'] - area['height']) <= 2, bottom_right
             drag_from(bottom_right['x'] + 13, bottom_right['y'] + 11,
                       original['x'] - bottom_right['x'], original['y'] - bottom_right['y'])
             eventually(lambda: same(bounds(), original))
@@ -446,10 +446,36 @@ def main():
             assert prefs()['windows']['settings']['bounds'] == saved_bounds
 
             settings.get_by_role('button', name='Dock', exact=True).click()
-            settings.get_by_role('button', name='Right side', exact=True).click()
             settings.get_by_role('button', name='Panel mode', exact=True).click()
-            right_dock = p.locator('.desktop-dock-zone.dock-right.dock-panel-zone')
-            expect(right_dock).to_be_visible()
+            for label, side, dx, dy in [('Bottom', 'bottom', 0, 420),
+                                        ('Right side', 'right', 420, 0),
+                                        ('Left side', 'left', -420, 0)]:
+                settings.get_by_role('button', name=label, exact=True).click()
+                position = ':not(.dock-side-zone)' if side == 'bottom' else f'.dock-{side}'
+                dock = p.locator(f'.desktop-dock-zone.dock-panel-zone{position}')
+                expect(dock).to_be_visible()
+
+                def beside_dock():
+                    window = settings.bounding_box()
+                    panel = dock.bounding_box()
+                    if side == 'bottom':
+                        return window['y'] + window['height'] <= panel['y'] + 1
+                    if side == 'right':
+                        return window['x'] + window['width'] <= panel['x'] + 1
+                    return window['x'] >= panel['x'] + panel['width'] - 1
+
+                eventually(beside_dock)
+                mark = settings.locator('.desktop-window-mark')
+                drag(mark, dx, dy)
+                eventually(beside_dock)
+                window, layer = settings.bounding_box(), p.locator('.desktop-window-layer').bounding_box()
+                if side == 'bottom':
+                    assert abs(window['y'] + window['height'] - layer['y'] - layer['height']) <= 2
+                elif side == 'right':
+                    assert abs(window['x'] + window['width'] - layer['x'] - layer['width']) <= 2
+                else:
+                    assert abs(window['x'] - layer['x']) <= 2
+            left_dock = p.locator('.desktop-dock-zone.dock-left.dock-panel-zone')
             settings.locator('.window-close').click()
             p.locator('.desktop-dock-home').click()
             p.locator('.desktop-shortcuts').get_by_role('button', name='Player', exact=True).click()
@@ -458,8 +484,8 @@ def main():
 
             def player_area():
                 canvas = p.locator('.desktop-canvas').bounding_box()
-                dock = right_dock.bounding_box()
-                return dict(canvas, width=dock['x'] - canvas['x'] - 8)
+                dock = left_dock.bounding_box()
+                return dict(canvas, x=dock['x'] + dock['width'], width=canvas['width'] - dock['width'])
 
             initial = player.bounding_box()
             reference = player_area()
@@ -472,7 +498,7 @@ def main():
             assert abs(player_bounds['reference']['width'] - reference['width']) <= 1
             assert abs(player_bounds['reference']['height'] - reference['height']) <= 1
             # The Player retains its full bounds for restoration. Its clipped
-            # portion must stop receiving pointer hits before the Dock.
+            # portion must stop receiving pointer hits outside the workspace.
             edge_x = reference['x'] + reference['width']
             assert p.evaluate('''([x, y]) => {
                 const app = point => document.elementFromPoint(point, y)?.closest('.app-player');
@@ -522,11 +548,12 @@ def main():
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Eight resize handles, captured titlebar movement and Escape cancellation',
-        'All four desktop edges clip floating windows while a titlebar grip stays reachable, including after restart',
+        'Desktop edges without a Dock can clip floating windows while keeping a titlebar grip reachable',
         'Growth reveals top and left overhangs first, then follows the saved relative center on both axes',
         'Independent window geometry across apps, reopen, resize, maximize and client restart',
         'A drag in a narrow Desktop saves the full rectangle and both reference dimensions, and a partially visible window moves and resizes by the pointer delta',
         'A right-aligned Settings window stays inside the desktop on shrink, reflows, and restores its saved placement',
+        'Window movement stops at the bottom, left, and right Dock boundaries',
         'Player reveals its right and bottom overhang, then follows its relative center inside the side Dock; shrink eventually fits flush',
         'Native monitor fullscreen with Escape restoring the original OS window',
         'Breadcrumb double-click editing and single-click navigation',

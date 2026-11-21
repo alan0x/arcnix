@@ -12,8 +12,8 @@ use windows::Win32::Security::Cryptography::{
 use windows::core::w;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::*;
 use crate::server_apps_worker::{Action as AppAction, Reply};
+use crate::*;
 
 const MAGIC: &[u8] = b"ARCNIX-COOKIE-DPAPI-V1\0";
 

@@ -3,6 +3,7 @@
 const desktopFrame = (() => {
     let canvas;
     let dock;
+    let frame;
 
     function dockInsets(canvas) {
         const zone = canvas.querySelector('.desktop-dock-zone');
@@ -15,11 +16,7 @@ const desktopFrame = (() => {
 
     function workArea(canvas) {
         const {width, height} = canvas.getBoundingClientRect();
-        const dock = dockInsets(canvas);
-        const reserve = size => size ? size + 8 : 0;
-        const left = reserve(dock.left);
-        const right = reserve(dock.right);
-        const bottom = reserve(dock.bottom);
+        const {left, right, bottom} = dockInsets(canvas);
         return {
             left, right, bottom,
             width: Math.max(1, Math.floor(width - left - right)),
@@ -44,9 +41,16 @@ const desktopFrame = (() => {
     function sizeDockTiles() {
         if (dock) dock.style.setProperty('--dock-tiles', String(1 + dock.querySelectorAll('.desktop-dock-app').length));
     }
+    function scheduleSync() {
+        if (!frame) frame = requestAnimationFrame(() => {
+            frame = 0;
+            sync();
+        });
+    }
     const dockItems = new MutationObserver(sizeDockTiles);
-    const dockPosition = new MutationObserver(sync);
-    const resize = new ResizeObserver(sync);
+    const dockPosition = new MutationObserver(scheduleSync);
+    // The frame variables also size the Dock. Update them after resize delivery.
+    const resize = new ResizeObserver(scheduleSync);
     function bind() {
         const next = document.querySelector('.desktop-canvas');
         if (next === canvas) return;
@@ -66,7 +70,7 @@ const desktopFrame = (() => {
         sync();
     }
     new MutationObserver(bind).observe(document, {childList: true, subtree: true});
-    window.addEventListener('resize', sync);
+    window.addEventListener('resize', scheduleSync);
     bind();
 
     function boundsFor(element) {

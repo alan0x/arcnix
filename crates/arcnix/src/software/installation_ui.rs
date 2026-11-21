@@ -1,7 +1,6 @@
 use arcnix_core::installers::{self, Definition};
 
-use crate::*;
-use crate::i18n;
+use crate::{i18n, *};
 
 pub(crate) fn options(ui: Ui) -> impl Widget {
     let state = ui.state;

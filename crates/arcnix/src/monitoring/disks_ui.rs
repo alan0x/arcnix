@@ -1,8 +1,8 @@
 use arcnix_core::disks::{Filesystem, Snapshot};
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::icon_action;
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct DiskState {

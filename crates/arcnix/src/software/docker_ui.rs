@@ -1,9 +1,9 @@
 use arcnix_core::docker::{Container, ContainerDetails, Operation, Snapshot, VolumeDetails};
 
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{icon_action, text_action};
 use crate::server_apps_worker::{Action as AppAction, Reply};
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct DockerState {

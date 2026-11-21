@@ -1,7 +1,7 @@
 //! Charts consume Rust-owned, session-only samples; they never fetch data.
-use crate::*;
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::btn;
+use crate::*;
 
 fn payload(s: &State) -> String {
     let m = &s.metrics;

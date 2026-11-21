@@ -584,7 +584,13 @@
         else if (event.detail === 2 && !additive(event) && !event.shiftKey) send(pane, "activate", row);
     }, true);
     document.addEventListener('dblclick', event => {
-        if (event.button !== 0 || !(event.target instanceof Element) || !event.target.closest('.breadcrumbs')) return;
+        if (event.button !== 0 || !(event.target instanceof Element)) return;
+        const picker = event.target.closest('.file-picker-row');
+        if (picker && !picker.closest('[inert]')) {
+            picker.querySelector('.file-picker-open-entry')?.click();
+            return;
+        }
+        if (!event.target.closest('.breadcrumbs')) return;
         const pane = pathPane(event.target);
         if (!pane) return;
         clearTimeout(breadcrumbClick);

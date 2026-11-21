@@ -9,7 +9,6 @@ use crate::*;
 pub(crate) enum Purpose {
     Video,
     TextEditor,
-    #[cfg(windows)]
     Code,
 }
 
@@ -85,6 +84,24 @@ pub(crate) fn dismiss(s: &mut State) {
     }
 }
 
+fn confirm(ui: &Ui, path: &str) {
+    let Some(purpose) = ui.state.with(current) else {
+        return;
+    };
+    ui.close_dialog();
+    if !ui
+        .state
+        .with(|s| s.connected && s.sftp_available && s.dialog.is_none())
+    {
+        return;
+    }
+    match purpose {
+        Purpose::Video => ui.player.open_from_picker(ui, path),
+        Purpose::TextEditor => text_editor::open(ui, path),
+        Purpose::Code => code_workbench::open(ui, path),
+    }
+}
+
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
     let state = ui.state;
     each(state.map(|s| current(s).into_iter().collect::<Vec<_>>()))
@@ -103,21 +120,9 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                     row().class("file-picker-actions").fill((
                         i18n::btn("取消", move || cancel.close_dialog()),
                         i18n::btn("打开", move || {
-                            let Some(path) = state.with(|s| selected_path(s).map(str::to_owned))
-                            else {
-                                return;
-                            };
-                            choose.close_dialog();
-                            if !state
-                                .with(|s| s.connected && s.sftp_available && s.dialog.is_none())
+                            if let Some(path) = state.with(|s| selected_path(s).map(str::to_owned))
                             {
-                                return;
-                            }
-                            match purpose {
-                                Purpose::Video => choose.player.open_from_picker(&choose, &path),
-                                Purpose::TextEditor => text_editor::open(&choose, &path),
-                                #[cfg(windows)]
-                                Purpose::Code => code_workbench::open(&choose, &path),
+                                confirm(&choose, &path);
                             }
                         })
                         .class("button primary")
@@ -555,6 +560,7 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                 .key(|entry| entry.path.clone())
                 .children(move |item| {
                     let entry = item.value;
+                    let browse = ui.clone();
                     let open = ui.clone();
                     row()
                         .class(state.map(move |s| {
@@ -587,13 +593,31 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                 .on(activate, move |_| {
                                     let e = entry.get();
                                     if e.is_dir {
-                                        read_directory(&open, e.path);
+                                        read_directory(&browse, e.path);
                                     } else {
                                         state.revise(|s| {
                                             if let Some(directory) = &mut s.desktop_file_picker {
                                                 directory.selected = Some(e.path);
                                             }
                                         });
+                                    }
+                                }),
+                            sapid::button()
+                                .class("hidden file-picker-open-entry")
+                                .on_press(move || {
+                                    let file = entry.get();
+                                    if !file.is_dir
+                                        && state.with(|s| {
+                                            s.desktop_file_picker.as_ref().is_some_and(
+                                                |directory| {
+                                                    directory.request.is_none()
+                                                        && directory.entries.contains(&file)
+                                                        && directory.filter.includes(&file, formats)
+                                                },
+                                            )
+                                        })
+                                    {
+                                        confirm(&open, &file.path);
                                     }
                                 }),
                             text().class("file-size").content(i18n::bind(

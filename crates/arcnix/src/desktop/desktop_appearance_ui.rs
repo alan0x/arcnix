@@ -3,10 +3,10 @@ use arcnix_core::desktop_theme::{
     ColorRole, CustomTheme, IconStyle, Overrides, Preset, Rgb, Selection, StyleOverrides, Themes,
 };
 
-use crate::*;
 use crate::desktop_customization_ui::{appearance, pending_wallpaper, settings_row, update};
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::btn;
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct Editor {

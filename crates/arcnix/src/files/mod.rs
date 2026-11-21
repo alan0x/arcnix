@@ -12,10 +12,10 @@ pub(crate) mod files_tabs;
 pub(crate) mod files_transfer;
 pub(crate) mod files_ui;
 pub(crate) mod folder_icons;
-pub(crate) mod trash_ui;
 pub(crate) mod transfer_details;
 pub(crate) mod transfer_progress;
 pub(crate) mod transfer_ui;
 pub(crate) mod transfer_worker;
 #[cfg(test)]
 pub(crate) mod transfer_worker_tests;
+pub(crate) mod trash_ui;

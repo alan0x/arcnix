@@ -1,7 +1,7 @@
 use arcnix_core::operations::{Intent, Service, ServiceAction, Snippet};
 
-use crate::*;
 use crate::operations_worker::{Action as OpAction, Event as OpEvent, Kind};
+use crate::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct OperationsState {
