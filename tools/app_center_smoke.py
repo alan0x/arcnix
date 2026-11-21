@@ -139,7 +139,7 @@ def main():
                 p.set_viewport_size(dict(width=width,height=800));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 app.screenshot(f'app-center-dark-{width}.png')
             p.set_viewport_size(dict(width=1440,height=980))
-            app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();app.servers()
+            app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();app.servers()
             p.get_by_role('textbox',name='搜索应用',exact=True).fill('数据库');expect(p.locator('.app-center-app-card')).to_have_count(4)
             p.get_by_role('textbox',name='搜索应用',exact=True).fill('');app.screenshot('app-center-chinese.png')
             assert not errors,errors

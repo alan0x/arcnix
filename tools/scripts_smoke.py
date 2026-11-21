@@ -75,7 +75,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         assert p.evaluate('document.documentElement.scrollWidth <= innerWidth')
         app.screenshot('scripts-narrow.png')
         app.settings('General')
-        p.get_by_role('button',name='简体中文',exact=True).click()
+        p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-scripts').click()
         expect(p.locator('.page-header-title')).to_have_text('运维脚本')

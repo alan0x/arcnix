@@ -146,8 +146,8 @@ with Peer(out/'alpha') as a, Peer(out/'beta') as b:
         passed('A favorite opens the normal reviewed multi-server form with the current script; accepted jobs survive desktop exit and query without resubmission')
 
         app.settings('General')
-        p.get_by_role('button', name='Dark', exact=True).click()
-        p.get_by_role('button', name='简体中文', exact=True).click()
+        p.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check()
+        p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         p.set_viewport_size(dict(width=900, height=700))
         p = library(app, '收藏')
         expect(p.get_by_text('安装 Nginx', exact=True)).to_be_visible()
@@ -173,7 +173,7 @@ with Peer(out/'alpha') as a, Peer(out/'beta') as b:
         passed('Chinese dark narrow layout keeps distinct source names, usable SVG stars, keyboard toggles and hover/click help without tiny text or overflow')
 
         app.settings('常规')
-        p.get_by_role('button', name='English', exact=True).click()
+        p.locator('.setting-language:visible').get_by_role('radio', name='English', exact=True).check()
         p = library(app)
         row(p, 'Personal probe').get_by_role('button', name='Delete', exact=True).click()
         d = p.get_by_role('dialog', name='Delete command', exact=True)

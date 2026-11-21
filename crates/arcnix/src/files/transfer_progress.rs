@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(percent(&job), 99.9);
         job.status = TransferStatus::Cancelled;
         assert!(percent(&job) < 100.);
-        assert_eq!(bytes(1024), "1.0 KiB");
+        assert_eq!(bytes(1000), "1.0 KB");
     }
     #[test]
     fn excludes_conflict_wait_and_decays_when_stalled() {

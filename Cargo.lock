@@ -1264,9 +1264,9 @@ dependencies = [
 
 [[package]]
 name = "glory"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e0ff6fd627fee9b3c0d419df7b1a8aad393984c9fa0321940c876b3f2729f84"
+checksum = "870fcc2b4be186396a84822cbe524b949f7ee394ce0ab9a9eb4546d91921880a"
 dependencies = [
  "glory-core",
  "glory-html",
@@ -1278,18 +1278,18 @@ dependencies = [
 
 [[package]]
 name = "glory-core"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9706f4d6f4b425c0e413dd2254ae9cc42d158d80c1678b233817830f9a4154fd"
+checksum = "6aec9cdea123d9148221479d97ec1518a3e12cacd74c0ab1d5e1784ee18a8ce2"
 dependencies = [
  "glory-render",
 ]
 
 [[package]]
 name = "glory-html"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4cf124834d4503eb7cf06f04c9ef17033709af05d61e3d3c4729d1e642e10b5"
+checksum = "c947a338753affad6aa5dcc0f50ff70b40d9160aa3eca48cecb1d3e80e71c8af"
 dependencies = [
  "glory-render",
  "glory-style",
@@ -1297,24 +1297,24 @@ dependencies = [
 
 [[package]]
 name = "glory-render"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a7437beed1f343065767f2f3d30df9a2b6f0193be334355beb7a4a97f4d830f"
+checksum = "8775ed3806d91da53e002e4c4b4d21b0b7ddf4cc95a70584946aeea0cdec4376"
 dependencies = [
  "glory-style",
 ]
 
 [[package]]
 name = "glory-style"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aef317298f44895fc22b616b6e159977ffb5e8f362dfd9478e9a6712dacdb81d"
+checksum = "b6c085bee476f2ae86688d24b73407c6e746e2701b0818a2f120762a91c379bb"
 
 [[package]]
 name = "glory-ui"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7749ab135feb65fd439d8dc404dfef7e0b31e71574afb88284401a990b0a971"
+checksum = "39b09a6800ddf42aedacdc6f3d68c45ea464f35a780a54b6b36d99c323f643e6"
 dependencies = [
  "glory-core",
  "glory-render",
@@ -1323,9 +1323,9 @@ dependencies = [
 
 [[package]]
 name = "glory-wry"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "779174ee432635f50813fc13ca0bb5ea0cc89ea79e5380b27d9a7d9d2e492ce4"
+checksum = "0a4ffbfa637ef7995a434147476e0dd142c13c7f05f14b775ce3cd69eb2bc8fd"
 dependencies = [
  "glory-core",
  "glory-html",
@@ -2968,9 +2968,9 @@ dependencies = [
 
 [[package]]
 name = "sapid"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4109d3499525c96432ef778c2cc921896972d3b38d1697744d41939fdad8fe2f"
+checksum = "4a789089a3703bc0c2ab6158f20882eddd4d8dd131eb0db860747939742c7557"
 dependencies = [
  "glory",
 ]

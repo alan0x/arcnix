@@ -373,7 +373,7 @@ def main():
             checks.append('Monitor includes services and logs; resource polling pauses on Home; search redetects log sources while refresh only reads logs')
 
             app.settings('General')
-            page.get_by_role('button', name='Dark', exact=True).click()
+            page.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check()
             app.servers()
             app.screenshot('desktop-dark.png')
             launch('Terminal')
@@ -408,7 +408,7 @@ def main():
                 page.get_by_role('button', name='Exit desktop fullscreen', exact=True).click()
             page.set_viewport_size(dict(width=1440, height=980))
             app.settings('General')
-            page.get_by_role('button', name='简体中文', exact=True).click()
+            page.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
             app.servers()
             expect(tabs.locator('.workbench-tab-select')).to_have_text(['首页', '传输文件', '桌面'])
             expect(tabs.get_by_role('button', name='全屏桌面', exact=True)).to_be_visible()

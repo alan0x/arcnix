@@ -77,7 +77,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         expect(p.locator('.diagnostic-run').first.locator('.diagnostic-finding')).to_have_count(0)
         p.locator('.diagnostic-target').last.get_by_role('button',name='Open server workspace',exact=True).click()
         expect(p.locator('.server-overview')).to_be_visible()
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-diagnostics').click()
         expect(p.locator('.page-header-title')).to_have_text('诊断')

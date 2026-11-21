@@ -496,9 +496,9 @@ def main():
             assert prefs()['windows']['settings']['bounds'] == saved_bounds
 
             settings.get_by_role('button', name='Dock', exact=True).click()
-            settings.get_by_role('button', name='Panel mode', exact=True).click()
+            settings.locator('.setting-dock-style:visible').get_by_role('radio', name='Panel mode', exact=True).check()
             for label, side in [('Bottom', 'bottom'), ('Right side', 'right'), ('Left side', 'left')]:
-                settings.get_by_role('button', name=label, exact=True).click()
+                settings.locator('.setting-dock-position:visible').get_by_role('radio', name=label, exact=True).check()
                 position = ':not(.dock-side-zone)' if side == 'bottom' else f'.dock-{side}'
                 dock = p.locator(f'.desktop-dock-zone.dock-panel-zone{position}')
                 expect(dock).to_be_visible()
@@ -587,7 +587,7 @@ def main():
             assert prefs()['windows']['player']['bounds'] == player_bounds
             app.application('Files')
             app.settings('General')
-            p.get_by_role('button', name='简体中文', exact=True).click()
+            p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
             app.servers()
             expect(p.locator('.files-sidebar').get_by_role('button', name='下载目录', exact=True)).to_be_visible()
             assert not errors, errors

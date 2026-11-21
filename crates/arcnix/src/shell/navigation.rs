@@ -471,6 +471,8 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
         .class(state.map(|s| {
             if server_desktop::fullscreen(s) {
                 "navigation-shell desktop-fullscreen"
+            } else if s.navigation == Page::Settings {
+                "navigation-shell settings-surface"
             } else {
                 "navigation-shell"
             }

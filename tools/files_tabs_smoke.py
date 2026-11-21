@@ -39,8 +39,8 @@ def main():
             assert not json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['show_hidden_files']
             active.locator('.files-new-tab + .files-settings').click()
             settings = page.get_by_role('dialog', name='Files settings')
-            expect(settings.get_by_role('button', name='Hide hidden files')).to_have_class(re.compile('active'))
-            settings.get_by_role('button', name='Show hidden files').click()
+            expect(settings.get_by_role('radio', name='Hide hidden files', exact=True)).to_be_checked()
+            settings.get_by_role('radio', name='Show hidden files', exact=True).check()
             settings.get_by_role('button', name='Done').click()
             expect(dotfile).to_be_visible()
             expect(hidden_dir).to_be_visible()

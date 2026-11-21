@@ -608,7 +608,7 @@ pub(crate) fn settings(ui: Ui) -> impl Widget {
     use desktop_customization_ui::{SettingsPage, settings_page};
 
     let state = ui.state;
-    row().class("desktop-settings-page").fill((
+    row().class("desktop-settings-page settings-surface").fill((
         desktop_customization_ui::settings_tabs(ui.clone()),
         each(state.map(|s| vec![settings_page(s)]))
             .key(|page| *page as u8)
@@ -661,7 +661,7 @@ pub(crate) fn settings(ui: Ui) -> impl Widget {
                                             text()
                                                 .class("section-title")
                                                 .content(i18n::bind("Desktop sync conflict")),
-                                            text().class("subtle").content(state.map(|s| {
+                                            text().class("subtle settings-copyable").content(state.map(|s| {
                                                 s.server_apps
                                                     .conflict
                                                     .as_ref()
@@ -722,28 +722,11 @@ fn general_settings(ui: Ui) -> impl Widget {
             help_ui::tip("Resource refresh interval", "This server uses the application default until you select an interval here. Sampling runs while the resource views in Monitor are open."),
             settings::desktop_reset(&ui, |prefs| prefs.resource_interval_seconds = None),
         )),
-        row()
-          .class("choice-list resource-interval-options")
-          .role(Role::Group)
-          .name(i18n::bind("Resource refresh interval"))
-          .fill(fragment(
-            std::iter::once(None)
-                .chain(AppSettings::RESOURCE_INTERVALS.into_iter().map(Some))
-                .map(move |seconds| {
-                    let choose = ui.clone();
-                    let label = seconds.map_or_else(
-                        || "Follow application".to_owned(),
-                        |seconds| format!("Every {seconds} s"),
-                    );
-                    sapid::button()
-                        .class("button")
-                        .label(i18n::bind(label))
-                        .pressed(state.map(move |s| current(s).resource_interval_seconds == seconds))
-                        .enabled(state.map(preferences_ready))
-                        .on_press(move || choose.save_desktop_interval(seconds))
-                })
-                .collect::<Vec<_>>(),
-        )),
+        settings::select(&ui, true, "Resource refresh interval",
+            std::iter::once((None, "Follow application".to_string())).chain(
+                AppSettings::RESOURCE_INTERVALS.into_iter().map(|n| (Some(n), format!("Every {n} s")))),
+            |s| current(s).resource_interval_seconds, preferences_ready,
+            |ui, seconds| ui.save_desktop_interval(seconds)),
       )),
       col().class("desktop-settings-card").fill((
         row().class("section-heading").fill((

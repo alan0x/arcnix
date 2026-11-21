@@ -75,7 +75,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         expect(p.locator('.task-status')).to_have_text(['Ready'],timeout=30000);p.get_by_role('button',name='Execute ready targets',exact=True).click();expect(p.locator('.task-status')).to_have_text(['Succeeded'],timeout=20000)
         assert json.loads((b.root/'cleanup-reports-fixture.json').read_text())[0]['released']
         history=app.config.with_suffix('.tasks.json').read_text();assert all(secret not in history for secret in ['arcnix-test','fixture-admin-secret','export_manifest_identity','runner_sha256','_RECOVERY_SOURCE'])
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click();p.get_by_role('button',name='清理报告',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click();p.get_by_role('button',name='清理报告',exact=True).click()
         expect(p.get_by_role('button',name='审核残留导出…',exact=True)).to_be_disabled();expect(p.get_by_role('button',name='审核暂存文件移除…',exact=True)).to_be_disabled()
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth');app.screenshot('recovery-chinese.png')
 

@@ -33,10 +33,10 @@ impl ConnectionSettings {
 }
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SizeUnits {
-    Bytes,
     #[default]
-    Iec,
+    #[serde(alias = "Bytes")]
     Decimal,
+    Iec,
 }
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DateStyle {
@@ -55,15 +55,30 @@ pub enum DisplayTimezone {
 #[serde(default)]
 pub struct DisplaySettings {
     pub units: SizeUnits,
+    #[serde(deserialize_with = "read_size_decimals")]
     pub decimals: u8,
     pub group_digits: bool,
     pub dates: DateStyle,
     pub timezone: DisplayTimezone,
 }
+impl DisplaySettings {
+    pub const MAX_DECIMALS: u8 = 2;
+}
+
+fn read_size_decimals<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let value = u8::deserialize(deserializer)?;
+    // Only migrate the previously supported precision. Other invalid values still fail validation.
+    Ok(if value == 3 {
+        DisplaySettings::MAX_DECIMALS
+    } else {
+        value
+    })
+}
+
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
-            units: SizeUnits::Iec,
+            units: SizeUnits::default(),
             decimals: 1,
             group_digits: false,
             dates: DateStyle::Relative,

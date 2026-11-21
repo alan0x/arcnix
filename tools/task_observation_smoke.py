@@ -103,7 +103,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         state(a,before='deactivating',saved=0,output='stopping again snapshot\n');groups.first.get_by_role('button',name='Refresh records',exact=True).click();expect(groups.first.locator('.record-status')).to_have_text('Stopping')
         passed('Independent record rows and saved logs apply the same legacy receipt rule without rewriting local task history')
 
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click()
         p.get_by_role('button',name='最近批次',exact=True).click()

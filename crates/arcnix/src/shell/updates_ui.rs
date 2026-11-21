@@ -422,7 +422,8 @@ fn controls(ui: Ui) -> impl Widget {
     let page = ui.clone();
     col().class("preferences-stack update-panel").fill((
         sapid::checkbox().class("preference-check").label(i18n::bind("Check for updates automatically")).checked(state.map(|s|s.config.settings.updates.automatic_checks)).on_checked_change(move|v|automatic.update_preferences(|s|s.updates.automatic_checks=v)),
-        row().class("choice-list").fill(each(vec![(1,"Daily"),(7,"Weekly"),(30,"Monthly")]).key(|(n,_)|*n).children({let ui=ui.clone();move|item|{let(n,label)=item.value.get();let set=ui.clone();sapid::button().class(state.map(move|s|if s.config.settings.updates.interval_days==n{"choice active"}else{"choice"}.to_owned())).label(i18n::bind(label)).on_press(move||set.update_preferences(|s|s.updates.interval_days=n))}})),
+        preferences_ui::preference_select(&ui, false, "Update check interval", [(1,"Daily"),(7,"Weekly"),(30,"Monthly")],
+            |s| s.updates.interval_days, |s,days| s.updates.interval_days=days),
         sapid::checkbox().class("preference-check").label(i18n::bind("Download and install verified updates when idle")).checked(state.map(|s|s.config.settings.updates.automatic_install)).on_checked_change(move|v|install.update_preferences(|s|s.updates.automatic_install=v)),
         text().class("subtle").content(i18n::bind(if ui.update_controller.automatic{"Checks contact the official GitHub release service. Installation waits until SSH is disconnected and all tasks are finished."}else{"Development build: background updates are paused. Manual update checks and installation are available."})),
         text().class("update-status").content(i18n::bind(state.map(|s|status(s).to_owned()))),

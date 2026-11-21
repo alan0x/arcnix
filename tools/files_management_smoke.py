@@ -64,7 +64,7 @@ def main():
             app.application('Settings')
             panel = page.locator('.desktop-settings-page')
             panel.get_by_role('button', name='Appearance', exact=True).click()
-            panel.get_by_role('button', name='Color icons', exact=True).click()
+            panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             expect(page.locator('.server-desktop')).to_have_attribute('data-desktop-icon-family', 'color')
             app.application('Files')
             folder_mark = app.file('Inbox').locator('.folder-icon-cloud')

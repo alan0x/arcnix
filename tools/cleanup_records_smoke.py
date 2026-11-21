@@ -75,7 +75,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         d.get_by_role('textbox',name='SSH password or key passphrase',exact=True).first.fill('arcnix-test');d.get_by_role('textbox',name='Administrator password (optional)',exact=True).first.fill('fixture-admin-secret');d.get_by_role('button',name='Read cleanup reports',exact=True).click()
         expect(alpha_group.locator('.cleanup-query-state')).to_have_text('Cleanup report query completed',timeout=30000)
         row(alpha_group,'report-0104').get_by_role('button',name='Inspect cleanup report',exact=True).click();expect(body).to_contain_text('unlink pending',timeout=30000)
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click()
         expect(alpha_group.locator('.cleanup-detail')).to_have_count(0);expect(alpha_group.get_by_role('button',name='刷新报告',exact=True)).to_be_disabled()
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth');app.screenshot('reports-chinese.png')
         assert not app.config.with_suffix('.tasks.json').exists();saved=app.config.read_text();assert all(s not in saved for s in ['report-0104','fixture-admin-secret','arcnix-test','unlink pending'])

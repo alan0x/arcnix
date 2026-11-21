@@ -140,7 +140,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         p.get_by_role('button',name='Import scripts…',exact=True).click();d=p.get_by_role('dialog',name='Import script bundle',exact=True)
         expect(d.get_by_role('textbox',name='Script bundle path',exact=True)).to_have_value('');d.get_by_role('button',name='Cancel',exact=True).click()
         passed('closing exchange dialogs discards source paths selected scripts and sharing drafts')
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规')
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-scripts').click();p.set_viewport_size(dict(width=900,height=700))
         p.get_by_role('button',name='导出脚本…',exact=True).click();d=p.get_by_role('dialog',name='导出脚本包',exact=True)
         expect(d).to_contain_text('分享副本');assert p.evaluate('document.documentElement.scrollWidth <= innerWidth')

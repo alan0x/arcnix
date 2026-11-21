@@ -18,7 +18,6 @@ fn payload(s: &State) -> String {
             "empty":label("Waiting for samples"),"latest":label("Latest read"),"seconds":label("s"),"minutes":label("min"),
         },
         "base":if s.config.settings.display.units==arcnix_core::preferences::SizeUnits::Decimal{1000}else{1024},
-        "bytes":s.config.settings.display.units==arcnix_core::preferences::SizeUnits::Bytes,
         "decimals":s.config.settings.display.decimals,
         "grouping":s.config.settings.display.group_digits,
         "locale":if desktop_system_settings::language(s)==arcnix_core::Language::SimplifiedChinese{"zh-CN"}else{"en-US"},

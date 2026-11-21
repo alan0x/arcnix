@@ -116,28 +116,39 @@ impl Preset {
     }
 
     pub fn theme(self) -> Theme {
-        let (wallpaper, accent, icons) = match self {
-            Self::Fjord => (Wallpaper::Fjord, None, IconStyle::Outline),
+        let (wallpaper, light_accent, dark_accent, icons) = match self {
+            Self::Fjord => (
+                Wallpaper::Fjord,
+                [135, 206, 235],
+                [121, 185, 213],
+                IconStyle::Outline,
+            ),
             Self::Aurora => (
                 Wallpaper::Aurora,
-                Some(Rgb([87, 194, 172])),
+                [170, 163, 239],
+                [137, 188, 153],
                 IconStyle::Outline,
             ),
             Self::Seaside => (
                 Wallpaper::Seaside,
-                Some(Rgb([172, 96, 89])),
+                [232, 162, 124],
+                [215, 152, 144],
                 IconStyle::Filled,
             ),
+        };
+        let style = |accent| StyleOverrides {
+            accent: Some(Rgb(accent)),
+            ..StyleOverrides::default()
         };
         Theme {
             wallpaper,
             mode: Mode::System,
-            accent,
+            accent: None,
             icons,
             icon_family: IconFamily::default(),
             colors: BTreeMap::new(),
-            light: StyleOverrides::default(),
-            dark: StyleOverrides::default(),
+            light: style(light_accent),
+            dark: style(dark_accent),
         }
     }
 }
@@ -218,6 +229,20 @@ impl Rgb {
         }))
     }
 
+    pub fn contrasting_label(self, surface: Self, text: Self) -> Self {
+        let background = self.luminance();
+        for label in [surface, text] {
+            if contrast(label.luminance(), background) >= 4.5 {
+                return label;
+            }
+        }
+        if contrast(0.0, background) >= contrast(1.0, background) {
+            Self([0; 3])
+        } else {
+            Self([255; 3])
+        }
+    }
+
     fn luminance(self) -> f64 {
         let [red, green, blue] = self.0.map(|channel| {
             let value = f64::from(channel) / 255.0;
@@ -268,6 +293,17 @@ impl Theme {
 
     pub fn main_color(&self, dark: bool) -> Option<Rgb> {
         self.style(dark).accent.or(self.accent)
+    }
+
+    /// The selected color for swatches and solid fills. Accent text uses the readable palette shade.
+    pub fn accent_fill(&self, dark: bool) -> Rgb {
+        self.style(dark)
+            .colors
+            .get(&ColorRole::Accent)
+            .or_else(|| self.colors.get(&ColorRole::Accent))
+            .copied()
+            .or_else(|| self.main_color(dark))
+            .unwrap_or_else(|| Self::default_accent(dark))
     }
 
     pub fn has_palette(&self, dark: bool) -> bool {
@@ -322,6 +358,7 @@ impl Theme {
         let input = tint(input, 2);
         let text = tint(text, 6);
         let raised = surface.mix(text, 7);
+        let selection_luminance = background.mix(self.accent_fill(dark), 20).luminance();
         let luminances = [background, surface, input, raised].map(Rgb::luminance);
         let ink = if dark { Rgb([255; 3]) } else { Rgb([0; 3]) };
         let readable = |color: Rgb, accent: bool| {
@@ -332,9 +369,7 @@ impl Theme {
                     luminances
                         .iter()
                         .all(|&base| contrast(base, luminance) >= 4.5)
-                        && (!accent
-                            || contrast(background.mix(*candidate, 20).luminance(), luminance)
-                                >= 4.5)
+                        && (!accent || contrast(selection_luminance, luminance) >= 4.5)
                 })
                 .unwrap_or(ink)
         };
@@ -553,6 +588,8 @@ mod tests {
             [255, 255, 0],
             [15, 29, 60],
             [36, 150, 136],
+            [120, 120, 120],
+            [170, 163, 239],
         ] {
             let theme = CustomTheme {
                 overrides: Overrides {
@@ -566,6 +603,10 @@ mod tests {
                 let palette = theme.palette(dark);
                 let background = palette[&Background];
                 let accent = palette[&Accent];
+                let fill = theme.accent_fill(dark);
+                assert_eq!(fill, Rgb(picked));
+                let label = fill.contrasting_label(palette[&Surface], palette[&Text]);
+                assert!(contrast(fill.luminance(), label.luminance()) >= 4.5);
                 let raised = palette[&Surface].mix(palette[&Text], 7);
                 for surface in [background, palette[&Surface], palette[&Input], raised] {
                     for role in [Text, MutedText, Accent, Error] {
@@ -575,9 +616,7 @@ mod tests {
                         );
                     }
                 }
-                assert!(
-                    contrast(background.mix(accent, 20).luminance(), accent.luminance()) >= 4.5
-                );
+                assert!(contrast(background.mix(fill, 20).luminance(), accent.luminance()) >= 4.5);
             }
         }
     }

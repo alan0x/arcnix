@@ -133,7 +133,7 @@ with Peer(out/'alpha') as a,Peer(out/'beta') as b:
         passed('Changed account, endpoint, fingerprint or saved port selection cannot redirect or reauthorize an inspection')
 
         app.stop();app.config.with_suffix('.tasks.json').write_text(json.dumps(saved));app.launch();p=app.page
-        app.settings('General');p.get_by_role('button',name='Dark',exact=True).click();p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check();p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         p.locator('.rail-diagnostics').click();p.set_viewport_size(dict(width=900,height=780))
         p.locator('.diagnostic-tcp-listeners').first.click();d=p.get_by_role('dialog',name='TCP 监听',exact=True)
         tip=d.get_by_role('button',name='帮助：TCP 监听',exact=True);tip.hover();expect(p.get_by_role('tooltip')).to_contain_text('独立 SSH')

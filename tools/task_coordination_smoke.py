@@ -76,7 +76,7 @@ with Peer(out/'peer') as peer:
         expect(p.locator('.task-status')).to_have_text(['Ready'], timeout=20000)
         p.get_by_role('button', name='Execute ready targets', exact=True).click()
         expect(p.locator('.task-status')).to_have_text(['Succeeded'], timeout=20000)
-        first.settings('General'); p.get_by_role('button', name='简体中文', exact=True).click()
+        first.settings('General'); p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-scripts').click()
         expect(p.locator('.page-header-title')).to_have_text('运维脚本')

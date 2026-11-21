@@ -50,12 +50,17 @@ def eventually(probe, timeout=15):
     raise AssertionError('Timed out waiting for the isolated test condition')
 
 
+def expect_radio_options(radios, labels):
+    expect(radios).to_have_count(len(labels))
+    for index, label in enumerate(labels):
+        expect(radios.nth(index)).to_have_accessible_name(label)
+
+
 def set_desktop_mode(panel, mode):
     panel.get_by_role('button', name='Appearance', exact=True).click()
-    row = panel.locator('.appearance-color-settings .desktop-setting-row').filter(has_text='Color scheme')
-    scheme = row.get_by_role('button', name=mode, exact=True)
-    scheme.click()
-    expect(scheme).to_have_attribute('aria-pressed', 'true')
+    scheme = panel.get_by_role('radiogroup', name='Color scheme', exact=True)
+    scheme.get_by_role('radio', name=mode, exact=True).check()
+    expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name(mode)
 
 
 class Peer:

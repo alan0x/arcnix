@@ -161,7 +161,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         d.get_by_role('button',name='Query',exact=True).click();expect(p.locator('.task-status').first).to_have_text('Succeeded',timeout=20000)
         expect(p.locator('.task-target').first.locator('.installation-report')).to_contain_text('Fixture check [redacted]')
         passed('status-word credentials redact decoded details and preserve restart verification')
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-scripts').click();expect(p.locator('.script-row').first).to_contain_text('检查所需软件包')
         p.set_viewport_size(dict(width=900,height=700))

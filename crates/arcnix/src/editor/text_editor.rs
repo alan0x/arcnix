@@ -937,6 +937,7 @@ pub(crate) fn menubar(ui: Ui) -> impl Widget {
                         read(&reload, surface);
                     }
                 })
+                .class("editor-reload")
                 .enabled(state.map(|s| active(s).is_some_and(|surface| can_reload(s, surface)))),
                 btn("Close tab", move || close_selected(&ui)).enabled(state.map(|s| {
                     active(s)

@@ -1,7 +1,7 @@
 """Verify theme inheritance, previews, and file placement in the desktop WebView."""
 import time
 
-from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expect
+from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expect, expect_radio_options
 from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 
 
@@ -9,35 +9,55 @@ def check_appearance_choices(panel):
     def button(name):
         return panel.get_by_role('button', name=name, exact=True)
 
-    line, color = button('Line icons'), button('Color icons')
+    scheme = panel.get_by_role('radiogroup', name='Color scheme')
+    icons = panel.get_by_role('radiogroup', name='Icon family')
+    segment = scheme.locator('.sapid-segment').first
+    panel.page.emulate_media(reduced_motion='no-preference')
+    assert segment.evaluate("""el => {
+        const style = getComputedStyle(el);
+        return style.transitionProperty.includes('background-color') &&
+            style.transitionDuration.split(',').some(duration => parseFloat(duration) > 0);
+    }""")
+    panel.page.emulate_media(reduced_motion='reduce')
+    expect(segment).to_have_css('transition-duration', '0s')
+    panel.page.emulate_media(reduced_motion=None)
     gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
     expect(gallery.locator('.wallpaper-choice')).to_have_text(['Fjord', 'Aurora', 'Seaside'])
     selected_wallpaper = gallery.locator('.wallpaper-choice[aria-pressed=true]')
     background = panel.page.locator('.desktop-wallpaper-art')
+    preset_accents = set()
     for mode in ('Light', 'Dark'):
-        hover_colors = set()
         for preset in ('Fjord', 'Aurora', 'Seaside'):
             card = button(preset).locator('..')
             card.click(position={'x': 20, 'y': 20})
             expect(button(preset)).to_have_attribute('aria-pressed', 'true')
-            button(mode).click()
-            expect(button(mode)).to_have_attribute('aria-pressed', 'true')
+            scheme.get_by_role('radio', name=mode, exact=True).check()
+            expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name(mode)
             expect(panel.page.locator('.server-desktop')).to_have_class(
                 f'server-desktop theme-{mode.lower()} desktop-{mode.lower()}',
             )
-            color.hover()
-            selected = line.evaluate('e => getComputedStyle(e).backgroundColor')
-            hover = color.evaluate('e => getComputedStyle(e).backgroundColor')
-            assert hover != selected, (preset, mode)
-            hover_colors.add(hover)
-            color.click()
-            expect(color).to_have_attribute('aria-pressed', 'true')
-            expect(color).to_have_css('background-color', selected)
-            color.press('Tab')
+            accent = card.evaluate("el => getComputedStyle(el).getPropertyValue('--accent-fill').trim()")
+            red, green, blue = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
+            expect(scheme.locator('.sapid-segment:has(input:checked)')).to_have_css(
+                'background-color', f'rgb({red}, {green}, {blue})',
+            )
+            expect(panel.get_by_role('textbox', name='Accent color', exact=True)).to_have_value(accent)
+            if preset == 'Fjord': assert accent == {'Light': '#87ceeb', 'Dark': '#79b9d5'}[mode]
+            readable = card.evaluate("el => getComputedStyle(el).getPropertyValue('--accent').trim()")
+            expect(card).to_have_css('border-top-color', f'rgb{tuple(bytes.fromhex(readable[1:]))}')
+            preset_accents.add(accent)
+            icons.get_by_role('radio', name='Color icons', exact=True).check()
+            expect(icons.get_by_role('radio', checked=True)).to_have_accessible_name('Color icons')
+            selected_icon = icons.get_by_role('radio', checked=True)
+            selected_icon.press('Tab')
             panel.page.keyboard.press('Shift+Tab')
-            expect(color).to_be_focused()
-            assert color.evaluate("e => e.matches(':focus-visible') && parseFloat(getComputedStyle(e).outlineWidth) >= 1.8")
-            line.click()
+            expect(selected_icon).to_be_focused()
+            assert selected_icon.evaluate("""el => el.matches(':focus-visible') &&
+                getComputedStyle(el.closest('label')).outlineStyle !== 'none'""")
+            selected_icon.press('ArrowLeft')
+            line_icons = icons.get_by_role('radio', name='Line icons', exact=True)
+            expect(line_icons).to_be_checked()
+            expect(line_icons).to_be_focused()
             override = 'Aurora' if preset == 'Seaside' else 'Seaside'
             gallery.get_by_role('button', name=f'{override} wallpaper', exact=True).click()
             expect(selected_wallpaper).to_have_text(override)
@@ -55,10 +75,10 @@ def check_appearance_choices(panel):
                 expect(selected_wallpaper.locator('.wallpaper-swatch')).to_have_css('background-image', active_image)
                 assert background.evaluate('el => el.getAnimations({subtree: true}).length') == 0
             if preset == 'Aurora' and mode == 'Dark':
-                button('Auto').click()
+                panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Auto', exact=True).check()
                 expect(selected_wallpaper).to_have_text('Aurora')
                 expect(background).to_have_class('desktop-wallpaper-art wallpaper-aurora')
-        assert len(hover_colors) == 3, (mode, hover_colors)
+    assert len(preset_accents) == 6
     button('Fjord').click()
 
 
@@ -90,7 +110,7 @@ def main():
             desktop = page.locator('.server-desktop')
             grid = desktop.locator('.desktop-shortcuts')
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'outline')
-            expect(desktop).to_have_css('color', 'rgb(35, 50, 72)')
+            expect(desktop).to_have_class('server-desktop theme-light desktop-light')
             expect(desktop.locator('.wallpaper-fjord')).to_have_count(1)
             expect(desktop.locator('.desktop-wallpaper-copy')).to_have_count(0)
             assert theme_file.read_text(encoding='utf-8') == legacy
@@ -152,26 +172,15 @@ def main():
 
             def check_interval_style(theme):
                 button('General').click()
-                group = panel.get_by_role('group', name='Resource refresh interval', exact=True)
-                selected = group.get_by_role('button', name='Follow application', exact=True)
-                other = group.get_by_role('button', name='Every 3 s', exact=True)
-                expect(selected).to_have_attribute('aria-pressed', 'true')
-                expect(other).to_have_attribute('aria-pressed', 'false')
-                foreground = desktop.evaluate('node => getComputedStyle(node).color')
-                expect(other).to_have_css('color', foreground)
-                expect(selected).to_have_css('color', foreground)
-                accent = button('General').evaluate('node => getComputedStyle(node).color')
-                expect(selected).not_to_have_css('border-top-color', accent)
-                fill = selected.evaluate('node => getComputedStyle(node).backgroundColor')
-                plain = other.evaluate('node => getComputedStyle(node).backgroundColor')
-                assert fill != plain
-                selected.hover()
-                expect(selected).to_have_css('background-color', fill)
-                other.hover()
-                expect(other).not_to_have_css('background-color', plain)
-                expect(other).to_have_css('color', foreground)
-                button('General').hover()
-                group.locator('..').screenshot(path=str(out / f'{theme}-refresh-interval.png'))
+                control = panel.get_by_role('combobox', name='Resource refresh interval')
+                expect(control.locator('option:checked')).to_have_text('Follow application')
+                expect(control.locator('option:not([hidden])')).to_have_text(['Follow application', 'Every 3 s', 'Every 5 s', 'Every 10 s', 'Every 30 s'])
+                expect(control).to_have_css('color', desktop.evaluate('el => getComputedStyle(el).color'))
+                expect(control).to_have_css('border-top-width', '0px')
+                expect(control).to_have_css('text-overflow', 'ellipsis')
+                assert control.evaluate("""el => el.getBoundingClientRect().right <=
+                    el.closest('.settings-select-field').getBoundingClientRect().right + 1""")
+                control.locator('..').screenshot(path=str(out / f'{theme}-refresh-interval.png'))
 
             button('About').click()
             links = panel.locator('.about-links')
@@ -185,16 +194,14 @@ def main():
             expect(panel.get_by_role('slider', name='Dock icon size', exact=True)).to_have_count(0)
             check_shortcut_gutter()
             button('Dock').click()
-            button('Left side').click()
+            panel.locator('.setting-dock-position:visible').get_by_role('radio', name='Left side', exact=True).check()
             expect(page.locator('.dock-left')).to_be_visible()
             check_shortcut_gutter()
-            button('Bottom').click()
+            panel.locator('.setting-dock-position:visible').get_by_role('radio', name='Bottom', exact=True).check()
             button('Desktop').click()
-            button('Horizontal').click()
-            button('Right to left').click()
-            panel.locator('.desktop-setting-row').filter(has_text='Desktop icon size').get_by_role(
-                'button', name='Large', exact=True,
-            ).click()
+            panel.locator('.setting-icon-arrangement:visible').get_by_role('radio', name='Horizontal', exact=True).check()
+            panel.locator('.setting-starting-edge:visible').get_by_role('radio', name='Right to left', exact=True).check()
+            panel.get_by_role('radiogroup', name='Desktop icon size', exact=True).get_by_role('radio', name='Large', exact=True).check()
             expect(grid).to_have_class('desktop-shortcuts icons-by-row icons-from-right icons-large')
             expect(grid).to_have_css('direction', 'rtl')
             check_shortcut_gutter()
@@ -235,6 +242,7 @@ def main():
             button('Dock').click()
             expect(panel.get_by_role('slider', name='Dock icon size', exact=True)).to_have_value('48')
             button('Desktop').click()
+            expect(desktop_size).to_be_visible()
             visible = shortcut_options('App icons')
             expect(visible.get_by_role('checkbox', name='Files', exact=True)).to_be_checked()
             visible.get_by_role('checkbox', name='Home', exact=True).check()
@@ -255,35 +263,34 @@ def main():
             check_appearance_choices(panel)
             button('Aurora').click()
             expect(desktop).to_have_class('server-desktop theme-light desktop-light')
-            styles = panel.locator('.appearance-color-settings .desktop-setting-row')
-            scheme_options = styles.filter(has_text='Color scheme').get_by_role('button')
-            icon_styles = panel.locator('.appearance-icon-settings')
-            icon_options = icon_styles.locator('.desktop-setting-row').filter(has_text='Tile background').get_by_role('button')
-            default_scheme = styles.filter(has_text='Color scheme').get_by_role('button', name='Auto', exact=True)
-            expect(scheme_options).to_have_text(['Auto', 'Light', 'Dark'])
-            expect(icon_options).to_have_text(['Gradient', 'Solid color'])
-            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
-            button('Dark').click()
+            scheme = panel.get_by_role('radiogroup', name='Color scheme')
+            scheme_options = scheme.get_by_role('radio')
+            icon_options = panel.get_by_role('radiogroup', name='Tile background').get_by_role('radio')
+            default_scheme = scheme.get_by_role('radio', checked=True)
+            expect_radio_options(scheme_options, ['Auto', 'Light', 'Dark'])
+            expect_radio_options(icon_options, ['Gradient', 'Solid color'])
+            expect(default_scheme).to_have_accessible_name('Auto')
+            panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Dark', exact=True).check()
             expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
-            expect(button('Gradient')).to_have_attribute('aria-pressed', 'true')
+            expect(panel.locator('.setting-tile-background:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Gradient')
             check_interval_style('aurora')
             button('Appearance').click()
             button('Seaside').click()
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'filled')
-            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            seaside_accent = panel.get_by_role('textbox', name='Accent color', exact=True).input_value()
+            expect(default_scheme).to_have_accessible_name('Auto')
             expect(desktop).to_have_class('server-desktop theme-light desktop-light')
-            expect(button('Solid color')).to_have_attribute('aria-pressed', 'true')
+            expect(panel.locator('.setting-tile-background:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Solid color')
             check_filled_icons()
             check_interval_style('seaside')
             button('Region & language').click()
             region = panel.locator('.desktop-region')
-            expect(region.get_by_role('button', name='English', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(region.locator('.setting-desktop-language:visible').get_by_role('radio', checked=True)).to_have_accessible_name('English')
             assert region.evaluate('''region => {
                 const desktop = region.closest('.server-desktop');
                 const color = el => getComputedStyle(el).color;
-                const active = color(region.closest('.desktop-settings-page').querySelector('.desktop-settings-section[aria-pressed=true]'));
-                return [...region.querySelectorAll('.section-title, .field-label')].every(label => color(label) === color(desktop))
-                    && [...region.querySelectorAll('.choice.active, .button[aria-pressed=true]')].every(button => color(button) === active);
+                return [...region.querySelectorAll('.section-title, .field-label, select')]
+                    .every(el => color(el) === color(desktop));
             }''')
             region.screenshot(path=str(out / 'seaside-region.png'))
             button('Appearance').click()
@@ -298,53 +305,64 @@ def main():
             active_theme = themes.locator('button[aria-pressed=true]')
             expect(active_theme).to_have_count(1)
             expect(button('Fjord')).to_have_attribute('aria-pressed', 'true')
-            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            expect(default_scheme).to_have_accessible_name('Auto')
             accent = panel.get_by_role('textbox', name='Accent color', exact=True)
             fjord_accent = accent.input_value()
-            button('Light').click()
-            expect(button('Light')).to_have_attribute('aria-pressed', 'true')
+            panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Light', exact=True).check()
+            expect(panel.locator('.setting-color-scheme:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Light')
             button('#249688').click()
-            button('Solid color').click()
-            button('Color icons').click()
+            panel.locator('.setting-tile-background:visible').get_by_role('radio', name='Solid color', exact=True).check()
+            panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             button('Seaside wallpaper').click()
             expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-seaside')
             button('Fjord').click()
-            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            expect(default_scheme).to_have_accessible_name('Auto')
             expect(active_theme).to_have_text('Fjord')
             expect(accent).to_have_value(fjord_accent)
-            expect(button('Line icons')).to_have_attribute('aria-pressed', 'true')
-            expect(button('Gradient')).to_have_attribute('aria-pressed', 'true')
+            expect(panel.locator('.setting-icon-family:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Line icons')
+            expect(panel.locator('.setting-tile-background:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Gradient')
             expect(button('Fjord wallpaper')).to_have_attribute('aria-pressed', 'true')
             expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-fjord')
 
             expect(button('Customize')).to_have_count(0)
             expect(accent).to_be_visible()
+            picker = panel.locator('input[type="color"]')
+            expect(picker).to_have_accessible_name('Choose accent color')
+            picker.fill('#3388bb')
+            expect(accent).to_have_value('#3388bb')
             initial_accent = desktop.evaluate("el => getComputedStyle(el).getPropertyValue('--accent')")
             accent.fill('invalid')
             assert desktop.evaluate("el => getComputedStyle(el).getPropertyValue('--accent')") == initial_accent
+            accent.press('Escape')
+            expect(accent).to_have_value('#3388bb')
+            accent.fill('#112233')
+            accent.press('Tab')
+            expect(picker).to_have_value('#112233')
 
             button('#249688').click()
             expect(accent).to_have_value('#249688')
             accent.fill('#123456')
-            button('Solid color').click()
-            button('Dark').click()
-            expect(button('Dark')).to_have_attribute('aria-pressed', 'true')
+            accent.press('Enter')
+            panel.locator('.setting-tile-background:visible').get_by_role('radio', name='Solid color', exact=True).check()
+            panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Dark', exact=True).check()
+            expect(panel.locator('.setting-color-scheme:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Dark')
             expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
             dark_text = desktop.evaluate('e => getComputedStyle(e).color')
+            expect(accent).to_have_value('#123456')
             check_filled_icons()
             expect(active_theme).to_have_text('Fjord')
 
             button('Aurora wallpaper').click()
             expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-aurora')
-            button('Gradient').click()
-            button('Color icons').click()
+            panel.locator('.setting-tile-background:visible').get_by_role('radio', name='Gradient', exact=True).check()
+            panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             button('Seaside').click()
             expect(active_theme).to_have_text('Seaside')
             expect(button('Seaside wallpaper')).to_have_attribute('aria-pressed', 'true')
             expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-seaside')
-            expect(accent).to_have_value('#ac6059')
-            expect(button('Line icons')).to_have_attribute('aria-pressed', 'true')
-            expect(default_scheme).to_have_attribute('aria-pressed', 'true')
+            expect(accent).to_have_value(seaside_accent)
+            expect(panel.locator('.setting-icon-family:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Line icons')
+            expect(default_scheme).to_have_accessible_name('Auto')
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'filled')
             expect(desktop).to_have_class('server-desktop theme-light desktop-light')
             expect(desktop).not_to_have_css('color', dark_text)
@@ -355,7 +373,7 @@ def main():
                 const indicator = getComputedStyle(icon, '::after');
                 return parseFloat(indicator.height) >= 3 && indicator.boxShadow !== 'none';
             }''')
-            button('Dark').click()
+            panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Dark', exact=True).check()
             expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
             dark_text = desktop.evaluate('e => getComputedStyle(e).color')
             gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
@@ -367,11 +385,11 @@ def main():
             expect(gallery.get_by_role('button', name='Add Picture', exact=True)).to_have_count(0)
             gallery.get_by_role('button', name='Aurora wallpaper', exact=True).click()
             expect(desktop.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-aurora')
-            expect(icon_options).to_have_text(['Gradient', 'Solid color'])
+            expect_radio_options(icon_options, ['Gradient', 'Solid color'])
             files_symbol = grid.locator('.app-files .desktop-app-icon').first
             symbol_mask = lambda: files_symbol.evaluate("icon => getComputedStyle(icon, '::before').maskImage")
             line_mask = symbol_mask()
-            button('Color icons').click()
+            panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             expect(desktop).to_have_attribute('data-desktop-icon-family', 'color')
             expect(icon_options).to_have_count(0)
             assert symbol_mask() == 'none'
@@ -394,9 +412,9 @@ def main():
                 })''')
             catalog.screenshot(path=str(out / 'color-apps.png'))
             close_dialog(catalog)
-            button('Line icons').click()
+            panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Line icons', exact=True).check()
             expect(desktop).to_have_attribute('data-desktop-icon-family', 'line')
-            expect(button('Solid color')).to_have_attribute('aria-pressed', 'true')
+            expect(panel.locator('.setting-tile-background:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Solid color')
             assert symbol_mask() == line_mask
             saved = eventually(lambda: persist() if persist().get('wallpaper') == 'aurora' and
                                 persist().get('overrides', {}).get('icon_family') == 'line' else None)
@@ -411,8 +429,15 @@ def main():
                 button(section).click()
                 expect(button(section)).to_have_attribute('aria-pressed', 'true')
                 assert panel.locator('.desktop-preferences').evaluate('el => el.scrollWidth <= el.clientWidth + 1'), section
+                for group in panel.get_by_role('radiogroup').all():
+                    assert group.locator('label').evaluate_all("""labels => labels.every(label => {
+                        const range = document.createRange();
+                        range.selectNodeContents(label.querySelector('span') || label);
+                        const text = range.getBoundingClientRect(), area = label.getBoundingClientRect();
+                        return text.width > 0 && text.left >= area.left - 1 && text.right <= area.right + 1;
+                    })"""), section
                 if section == 'Appearance':
-                    expect(button('Dark')).to_have_attribute('aria-pressed', 'true')
+                    expect(panel.locator('.setting-color-scheme:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Dark')
                     choices = gallery.locator('.wallpaper-choices')
                     choices.scroll_into_view_if_needed()
                     assert choices.evaluate('''grid => {

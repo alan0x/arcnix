@@ -123,7 +123,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
             expect(p.locator('.diagnostic-run').first.get_by_role('button',name='Findings and suggestions',exact=True)).to_be_disabled()
             marker.unlink();passed(flag+' cannot be presented as a complete set of diagnostic findings')
 
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-diagnostics').click();p.set_viewport_size(dict(width=900,height=700))
         good=next(i for i,task in enumerate(history(app)) if task['id']==identifier)

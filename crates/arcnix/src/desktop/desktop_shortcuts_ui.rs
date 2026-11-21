@@ -83,10 +83,16 @@ fn receive(ui: &Ui, value: &str) {
                 .revise(|s| s.server_apps.recording_shortcut = active && editing(s));
         }
         _ if !ui.state.with(desktop_active) => {}
-        Intent::Run { action, preset, chord } => {
+        Intent::Run {
+            action,
+            preset,
+            chord,
+        } => {
             if !ui.state.with(|s| {
                 let keys = keys(s);
-                keys.preset == preset && can_run(s, action) && keys.chords(action).any(|key| key == chord)
+                keys.preset == preset
+                    && can_run(s, action)
+                    && keys.chords(action).any(|key| key == chord)
             }) {
                 return;
             }
@@ -280,21 +286,16 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
         col().class("desktop-settings-card desktop-shortcut-scheme").fill((
             row().class("desktop-setting-row").fill((
                 text().class("section-title").content(i18n::bind("Shortcut scheme")),
-                row().class("desktop-setting-controls").fill(fragment([
-                    (Scheme::Auto, "Auto"), (Scheme::Windows, "Windows"), (Scheme::MacOs, "macOS"),
-                ].into_iter().map(|(scheme, label)| {
-                    let ui = ui.clone();
-                    sapid::button().class("button appearance-option").label(i18n::bind(label))
-                        .pressed(state.map(move |s| s.config.settings.shortcut_scheme == scheme))
-                        .on_press(move || {
-                            state.revise(|s| {
-                                s.config.settings.shortcut_scheme = scheme;
-                                s.server_apps.recording_shortcut = false;
-                                s.server_apps.shortcut_error.clear();
-                            });
-                            ui.save();
-                        })
-                }).collect::<Vec<_>>())),
+                row().class("desktop-setting-controls").fill(settings::select(&ui, true, "Shortcut scheme",
+                    [(Scheme::Auto, "Auto"), (Scheme::Windows, "Windows"), (Scheme::MacOs, "macOS")],
+                    |s| s.config.settings.shortcut_scheme, |_| true, |ui, scheme| {
+                        ui.state.revise(|s| {
+                            s.config.settings.shortcut_scheme = scheme;
+                            s.server_apps.recording_shortcut = false;
+                            s.server_apps.shortcut_error.clear();
+                        });
+                        ui.save();
+                    })),
             )),
             when(state.map(|s| s.config.settings.shortcut_scheme == Scheme::Auto), move || {
                 text().class("subtle").content(i18n::bind(match Scheme::Auto.preset() {

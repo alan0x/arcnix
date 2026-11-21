@@ -385,9 +385,9 @@ def main():
                 ('Aurora', 'Dark'), ('Seaside', 'Light'), ('Aurora', 'Dark'), ('Fjord', 'Light'),
             ], start=1):
                 settings.get_by_role('button', name=choice, exact=True).click()
-                expect(settings.get_by_role('button', name='Auto', exact=True)).to_have_attribute('aria-pressed', 'true')
+                expect(settings.locator('.setting-color-scheme:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Auto')
                 if effective == 'Dark':
-                    settings.get_by_role('button', name='Dark', exact=True).click()
+                    settings.locator('.setting-color-scheme:visible').get_by_role('radio', name='Dark', exact=True).check()
                 title = f'{effective} page ({count})'
                 expect(tabs.nth(1)).to_have_text(title)
                 expect(page.locator('.app')).to_have_class(re.compile(r'\btheme-light\b'))

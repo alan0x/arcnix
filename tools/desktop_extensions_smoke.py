@@ -56,7 +56,7 @@ def main():
             expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Settings')
             fits_desktop(p.locator('.desktop-window.active'))
             expect(p.locator('.desktop-modal-backdrop')).to_have_count(0)
-            d.get_by_role('button',name='Every 10 s',exact=True).click()
+            d.locator('select.setting-resource-refresh-interval:visible').select_option(label='Every 10 s')
             prefs=ubuntu.root/'home/arcnix/.arcnix/desktop.json'
             eventually(lambda: read_desktop_settings(prefs).get('resource_interval_seconds') == 10)
             d.get_by_role('button',name='Keyboard shortcuts',exact=True).click()
@@ -96,7 +96,7 @@ def main():
             expect(p.locator('.resource-trend-network')).to_be_visible()
             expect(p.locator('.resource-table')).to_contain_text('eth0')
             network = sections.get_by_role('button',name='Network',exact=True)
-            expect(network.locator('.monitor-section-summary')).to_contain_text('KiB/s', timeout=15000)
+            expect(network.locator('.monitor-section-summary')).to_contain_text('KB/s', timeout=15000)
             p.locator('.desktop-window.app-monitor .window-maximize').click()
             sidebar_widths = []
             for width, height in [(1440, 980), (1100, 780), (900, 660)]:
@@ -123,7 +123,7 @@ def main():
             viewport = table.get_by_role('list', name='Processes')
             expect(rows.first).to_contain_text('fixture-batch worker')
             expect(rows.first).to_contain_text('13.5%')
-            expect(rows.first).to_contain_text('4.0 MiB')
+            expect(rows.first).to_contain_text('4.2 MB')
             expect(rows.first.locator('.monitor-process-ports')).to_have_text('')
             expect(rows.filter(has_text='fixture-web').locator('.monitor-process-ports')).to_have_text('TCP 8080')
             query = processes.get_by_role('textbox',name='Filter by program, PID, UID or port')
@@ -237,7 +237,8 @@ def main():
             d.get_by_role('textbox',name='Host port',exact=True).fill('18080')
             d.get_by_role('button',name='Preview Compose',exact=True).click();expect(d.locator('.compose-preview')).to_contain_text('restart: unless-stopped')
             assert d.locator('.compose-preview').evaluate('el=>getComputedStyle(el).color')==d.get_by_role('button',name='Preview Compose',exact=True).evaluate('el=>getComputedStyle(el).color')
-            assert d.locator('.compose-preview').evaluate('el=>getComputedStyle(el).color')=='rgb(226, 234, 244)'
+            desktop_text = p.locator('.server-desktop').evaluate('el => getComputedStyle(el).color')
+            expect(d.locator('.compose-preview')).to_have_css('color', desktop_text)
             expect(d.locator('.compose-install-path')).to_have_text('~/.arcnix/apps/nginx-demo/compose.yaml')
             app.screenshot('unified-compose-install.png')
             d.get_by_role('button',name='Install',exact=True).click();finish_task(review=False)

@@ -78,7 +78,7 @@ cargo run --locked -p arcnix --bin arcnix -- --config ./my-config.json
 - **General / Theme**：Follow system（跟随系统，默认）／Dark／Light，实时应用。跟随系统时，系统深浅主题变化会自动更新界面、图标及终端配色；已有配置中明确保存的 Dark／Light 选择继续保留。
 - **Files / Hidden files**：显示或隐藏本地、远程列表中的点号文件。
 - **Monitoring / Resource refresh interval**：3／5／10／30 秒，仅在资源页打开时自动采集。
-- **Files / File sizes、Dates and times**：大小单位、精度、千位分隔、相对／ISO／系统时间、当地时间／UTC，统一用于文件与传输统计。提供明确标注的预览，精确字节模式下禁用小数精度。
+- **Files / File sizes、Dates and times** 默认以十进制 KB / MB 显示文件大小，保留 1 位小数。可切换二进制 KiB / MiB、选择 0 至 2 位小数或启用千位分隔。文件与传输统计共用这些设置。日期可选择相对时间、ISO 格式或系统格式，以及当地时间或 UTC。
 - **Connection**：连接超时与 SSH 保活，支持站点覆盖，下次连接生效；连接中断不会自动重放命令或文件修改。
 - **Transfers**：上传／下载分别配置询问、覆盖或跳过；文件操作菜单的 **Transfer defaults** 可以按服务器覆盖或恢复继承。
 - **Logging / Operation log、Log files**：操作日志的时间戳／导出与文件持久化分开。默认关闭写文件，开启后才显示目录、容量和轮转数量，默认目录位于配置旁的 `logs`；空错误不渲染，真实 I/O 错误仍显示。队列拥塞时提示丢弃记录，不能充当完整审计日志。

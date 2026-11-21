@@ -70,7 +70,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         p.locator('.rail-scripts').click();time.sleep(2.4);p.locator('.rail-tasks').click()
         expect(p.locator('.audit-storage-record')).to_have_count(0);expect(a_group.get_by_role('button',name='Refresh audit storage',exact=True)).to_be_disabled()
         (a.root/'audit-storage-slow').unlink()
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
         expect(p.get_by_role('button',name='残留导出存储',exact=True)).to_be_visible();assert p.evaluate('document.documentElement.scrollWidth<=innerWidth')
         p.get_by_role('button',name='连接清理报告…',exact=True).click();d=p.get_by_role('dialog',name='连接清理报告',exact=True)
         d.get_by_role('button',name='读取清理报告',exact=True).click();expect(p.locator('.audit-storage-record')).to_have_count(2)

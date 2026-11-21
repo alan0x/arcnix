@@ -259,7 +259,11 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .diagnostic-resolution-fields{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;width:100%}.diagnostic-resolution-row{padding:10px;border:1px solid var(--line);border-radius:5px}@media(max-width:1000px){.diagnostic-resolution-fields{grid-template-columns:minmax(0,1fr)}}
 .tcp-listeners-rows{display:flex;flex-direction:column;gap:10px}.tcp-listener-row{padding:10px;border:1px solid var(--line);border-radius:5px;display:flex;flex-direction:column;gap:6px}.tcp-listener-endpoint,.tcp-listener-holders{font:var(--font-code)/1.6 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.tcp-listeners-state,.tcp-listeners-error,.tcp-listeners-warning{overflow-wrap:anywhere}
 
-.terminal-tabs{display:flex;align-items:center;gap:6px;flex:none;overflow-x:auto;min-width:0;padding:6px 10px;border-bottom:1px solid var(--line)}.terminal-tab-item{display:flex;align-items:center;flex:none;min-width:0;max-width:300px;border:1px solid var(--line);border-radius:5px;overflow:hidden}.terminal-tab{min-width:0!important;max-width:260px;min-height:27px!important;padding:4px 8px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important;text-align:left;font-size:var(--font-small)!important;color:var(--muted)!important}.terminal-tab.active{color:var(--accent)!important;background:var(--accent-bg)!important}.terminal-tab-close{width:24px!important;min-width:24px!important;height:27px!important;min-height:27px!important;border-radius:0!important;flex:none}
+.terminal-tabs{display:flex;align-items:center;gap:6px;flex:none;overflow-x:auto;min-width:0;padding:6px 10px;border-bottom:1px solid var(--line)}.terminal-tab-item{display:flex;align-items:center;flex:none;min-width:0;max-width:300px;border:1px solid var(--line);border-radius:5px;overflow:hidden}.terminal-tab{min-width:0!important;max-width:260px;min-height:27px!important;padding:4px 8px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important;text-align:left;font-size:var(--font-small)!important;color:var(--muted)!important}.terminal-tab.active{color:var(--accent)!important}.terminal-tab-close{width:24px!important;min-width:24px!important;height:27px!important;min-height:27px!important;border-radius:0!important;flex:none}
+.terminal-tab-item:has(> .terminal-tab.active) {
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--line));
+}
 
 .terminal-tabs{overflow:hidden}.terminal-tab-list{display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow-x:auto}.terminal-tab-id{display:none!important}.terminal-new-tab{flex:none!important;margin-left:4px}
 
@@ -295,7 +299,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   --desktop-dock-line: #aec5f034;
   --desktop-tooltip: #22334c;
   --desktop-tooltip-ink: #f1f7ff;
-  --desktop-indicator: #9bb8d4;
   --desktop-indicator-outline: #081425;
   --desktop-active: #a2e7e3;
   display: flex;
@@ -314,7 +317,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   --desktop-dock-line: #81a1bf53;
   --desktop-tooltip: #20364d;
   --desktop-tooltip-ink: #f4f9ff;
-  --desktop-indicator: #10243a;
   --desktop-indicator-outline: #f3f7ff;
   --desktop-active: #237b9c;
 }
@@ -830,11 +832,11 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   width: var(--indicator-length);
   height: var(--indicator-size);
   border-radius: 4px;
-  background: var(--desktop-indicator);
+  background: var(--desktop-active);
   box-shadow: 0 0 0 1px var(--desktop-indicator-outline);
 }
-.desktop-dock-app.active::after { --indicator-length: calc(var(--dock-icon) * .27); background: var(--desktop-active); }
-.desktop-light .desktop-dock-app.active::after { background: color-mix(in srgb, var(--desktop-active) 60%, #08182c); }
+.desktop-dock-app.active::after { --indicator-length: calc(var(--dock-icon) * .27); }
+.desktop-light .desktop-dock-app.running::after { background: color-mix(in srgb, var(--desktop-active) 60%, #08182c); }
 .dock-side-zone .desktop-dock-app.running::after {
   top: 50%; bottom: auto; width: var(--indicator-size); height: var(--indicator-length);
 }
@@ -947,6 +949,11 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   top: var(--dock-menu-arrow); left: -6px; transform: translateY(-50%) rotate(135deg);
 }
 .app-settings { --desktop-settings-sidebar-width: clamp(138px, 25%, 208px); }
+.settings-surface { user-select: none; }
+.settings-surface :is(
+  :read-write, input[readonly], textarea, .settings-copyable, .network-settings-values,
+  .network-interface-name, .update-notes, .configuration-backup-digest, .error, .dialog-error, .form-error, .software-error
+) { user-select: text; }
 .desktop-window-content:has(> .desktop-settings-page) { container: desktop-settings / inline-size; padding: 0; }
 .desktop-settings-page { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .desktop-preferences {
@@ -1016,31 +1023,62 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .desktop-shortcut-option .preference-check:has(> input:disabled) { color: var(--muted) !important; }
 .server-desktop, .desktop-modal-backdrop {
-  --button-hover: color-mix(in srgb, var(--surface), var(--accent) 9%);
+  --accent-fill: var(--accent);
+  --on-accent: var(--surface);
+  --button-hover: color-mix(in srgb, var(--surface), var(--accent-fill) 9%);
 }
-:is(.desktop-appearance, .desktop-shortcut-scheme) {
-  --choice-track: color-mix(in srgb, var(--surface), var(--text) 4%);
-  --choice-tint: color-mix(in srgb, var(--surface), var(--accent) 10%);
+:is(.server-desktop, .desktop-modal-backdrop) .button.primary {
+  background: var(--accent-fill) !important; border-color: var(--accent) !important; color: var(--on-accent) !important;
 }
-:is(.desktop-appearance, .desktop-shortcut-scheme) .desktop-setting-controls:has(> .appearance-option) {
-  justify-self: end; width: fit-content; gap: 2px;
-  padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--choice-track);
+:is(.server-desktop, .desktop-modal-backdrop) .button.primary:hover:not(:disabled) {
+  background: var(--accent-fill) !important; box-shadow: inset 0 0 0 1px var(--on-accent);
 }
-:is(.desktop-appearance, .desktop-shortcut-scheme) .desktop-setting-controls > .appearance-option {
-  flex: 1 1 auto; min-width: 0; min-height: 28px !important; padding: 4px 10px !important;
-  border: 0 !important; border-radius: 5px !important; background: transparent !important;
-  color: var(--text) !important; white-space: normal !important;
+.desktop-appearance { --choice-tint: color-mix(in srgb, var(--surface), var(--accent-fill) 10%); }
+.settings-segment-field, .settings-segmented { width: fit-content; min-width: 0; max-width: 100%; }
+/* Sapid supplies motion and radio semantics. The surrounding setting labels the group. */
+.settings-segmented {
+  --sp-disabled: var(--raised); --sp-input: var(--accent-fill, var(--accent));
+  --sp-border: transparent; --sp-ring: var(--accent); --sp-disabled-text: var(--muted);
 }
-:is(.desktop-appearance, .desktop-shortcut-scheme) .appearance-option[aria-pressed=false]:hover:not(:disabled) {
-  background: var(--button-hover) !important;
+.settings-segmented > span:first-child { display: none; }
+.settings-segmented .sapid-radio-group-items {
+  display: inline-grid !important; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  box-sizing: border-box; max-width: 100%;
 }
-:is(.desktop-appearance, .desktop-shortcut-scheme) .desktop-setting-controls > .appearance-option[aria-pressed=true],
-:is(.desktop-appearance, .desktop-shortcut-scheme) .appearance-option[aria-pressed=true]:hover:not(:disabled) {
-  background: var(--accent) !important; color: var(--surface) !important; font-weight: 600 !important;
+.settings-segmented .sapid-segment {
+  display: grid; place-items: center; min-width: 0; min-height: 28px; padding: 3px 9px;
+  color: var(--text) !important; font: inherit !important;
+  text-align: center; overflow-wrap: anywhere;
 }
-:is(.desktop-appearance, .desktop-shortcut-scheme) .button:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: 2px;
+.settings-segmented .sapid-segment input[type=radio] {
+  inset: 0; width: 100%; height: 100%; min-height: 0; cursor: inherit;
 }
+.settings-segmented .sapid-segment:hover:has(input:enabled:not(:checked)) { background: var(--button-hover, var(--surface)); }
+.settings-segmented .sapid-segment:has(input:checked) {
+  background-color: var(--accent-fill, var(--accent)); border-color: transparent;
+  color: var(--on-accent, var(--surface)) !important;
+}
+.settings-select-field { width: min(100%, 13.5rem); max-width: 100%; min-width: 0; }
+.settings-select {
+  box-sizing: border-box; appearance: auto; align-self: flex-start; width: 100%;
+  min-height: 34px !important; padding: 5px 9px !important;
+  border: 0 !important; border-bottom: 1px solid var(--line) !important; border-radius: 4px 4px 0 0 !important;
+  background-color: color-mix(in srgb, var(--surface) 94%, var(--accent)) !important;
+  color: var(--text) !important; font: inherit !important; cursor: pointer;
+}
+.settings-select:hover:enabled { border-bottom-color: var(--line-hover) !important; }
+.settings-select:focus-visible,
+.theme-custom-color input.sapid-color-editor:focus-visible {
+  outline: none; box-shadow: inset 0 -2px var(--accent);
+}
+.settings-select:disabled { color: var(--muted) !important; opacity: .65; cursor: default; }
+.desktop-light .settings-select { color-scheme: light; }
+.desktop-dark .settings-select { color-scheme: dark; }
+.preference-select-row {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px;
+}
+.preference-select-row > span { color: var(--text); font-size: var(--font-label); }
+.icon-size-options > .settings-segment-field { align-self: flex-end; }
 .theme-preset-grid {
   display: grid !important; grid-template-columns: repeat(auto-fit, minmax(min(100%, 125px), 1fr)); gap: 8px;
 }
@@ -1083,16 +1121,27 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   display: flex; position: absolute; inset: auto 0 0; justify-content: space-around; padding: 4px;
   background: #101820b0; color: #fff; font-size: var(--font-small);
 }
-.theme-accent-controls, .theme-accent-options, .theme-accent-value {
+.theme-accent-controls, .theme-accent-options {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0;
 }
 .theme-accent-controls { justify-content: flex-end; }
-.desktop-appearance .theme-accent-value {
-  flex-wrap: nowrap; gap: 0; padding-inline-start: 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--input);
+.theme-custom-color { position: relative; display: flex; align-items: center; width: 9.25rem; max-width: 100%; }
+.theme-custom-color input[type=color] {
+  display: block;
+  width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer;
 }
-.desktop-appearance .theme-accent-value:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
-.theme-accent-value > .theme-color-swatch { width: 15px; height: 15px; }
+.theme-custom-color input[type=color]::-webkit-color-swatch-wrapper { padding: 1px; }
+.theme-custom-color input[type=color]::-webkit-color-swatch { border: 1px solid var(--line-hover); border-radius: 50%; }
+.theme-custom-color .sapid-color-input-editor { width: 100%; }
+.theme-custom-color .sapid-color-validation[aria-hidden=true] { display: none; }
+.theme-custom-color .sapid-color-input-left-section { top: 50% !important; transform: translateY(-50%); z-index: 1; }
+.theme-custom-color input.sapid-color-editor {
+  width: 100%; box-sizing: border-box; min-height: 36px; padding-inline: 36px 8px !important;
+  border: 0 !important; border-bottom: 1px solid var(--line) !important; border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--surface) 94%, var(--accent)) !important;
+  color: var(--text) !important; font: 13px/1.4 Consolas, monospace;
+}
+.theme-custom-color input[type=color]:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 .desktop-appearance .theme-accent-options > .theme-accent-choice {
   display: grid !important; place-items: center; width: 30px; min-height: 30px !important;
   padding: 3px !important; border-radius: 50% !important; border-color: transparent !important;
@@ -1102,9 +1151,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   border-color: var(--accent) !important;
 }
 .theme-color-swatch { width: 21px; height: 21px; border: 1px solid color-mix(in srgb, var(--text) 18%, transparent); border-radius: 50%; flex: none; }
-.desktop-appearance .theme-color-value {
-  width: 9ch; padding-inline: 6px; border: 0; outline: 0; background: transparent; font-family: Consolas, monospace;
-}
 .desktop-settings-pane .section-heading { min-width: 0; gap: 6px; }
 .desktop-settings-pane .choice-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 /* Sapid sets a light-theme foreground inline on checkbox labels. */
@@ -1160,9 +1206,11 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .time-zone-empty { padding: 22px 12px; text-align: center; color: var(--muted); }
 .dock-status-settings .desktop-setting-row { grid-template-columns: minmax(0, 1fr) auto; }
 .desktop-settings-pane .sapid-switch { min-width: 44px; min-height: 44px; justify-content: center; }
-.desktop-settings-pane .sapid-switch-track { background: var(--muted) !important; }
-.desktop-settings-pane .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent) !important; }
+.desktop-settings-pane .sapid-switch-track { background: var(--line-hover) !important; }
+.desktop-settings-pane .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill) !important; }
 .desktop-settings-pane .sapid-switch-thumb { background: var(--surface) !important; }
+.desktop-settings-pane .sapid-switch-thumb { box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent); }
+.desktop-settings-pane .sapid-switch:has(input:checked) .sapid-switch-track { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
 .desktop-settings-pane .sapid-switch-focus { display: none !important; }
 .desktop-settings-pane .sapid-switch:has(input:focus-visible) .sapid-switch-track {
   outline: 2px solid var(--accent); outline-offset: 3px;
@@ -1175,36 +1223,19 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-settings-pane .button[aria-pressed=true] {
   background: var(--accent-bg) !important; border-color: var(--accent) !important; color: var(--accent) !important;
 }
-.desktop-settings-pane .resource-interval-options > .button {
-  background: var(--surface) !important; border-color: var(--line) !important; color: var(--text) !important;
-}
-.desktop-settings-pane .resource-interval-options > .button[aria-pressed=false]:hover:not(:disabled) {
-  background: var(--raised) !important; border-color: var(--line-hover) !important;
-}
-.desktop-settings-pane .resource-interval-options > .button[aria-pressed=true] {
-  background: color-mix(in srgb, var(--surface), var(--accent) 16%) !important;
-  border-color: color-mix(in srgb, var(--line), var(--accent) 45%) !important;
-  font-weight: 600 !important;
-}
 .desktop-region :is(.section-title, .field-label) { color: var(--text); }
-.desktop-region .choice {
-  background: var(--raised) !important; border-color: var(--line) !important; color: var(--text) !important;
-}
-.desktop-settings-pane.desktop-region .choice.active {
-  background: var(--accent-bg) !important; border-color: var(--accent) !important; color: var(--accent) !important;
-}
 .icon-size-control { display: flex; gap: 12px; align-items: center; width: 100%; }
 .icon-size-slider {
   --icon-size-thumb: 15px;
   flex: 1; min-width: 0; height: 26px; margin: 0; padding: 0 !important; border: 0 !important;
   appearance: none; cursor: pointer;
-  background: linear-gradient(to right, var(--accent) var(--icon-size-progress, 0%), var(--line-hover) 0)
+  background: linear-gradient(to right, var(--accent-fill) var(--icon-size-progress, 0%), var(--line) 0)
     center / calc(100% - var(--icon-size-thumb)) 4px no-repeat !important;
 }
 .icon-size-slider::-webkit-slider-runnable-track { height: var(--icon-size-thumb); background: transparent; }
 .icon-size-slider::-webkit-slider-thumb {
   appearance: none; width: var(--icon-size-thumb); height: var(--icon-size-thumb);
-  border: 0; border-radius: 50%; background: var(--accent);
+  border: 1px solid var(--accent); border-radius: 50%; background: var(--accent-fill);
 }
 .icon-size-slider:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
 .icon-size-slider:disabled { cursor: default; }
@@ -1266,7 +1297,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 @container desktop-preferences (max-width: 405px) {
   .desktop-setting-row { grid-template-columns: minmax(0, 1fr); }
   .desktop-settings-pane .desktop-setting-controls { justify-content: flex-start; }
-  .desktop-appearance .desktop-setting-controls:has(> .appearance-option) { justify-self: start; }
+  .icon-size-options > .settings-segment-field { align-self: flex-start; }
   .desktop-settings-pane .desktop-setting-controls:has([role=switch]) { justify-content: flex-end; }
   .desktop-date-time .desktop-setting-controls { justify-content: flex-end; }
   .desktop-date-time .desktop-setting-row:has(.desktop-time-zone-controls) { grid-template-columns: minmax(0, 1fr); }
@@ -2388,6 +2419,11 @@ button,
   text-align: start; font: inherit !important; justify-content: flex-start;
 }
 .editor-menu-popup button:is(:hover, :focus-visible):enabled { background: var(--raised) !important; }
+.editor-menu-popup button[data-shortcut] { display: flex; align-items: center; gap: 24px; white-space: nowrap; }
+.editor-menu-popup button[data-shortcut]::after {
+  content: attr(data-shortcut) / ''; margin-inline-start: auto;
+  color: var(--muted); font-size: var(--font-small);
+}
 .editor-menu-popup button[aria-pressed=true]::after { content: '✓'; float: right; margin-inline-start: 12px; }
 .editor-tabbar {
   display: flex; align-items: center; gap: 4px; min-width: 0; flex: none; padding: 2px 6px;

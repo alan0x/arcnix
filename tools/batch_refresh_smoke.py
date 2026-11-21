@@ -168,7 +168,7 @@ with ExitStack() as stack:
         p.locator('.rail-tasks').click();no_pending(p)
         passed('Query completions update history while preserving the page the user chose')
 
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
         d=open_query(p,'查询批次结果')

@@ -81,7 +81,7 @@ with Peer(out/'peer') as peer:
         expect(p.locator('.script-row')).to_have_count(2)
         expect(p.locator('.script-page')).to_contain_text('Install PostgreSQL client')
         expect(p.locator('.script-page')).to_contain_text('Install MySQL/MariaDB client')
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规')
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-backups').click();p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth');app.screenshot('database-chinese.png')
         p.get_by_role('button',name='数据库客户端安装模板…',exact=True).click()
         p.get_by_role('textbox',name='搜索脚本',exact=True).fill('PostgreSQL 客户端')

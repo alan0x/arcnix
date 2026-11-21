@@ -130,7 +130,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         expect(d.get_by_role('textbox',name='SSH password or key passphrase',exact=True).first).to_have_value('');expect(d.get_by_role('textbox',name='Administrator password (optional)',exact=True).first).to_have_value('')
         d.get_by_role('textbox',name='SSH password or key passphrase',exact=True).first.fill('arcnix-test');d.get_by_role('textbox',name='Administrator password (optional)',exact=True).first.fill('fixture-admin-secret')
         d.get_by_role('button',name='Inspect storage',exact=True).click();expect(alpha_group.locator('.storage-state')).to_have_text('Storage query completed',timeout=30000)
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规')
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click();expect(alpha_group.get_by_role('button',name='刷新存储',exact=True)).to_be_disabled()
         expect(p.locator('.record-storage-page')).to_contain_text('不会更改服务器文件')
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth');app.screenshot('storage-chinese.png')

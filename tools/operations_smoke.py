@@ -171,7 +171,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         p.get_by_role('button',name='Commands',exact=True).click()
         p.locator('.snippet-row').filter(has_text='Hold operation').get_by_role('button',name='Run command…',exact=True).click()
         check(app,'Failed');expect(p.locator('.task-output')).to_contain_text('require a running systemd')
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-servers').click()
         p.get_by_role('button',name='运维操作',exact=True).click()

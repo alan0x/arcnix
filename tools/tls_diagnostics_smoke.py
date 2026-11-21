@@ -91,12 +91,12 @@ with Peer(out/'alpha') as a,Peer(out/'beta') as b:
         assert (launches(a),launches(b))==launch_before
         passed('Independent server metadata retains the exact TLS selection after local history is removed and can still verify and export it without a workspace, SFTP or repeated execution')
 
-        app.settings('General');p.get_by_role('button',name='Dark',exact=True).click();p.get_by_role('button',name='简体中文',exact=True).click();p.locator('.rail-diagnostics').click();p.set_viewport_size(dict(width=900,height=780))
+        app.settings('General');p.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check();p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();p.locator('.rail-diagnostics').click();p.set_viewport_size(dict(width=900,height=780))
         p.get_by_role('button',name='添加 TLS 端点',exact=True).click();r=endpoints(p);r.get_by_role('textbox',name='TLS 连接主机',exact=True).fill('xn--fiqs8s.test');r.get_by_role('textbox',name='TLS 验证名称（可选）',exact=True).fill('name.test')
         help(p,p.get_by_role('button',name='帮助：TLS 端点',exact=True),'SNI')
         assert p.evaluate('document.documentElement.scrollWidth<=innerWidth');assert not p.locator('.diagnostic-settings *:visible').evaluate_all("els=>els.filter(el=>!el.children.length&&el.textContent.trim()&&parseFloat(getComputedStyle(el).fontSize)<12).map(el=>el.textContent)")
         app.screenshot('tls-chinese-dark-900.png');r.get_by_role('textbox',name='TLS 连接主机',exact=True).focus();p.keyboard.press('Tab');expect(r.get_by_role('textbox',name='TLS 端口',exact=True)).to_be_focused()
-        p.locator('.settings-link').click();p.locator('.context-links').get_by_role('button',name='常规',exact=True).click();p.get_by_role('button',name='English',exact=True).click();p.get_by_role('button',name='Light',exact=True).click();p.locator('.rail-diagnostics').click();expect(endpoints(p).get_by_role('textbox',name='TLS connect host',exact=True)).to_have_value('xn--fiqs8s.test')
+        p.locator('.settings-link').click();p.locator('.context-links').get_by_role('button',name='常规',exact=True).click();p.locator('.setting-language:visible').get_by_role('radio', name='English', exact=True).check();p.locator('.setting-theme:visible').get_by_role('radio', name='Light', exact=True).check();p.locator('.rail-diagnostics').click();expect(endpoints(p).get_by_role('textbox',name='TLS connect host',exact=True)).to_have_value('xn--fiqs8s.test')
         app.screenshot('tls-english-light-900.png');passed('Chinese/English and both themes retain edited TLS rows, hover/click help, keyboard order, at least 12 px text and no horizontal overflow at 900 px')
 
 (out/'summary.json').write_text(json.dumps(checks,ensure_ascii=False,indent=2),encoding='utf-8');print(f'{len(checks)} groups passed; artifacts: {out}',flush=True)

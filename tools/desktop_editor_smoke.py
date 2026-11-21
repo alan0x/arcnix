@@ -72,6 +72,13 @@ def main():
                 titlebar.get_by_role('button', name=menu, exact=True).click()
                 titlebar.locator('.editor-menu-popup:popover-open').get_by_role('button', name=label, exact=True).click()
 
+            def check_shortcuts(bindings):
+                popup = titlebar.locator('.editor-menu-popup:popover-open')
+                for name, chord in bindings.items():
+                    item = popup.get_by_role('button', name=name, exact=True)
+                    expect(item).to_have_attribute('aria-keyshortcuts', chord.replace('Ctrl+', 'Control+'))
+                    assert chord in item.evaluate("el => getComputedStyle(el, '::after').content")
+
             def choose_file(name, *, double=False, filesystem=True):
                 command('File', 'Open file…')
                 expect(picker.get_by_role('button', name='File types', exact=True)).to_have_text('All supported text files')
@@ -92,14 +99,23 @@ def main():
             file_menu = titlebar.get_by_role('button', name='File', exact=True)
             file_menu.click()
             expect(titlebar.get_by_text('Save as…', exact=True)).to_be_visible()
+            check_shortcuts({'New document': 'Ctrl+N', 'Open file…': 'Ctrl+O', 'Save': 'Ctrl+S',
+                             'Save as…': 'Ctrl+Shift+S', 'Reload from server': 'F5'})
             file_menu.click()
             expect(titlebar.locator('.editor-menu-popup:popover-open')).to_have_count(0)
-            command('File', 'New document')
+            file_menu.press('Control+o')
+            picker.get_by_role('button', name='Cancel', exact=True).click()
+            expect(picker).to_have_count(0)
+            file_menu.press('Control+n')
             expect(contents).to_be_enabled()
             expect(contents).to_have_value('')
             expect(contents).to_be_focused()
             contents.press_sequentially('draft')
-            command('Edit', 'Select all')
+            titlebar.get_by_role('button', name='Edit', exact=True).click()
+            check_shortcuts({'Undo': 'Ctrl+Z', 'Redo': 'Ctrl+Y', 'Cut': 'Ctrl+X', 'Copy': 'Ctrl+C',
+                             'Paste': 'Ctrl+V', 'Select all': 'Ctrl+A'})
+            p.keyboard.press('Control+a')
+            expect(contents).to_be_focused()
             assert contents.evaluate('e => e.selectionEnd - e.selectionStart') == 5
             p.keyboard.insert_text('test')
             command('Edit', 'Undo')
@@ -122,7 +138,12 @@ def main():
             save_picker.get_by_role('button', name='Save', exact=True).click()
             eventually(lambda: (peer.root / 'copy.md').read_bytes() == b'draft')
             expect(strip.locator('.editor-tab-label')).to_have_text('copy.md')
+            (peer.root / 'copy.md').write_bytes(b'external edit')
+            contents.press('F5')
+            expect(contents).to_have_value('external edit')
             contents.fill('second draft')
+            contents.press('F5')
+            expect(contents).to_have_value('second draft')
             command('File', 'Save as…')
             filename.fill('race.txt')
             expect(save_picker.get_by_role('button', name='Save', exact=True)).to_be_enabled()
@@ -145,7 +166,7 @@ def main():
             save_picker.get_by_role('button', name='Save', exact=True).click()
             save_picker.get_by_role('button', name='Replace', exact=True).click()
             eventually(lambda: (peer.root / '新 文档.txt').read_bytes() == b'second draft')
-            assert (peer.root / 'copy.md').read_bytes() == b'draft'
+            assert (peer.root / 'copy.md').read_bytes() == b'external edit'
             command('File', 'Close tab')
             choose_file('drag.html', double=True)
             expect(contents).to_have_value('<p>dragged from Files</p>')

@@ -1438,24 +1438,19 @@ pub(crate) fn settings_row(
 
 fn choices<T: Copy + PartialEq + 'static>(
     ui: &Ui,
+    title: &'static str,
     options: &'static [(T, &'static str)],
     read: fn(&Appearance) -> T,
     write: fn(&mut Appearance, T),
 ) -> impl Widget + use<T> {
-    let state = ui.state;
-    fragment(
-        options
-            .iter()
-            .map(|&(value, label)| {
-                let ui = ui.clone();
-                sapid::button()
-                    .class("button")
-                    .label(i18n::bind(label))
-                    .pressed(state.map(move |s| read(appearance(s)) == value))
-                    .enabled(state.map(server_apps_ui::preferences_ready))
-                    .on_press(move || update(&ui, |prefs| write(prefs, value)))
-            })
-            .collect::<Vec<_>>(),
+    settings::select(
+        ui,
+        true,
+        title,
+        options.to_vec(),
+        move |s| read(appearance(s)),
+        server_apps_ui::preferences_ready,
+        move |ui, value| update(ui, |prefs| write(prefs, value)),
     )
 }
 
@@ -1476,6 +1471,7 @@ pub(crate) fn layout_controls(ui: Ui) -> impl Widget {
                 "Icon arrangement",
                 choices(
                     &ui,
+                    "Icon arrangement",
                     &[
                         (IconFlow::Columns, "Vertical"),
                         (IconFlow::Rows, "Horizontal"),
@@ -1488,6 +1484,7 @@ pub(crate) fn layout_controls(ui: Ui) -> impl Widget {
                 "Starting edge",
                 choices(
                     &ui,
+                    "Starting edge",
                     &[
                         (IconDirection::LeftToRight, "Left to right"),
                         (IconDirection::RightToLeft, "Right to left"),
@@ -1597,9 +1594,7 @@ fn icon_size_control(
                 .class("icon-size-state hidden")
                 .content(state.map(move |s| format!("{min},{max},{}", read(appearance(s))))),
         )),
-        row()
-            .class("choice-list")
-            .fill(choices(ui, presets, read, write)),
+        choices(ui, label, presets, read, write),
     ))
 }
 
@@ -1630,6 +1625,7 @@ fn dock_layout(ui: Ui) -> impl Widget {
                 "Dock position",
                 choices(
                     &ui,
+                    "Dock position",
                     &[
                         (DockPosition::Left, "Left side"),
                         (DockPosition::Right, "Right side"),
@@ -1643,6 +1639,7 @@ fn dock_layout(ui: Ui) -> impl Widget {
                 "Dock style",
                 choices(
                     &ui,
+                    "Dock style",
                     &[(false, "Floating dock"), (true, "Panel mode")],
                     |prefs| prefs.dock.panel_mode,
                     |prefs, value| prefs.dock.panel_mode = value,
@@ -1682,39 +1679,29 @@ fn dock_icons_settings(ui: Ui) -> impl Widget {
             when(state.map(panel_mode), move || {
                 settings_row(
                     "App icon alignment",
-                    row()
-                        .class("choice-list")
-                        .name(i18n::bind("App icon alignment"))
-                        .fill(fragment(
-                            [(false, "Align left"), (true, "Center icons")]
-                                .into_iter()
-                                .map(|(centered, label)| {
-                                    let choose = alignment.clone();
-                                    sapid::button()
-                                        .class("button")
-                                        .label(i18n::bind(state.map(move |s| {
-                                            if !centered
-                                                && appearance(s).dock.position
-                                                    != DockPosition::Bottom
-                                            {
-                                                "Align top"
-                                            } else {
-                                                label
-                                            }
-                                            .to_owned()
-                                        })))
-                                        .pressed(state.map(move |s| {
-                                            appearance(s).dock.panel_centered == centered
-                                        }))
-                                        .enabled(state.map(server_apps_ui::preferences_ready))
-                                        .on_press(move || {
-                                            update(&choose, |prefs| {
-                                                prefs.dock.panel_centered = centered
-                                            })
-                                        })
-                                })
-                                .collect::<Vec<_>>(),
-                        )),
+                    each(state.map(|s| vec![appearance(s).dock.position == DockPosition::Bottom]))
+                        .key(|bottom| *bottom)
+                        .children({
+                            let alignment = alignment.clone();
+                            move |item| {
+                                let edge = if item.value.get() {
+                                    "Align left"
+                                } else {
+                                    "Align top"
+                                };
+                                settings::select(
+                                    &alignment,
+                                    true,
+                                    "App icon alignment",
+                                    [(false, edge), (true, "Center icons")],
+                                    |s| appearance(s).dock.panel_centered,
+                                    server_apps_ui::preferences_ready,
+                                    |ui, centered| {
+                                        update(ui, |prefs| prefs.dock.panel_centered = centered)
+                                    },
+                                )
+                            }
+                        }),
                 )
             }),
             settings_row(
@@ -1797,14 +1784,22 @@ pub(crate) fn wallpaper_controls(ui: Ui) -> impl Widget {
                         sapid::button()
                             .class("button wallpaper-choice")
                             .name(i18n::bind(format!("{label} wallpaper")))
-                            .pressed(state.map(move |s| desktop_appearance_ui::background(s) == selected))
+                            .pressed(
+                                state
+                                    .map(move |s| desktop_appearance_ui::background(s) == selected),
+                            )
                             .enabled(ready)
                             .fill((
-                                text().class(format!("wallpaper-swatch {class}")).content(""),
+                                text()
+                                    .class(format!("wallpaper-swatch {class}"))
+                                    .content(""),
                                 text().class("wallpaper-name").content(i18n::bind(label)),
                             ))
                             .on_press(move || {
-                                desktop_appearance_ui::set_background(&choose, Some(wallpaper.clone()))
+                                desktop_appearance_ui::set_background(
+                                    &choose,
+                                    Some(wallpaper.clone()),
+                                )
                             })
                     })
                     .collect::<Vec<_>>(),

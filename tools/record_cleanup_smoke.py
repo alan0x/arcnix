@@ -59,7 +59,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         history=app.config.with_suffix('.tasks.json').read_text();assert all(secret not in history for secret in ['arcnix-test','fixture-admin-secret','runner_sha256','request_sha256'])
         p.get_by_role('button',name='Record storage',exact=True).click();expect(p.get_by_role('button',name='Review cleanup on servers…',exact=True)).to_be_disabled()
         p.get_by_role('dialog',name='Inspect record storage',exact=True).get_by_role('button',name='Cancel',exact=True).click()
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click()
         expect(p.get_by_role('button',name='审核服务器清理…',exact=True)).to_be_visible()
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth');app.screenshot('cleanup-chinese.png')
 

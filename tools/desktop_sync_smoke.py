@@ -83,7 +83,7 @@ def main():
             a_settings = settings(a, 'Appearance')
             set_desktop_mode(a_settings, 'Dark')
             b_settings = settings(b, 'General')
-            b_settings.get_by_role('button', name='Every 5 s', exact=True).click()
+            b_settings.locator('select.setting-resource-refresh-interval:visible').select_option(label='Every 5 s')
             expect(a_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             expect(b_settings.get_by_text('Pending sync', exact=True)).to_be_visible()
             eventually(lambda: json.loads(pending(a, 'cookies.json').read_text())['pending']['dirty'])

@@ -92,7 +92,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         app.config.with_suffix('.tasks.json').write_text(json.dumps(saved));app.launch();p=recent(app)
         expect(p.locator('.task-status')).to_have_text(['Succeeded','Cancelled'])
         expect(p.locator('.task-target').nth(1).get_by_role('button',name='Query server result',exact=True)).to_be_disabled()
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
         p.locator('.task-batch-refresh:visible').click();d=p.get_by_role('dialog',name='查询批次结果',exact=True)

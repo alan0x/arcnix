@@ -207,12 +207,19 @@ def main():
             new_tab.click()
             expect(tabs).to_have_count(2)
             running()
+            items = page.locator('.terminal-tab-item')
+            transparent = 'rgba(0, 0, 0, 0)'
+            expect(items.last.locator('.terminal-tab-close')).to_be_visible()
+            expect(items.last).not_to_have_css('background-color', transparent)
+            expect(items.first).to_have_css('background-color', transparent)
             second_id = metadata()['id']
             assert second_id != original_id
             command('echo SECOND_TAB_MARKER')
             expect(reader).to_contain_text('SECOND_TAB_MARKER')
             tabs.first.click()
             expect(reader).to_contain_text('FIRST_SESSION_STILL_ALIVE')
+            expect(items.first).not_to_have_css('background-color', transparent)
+            expect(items.last).to_have_css('background-color', transparent)
             expect(reader).not_to_contain_text('SECOND_TAB_MARKER')
             assert metadata()['id'] == original_id
             keyboard.focus()
@@ -293,7 +300,7 @@ def main():
             app.screenshot('terminal-menu-narrow.png')
             page.keyboard.press('Escape')
             app.settings('General')
-            page.get_by_role('button', name='Dark', exact=True).click()
+            page.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check()
             app.servers()
             app.application('Terminal')
             expect(reader).to_contain_text('AFTER_SHORTCUT_CLEAR')

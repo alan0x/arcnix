@@ -1,5 +1,20 @@
 (() => {
     const popupSelector = '.editor-menu-popup:popover-open';
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+    const primary = mac ? 'Meta+' : 'Control+';
+    const shortcuts = new Map([
+        [primary + 'N', '.editor-new'],
+        [primary + 'O', '.editor-open'],
+        [primary + 'S', '.remote-editor-save'],
+        [primary + 'Shift+S', '.editor-save-as'],
+        ['F5', '.editor-reload'],
+        [primary + 'Z', '.editor-edit-undo'],
+        [primary + (mac ? 'Shift+Z' : 'Y'), '.editor-edit-redo'],
+        [primary + 'X', '.editor-edit-cut'],
+        [primary + 'C', '.editor-edit-copy'],
+        [primary + 'V', '.editor-edit-paste'],
+        [primary + 'A', '.editor-edit-selectAll'],
+    ]);
 
     function showMenu(trigger) {
         const popup = trigger.nextElementSibling;
@@ -20,6 +35,12 @@
             popup.setAttribute('popover', 'auto');
             popup.setAttribute('role', 'group');
             trigger.popoverTargetElement = popup;
+            for (const [chord, selector] of shortcuts) {
+                const item = popup.querySelector(selector);
+                if (!item) continue;
+                item.setAttribute('aria-keyshortcuts', chord);
+                item.dataset.shortcut = chord.replace('Control+', 'Ctrl+').replace('Meta+', 'Cmd+');
+            }
             popup.addEventListener('toggle', () => trigger.setAttribute('aria-expanded', String(popup.matches(':popover-open'))));
         }
         const open = document.querySelector(popupSelector);
@@ -45,7 +66,7 @@
         }
         const popup = button.closest('.editor-menu-popup');
         const input = button.closest('.app-editor').querySelector('.editor-sheet textarea:enabled');
-        if (popup.matches(':popover-open')) popup.hidePopover();
+        button.closest('.editor-menubar').querySelector(popupSelector)?.hidePopover();
         const command = [...button.classList].find(name => name.startsWith('editor-edit-'))?.slice('editor-edit-'.length);
         if (!input || !command) return;
         input.focus();
@@ -94,14 +115,19 @@
             event.stopImmediatePropagation();
             return;
         }
-        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        if (event.altKey || event.getModifierState('AltGraph') || (event.ctrlKey && event.metaKey)) return;
+        const modified = event.ctrlKey || event.metaKey;
+        if (!modified && event.key !== 'F5') return;
+        const chord = (modified ? primary : '') + (event.shiftKey ? 'Shift+' : '') + event.key.toUpperCase();
+        const selector = shortcuts.get(chord);
+        if (!selector) return;
+        // The textarea owns native clipboard and undo shortcuts. Route them through
+        // the menu only while it has focus, so its displayed commands also work there.
+        if (selector.startsWith('.editor-edit-') && (!menu || !(mac ? event.metaKey : event.ctrlKey))) return;
         const editor = event.target.closest?.('.remote-editor-modal, .desktop-window.app-editor')
             || (event.target.matches?.('.desktop-canvas') && event.target.querySelector('.app-editor.active:not(.hidden)'));
         if (!editor || editor.closest('[inert]')) return;
-        const key = event.key.toLowerCase();
-        const selector = event.shiftKey ? (key === 's' && '.editor-save-as')
-            : {s: '.remote-editor-save', n: '.editor-new', o: '.editor-open'}[key];
-        const action = selector && editor.querySelector(selector);
+        const action = editor.querySelector(selector);
         if (!action) return;
         event.preventDefault();
         event.stopImmediatePropagation();

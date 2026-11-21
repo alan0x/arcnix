@@ -48,7 +48,7 @@ def main():
                 def running(direction):
                     row=page.locator('.queue-row').last
                     expect(row.locator('.job-name')).to_contain_text(direction)
-                    expect(row.locator('.job-transfer-details')).to_contain_text(re.compile(r'[1-9][0-9.]* (?:B|KiB|MiB)/s'))
+                    expect(row.locator('.job-transfer-details')).to_contain_text(re.compile(r'[1-9][0-9.]* (?:B|KB|MB)/s'))
                     value=float(row.get_by_role('progressbar').get_attribute('aria-valuenow'))
                     assert 0<value<100,value
                     assert row.locator('.job-progress').bounding_box()['height']<=5
@@ -58,7 +58,7 @@ def main():
                     expect(row.locator('.job-status')).to_have_text('Completed',timeout=20000)
                     expect(row.get_by_role('progressbar')).to_have_attribute('aria-valuenow','100')
                     expect(row.locator('.job-transfer-details')).to_contain_text('Average ')
-                    expect(row.locator('.job-transfer-details')).to_contain_text('Transferred 6.0 MiB')
+                    expect(row.locator('.job-transfer-details')).to_contain_text('Transferred 6.3 MB')
                     return row
                 upload();running('↑');checks.append('Upload displays an actual advancing progress bar, throughput, elapsed time and finite ETA; completion keeps average throughput and payload bytes')
                 path.unlink()
@@ -86,7 +86,7 @@ def main():
                 remote_path.unlink()
                 upload()
                 row=page.locator('.queue-row').last
-                expect(row.locator('.job-transfer-details')).to_contain_text(re.compile(r'[1-9][0-9.]* (?:B|KiB|MiB)/s'))
+                expect(row.locator('.job-transfer-details')).to_contain_text(re.compile(r'[1-9][0-9.]* (?:B|KB|MB)/s'))
                 row.get_by_role('button',name='Cancel transfer',exact=True).click()
                 expect(row.locator('.job-status')).to_have_text(re.compile(r'^Cancel(l)?ed$'))
                 assert float(row.get_by_role('progressbar').get_attribute('aria-valuenow'))<100

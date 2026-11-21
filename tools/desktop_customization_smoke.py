@@ -8,6 +8,7 @@ from desktop_fixture import Desktop, Peer, ROOT, close_dialog, expect, eventuall
 
 
 def check_wallpaper(surface, name):
+    expect(surface).to_have_css('background-image', re.compile(re.escape(f'/wallpapers/{name}.webp')))
     path, width, height = surface.evaluate("""async el => {
         const url = getComputedStyle(el).backgroundImage.slice(5, -2);
         const image = new Image();
@@ -139,7 +140,13 @@ def main():
                         : right ? (dock.right + icon.right) / 2
                         : (dock.bottom + icon.bottom) / 2;
                     const [width, height] = [parseFloat(indicator.width), parseFloat(indicator.height)];
+                    const dots = zone.querySelectorAll('.desktop-dock-app.running:not(.active)');
                     return margins.every(margin => Math.abs(margin / icon.width - .12) < .03)
+                        && [...dots].every(other => {
+                            const dot = getComputedStyle(other, '::after');
+                            return dot.backgroundColor === indicator.backgroundColor
+                                && dot.boxShadow === indicator.boxShadow && dot.width === dot.height;
+                        })
                         && Math.abs(center - target) <= 1
                         && ((left || right) ? height > width : width > height)
                         && indicator.content !== 'none';
@@ -244,7 +251,10 @@ def main():
             settings().get_by_role('button', name='Dock', exact=True).click()
             expect(settings().locator('.desktop-settings-card .section-title')).to_have_text(
                 ['Dock layout', 'Dock icons', 'Status bar'])
-            expect(settings().locator('.dock-layout-settings').get_by_role('button', name='Bottom', exact=True)).to_be_visible()
+            settings().get_by_text('Dock layout', exact=True).dblclick(position={'x': 8, 'y': 8})
+            assert not p.evaluate('window.getSelection().toString()')
+            position = settings().get_by_role('radiogroup', name='Dock position')
+            expect(position.get_by_text('Bottom', exact=True)).to_have_css('user-select', 'none')
             expect(settings().locator('.dock-icons-settings').get_by_role('slider', name='Dock icon size', exact=True)).to_be_visible()
             pinned = shortcut_options('App icons')
             pinned_order = ['Home', *default_apps, 'Trash']
@@ -294,16 +304,16 @@ def main():
             expect(swatches).to_have_count(2)
             gallery_swatch = settings().locator('.wallpaper-swatch.wallpaper-seaside')
             for mode, picture in [('Light', 'seaside-sunrise'), ('Dark', 'seaside-moonrise')]:
-                mode_button = settings().get_by_role('button', name=mode, exact=True)
-                mode_button.click()
-                expect(mode_button).to_have_attribute('aria-pressed', 'true')
+                scheme = settings().get_by_role('radiogroup', name='Color scheme', exact=True)
+                scheme.get_by_role('radio', name=mode, exact=True).check()
+                expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name(mode)
                 check_wallpaper(art, picture)
                 check_wallpaper(gallery_swatch, picture)
                 check_wallpaper(swatches.first, 'seaside-sunrise')
                 check_wallpaper(swatches.last, 'seaside-moonrise')
             settings().get_by_role('button', name='Aurora', exact=True).click()
             saved()
-            expect(settings().get_by_role('button', name='Auto', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name('Auto')
             expect(p.locator('.desktop-wallpaper-art')).to_have_class('desktop-wallpaper-art wallpaper-aurora')
             fjord = settings().get_by_role('button', name='Fjord', exact=True)
             fjord.click()
@@ -315,9 +325,9 @@ def main():
             check_wallpaper(fjord_swatches.last, 'fjord')
             gallery = settings().get_by_role('group', name='Wallpaper', exact=True)
             for mode, picture in [('Dark', 'fjord'), ('Light', 'fjord-daylight')]:
-                mode_button = settings().get_by_role('button', name=mode, exact=True)
-                mode_button.click()
-                expect(mode_button).to_have_attribute('aria-pressed', 'true')
+                scheme = settings().get_by_role('radiogroup', name='Color scheme', exact=True)
+                scheme.get_by_role('radio', name=mode, exact=True).check()
+                expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name(mode)
                 check_wallpaper(p.locator('.desktop-wallpaper-art'), picture)
                 check_wallpaper(gallery.locator('.wallpaper-swatch.wallpaper-fjord'), picture)
             expect(gallery.get_by_role('button', name='Add Picture', exact=True)).to_have_count(0)
@@ -331,7 +341,7 @@ def main():
             dock_button('Terminal').click(button='right')
             menu('Dock settings').click()
             expect(settings().get_by_role('button', name='Dock', exact=True)).to_have_attribute('aria-pressed', 'true')
-            settings().locator('.desktop-setting-row').filter(has_text='Dock icon size').get_by_role('button', name='Large', exact=True).click()
+            settings().locator('.desktop-setting-row').filter(has_text='Dock icon size').locator('.setting-dock-icon-size:visible').get_by_role('radio', name='Large', exact=True).check()
             saved()
             expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-large')
             expect(settings().get_by_role('button', name='Magnify Dock icons', exact=True)).to_have_count(0)
@@ -371,7 +381,7 @@ def main():
             close_dialog(pinned)
             settings().get_by_role('switch', name='Automatically hide the dock', exact=True).click()
             saved()
-            settings().get_by_role('button', name='Panel mode', exact=True).click()
+            settings().locator('.setting-dock-style:visible').get_by_role('radio', name='Panel mode', exact=True).check()
             saved()
             panel = p.locator('.dock-panel-zone > .desktop-dock')
             canvas = p.locator('.desktop-canvas')
@@ -385,16 +395,16 @@ def main():
             assert clock.bounding_box()['x'] > panel_box['x'] + panel_box['width'] / 2
             check_dock_selection()
 
-            align_left = settings().get_by_role('button', name='Align left', exact=True)
-            center_icons = settings().get_by_role('button', name='Center icons', exact=True)
+            align_left = settings().locator('.setting-app-icon-alignment:visible')
+            center_icons = settings().locator('.setting-app-icon-alignment:visible')
             leading = panel.locator('.desktop-dock-leading')
             apps = panel.locator('.desktop-dock-apps')
-            expect(align_left).to_have_attribute('aria-pressed', 'true')
+            expect(align_left.get_by_role('radio', checked=True)).to_have_accessible_name('Align left')
             leading_box = leading.bounding_box()
             assert 0 < apps.bounding_box()['x'] - leading_box['x'] - leading_box['width'] < 12
-            center_icons.click()
+            center_icons.get_by_role('radio', name='Center icons', exact=True).check()
             eventually(lambda: preferences()['dock'].get('panel_centered') is True)
-            expect(center_icons).to_have_attribute('aria-pressed', 'true')
+            expect(center_icons.get_by_role('radio', checked=True)).to_have_accessible_name('Center icons')
             apps_box = apps.bounding_box()
             assert abs(apps_box['x'] + apps_box['width'] / 2 - panel_box['x'] - panel_box['width'] / 2) < 2
             expect(apps).to_have_css('border-top-width', '0px')
@@ -415,7 +425,7 @@ def main():
             slider = settings().get_by_role('slider', name='Dock icon size', exact=True)
             dock_size = settings().locator('.desktop-setting-row').filter(has_text='Dock icon size')
             for label, pixels in [('Small', 32), ('Medium', 48), ('Large', 56)]:
-                dock_size.get_by_role('button', name=label, exact=True).click()
+                dock_size.get_by_role('radio', name=label, exact=True).check()
                 saved()
                 expect(slider).to_have_value(str(pixels))
                 check_dock_selection()
@@ -428,8 +438,9 @@ def main():
                     eventually(lambda: preferences()['dock']['size'] == 'small' and 'icon_size' not in preferences()['dock'])
                 else:
                     eventually(lambda: preferences()['dock'].get('icon_size') == value)
+                    expect(dock_size.get_by_role('radio', checked=True)).to_have_count(0)
                 check_dock_corners()
-            dock_size.get_by_role('button', name='Large', exact=True).click()
+            dock_size.locator('.setting-dock-icon-size:visible').get_by_role('radio', name='Large', exact=True).check()
             eventually(lambda: preferences()['dock']['size'] == 'large' and 'icon_size' not in preferences()['dock'])
             expect(slider).to_have_value('56')
             track = slider.bounding_box()
@@ -475,17 +486,17 @@ def main():
             expect(desktop_button('Settings')).to_have_count(0)
             eventually(lambda: {'terminal', 'settings', 'docker'} <= set(preferences()['hidden']))
             settings().get_by_role('button', name='Dock', exact=True).click()
-            expect(settings().get_by_role('button', name='Center icons', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(settings().locator('.setting-app-icon-alignment:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Center icons')
             expect(settings().get_by_role('switch', name='Show dock status bar', exact=True)).to_have_count(0)
-            settings().get_by_role('button', name='Align left', exact=True).click()
+            settings().locator('.setting-app-icon-alignment:visible').get_by_role('radio', name='Align left', exact=True).check()
             eventually(lambda: 'panel_centered' not in preferences()['dock'])
             expect(p.locator('.dock-panel-zone > .desktop-dock')).to_have_class(f'desktop-dock dock-size-{custom_pixels}')
-            settings().get_by_role('button', name='Floating dock', exact=True).click()
+            settings().locator('.setting-dock-style:visible').get_by_role('radio', name='Floating dock', exact=True).check()
             saved()
             expect(p.locator('.dock-panel-zone')).to_have_count(0)
             expect(p.locator('.desktop-panel-time')).to_have_count(0)
             expect(settings().locator('.dock-clock-settings')).to_have_count(0)
-            expect(settings().get_by_role('button', name='Center icons', exact=True)).to_have_count(0)
+            expect(settings().locator('.setting-app-icon-alignment:visible')).to_have_count(0)
             slider = settings().get_by_role('slider', name='Dock icon size', exact=True)
             expect(slider).to_have_value(str(custom_pixels))
             check_dock_selection()
@@ -505,7 +516,7 @@ def main():
             status_toggle.press('Space')
             expect(status_toggle).to_be_checked()
             saved()
-            expect(settings().locator('.dock-clock-settings').get_by_text('Time format', exact=True)).to_be_visible()
+            expect(settings().locator('.dock-clock-settings').get_by_role('radiogroup', name='Time format', exact=True)).to_be_visible()
             status = p.locator('.desktop-dock-status')
 
             def check_clock_inset():
@@ -566,11 +577,11 @@ def main():
             assert dock_icon.bounding_box() == icon_box
             p.mouse.move(25, 100)
             app.screenshot('floating-dock-status.png')
-            settings().get_by_role('button', name='Panel mode', exact=True).click()
+            settings().locator('.setting-dock-style:visible').get_by_role('radio', name='Panel mode', exact=True).check()
             saved()
             expect(status).to_have_count(0)
             expect(p.locator('.desktop-panel-time')).to_have_text(re.compile(r'\b\d{1,2}:\d{2}:\d{2}\b'))
-            settings().get_by_role('button', name='Floating dock', exact=True).click()
+            settings().locator('.setting-dock-style:visible').get_by_role('radio', name='Floating dock', exact=True).check()
             saved()
             expect(status_toggle).to_be_checked()
             expect(status).to_be_visible()
@@ -597,7 +608,7 @@ def main():
                     app.screenshot('compact-wallpaper-settings.png')
             p.set_viewport_size(dict(width=1440, height=980))
             settings().get_by_role('button', name='Dock', exact=True).click()
-            expect(settings().get_by_role('button', name='Bottom', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(settings().locator('.setting-dock-position:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Bottom')
             p.locator('.app-settings.active .window-maximize').click()
 
             def maximized_fits_dock(edge):
@@ -616,7 +627,7 @@ def main():
             eventually(lambda: maximized_fits_dock('bottom'))
             bubble = p.locator('.desktop-context-menu')
             for edge, menu_side in [('left', 'right'), ('right', 'left')]:
-                settings().get_by_role('button', name=edge.title() + ' side', exact=True).click()
+                settings().locator('.setting-dock-position:visible').get_by_role('radio', name=edge.title() + ' side', exact=True).check()
                 p.mouse.move(25, 100)
                 zone = p.locator(f'.desktop-dock-zone.dock-{edge}')
                 expect(zone).to_be_visible()
@@ -647,9 +658,9 @@ def main():
                 if edge == 'left':
                     dock_button('Settings').drag_to(dock_button('Terminal'), target_position={'x': 12, 'y': 4})
                     eventually(lambda: preferences()['dock']['order'][0] == 'settings')
-            settings().get_by_role('button', name='Panel mode', exact=True).click()
-            align_top = settings().get_by_role('button', name='Align top', exact=True)
-            center_icons = settings().get_by_role('button', name='Center icons', exact=True)
+            settings().locator('.setting-dock-style:visible').get_by_role('radio', name='Panel mode', exact=True).check()
+            align_top = settings().locator('.setting-app-icon-alignment:visible')
+            center_icons = settings().locator('.setting-app-icon-alignment:visible')
 
             def side_panel_fits(dock, centered):
                 return dock.evaluate('''(dock, centered) => {
@@ -673,25 +684,25 @@ def main():
                 }''', centered)
 
             for edge in ('left', 'right'):
-                settings().get_by_role('button', name=edge.title() + ' side', exact=True).click()
+                settings().locator('.setting-dock-position:visible').get_by_role('radio', name=edge.title() + ' side', exact=True).check()
                 panel = p.locator(f'.dock-{edge}.dock-panel-zone > .desktop-dock')
                 expect(panel.locator('.desktop-panel-time')).to_have_text(re.compile(r'^\d{2}:\d{2}$'))
-                expect(align_top).to_have_attribute('aria-pressed', 'true')
+                expect(align_top.get_by_role('radio', checked=True)).to_have_accessible_name('Align top')
                 eventually(lambda: side_panel_fits(panel, False))
                 if edge == 'left':
                     app.screenshot('left-panel-align-top.png')
-                center_icons.click()
-                expect(center_icons).to_have_attribute('aria-pressed', 'true')
+                center_icons.get_by_role('radio', name='Center icons', exact=True).check()
+                expect(center_icons.get_by_role('radio', checked=True)).to_have_accessible_name('Center icons')
                 eventually(lambda: side_panel_fits(panel, True))
                 p.set_viewport_size(dict(width=900, height=590))
                 eventually(lambda: side_panel_fits(panel, True))
                 eventually(lambda: maximized_fits_dock(edge))
                 check_dock_corners()
-                align_top.click()
+                align_top.get_by_role('radio', name='Align top', exact=True).check()
                 eventually(lambda: side_panel_fits(panel, False))
                 check_dock_corners()
                 p.set_viewport_size(dict(width=1440, height=980))
-            settings().get_by_role('button', name='Bottom', exact=True).click()
+            settings().locator('.setting-dock-position:visible').get_by_role('radio', name='Bottom', exact=True).check()
             eventually(lambda: maximized_fits_dock('bottom'))
             auto_hide = settings().get_by_role('switch', name='Automatically hide the dock', exact=True)
             auto_hide.click()
@@ -700,28 +711,28 @@ def main():
             dock_layout = settings().locator('.dock-layout-settings')
             dock_icons = settings().locator('.dock-icons-settings')
             dock_status = settings().locator('.dock-status-settings')
-            dock_icons.get_by_role('button', name='Large', exact=True).click()
-            status_format = dock_status.get_by_role('button', name='24-hour', exact=True)
-            status_format.click()
+            dock_icons.locator('.setting-dock-icon-size:visible').get_by_role('radio', name='Large', exact=True).check()
+            status_format = dock_status.locator('.setting-time-format:visible')
+            status_format.get_by_role('radio', name='24-hour', exact=True).check()
             dock_layout.locator('.settings-card-heading').get_by_role('button', name='Reset', exact=True).click()
             expect(auto_hide).not_to_be_checked()
-            expect(dock_icons.get_by_role('button', name='Large', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(dock_icons.locator('.setting-dock-icon-size:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Large')
             floating_status = dock_status.get_by_role('switch', name='Show dock status bar', exact=True)
             floating_status.check()
-            expect(status_format).to_have_attribute('aria-pressed', 'true')
+            expect(status_format.get_by_role('radio', checked=True)).to_have_accessible_name('24-hour')
             dock_icons.locator('.settings-card-heading').get_by_role('button', name='Reset', exact=True).click()
-            expect(dock_icons.get_by_role('button', name='Medium', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(dock_icons.locator('.setting-dock-icon-size:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Medium')
             expect(floating_status).to_be_checked()
-            expect(status_format).to_have_attribute('aria-pressed', 'true')
+            expect(status_format.get_by_role('radio', checked=True)).to_have_accessible_name('24-hour')
             dock_status.locator('.settings-card-heading').get_by_role('button', name='Reset', exact=True).click()
             expect(floating_status).not_to_be_checked()
-            expect(dock_icons.get_by_role('button', name='Medium', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(dock_icons.locator('.setting-dock-icon-size:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Medium')
             expect(p.locator('.dock-side-zone')).to_have_count(0)
-            expect(settings().get_by_role('button', name='Bottom', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(settings().locator('.setting-dock-position:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Bottom')
             assert not errors, errors
             app.screenshot('restored.png')
             settings().get_by_role('button', name='Appearance', exact=True).click()
-            settings().get_by_role('button', name='Color icons', exact=True).click()
+            settings().locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             expect(p.locator('.server-desktop')).to_have_attribute('data-desktop-icon-family', 'color')
             project_icon = desktop_button('Projects').locator('.folder-icon-projects')
             assert project_icon.evaluate('''icon => {

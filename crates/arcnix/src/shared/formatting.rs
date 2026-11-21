@@ -25,17 +25,6 @@ pub(crate) fn bytes(bytes: u64) -> String {
     bytes_with(bytes, SETTINGS.get())
 }
 pub(crate) fn bytes_with(bytes: u64, settings: DisplaySettings) -> String {
-    if settings.units == SizeUnits::Bytes {
-        let n = bytes.to_string();
-        return format!(
-            "{} B",
-            if settings.group_digits {
-                grouped(&n)
-            } else {
-                n
-            }
-        );
-    }
     let (base, units) = if settings.units == SizeUnits::Iec {
         (1024f64, ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"])
     } else {
@@ -50,7 +39,11 @@ pub(crate) fn bytes_with(bytes: u64, settings: DisplaySettings) -> String {
     let n = if index == 0 {
         bytes.to_string()
     } else {
-        format!("{:.*}", settings.decimals.min(3) as usize, value)
+        format!(
+            "{:.*}",
+            settings.decimals.min(DisplaySettings::MAX_DECIMALS) as usize,
+            value
+        )
     };
     format!(
         "{} {}",
@@ -166,12 +159,18 @@ mod tests {
     #[test]
     fn units_grouping_and_large_counts() {
         let mut s = DisplaySettings::default();
-        assert_eq!(bytes_with(1024, s), "1.0 KiB");
-        s.units = SizeUnits::Decimal;
+        assert_eq!(bytes_with(999, s), "999 B");
         assert_eq!(bytes_with(1000, s), "1.0 KB");
-        s.units = SizeUnits::Bytes;
+        assert_eq!(bytes_with(123_456_789, s), "123.5 MB");
+        s.decimals = 0;
+        assert_eq!(bytes_with(123_456_789, s), "123 MB");
+        s.decimals = 2;
+        assert_eq!(bytes_with(123_456_789, s), "123.46 MB");
+        assert_eq!(bytes_with(u64::MAX, s), "18.45 EB");
+        s.units = SizeUnits::Iec;
         s.group_digits = true;
-        assert_eq!(bytes_with(1234567, s), "1,234,567 B");
-        assert_eq!(bytes_with(u64::MAX, s), "18,446,744,073,709,551,615 B");
+        assert_eq!(bytes_with(1023, s), "1,023 B");
+        assert_eq!(bytes_with(1024, s), "1.00 KiB");
+        assert_eq!(bytes_with(1_024_000, s), "1,000.00 KiB");
     }
 }

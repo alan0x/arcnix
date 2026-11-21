@@ -694,10 +694,14 @@ Shell 命令	Shell command
 更新权限失败：{message}	Permission update failed: {message}
 
 显示格式	Display formats
+选择强调色	Choose accent color
+文件大小单位	File size units
+自定义值	Custom
+日期格式	Date format
+更新检查间隔	Update check interval
 文件大小	File sizes
 二进制单位 · KiB / MiB	IEC · KiB / MiB
 十进制单位 · KB / MB	Decimal · KB / MB
-精确字节数	Exact bytes
 小数位数	Decimal places
 使用千位分隔	Use thousands separators
 日期与时间	Dates and times

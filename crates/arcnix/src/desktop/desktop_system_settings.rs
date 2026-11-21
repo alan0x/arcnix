@@ -108,26 +108,12 @@ pub(crate) fn time_zone_reply(ui: &Ui, result: std::result::Result<Reply, String
 }
 
 pub(crate) fn region(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let languages = [
-        (Language::English, "English"),
-        (Language::SimplifiedChinese, "简体中文"),
-    ]
-    .map(|(value, label)| {
-        let choose = ui.clone();
-        sapid::button()
-            .class("button")
-            .label(label)
-            .pressed(state.map(move |s| language(s) == value))
-            .enabled(state.map(server_apps_ui::preferences_ready))
-            .on_press(move || choose.change_desktop_language(value))
-    });
     col().class("desktop-settings-pane desktop-region").fill((
         col().class("desktop-settings-card").fill((
             settings::section_heading("Desktop language", true, settings::desktop_reset(&ui, |prefs| prefs.language = None)),
-            row()
-                .class("choice-list")
-                .fill(fragment(Vec::from(languages))),
+            settings::select(&ui, true, "Desktop language",
+                [(Language::English, "English"), (Language::SimplifiedChinese, "简体中文")],
+                language, server_apps_ui::preferences_ready, |ui, lang| ui.change_desktop_language(lang)),
             text().class("subtle").content(i18n::bind(
                 "Changes the display language of this Arcnix desktop only. The server manages its system language separately.",
             )),
@@ -141,29 +127,23 @@ pub(crate) fn region(ui: Ui) -> impl Widget {
 }
 
 fn time_format_choices(ui: &Ui) -> impl Widget + use<> {
-    let state = ui.state;
-    fragment(
+    settings::select(
+        ui,
+        true,
+        "Time format",
         [
             (ClockFormat::TwentyFourHour, "24-hour"),
             (ClockFormat::TwelveHour, "AM / PM"),
-        ]
-        .into_iter()
-        .map(|(value, label)| {
-            let ui = ui.clone();
-            sapid::button()
-                .class("button")
-                .label(i18n::bind(label))
-                .pressed(state.map(move |s| clock_format(s) == value))
-                .enabled(state.map(server_apps_ui::preferences_ready))
-                .on_press(move || {
-                    let mut prefs = state.with(server_apps_ui::desired);
-                    if prefs.clock.format != value {
-                        prefs.clock.format = value;
-                        ui.queue_desktop_preferences(prefs);
-                    }
-                })
-        })
-        .collect::<Vec<_>>(),
+        ],
+        clock_format,
+        server_apps_ui::preferences_ready,
+        |ui, value| {
+            let mut prefs = ui.state.with(server_apps_ui::desired);
+            if prefs.clock.format != value {
+                prefs.clock.format = value;
+                ui.queue_desktop_preferences(prefs);
+            }
+        },
     )
 }
 

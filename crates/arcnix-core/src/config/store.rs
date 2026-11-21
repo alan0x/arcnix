@@ -247,8 +247,8 @@ impl AppConfig {
         }
         self.settings.logging.validate()?;
         ensure!(
-            self.settings.display.decimals <= 3,
-            "Use 0–3 decimal places"
+            self.settings.display.decimals <= crate::preferences::DisplaySettings::MAX_DECIMALS,
+            "Use 0–2 decimal places"
         );
         ensure!(
             [1, 7, 30].contains(&self.settings.updates.interval_days),
@@ -895,6 +895,25 @@ mod tests {
         assert_eq!(config.trusted_fingerprint("::1", 22), Some(first.as_str()));
     }
     #[test]
+    fn retired_file_size_options_migrate_when_loading_a_configuration() {
+        use crate::preferences::SizeUnits;
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&encoded(&AppConfig::default()).unwrap()).unwrap();
+        let display = &mut document["config"]["settings"]["display"];
+        display["units"] = "Bytes".into();
+        display["decimals"] = 3.into();
+        display["group_digits"] = true.into();
+        let loaded = decoded(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(loaded.settings.display.units, SizeUnits::Decimal);
+        assert_eq!(loaded.settings.display.decimals, 2);
+        assert!(loaded.settings.display.group_digits);
+        let saved: serde_json::Value = serde_json::from_slice(&encoded(&loaded).unwrap()).unwrap();
+        assert_eq!(saved["config"]["settings"]["display"]["units"], "Decimal");
+        document["config"]["settings"]["display"]["decimals"] = 4.into();
+        assert!(decoded(&serde_json::to_vec(&document).unwrap()).is_err());
+    }
+
+    #[test]
     fn workstation_preferences_and_locations_roundtrip_without_leaking_between_servers() {
         use crate::preferences::*;
         let dir = TestDir::new();
@@ -911,8 +930,8 @@ mod tests {
         let second = server();
         config.upsert_server(first.clone()).unwrap();
         config.upsert_server(second).unwrap();
-        config.settings.display.units = SizeUnits::Decimal;
-        config.settings.display.decimals = 3;
+        config.settings.display.units = SizeUnits::Iec;
+        config.settings.display.decimals = 2;
         config.settings.display.group_digits = true;
         config.settings.display.dates = DateStyle::Iso;
         config.settings.display.timezone = DisplayTimezone::Utc;

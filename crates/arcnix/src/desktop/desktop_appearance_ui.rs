@@ -30,7 +30,7 @@ pub(crate) fn background(s: &State) -> Wallpaper {
 }
 
 pub(crate) fn variables(s: &State) -> String {
-    use ColorRole::{Accent, Background, Border, MutedText, Surface, Text};
+    use ColorRole::{Background, Border, MutedText, Surface, Text};
     let theme = theme(s);
     let dark = theme.mode.is_dark(client_dark(s));
     let mut vars = std::collections::BTreeMap::new();
@@ -39,16 +39,19 @@ pub(crate) fn variables(s: &State) -> String {
         for (role, color) in &palette {
             vars.insert(role.variable(), *color);
         }
+        let fill = theme.accent_fill(dark);
         vars.extend([
             ("--raised", palette[&Surface].mix(palette[&Text], 7)),
+            ("--accent-fill", fill),
             (
-                "--accent-bg",
-                palette[&Background].mix(palette[&Accent], 20),
+                "--on-accent",
+                fill.contrasting_label(palette[&Surface], palette[&Text]),
             ),
+            ("--accent-bg", palette[&Background].mix(fill, 20)),
             ("--line-hover", palette[&Border].mix(palette[&Text], 22)),
             ("--faint", palette[&MutedText]),
             ("--desktop-ink", palette[&Text]),
-            ("--desktop-active", palette[&Accent]),
+            ("--desktop-active", fill),
         ]);
     }
     let colors = vars
@@ -98,14 +101,7 @@ fn set_accent(ui: &Ui, color: Rgb) {
 fn accent_color(s: &State) -> Rgb {
     let theme = theme(s);
     let dark = theme.mode.is_dark(client_dark(s));
-    let style = if dark { &theme.dark } else { &theme.light };
-    style
-        .colors
-        .get(&ColorRole::Accent)
-        .copied()
-        .or_else(|| theme.colors.get(&ColorRole::Accent).copied())
-        .or_else(|| theme.main_color(dark))
-        .unwrap_or_else(|| DesktopTheme::default_accent(dark))
+    theme.accent_fill(dark)
 }
 
 fn accent_swatch(Rgb([red, green, blue]): Rgb) -> glory::style::Style {
@@ -118,7 +114,7 @@ fn accent_swatch(Rgb([red, green, blue]): Rgb) -> glory::style::Style {
 fn accent_controls(ui: Ui) -> impl Widget {
     let state = ui.state;
     let ready = state.map(choices_ready);
-    let input_ui = ui.clone();
+
     row().class("theme-accent-controls").fill((
         row()
             .class("theme-accent-options")
@@ -150,48 +146,80 @@ fn accent_controls(ui: Ui) -> impl Widget {
                 })
                 .collect::<Vec<_>>(),
             )),
-        row().class("theme-accent-value").fill((
-            text()
-                .class("theme-color-swatch")
-                .style(state.map(|s| accent_swatch(accent_color(s)))),
-            input()
-                .class("theme-color-value")
+        widget(move |scope| {
+            let active = state.map(accent_color).with_partial_eq();
+            let draft = scope.cage(active.get().to_string());
+            scope.effect(move || {
+                let color = active.get();
+                draft.revise(|value| *value = color.to_string());
+            });
+            let ui = ui.clone();
+            let apply_color = move |text: String| {
+                let current = state.with(accent_color);
+                let color = Rgb::parse(&text).unwrap_or(current);
+                draft.revise(|value| *value = color.to_string());
+                if state.with(choices_ready) && color != current {
+                    set_accent(&ui, color);
+                }
+            };
+            let on_blur = apply_color.clone();
+            let on_pick = apply_color.clone();
+            sapid::color_input("desktop-accent")
+                .unstyled()
+                .class("theme-custom-color")
                 .name(i18n::bind("Accent color"))
-                .value(state.map(|s| accent_color(s).to_string()))
+                .value(draft)
                 .enabled(ready)
-                .on(value_changed, move |event| {
-                    if let Event::ValueChanged { value, .. } = event
-                        && let Some(color) = Rgb::parse(&value)
-                    {
-                        set_accent(&input_ui, color);
+                .show_picker(false)
+                .with_preview(false)
+                .fix_on_blur(false)
+                .left_section(
+                    input()
+                        .class("theme-accent-picker")
+                        .name(i18n::bind("Choose accent color"))
+                        .value(state.map(|s| accent_color(s).to_string()).with_partial_eq())
+                        .enabled(ready)
+                        .on(value_changed, move |event| {
+                            if let Event::ValueChanged { value, .. } = event {
+                                on_pick(value);
+                            }
+                        }),
+                )
+                .on_value_change(move |value| draft.revise(|text| *text = value))
+                .on_commit(apply_color)
+                .on(glory::render::EventKind::Keyboard, move |event| {
+                    if let Event::Keyboard {
+                        command: glory::render::KeyboardCommand::Dismiss,
+                        ..
+                    } = event {
+                        draft.revise(|value| *value = state.with(accent_color).to_string());
                     }
-                }),
-        )),
+                })
+                .on(glory::render::EventKind::FocusChanged, move |event| {
+                    if matches!(event, Event::FocusChanged(false)) {
+                        on_blur(draft.get());
+                    }
+                })
+                .show_in(scope)
+        }),
     ))
 }
 
 fn options<T: Copy + PartialEq + 'static>(
     ui: &Ui,
+    title: &'static str,
     options: &[(T, &'static str)],
     read: fn(&DesktopTheme) -> T,
     write: fn(&mut Overrides, T),
 ) -> impl Widget + use<T> {
-    let state = ui.state;
-    fragment(
-        options
-            .iter()
-            .map(|&(value, label)| {
-                let ui = ui.clone();
-                sapid::button()
-                    .class("button appearance-option")
-                    .label(i18n::bind(label))
-                    .pressed(state.map(move |s| read(&theme(s)) == value))
-                    .enabled(state.map(choices_ready))
-                    .on_press(move || {
-                        edit(&ui, |prefs| write(&mut prefs.overrides, value));
-                    })
-            })
-            .collect::<Vec<_>>(),
+    settings::select(
+        ui,
+        true,
+        title,
+        options.to_vec(),
+        move |s| read(&theme(s)),
+        choices_ready,
+        move |ui, value| edit(ui, |prefs| write(&mut prefs.overrides, value)),
     )
 }
 
@@ -278,6 +306,7 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                         "Color scheme",
                         options(
                             &ui,
+                            "Color scheme",
                             &[
                                 (Theme::System, "Auto"),
                                 (Theme::Light, "Light"),
@@ -315,6 +344,7 @@ fn icon_controls(ui: Ui) -> impl Widget {
                 "Icon family",
                 options(
                     &ui,
+                    "Icon family",
                     &IconFamily::ALL.map(|family| (family, family.label())),
                     |theme| theme.icon_family,
                     |overrides, family| overrides.icon_family = Some(family),
@@ -327,6 +357,7 @@ fn icon_controls(ui: Ui) -> impl Widget {
                         "Tile background",
                         options(
                             &ui,
+                            "Tile background",
                             &IconStyle::ALL.map(|style| (style, style.label())),
                             |theme| theme.icons,
                             |overrides, style| overrides.icons = Some(style),

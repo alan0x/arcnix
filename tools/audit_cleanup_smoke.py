@@ -96,7 +96,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b,Peer(out/'peer-c') as c:
             for protection in group.locator('.audit-storage-protection').all():expect(protection).to_contain_text('Audit cleanup evidence remains protected')
             expect(group.locator('.audit-storage-record').filter(has=group.page.get_by_role('button',name=latest['id'],exact=True)).locator('.audit-storage-record-size')).to_contain_text('Completed')
         expect(p.get_by_role('button',name='Review audit cleanup…',exact=True)).to_be_disabled()
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规');p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
         expect(p.get_by_role('button',name='审计清理结果',exact=True)).to_be_visible()
         p.get_by_role('button',name='连接清理报告…',exact=True).click();d=p.get_by_role('dialog',name='连接清理报告',exact=True)
         expect(d.get_by_role('textbox',name='SSH 密码或私钥口令',exact=True)).to_have_count(2)

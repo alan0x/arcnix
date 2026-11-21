@@ -101,7 +101,7 @@ def main():
             page.keyboard.press('Shift+F10');expect(menu).to_be_visible();expect(menu.locator('button').first).to_be_focused();page.keyboard.press('ArrowDown');expect(menu.locator('button').nth(1)).to_be_focused();page.keyboard.press('Escape')
             # Context menus can switch targets even while the common dismiss scrim is active.
             stage.locator('.group-button').click(button='right');page.locator('.host-row').last.click(button='right',force=True);expect(page.locator('.host-row.menu-open')).to_have_count(1);page.keyboard.press('Escape')
-            page.locator('.settings-link').click();page.locator('.context-sidebar').get_by_role('button',name='General',exact=True).click();page.get_by_role('button',name='Light',exact=True).click();page.locator('.rail-servers').click();page.screenshot(path=str(out/'tree-light.png'))
+            page.locator('.settings-link').click();page.locator('.context-sidebar').get_by_role('button',name='General',exact=True).click();page.locator('.setting-theme:visible').get_by_role('radio', name='Light', exact=True).check();page.locator('.rail-servers').click();page.screenshot(path=str(out/'tree-light.png'))
             page.set_viewport_size(dict(width=900,height=700));page.locator('.group-more').last.click();box=menu.bounding_box();assert box['y']>=0 and box['y']+box['height']<=700;page.screenshot(path=str(out/'tree-narrow-menu.png'))
             page.keyboard.press('Escape');expect(menu).to_have_count(0);page.set_viewport_size(dict(width=1440,height=980))
             stage.locator('.group-more').click();menu.get_by_role('button',name='Dissolve group (keep servers)',exact=True).click()

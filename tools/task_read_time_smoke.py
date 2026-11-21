@@ -90,7 +90,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         assert [t['result_read_at'] for t in history(app)[0]['targets']]==[latest_a,latest_b]
         passed('A successful manual query replaces the snapshot time and the exact values survive another restart')
 
-        app.settings('Files');p.get_by_role('button',name='UTC',exact=True).click()
+        app.settings('Files');p.locator('.setting-time-zone:visible').get_by_role('radio', name='UTC', exact=True).check()
         p.locator('.rail-tasks').click()
         utc=datetime.fromtimestamp(latest_a,timezone.utc).isoformat().replace('+00:00','Z').replace('T',' ')
         expect(p.locator('.task-target').first.locator('.task-result-read')).to_have_text('Snapshot read: '+utc)
@@ -100,7 +100,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         assert [t['result_read_at'] for t in history(app)[0]['targets']]==[latest_a,latest_b]
         passed('UTC and local display preferences reformat the same stored receive time without a new query')
 
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click();p.set_viewport_size(dict(width=900,height=700))
         target=p.locator('.task-target').first

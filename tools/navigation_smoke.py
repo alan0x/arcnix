@@ -134,9 +134,9 @@ def main():
 
             dark_icon = page.locator(".navigation-rail .brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
             page.locator(".settings-link").click()
-            expect(page.get_by_role("button", name="English", exact=True)).to_be_visible()
+            expect(page.locator('.setting-language:visible')).to_be_visible()
             page.locator(".context-sidebar").get_by_role("button", name="General", exact=True).click()
-            page.get_by_role("button", name="Light", exact=True).click()
+            page.locator('.setting-theme:visible').get_by_role('radio', name='Light', exact=True).check()
             expect(page.locator(".app")).to_have_class("app theme-light")
             light_icon = page.locator(".navigation-rail .brand-icon").evaluate("el=>getComputedStyle(el).backgroundImage")
             assert dark_icon != light_icon
@@ -165,7 +165,7 @@ def main():
             page.set_viewport_size(dict(width=1440, height=980))
             page.locator(".settings-link").click()
             page.locator(".context-sidebar").get_by_role("button", name="General", exact=True).click()
-            page.get_by_role("button", name="简体中文", exact=True).click()
+            page.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
             expect(page.locator(".context-title")).to_have_text("设置")
             page.locator(".rail-logo").click()
             expect(page.locator(".context-title")).to_have_text("设置")

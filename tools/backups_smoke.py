@@ -76,7 +76,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         expect(p.locator('.backup-policy')).to_contain_text('Updated website policy')
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth')
         app.screenshot('backups-narrow.png')
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click()
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
         expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-backups').click();expect(p.locator('.page-header-title')).to_have_text('备份与恢复')
         app.screenshot('backups-chinese.png')

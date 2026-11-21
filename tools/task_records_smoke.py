@@ -125,7 +125,7 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         d.get_by_role('button',name='Read server records',exact=True).click()
         expect(alpha_group).to_contain_text('Record browser connected',timeout=20000)
         expect(alpha_group.locator('.server-task-record')).to_have_count(100,timeout=20000)
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规')
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click();expect(p.locator('.page-header-title')).to_have_text('任务中心')
         expect(p.locator('.server-records-page')).to_contain_text('按 SSH 账户浏览已保存的任务')
         expect(alpha_group.get_by_role('button',name='刷新记录',exact=True)).to_be_disabled()

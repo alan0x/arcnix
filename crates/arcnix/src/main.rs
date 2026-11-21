@@ -1757,12 +1757,24 @@ fn modal_with_header(
                                 Some(Dialog::TransferProgress(_)) => {
                                     "modal-card transfer-progress-modal"
                                 }
-                                Some(Dialog::DesktopTimeZone) => "modal-card time-zone-dialog",
-                                Some(Dialog::DesktopIcons) => "modal-card shortcut-settings-dialog",
+                                Some(Dialog::DesktopTimeZone) => {
+                                    "modal-card settings-surface time-zone-dialog"
+                                }
+                                Some(Dialog::DesktopIcons) => {
+                                    "modal-card settings-surface shortcut-settings-dialog"
+                                }
                                 Some(Dialog::DesktopApps) => "modal-card desktop-apps-dialog",
                                 Some(Dialog::DockShortcuts) => {
-                                    "modal-card shortcut-settings-dialog dock-shortcut-dialog"
+                                    "modal-card settings-surface shortcut-settings-dialog dock-shortcut-dialog"
                                 }
+                                Some(
+                                    Dialog::ConfigureNetwork
+                                    | Dialog::FileAssociation { .. }
+                                    | Dialog::FilesSettings
+                                    | Dialog::TransferDefaults
+                                    | Dialog::ConfigurationBackup
+                                    | Dialog::ConfigurationRestore,
+                                ) => "modal-card settings-surface",
                                 Some(Dialog::OpenDesktopFile(_)) => "modal-card file-picker-dialog",
                                 Some(Dialog::TextEditor) => "modal-card remote-editor-modal",
                                 _ => "modal-card",
@@ -2287,6 +2299,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/shortcut-chords.js"),
                     include_str!("../assets/file-list-events.js"),
                     include_str!("../assets/desktop-customization.js"),
+                    include_str!("../assets/settings-controls.js"),
                     include_str!("../assets/help-events.js"),
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
@@ -2315,7 +2328,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             width: 1440.,
             height: 980.,
             css: format!(
-                "{}\n{}\n{}\n{}\n{}",
+                "@layer sapid-settings {{ @scope (.settings-segment-field, .settings-select-field) {{ {} }} }}\n{}\n{}\n{}\n{}\n{}",
+                sapid::STRUCTURAL_CSS,
                 include_str!("style.css"),
                 icons::css(),
                 folder_icons::css(),

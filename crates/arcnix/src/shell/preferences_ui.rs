@@ -56,17 +56,30 @@ fn check(
         .checked(ui.state.map(move |s| read(&s.config.settings)))
         .on_checked_change(move |checked| ui.update_preferences(|s| write(s, checked)))
 }
-fn option(
+pub(crate) fn preference_select<T, L, O>(
     ui: &Ui,
-    name: &'static str,
-    read: impl Fn(&State) -> bool + 'static,
-    change: impl Fn(&mut AppSettings) + 'static,
-) -> sapid::Button {
-    let set = ui.clone();
-    settings::choice(ui, name, read, move || {
-        set.update_preferences(|s| change(s))
-    })
+    desktop: bool,
+    title: &'static str,
+    options: O,
+    read: fn(&AppSettings) -> T,
+    write: fn(&mut AppSettings, T),
+) -> impl Widget + use<T, L, O>
+where
+    T: Copy + PartialEq + 'static,
+    L: Into<String>,
+    O: IntoIterator<Item = (T, L)>,
+{
+    settings::select(
+        ui,
+        desktop,
+        title,
+        options,
+        move |s| read(&s.config.settings),
+        |_| true,
+        move |ui, value| ui.update_preferences(|s| write(s, value)),
+    )
 }
+
 pub(crate) fn display(ui: Ui) -> impl Widget {
     fragment((
         settings::panel_with_reset(
@@ -97,59 +110,53 @@ pub(crate) fn file_sizes_reset(ui: &Ui, desktop: bool) -> sapid::Button {
     })
 }
 
+fn setting_field(
+    desktop: bool,
+    title: &'static str,
+    control: impl Widget + 'static,
+) -> impl Widget {
+    row()
+        .class("preference-select-row")
+        .fill((text().content(i18n::bind_in(desktop, title)), control))
+}
+
 pub(crate) fn size_options(ui: &Ui, desktop: bool) -> impl Widget + use<> {
-    let units = |label, units| {
-        option(
-            ui,
-            label,
-            move |s| s.config.settings.display.units == units,
-            move |s| s.display.units = units,
-        )
-        .label(i18n::bind_in(desktop, label))
-    };
     col().class("preferences-stack").fill((
-        row().class("choice-list").fill((
-            units("IEC · KiB / MiB", SizeUnits::Iec),
-            units("Decimal · KB / MB", SizeUnits::Decimal),
-            units("Exact bytes", SizeUnits::Bytes),
-        )),
-        fragment((
-            text()
-                .class("field-label")
-                .content(i18n::bind_in(desktop, "Decimal places")),
-            row()
-                .class("choice-list")
-                .fill(each(vec![0u8, 1, 2, 3]).key(|n| *n).children({
-                    let ui = ui.clone();
-                    move |item| {
-                        let n = item.value.get();
-                        let set = ui.clone();
-                        sapid::button()
-                            .class(ui.state.map(move |s| {
-                                if s.config.settings.display.decimals == n {
-                                    "choice active"
-                                } else {
-                                    "choice"
-                                }
-                                .to_owned()
-                            }))
-                            .label(n.to_string())
-                            .enabled(
-                                ui.state
-                                    .map(|s| s.config.settings.display.units != SizeUnits::Bytes),
-                            )
-                            .on_press(move || set.update_preferences(|s| s.display.decimals = n))
-                    }
-                })),
-            check(
-                ui.clone(),
-                "Use thousands separators",
-                |s| s.display.group_digits,
-                |s, v| s.display.group_digits = v,
-            )
-            .name(i18n::bind_in(desktop, "Use thousands separators"))
-            .label(i18n::bind_in(desktop, "Use thousands separators")),
-        )),
+        setting_field(
+            desktop,
+            "File size units",
+            preference_select(
+                ui,
+                desktop,
+                "File size units",
+                [
+                    (SizeUnits::Decimal, "Decimal · KB / MB"),
+                    (SizeUnits::Iec, "IEC · KiB / MiB"),
+                ],
+                |s| s.display.units,
+                |s, units| s.display.units = units,
+            ),
+        ),
+        setting_field(
+            desktop,
+            "Decimal places",
+            preference_select(
+                ui,
+                desktop,
+                "Decimal places",
+                (0..=DisplaySettings::MAX_DECIMALS).map(|n| (n, n.to_string())),
+                |s| s.display.decimals,
+                |s, places| s.display.decimals = places,
+            ),
+        ),
+        check(
+            ui.clone(),
+            "Use thousands separators",
+            |s| s.display.group_digits,
+            |s, v| s.display.group_digits = v,
+        )
+        .name(i18n::bind_in(desktop, "Use thousands separators"))
+        .label(i18n::bind_in(desktop, "Use thousands separators")),
         text().class("preference-preview").content(i18n::bind_in(
             desktop,
             ui.state.map(|s| {
@@ -164,40 +171,37 @@ pub(crate) fn size_options(ui: &Ui, desktop: bool) -> impl Widget + use<> {
 
 pub(crate) fn date_options(ui: &Ui) -> impl Widget + use<> {
     col().class("preferences-stack").fill((
-        row().class("choice-list").fill((
-            option(
+        setting_field(
+            false,
+            "Date format",
+            preference_select(
                 ui,
-                "Relative time",
-                |s| s.config.settings.display.dates == DateStyle::Relative,
-                |s| s.display.dates = DateStyle::Relative,
+                false,
+                "Date format",
+                [
+                    (DateStyle::Relative, "Relative time"),
+                    (DateStyle::Iso, "ISO 8601"),
+                    (DateStyle::System, "System format"),
+                ],
+                |s| s.display.dates,
+                |s, dates| s.display.dates = dates,
             ),
-            option(
+        ),
+        setting_field(
+            false,
+            "Time zone",
+            preference_select(
                 ui,
-                "ISO 8601",
-                |s| s.config.settings.display.dates == DateStyle::Iso,
-                |s| s.display.dates = DateStyle::Iso,
+                false,
+                "Time zone",
+                [
+                    (DisplayTimezone::Local, "Local timezone"),
+                    (DisplayTimezone::Utc, "UTC"),
+                ],
+                |s| s.display.timezone,
+                |s, zone| s.display.timezone = zone,
             ),
-            option(
-                ui,
-                "System format",
-                |s| s.config.settings.display.dates == DateStyle::System,
-                |s| s.display.dates = DateStyle::System,
-            ),
-        )),
-        row().class("choice-list").fill((
-            option(
-                ui,
-                "Local timezone",
-                |s| s.config.settings.display.timezone == DisplayTimezone::Local,
-                |s| s.display.timezone = DisplayTimezone::Local,
-            ),
-            option(
-                ui,
-                "UTC",
-                |s| s.config.settings.display.timezone == DisplayTimezone::Utc,
-                |s| s.display.timezone = DisplayTimezone::Utc,
-            ),
-        )),
+        ),
         text()
             .class("preference-preview")
             .content(ui.state.map(|_| {
@@ -217,49 +221,46 @@ pub(crate) fn date_options(ui: &Ui) -> impl Widget + use<> {
 pub(crate) fn connection(ui: Ui) -> impl Widget {
     settings::panel_with_reset(&ui,navigation::SettingsSection::Connection,"Timeout and keepalive",
         settings::local_reset(&ui, false, |s, defaults| s.connection = defaults.connection), col().class("preferences-stack").fill((
-        label("Connection timeout"),row().class("choice-list").fill(
-            each(vec![5u32,15,30,60,120]).key(|n|*n).children({let ui=ui.clone();move|item|{let n=item.value.get();let set=ui.clone();sapid::button().class(ui.state.map(move|s|if s.config.settings.connection.timeout_seconds==n{"choice active"}else{"choice"}.to_owned())).label(i18n::bind(format!("{n} seconds"))).on_press(move||set.update_preferences(|s|s.connection.timeout_seconds=n))}})
-        ),label("SSH keepalive"),row().class("choice-list").fill(
-            each(vec![0u32,15,30,60]).key(|n|*n).children({let ui=ui.clone();move|item|{let n=item.value.get();let set=ui.clone();sapid::button().class(ui.state.map(move|s|if s.config.settings.connection.keepalive_seconds==n{"choice active"}else{"choice"}.to_owned())).label(i18n::bind(if n==0{"Disabled".into()}else{format!("{n} seconds")})).on_press(move||set.update_preferences(|s|s.connection.keepalive_seconds=n))}})
-        ),text().class("subtle").content(i18n::bind("Connection changes apply on the next connection. Commands and file changes are never replayed automatically.")),
+        setting_field(false, "Connection timeout", preference_select(&ui, false, "Connection timeout",
+            [5u32,15,30,60,120].map(|n| (n,format!("{n} seconds"))), |s| s.connection.timeout_seconds, |s,n| s.connection.timeout_seconds=n)),
+        setting_field(false, "SSH keepalive", preference_select(&ui, false, "SSH keepalive",
+            [0u32,15,30,60].map(|n| (n,if n==0 {"Disabled".into()} else {format!("{n} seconds")})), |s| s.connection.keepalive_seconds, |s,n| s.connection.keepalive_seconds=n)),
+        text().class("subtle").content(i18n::bind("Connection changes apply on the next connection. Commands and file changes are never replayed automatically.")),
     )))
 }
 fn policy(ui: Ui, direction: TransferDirection) -> impl Widget {
-    row().class("choice-list").fill(
-        each(vec![
-            (None, "Ask every time"),
-            (Some(ExistingFileAction::Overwrite), "Overwrite"),
-            (Some(ExistingFileAction::Skip), "Skip"),
-        ])
-        .key(|(a, _)| format!("{a:?}"))
-        .children(move |item| {
-            let (action, name) = item.value.get();
-            let set = ui.clone();
-            sapid::button()
-                .class(ui.state.map(move |s| {
-                    if (if direction == TransferDirection::Upload {
-                        s.config.settings.upload_conflict
+    let uploads = direction == TransferDirection::Upload;
+    let title = if uploads { "Uploads" } else { "Downloads" };
+    setting_field(
+        false,
+        title,
+        settings::select(
+            &ui,
+            false,
+            title,
+            [
+                (None, "Ask every time"),
+                (Some(ExistingFileAction::Overwrite), "Overwrite"),
+                (Some(ExistingFileAction::Skip), "Skip"),
+            ],
+            move |s| {
+                if uploads {
+                    s.config.settings.upload_conflict
+                } else {
+                    s.config.settings.download_conflict
+                }
+            },
+            |_| true,
+            move |ui, action| {
+                ui.update_preferences(|s| {
+                    if uploads {
+                        s.upload_conflict = action
                     } else {
-                        s.config.settings.download_conflict
-                    }) == action
-                    {
-                        "choice active"
-                    } else {
-                        "choice"
+                        s.download_conflict = action
                     }
-                    .to_owned()
-                }))
-                .label(i18n::bind(name))
-                .on_press(move || {
-                    set.update_preferences(|s| {
-                        if direction == TransferDirection::Upload {
-                            s.upload_conflict = action
-                        } else {
-                            s.download_conflict = action
-                        }
-                    })
                 })
-        }),
+            },
+        ),
     )
 }
 pub(crate) fn transfers(ui: Ui) -> impl Widget {
@@ -320,7 +321,7 @@ pub(crate) fn transfers(ui: Ui) -> impl Widget {
                 s.download_conflict = defaults.download_conflict;
             }), col().class("preferences-stack").fill((
             text().class("subtle").content(i18n::bind("Default behavior when a destination already exists. Server and session choices override these defaults.")),
-            label("Uploads"),policy(ui.clone(),TransferDirection::Upload),label("Downloads"),policy(ui.clone(),TransferDirection::Download),
+            policy(ui.clone(),TransferDirection::Upload),policy(ui.clone(),TransferDirection::Download),
         ))),
     ))
 }
@@ -483,51 +484,29 @@ fn log_files(ui: Ui) -> impl Widget {
                     text()
                         .class("subtle")
                         .content(i18n::bind("Leave empty to use the default log directory.")),
-                    label("Maximum log size"),
-                    row().class("choice-list").fill(
-                        each(vec![1u16, 5, 10, 50, 100]).key(|n| *n).children({
-                            let ui = ui.clone();
-                            move |item| {
-                                let n = item.value.get();
-                                let set = ui.clone();
-                                sapid::button()
-                                    .class(ui.state.map(move |s| {
-                                        if s.config.settings.logging.max_size_mib == n {
-                                            "choice active"
-                                        } else {
-                                            "choice"
-                                        }
-                                        .to_owned()
-                                    }))
-                                    .label(format!("{n} MiB"))
-                                    .on_press(move || {
-                                        set.update_preferences(|s| s.logging.max_size_mib = n)
-                                    })
-                            }
-                        }),
+                    setting_field(
+                        false,
+                        "Maximum log size",
+                        preference_select(
+                            &ui,
+                            false,
+                            "Maximum log size",
+                            [1u16, 5, 10, 50, 100].map(|n| (n, format!("{n} MiB"))),
+                            |s| s.logging.max_size_mib,
+                            |s, n| s.logging.max_size_mib = n,
+                        ),
                     ),
-                    label("Rotated log files"),
-                    row().class("choice-list").fill(
-                        each(vec![1u8, 3, 5, 10]).key(|n| *n).children({
-                            let ui = ui.clone();
-                            move |item| {
-                                let n = item.value.get();
-                                let set = ui.clone();
-                                sapid::button()
-                                    .class(ui.state.map(move |s| {
-                                        if s.config.settings.logging.retained_files == n {
-                                            "choice active"
-                                        } else {
-                                            "choice"
-                                        }
-                                        .to_owned()
-                                    }))
-                                    .label(n.to_string())
-                                    .on_press(move || {
-                                        set.update_preferences(|s| s.logging.retained_files = n)
-                                    })
-                            }
-                        }),
+                    setting_field(
+                        false,
+                        "Rotated log files",
+                        preference_select(
+                            &ui,
+                            false,
+                            "Rotated log files",
+                            [1u8, 3, 5, 10].map(|n| (n, n.to_string())),
+                            |s| s.logging.retained_files,
+                            |s, n| s.logging.retained_files = n,
+                        ),
                     ),
                 )),
             settings::feedback(

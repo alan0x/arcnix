@@ -184,7 +184,7 @@ def main():
             passed('Administrator inspection, scan-limit coverage and malformed-response errors are explicit; unknown network identity disables termination and a fresh read recovers')
 
             app.settings('General')
-            page.get_by_role('button', name='Dark', exact=True).click()
+            page.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check()
             app.servers()
             ports()
             page.set_viewport_size(dict(width=1000, height=780))
@@ -205,7 +205,7 @@ def main():
             passed('Dark 1000px layouts keep port rows and the confirmation actions inside the viewport')
 
             app.settings('General')
-            page.get_by_role('button', name='简体中文', exact=True).click()
+            page.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
             app.servers()
             page.locator('.desktop-dock').get_by_role('button', name='监控', exact=True).click()
             page.locator('.monitor-sidebar').get_by_role('button', name='进程', exact=True).click()
@@ -223,7 +223,7 @@ def main():
             app.screenshot('ports-chinese-dark-1000.png')
             dialog.get_by_role('button', name='取消', exact=True).click()
             app.settings('常规')
-            page.get_by_role('button', name='English', exact=True).click()
+            page.locator('.setting-language:visible').get_by_role('radio', name='English', exact=True).check()
             app.servers()
             ports()
             passed('Chinese port labels and the destructive-action warning remain translated in the narrow layout')

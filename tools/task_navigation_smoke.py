@@ -61,7 +61,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
                 expect(p.locator('.connection-state')).to_have_text('SSH connected')
                 expect(p.locator('.module-tab')).to_have_count(6)
                 app.settings('General');active(p,'settings')
-                p.get_by_role('button',name='Dark' if n%2 else 'Light',exact=True).click()
+                p.locator('.setting-theme:visible').get_by_role('radio', name='Dark' if n%2 else 'Light', exact=True).check()
                 active(p,'settings')
 
             navigate(p,'tasks')

@@ -1,5 +1,105 @@
 use crate::*;
 
+pub(crate) fn select<T, L, O, R, W>(
+    ui: &Ui,
+    desktop: bool,
+    title: &'static str,
+    options: O,
+    read: R,
+    enabled: fn(&State) -> bool,
+    write: W,
+) -> impl Widget + use<T, L, O, R, W>
+where
+    T: Copy + PartialEq + 'static,
+    L: Into<String>,
+    O: IntoIterator<Item = (T, L)>,
+    R: Fn(&State) -> T + 'static,
+    W: Fn(&Ui, T) + 'static,
+{
+    let ui = ui.clone();
+    let state = ui.state;
+    let options = Rc::new(
+        options
+            .into_iter()
+            .map(|(value, label)| (value, label.into()))
+            .collect::<Vec<_>>(),
+    );
+    let slug = title.to_ascii_lowercase().replace(' ', "-");
+    let key = format!("{}-{slug}", if desktop { "desktop" } else { "local" });
+    let values = options.clone();
+    let position = move |s: &State| {
+        let current = read(s);
+        values.iter().position(|(value, _)| *value == current)
+    };
+    let values = options.clone();
+    let apply = move |key: String| {
+        if let Ok(index) = key.parse::<usize>()
+            && let Some((value, _)) = values.get(index)
+            && state.with(enabled)
+        {
+            write(&ui, *value);
+        }
+    };
+
+    if (1..=3).contains(&options.len()) {
+        let label = i18n::bind_in(desktop, title);
+        let selected = state
+            .map(move |s| {
+                position(s)
+                    .map(|index| index.to_string())
+                    .unwrap_or_default()
+            })
+            .with_partial_eq();
+        return row().class("settings-segment-field").fill(
+            sapid::segmented_control(key)
+                .class(format!("settings-segmented setting-{slug}"))
+                .label(label)
+                .segments(options.iter().enumerate().map(|(index, (_, label))| {
+                    sapid::segment(index.to_string()).label(i18n::bind_in(desktop, label.clone()))
+                }))
+                .value(selected)
+                .enabled(state.map(enabled))
+                .on_value_change(apply),
+        );
+    }
+
+    let apply = Rc::new(apply);
+    let selected = state
+        .map(move |s| position(s).map(|index| index.to_string()))
+        .with_partial_eq();
+    let language = state
+        .map(move |s| {
+            vec![if desktop {
+                desktop_system_settings::language(s)
+            } else {
+                s.config.settings.language
+            }]
+        })
+        .with_partial_eq();
+    row().class("settings-select-field").fill(
+        each(language)
+            .key(|language| *language as u8)
+            .children(move |item| {
+                let language = item.value.get();
+                let apply = apply.clone();
+                sapid::native_select(key.clone())
+                    .class(format!("settings-select setting-{slug}"))
+                    .name(i18n::translate_for(title, language))
+                    .placeholder(i18n::translate_for("Custom", language))
+                    .options(options.iter().enumerate().map(|(i, (_, label))| {
+                        sapid::select_option(i.to_string(), i18n::translate_for(label, language))
+                    }))
+                    .value(selected)
+                    .enabled(state.map(enabled))
+                    .on_value_change(move |key| {
+                        if let Some(key) = key {
+                            apply(key);
+                        }
+                    })
+            }),
+    )
+}
+
 pub(crate) fn reset_button(desktop: bool, reset: impl FnMut() + 'static) -> sapid::Button {
     let label = i18n::bind_in(desktop, "Reset");
     sapid::button()
@@ -119,40 +219,17 @@ impl Ui {
     }
 }
 
-pub(crate) fn choice(
-    ui: &Ui,
-    label: &'static str,
-    active: impl Fn(&State) -> bool + 'static,
-    action: impl FnMut() + 'static,
-) -> sapid::Button {
-    sapid::button()
-        .class(
-            ui.state
-                .map(move |s| if active(s) { "choice active" } else { "choice" }.to_string()),
-        )
-        .label(i18n::bind(label))
-        .on_press(action)
-}
-
-fn hidden_file_choices(ui: &Ui) -> (sapid::Button, sapid::Button) {
-    let show = ui.clone();
-    let hide = ui.clone();
-    (
-        choice(
-            ui,
-            "Show hidden files",
-            |s| s.config.settings.show_hidden_files,
-            move || show.change_hidden_files(true),
-        ),
-        choice(
-            ui,
-            "Hide hidden files",
-            |s| !s.config.settings.show_hidden_files,
-            move || hide.change_hidden_files(false),
-        ),
+fn hidden_file_choices(ui: &Ui, title: &'static str) -> impl Widget + use<> {
+    select(
+        ui,
+        false,
+        title,
+        [(true, "Show hidden files"), (false, "Hide hidden files")],
+        |s| s.config.settings.show_hidden_files,
+        |_| true,
+        Ui::change_hidden_files,
     )
 }
-
 pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
     when(
         ui.state.map(|s| s.dialog == Some(Dialog::FilesSettings)),
@@ -170,7 +247,7 @@ pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
                     )),
                     row()
                         .class("choice-list settings-choices")
-                        .fill(hidden_file_choices(&ui)),
+                        .fill(hidden_file_choices(&ui, "Files settings")),
                     text()
                         .class("dialog-error")
                         .content(i18n::bind(ui.state.map(|s| s.settings.error.clone()))),
@@ -214,30 +291,22 @@ fn section(
 }
 
 pub(crate) fn language_choices(ui: &Ui) -> impl Widget + use<> {
-    let english = ui.clone();
-    let chinese = ui.clone();
-    fragment((
-        choice(
-            ui,
-            "English",
-            |s| s.config.settings.language == Language::English,
-            move || english.change_language(Language::English),
-        ),
-        choice(
-            ui,
-            "简体中文",
-            |s| s.config.settings.language == Language::SimplifiedChinese,
-            move || chinese.change_language(Language::SimplifiedChinese),
-        ),
-    ))
+    select(
+        ui,
+        false,
+        "Language",
+        [
+            (Language::English, "English"),
+            (Language::SimplifiedChinese, "简体中文"),
+        ],
+        |s| s.config.settings.language,
+        |_| true,
+        Ui::change_language,
+    )
 }
 
 pub(crate) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let system = ui.clone();
-    let dark = ui.clone();
-    let light = ui.clone();
-    let intervals = ui.clone();
     col().class("settings-page").fill((
         feedback(
             &ui,
@@ -259,25 +328,18 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 "Theme",
                 "Choose a color theme.",
                 local_reset(&ui, false, |s, defaults| s.theme = defaults.theme),
-                (
-                    choice(
-                        &ui,
-                        "Follow system",
-                        |s| s.config.settings.theme == Theme::System,
-                        move || system.change_theme(Theme::System),
-                    ),
-                    choice(
-                        &ui,
-                        "Dark",
-                        |s| s.config.settings.theme == Theme::Dark,
-                        move || dark.change_theme(Theme::Dark),
-                    ),
-                    choice(
-                        &ui,
-                        "Light",
-                        |s| s.config.settings.theme == Theme::Light,
-                        move || light.change_theme(Theme::Light),
-                    ),
+                select(
+                    &ui,
+                    false,
+                    "Theme",
+                    [
+                        (Theme::System, "Follow system"),
+                        (Theme::Dark, "Dark"),
+                        (Theme::Light, "Light"),
+                    ],
+                    |s| s.config.settings.theme,
+                    |_| true,
+                    Ui::change_theme,
                 ),
             ),
             preferences_ui::connection(ui.clone()),
@@ -289,7 +351,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 local_reset(&ui, false, |s, defaults| {
                     s.show_hidden_files = defaults.show_hidden_files
                 }),
-                hidden_file_choices(&ui),
+                hidden_file_choices(&ui, "Hidden files"),
             ),
             preferences_ui::display(ui.clone()),
             section(
@@ -309,23 +371,15 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 local_reset(&ui, false, |s, defaults| {
                     s.resource_interval_seconds = defaults.resource_interval_seconds
                 }),
-                each(AppSettings::RESOURCE_INTERVALS.to_vec())
-                    .key(|seconds| *seconds)
-                    .children(move |item| {
-                        let seconds = item.value.get();
-                        let ui = intervals.clone();
-                        sapid::button()
-                            .class(state.map(move |s| {
-                                if s.config.settings.resource_interval_seconds == seconds {
-                                    "choice active"
-                                } else {
-                                    "choice"
-                                }
-                                .to_string()
-                            }))
-                            .label(i18n::bind(format!("Every {seconds} seconds")))
-                            .on_press(move || ui.change_resource_interval(seconds))
-                    }),
+                select(
+                    &ui,
+                    false,
+                    "Resource refresh interval",
+                    AppSettings::RESOURCE_INTERVALS.map(|n| (n, format!("Every {n} seconds"))),
+                    |s| s.config.settings.resource_interval_seconds,
+                    |_| true,
+                    Ui::change_resource_interval,
+                ),
             ),
             preferences_ui::logging(ui.clone()),
             panel(
@@ -366,7 +420,7 @@ pub(crate) fn about(ui: Ui, desktop: bool) -> impl Widget {
             text().class("brand-icon").content(""),
             col().class("about-identity").fill((
                 text().class("about-name").content("Arcnix"),
-                text().class("subtle").content(i18n::bind_in(
+                text().class("subtle settings-copyable").content(i18n::bind_in(
                     desktop,
                     concat!("Version ", env!("CARGO_PKG_VERSION")),
                 )),

@@ -110,7 +110,7 @@ with Peer(out/'alpha') as a,Peer(out/'beta',io_delay=.025) as b,Peer(out/'gamma'
         expect(d.get_by_role('textbox',name='Tags (comma-separated)',exact=True)).to_have_value('web, db, 中文, active')
         d.get_by_role('textbox',name='Environment (optional)',exact=True).fill('');d.get_by_role('textbox',name='Tags (comma-separated)',exact=True).fill('');d.get_by_role('button',name='Save server',exact=True).click();expect(d).not_to_be_visible()
         assert 'environment' not in saved(app)['servers'][1] and 'tags' not in saved(app)['servers'][1]
-        app.settings('General');p.get_by_role('button',name='Dark',exact=True).click();p.get_by_role('button',name='简体中文',exact=True).click();p.set_viewport_size(dict(width=900,height=700));d=edit(p,'Beta',True)
+        app.settings('General');p.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check();p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();p.set_viewport_size(dict(width=900,height=700));d=edit(p,'Beta',True)
         d.get_by_role('textbox',name='环境（可选）',exact=True).fill('测试环境');d.get_by_role('textbox',name='标签（逗号分隔）',exact=True).fill('数据库,华东')
         tip=d.get_by_role('button',name='帮助：服务器分类',exact=True);tip.hover();expect(p.get_by_role('tooltip')).to_contain_text('本地备注');tip.click();p.mouse.move(890,690);expect(p.get_by_role('tooltip')).to_be_visible();p.keyboard.press('Escape')
         assert not d.locator('*:visible').evaluate_all("els=>els.filter(el=>!el.children.length&&el.textContent.trim()&&parseFloat(getComputedStyle(el).fontSize)<12).map(el=>el.textContent)")

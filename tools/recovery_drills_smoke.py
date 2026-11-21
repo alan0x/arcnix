@@ -183,7 +183,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         p.set_viewport_size(dict(width=900,height=700));assert p.evaluate('document.documentElement.scrollWidth <= innerWidth')
         box=d.get_by_role('button',name='Review recovery drill…',exact=True).bounding_box();assert box and box['y']+box['height']<=700
         app.screenshot('drill-form-narrow.png');d.get_by_role('button',name='Cancel',exact=True).click()
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规')
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规')
         p.locator('.rail-tasks').click();p.get_by_role('button',name='最近批次',exact=True).click();p.locator('.task-heading').first.click()
         expect(p.locator('.task-target').first.locator('.drill-report')).to_contain_text('恢复验收检查通过')
         app.screenshot('drill-report-chinese.png');passed('Chinese report and narrow form retain visible footer and wrapping')

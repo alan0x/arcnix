@@ -66,7 +66,7 @@ with Peer(out/'peer-a') as a,Peer(out/'peer-b') as b:
         (a.root/'audit-details-slow').touch();ga.locator('.audit-storage-record').filter(has=p.get_by_role('button',name='audit-partial',exact=True)).get_by_role('button',name='Inspect audit cleanup',exact=True).click();p.locator('.rail-scripts').click();time.sleep(2.4);p.locator('.rail-tasks').click();expect(p.locator('.audit-cleanup-details')).to_have_count(0);(a.root/'audit-details-slow').unlink()
         passed('Closing, forgetting credentials, changing storage scope and leaving the page discard detail state; delayed reads cannot restore closed details or affect the other server')
 
-        app.settings('General');p.get_by_role('button',name='简体中文',exact=True).click();expect(p.locator('.page-header-title')).to_have_text('常规');p.set_viewport_size(dict(width=900,height=700))
+        app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();expect(p.locator('.page-header-title')).to_have_text('常规');p.set_viewport_size(dict(width=900,height=700))
         p=connect(app,False,True);ga=p.locator('.audit-storage-group').first;inspect(ga,'audit-partial',True)
         expect(ga.locator('.audit-detail-files')).to_contain_text('移除结果待确认');readable(p)
         tip=ga.locator('.audit-cleanup-details').get_by_role('button',name='帮助：审计清理详情',exact=True)

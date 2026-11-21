@@ -26,12 +26,12 @@
     };
     function rate(value, data, axis = false) {
         if (!valid(value)) return data.labels.missing;
-        const base = data.base === 1000 ? 1000 : 1024;
+        const base = data.base === 1024 ? 1024 : 1000;
         const units = base === 1000 ? ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'] : ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
         let index = 0;
-        if (!data.bytes) while (value >= base && index < units.length - 1) { value /= base; index++; }
-        if (axis && data.bytes && value >= 100000) return `${value.toExponential(1)} B/s`;
-        return `${value.toLocaleString(data.locale, { maximumFractionDigits: index ? (axis ? 1 : Math.min(3, data.decimals ?? 1)) : 0, useGrouping: !!data.grouping })} ${units[index]}/s`;
+        while (value >= base && index < units.length - 1) { value /= base; index++; }
+        const decimals = index ? Math.min(data.decimals ?? 1, axis ? 1 : 2) : 0;
+        return `${value.toLocaleString(data.locale, { maximumFractionDigits: decimals, useGrouping: !!data.grouping })} ${units[index]}/s`;
     }
     function makeChart(root, kind, keys) {
         const figure = element('figure', `resource-trend-chart resource-trend-${kind}`, root);
