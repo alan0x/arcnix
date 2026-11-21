@@ -48,10 +48,21 @@ def check_appearance_choices(panel):
                 swatches = card.locator('.theme-wallpaper-swatch')
                 images = swatches.evaluate_all('els => els.map(el => getComputedStyle(el).backgroundImage)')
                 assert len(images) == 2 and images[0] != images[1]
-                assert all('gradient(' in image and 'url(' not in image for image in images)
+                for image, asset in zip(images, ['aurora-twilight', 'aurora-night'], strict=True):
+                    assert image.endswith(f'/wallpapers/{asset}.webp")'), image
                 active_image = images[0 if mode == 'Light' else 1]
                 expect(background).to_have_css('background-image', active_image)
                 expect(selected_wallpaper.locator('.wallpaper-swatch')).to_have_css('background-image', active_image)
+                moving, mask, animation = background.evaluate("""el => {
+                    const sky = getComputedStyle(el, '::before');
+                    return [matchMedia('(prefers-reduced-motion: no-preference)').matches,
+                            sky.maskImage, sky.animationName];
+                }""")
+                if moving:
+                    assert mask == active_image.replace('.webp', '-mask.webp')
+                    assert animation == 'aurora-drift'
+                else:
+                    assert animation == 'none'
             if preset == 'Aurora' and mode == 'Dark':
                 button('Auto').click()
                 expect(selected_wallpaper).to_have_text('Aurora')

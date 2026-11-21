@@ -442,27 +442,34 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-dark .wallpaper-seaside, .wallpaper-seaside-moonrise {
   background: #222d42 url("/wallpapers/seaside-moonrise.webp") center / cover no-repeat;
 }
-.wallpaper-aurora, .wallpaper-aurora-light, .wallpaper-aurora-dark {
-  --aurora-sky: #90a5b8;
-  --aurora-horizon: #adbfca;
-  --aurora-violet: #a29fb5;
-  --aurora-glow: #c5c1d261;
-  --aurora-ribbon: #b7d4caaf;
-  --aurora-veil: #94b8b64d;
-  --aurora-fold: #9c96b678;
-  background:
-    radial-gradient(ellipse 88% 115% at 14% -42%, transparent 57%, var(--aurora-veil) 72%, var(--aurora-ribbon) 83%, var(--aurora-veil) 94%, transparent 108%),
-    radial-gradient(ellipse 101% 110% at 108% 110%, transparent 47%, var(--aurora-fold) 64%, var(--aurora-glow) 77%, transparent 99%),
-    linear-gradient(152deg, var(--aurora-sky) 5%, var(--aurora-horizon) 51%, var(--aurora-violet) 100%);
+.wallpaper-aurora, .wallpaper-aurora-light {
+  background: #8594ae url("/wallpapers/aurora-twilight.webp") center / cover no-repeat;
+  --aurora-mask: url("/wallpapers/aurora-twilight-mask.webp");
 }
 .desktop-dark .wallpaper-aurora, .wallpaper-aurora-dark {
-  --aurora-sky: #172436;
-  --aurora-horizon: #203445;
-  --aurora-violet: #252c40;
-  --aurora-glow: #797a9e47;
-  --aurora-ribbon: #598781a8;
-  --aurora-veil: #436c7152;
-  --aurora-fold: #65607e66;
+  background: #142537 url("/wallpapers/aurora-night.webp") center / cover no-repeat;
+  --aurora-mask: url("/wallpapers/aurora-night-mask.webp");
+}
+@media (prefers-reduced-motion: no-preference) {
+  .desktop-wallpaper-art.wallpaper-aurora::before,
+  .desktop-wallpaper-art.wallpaper-aurora::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    mask: var(--aurora-mask) center / cover no-repeat;
+    background: linear-gradient(105deg, transparent 3%, #c2eed4 31%, transparent 65%, #d6c5eb 92%);
+    animation: aurora-drift 29s ease-in-out -8s infinite alternate;
+  }
+  .desktop-wallpaper-art.wallpaper-aurora::after {
+    background: linear-gradient(83deg, transparent 19%, #b1e4d2 60%, transparent 91%);
+    animation-duration: 41s;
+    animation-delay: -19s;
+    animation-direction: alternate-reverse;
+  }
+}
+@keyframes aurora-drift {
+  from { opacity: .02; transform: translateX(-.45%); }
+  to { opacity: .24; transform: translateX(.45%); }
 }
 .wallpaper-fjord { background: #102736 url("/wallpapers/fjord.webp") center 60% / cover no-repeat; }
 .desktop-wallpaper-copy {
@@ -484,9 +491,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-wallpaper-address { color: var(--desktop-ink); opacity: .86; margin-top: 6px; font-size: 13px; overflow-wrap: anywhere; }
 .desktop-canvas:has(.desktop-wallpaper-image, .wallpaper-seaside, .wallpaper-aurora, .wallpaper-fjord) :is(.desktop-wallpaper-name, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
   color: #fff; text-shadow: 0 1px 3px #000, 0 1px 12px #000c;
-}
-.desktop-light .desktop-canvas:has(.wallpaper-aurora) :is(.desktop-wallpaper-name, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
-  color: #20324b; text-shadow: 0 1px 2px #ffffffb3;
 }
 .desktop-shortcuts {
   --shortcut-icon-size: var(--desktop-icon-preview, var(--desktop-icon-ideal, 55px));
@@ -1382,11 +1386,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
     radial-gradient(ellipse at 85% 100%, #9adde1b0, transparent 58%),
     linear-gradient(133deg, #f2f7ff, #dce8f8 54%, #c7e4ee);
 }
-.desktop-light .desktop-wallpaper-art::before {
-  border-color: #456c9a38;
-  box-shadow: 0 0 0 36px #456c9a13, 0 0 0 72px #456c9a0c, 0 0 0 108px #456c9a08;
-}
-.desktop-light .desktop-wallpaper-art::after { background-image: radial-gradient(circle, #335c8629 1px, transparent 1px); }
 @media (max-width: 1050px) {
   .desktop-window { inset: 13px 13px 89px; }
   .desktop-wallpaper-copy { right: calc(24px + var(--desktop-dock-right, 0px)); }

@@ -2246,6 +2246,22 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             assets: [
                 ("fjord", include_bytes!("../assets/fjord.webp").as_slice()),
                 (
+                    "aurora-twilight",
+                    include_bytes!("../assets/aurora-twilight.webp").as_slice(),
+                ),
+                (
+                    "aurora-night",
+                    include_bytes!("../assets/aurora-night.webp").as_slice(),
+                ),
+                (
+                    "aurora-twilight-mask",
+                    include_bytes!("../assets/aurora-twilight-mask.webp").as_slice(),
+                ),
+                (
+                    "aurora-night-mask",
+                    include_bytes!("../assets/aurora-night-mask.webp").as_slice(),
+                ),
+                (
                     "seaside-sunrise",
                     include_bytes!("../assets/seaside-sunrise.webp").as_slice(),
                 ),
