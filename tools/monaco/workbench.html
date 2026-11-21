@@ -39,7 +39,13 @@
         top: calc(var(--command-inset) - var(--menu-height));
         height: calc(100% - var(--command-inset) + var(--menu-height));
       }
-      .has-menu-slot .part.titlebar { background: var(--command-surround) !important; }
+      .has-menu-slot .part.titlebar {
+        background: var(--command-surround) !important;
+        color: var(--command-foreground) !important;
+      }
+      .has-menu-slot .menubar > .menubar-menu-button:not(:hover, :focus, .open) {
+        color: var(--command-foreground);
+      }
       .has-menu-slot .part.titlebar .titlebar-left {
         flex: none !important;
         margin-left: var(--command-menu-left);

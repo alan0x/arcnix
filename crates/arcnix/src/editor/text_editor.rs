@@ -40,6 +40,7 @@ pub(crate) struct Tabs {
     active: Option<u64>,
     next_id: u64,
     confirm_close: Option<CloseTarget>,
+    hide_status: bool,
 }
 
 impl Tabs {
@@ -52,6 +53,14 @@ impl Tabs {
             self.active = Some(id);
             self.confirm_close = None;
         }
+    }
+
+    fn insert(&mut self, editor: Editor) -> u64 {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.documents.insert(id, editor);
+        self.select(id);
+        id
     }
 
     fn remove(&mut self, id: u64) {
@@ -70,10 +79,17 @@ impl Tabs {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Pending {
     serial: u64,
-    saving: bool,
+    operation: Operation,
+}
+
+#[derive(Clone, PartialEq)]
+enum Operation {
+    Read,
+    Save,
+    SaveAs(String),
 }
 
 #[derive(Clone)]
@@ -123,6 +139,22 @@ fn render_markdown(source: &str) -> Option<Arc<str>> {
 }
 
 impl Editor {
+    fn editable(&self) -> bool {
+        self.path.is_empty() || self.document.is_some()
+    }
+
+    fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        match &self.document {
+            Some(doc) => doc.encode(&self.draft),
+            None => arcnix_core::text_files::encode(&self.draft, false, false),
+        }
+    }
+
+    fn targets(&self, path: &str) -> bool {
+        self.path == path
+            || matches!(&self.pending, Some(Pending { operation: Operation::SaveAs(target), .. }) if target == path)
+    }
+
     fn render_preview(&mut self) {
         self.rendered = if self.preview && self.document.is_some() {
             render_markdown(&self.draft)
@@ -179,7 +211,7 @@ fn open_path(ui: &Ui, path: &str, preview: bool) {
         if let Some((&id, editor)) = tabs
             .documents
             .iter_mut()
-            .find(|(_, e)| e.path == path && e.epoch == epoch)
+            .find(|(_, e)| e.targets(path) && e.epoch == epoch)
         {
             if !preview && editor.preview {
                 editor.preview = false;
@@ -188,11 +220,7 @@ fn open_path(ui: &Ui, path: &str, preview: bool) {
             tabs.select(id);
             return (id, false);
         }
-        tabs.next_id += 1;
-        let id = tabs.next_id;
-        let editor = new_editor(epoch, path, preview);
-        tabs.documents.insert(id, editor);
-        tabs.select(id);
+        let id = tabs.insert(new_editor(epoch, path, preview));
         (id, true)
     });
     ui.open_desktop_app(WorkspacePage::Editor);
@@ -209,7 +237,7 @@ fn new_editor(epoch: u64, path: &str, preview: bool) -> Editor {
         document: None,
         draft: String::new(),
         pending: None,
-        queued_read: true,
+        queued_read: !path.is_empty(),
         cancel: Arc::new(AtomicBool::new(false)),
         dirty: false,
         discard: false,
@@ -227,7 +255,11 @@ fn read(ui: &Ui, surface: Surface) {
         }
         let epoch = s.epoch;
         let editor = surface.editor_mut(s)?;
-        if editor.dirty || editor.pending.is_some() || editor.epoch != epoch {
+        if editor.path.is_empty()
+            || editor.dirty
+            || editor.pending.is_some()
+            || editor.epoch != epoch
+        {
             return None;
         }
         editor.queued_read = false;
@@ -241,7 +273,7 @@ fn read(ui: &Ui, surface: Surface) {
             if let Some(e) = surface.editor_mut(s) {
                 e.pending = Some(Pending {
                     serial,
-                    saving: false,
+                    operation: Operation::Read,
                 });
                 e.error.clear();
                 e.saved = false;
@@ -388,19 +420,58 @@ pub(crate) fn save(ui: &Ui, surface: Surface, sudo: Option<zeroize::Zeroizing<St
         })
     });
     if let Some(action) = action {
-        let serial = ui.send(action);
-        ui.state.revise(|s| {
-            s.file_pending = Some(serial);
-            if let Some(e) = surface.editor_mut(s) {
-                e.pending = Some(Pending {
-                    serial,
-                    saving: true,
-                });
-                e.error.clear();
-                e.saved = false;
-            }
-        });
+        start_save(ui, surface, action, Operation::Save);
     }
+}
+
+fn start_save(ui: &Ui, surface: Surface, action: Action, operation: Operation) {
+    let serial = ui.send(action);
+    ui.state.revise(|s| {
+        s.file_pending = Some(serial);
+        if let Some(e) = surface.editor_mut(s) {
+            e.pending = Some(Pending { serial, operation });
+            e.error.clear();
+            e.saved = false;
+        }
+    });
+}
+
+pub(crate) fn save_as(
+    ui: &Ui,
+    id: u64,
+    path: String,
+    replace: Option<arcnix_core::text_files::TextSnapshot>,
+) {
+    let surface = Surface::Desktop(id);
+    if ui
+        .state
+        .with(|s| surface.editor(s).is_some_and(|e| e.path == path))
+    {
+        save(ui, surface, None);
+        return;
+    }
+    let action = ui.state.with(|s| {
+        if !can_save_as(s, surface) {
+            return None;
+        }
+        let e = surface.editor(s)?;
+        Some(Action::TextSaveAs {
+            path: path.clone(),
+            bytes: e.encode().ok()?.into(),
+            replace,
+            cancel: e.cancel.clone(),
+        })
+    });
+    if let Some(action) = action {
+        start_save(ui, surface, action, Operation::SaveAs(path));
+    }
+}
+
+pub(crate) fn open_in_another_tab(s: &State, id: u64, path: &str) -> bool {
+    s.desktop_editor
+        .documents
+        .iter()
+        .any(|(&other, e)| other != id && e.targets(path))
 }
 pub(crate) fn event(
     ui: &Ui,
@@ -408,7 +479,7 @@ pub(crate) fn event(
     result: std::result::Result<Document, worker::FileFailure>,
 ) {
     let current = ui.state.revise(|s| {
-        let matches = |e: &Editor| e.pending.is_some_and(|p| p.serial == serial);
+        let matches = |e: &Editor| e.pending.as_ref().is_some_and(|p| p.serial == serial);
         let surface = if s.remote_editor.as_ref().is_some_and(matches) {
             Surface::Transfer
         } else {
@@ -424,16 +495,24 @@ pub(crate) fn event(
         s.file_pending = None;
         let editor = surface.editor_mut(s)?;
         let current = editor.epoch == epoch;
-        let saved = editor.pending.take()?.saving;
+        let operation = editor.pending.take()?.operation;
+        let saved = operation != Operation::Read;
         let success = result.is_ok();
         let retry = (current
-            && saved
+            && operation == Operation::Save
             && !editor.cancel.load(Ordering::Relaxed)
             && result.as_ref().is_err_and(|error| error.permission_denied))
         .then(|| file_elevation::Retry::Save(surface, editor.path.clone()));
-        let opened = (current && success && !saved).then(|| editor.path.clone());
+        let opened = result
+            .as_ref()
+            .ok()
+            .filter(|_| current && operation != Operation::Save)
+            .map(|doc| doc.path.clone());
         match result {
             Ok(document) => {
+                editor.path = document.path.clone();
+                editor.markdown = markdown(&editor.path);
+                editor.preview &= editor.markdown;
                 editor.draft = document.content.clone();
                 editor.document = Some(document);
                 editor.dirty = false;
@@ -508,7 +587,7 @@ fn mode_controls(ui: Ui, surface: Surface) -> impl Widget {
                     .map(|(preview, label)| {
                         sapid::button()
                             .class("button compact")
-                            .label(i18n::bind(label))
+                            .label(i18n::bind_in(surface != Surface::Transfer, label))
                             .pressed(state.map(move |s| {
                                 surface.editor(s).is_some_and(|e| e.preview == preview)
                             }))
@@ -546,7 +625,7 @@ fn editor_status(state: Cage<State>, surface: Surface) -> impl Widget {
                 state.map(move |s| {
                     surface
                         .editor(s)
-                        .is_some_and(|e| !e.preview && e.document.is_some())
+                        .is_some_and(|e| !e.preview && e.editable())
                 }),
                 || {
                     row().class("editor-position").fill((
@@ -564,10 +643,18 @@ fn editor_status(state: Cage<State>, surface: Surface) -> impl Widget {
             text().class("editor-format").content(state.map(move |s| {
                 surface
                     .editor(s)
-                    .and_then(|e| e.document.as_ref())
-                    .map(|doc| {
-                        let encoding = if doc.bom { "UTF-8 BOM" } else { "UTF-8" };
-                        let ending = if doc.crlf { "CRLF" } else { "LF" };
+                    .filter(|e| e.editable())
+                    .map(|e| {
+                        let encoding = if e.document.as_ref().is_some_and(|d| d.bom) {
+                            "UTF-8 BOM"
+                        } else {
+                            "UTF-8"
+                        };
+                        let ending = if e.document.as_ref().is_some_and(|d| d.crlf) {
+                            "CRLF"
+                        } else {
+                            "LF"
+                        };
                         format!("{encoding}  ·  {ending}")
                     })
                     .unwrap_or_default()
@@ -580,19 +667,21 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
     let state = ui.state;
     let discard_ui = ui.clone();
     col().class("remote-editor").fill((
-        row().class("editor-toolbar").fill((
-            icons::glyph(Icon::File),
-            text()
-                .class("editor-path")
-                .selectable(true)
-                .content(state.map(move |s| {
-                    surface
-                        .editor(s)
-                        .map(|e| e.path.clone())
-                        .unwrap_or_default()
-                })),
-            mode_controls(ui, surface),
-        )),
+        when(surface == Surface::Transfer, move || {
+            row().class("editor-toolbar").fill((
+                icons::glyph(Icon::File),
+                text()
+                    .class("editor-path")
+                    .selectable(true)
+                    .content(state.map(move |s| {
+                        surface
+                            .editor(s)
+                            .map(|e| e.path.clone())
+                            .unwrap_or_default()
+                    })),
+                mode_controls(ui.clone(), surface),
+            ))
+        }),
         when(
             state.map(move |s| surface.editor(s).is_some_and(|e| !e.preview)),
             move || {
@@ -609,7 +698,7 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                     .enabled(state.map(move |s| {
                         surface
                             .editor(s)
-                            .is_some_and(|e| e.document.is_some() && e.pending.is_none())
+                            .is_some_and(|e| e.editable() && e.pending.is_none())
                     }))
                     .on(value_changed, move |event| {
                         if let Event::ValueChanged { value, .. } = event {
@@ -622,7 +711,8 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                                         editor.dirty = editor
                                             .document
                                             .as_ref()
-                                            .is_some_and(|document| document.content != value);
+                                            .map_or("", |doc| doc.content.as_str())
+                                            != value;
                                         editor.draft = value;
                                         editor.saved = false;
                                     } else {
@@ -669,7 +759,10 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                 ))
             },
         ),
-        editor_status(state, surface),
+        when(
+            state.map(move |s| surface == Surface::Transfer || !s.desktop_editor.hide_status),
+            move || editor_status(state, surface),
+        ),
         when(
             state.map(move |s| {
                 surface == Surface::Transfer && surface.editor(s).is_some_and(|e| e.discard)
@@ -715,9 +808,9 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
 fn can_reload(s: &State, surface: Surface) -> bool {
     s.connected
         && s.file_pending.is_none()
-        && surface
-            .editor(s)
-            .is_some_and(|e| !e.dirty && e.pending.is_none() && e.epoch == s.epoch)
+        && surface.editor(s).is_some_and(|e| {
+            !e.path.is_empty() && !e.dirty && e.pending.is_none() && e.epoch == s.epoch
+        })
 }
 
 fn buttons(ui: Ui, surface: Surface) -> impl Widget {
@@ -749,28 +842,156 @@ fn browse(ui: &Ui) {
     desktop_file_picker::open(ui, desktop_file_picker::Purpose::TextEditor, start);
 }
 
-pub(crate) fn title_actions(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    each(state.map(|s| s.desktop_editor.active.into_iter().collect::<Vec<_>>()))
-        .key(|id| *id)
-        .children(move |item| {
-            let surface = Surface::Desktop(item.value.get());
-            let open = ui.clone();
-            let reload = ui.clone();
-            let save_ui = ui.clone();
-            fragment((
-                i18n::desktop::icon_action("Open file…", Icon::Folder)
-                    .enabled(state.map(can_browse))
-                    .on_press(move || browse(&open)),
-                i18n::desktop::icon_action("Reload from server", Icon::Refresh)
-                    .enabled(state.map(move |s| can_reload(s, surface)))
-                    .on_press(move || read(&reload, surface)),
-                i18n::desktop::icon_action("Save", Icon::Save)
-                    .class("icon-button remote-editor-save")
-                    .enabled(state.map(move |s| can_save(s, surface)))
-                    .on_press(move || save(&save_ui, surface, None)),
-            ))
+fn can_save_as(s: &State, surface: Surface) -> bool {
+    s.connected
+        && s.sftp_available
+        && s.file_pending.is_none()
+        && surface.editor(s).is_some_and(|e| {
+            e.epoch == s.epoch && e.editable() && e.pending.is_none() && e.encode().is_ok()
         })
+}
+
+fn choose_destination(ui: &Ui, id: u64) {
+    let Some((start, name)) = ui.state.with(|s| {
+        let e = Surface::Desktop(id).editor(s)?;
+        Some((
+            desktop_file_picker::parent(&e.path),
+            filename(&e.path).to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    desktop_file_picker::open(ui, desktop_file_picker::Purpose::SaveText(id), start);
+    desktop_file_picker::set_save_name(ui, name);
+}
+
+fn new_document(ui: &Ui) {
+    ui.state.revise(|s| {
+        if available(s) {
+            s.desktop_editor.insert(new_editor(s.epoch, "", false));
+        }
+    });
+}
+
+fn active(s: &State) -> Option<Surface> {
+    s.desktop_editor.active.map(Surface::Desktop)
+}
+
+fn menu(label: &'static str, items: impl IntoChildren + 'static) -> impl Widget {
+    col().class("editor-menu").fill((
+        sapid::button()
+            .class("editor-menu-trigger")
+            .label(i18n::desktop::bind(label)),
+        col().class("editor-menu-popup").fill(items),
+    ))
+}
+
+pub(crate) fn menubar(ui: Ui) -> impl Widget {
+    use i18n::desktop::{bind, btn};
+    let state = ui.state;
+    let new = ui.clone();
+    let open = ui.clone();
+    let save_ui = ui.clone();
+    let save_as_ui = ui.clone();
+    let reload = ui.clone();
+    let mode_ui = ui.clone();
+    row().class("editor-menubar").fill((
+        menu(
+            "File",
+            (
+                btn("New document", move || new_document(&new))
+                    .class("editor-new")
+                    .enabled(state.map(available)),
+                btn("Open file…", move || browse(&open))
+                    .class("editor-open")
+                    .enabled(state.map(can_browse)),
+                btn("Save", move || {
+                    if let Some(id) = state.with(|s| s.desktop_editor.active) {
+                        let surface = Surface::Desktop(id);
+                        if state.with(|s| surface.editor(s).is_some_and(|e| e.path.is_empty())) {
+                            choose_destination(&save_ui, id);
+                        } else {
+                            save(&save_ui, surface, None);
+                        }
+                    }
+                })
+                .class("remote-editor-save")
+                .enabled(state.map(|s| {
+                    active(s).is_some_and(|surface| {
+                        if surface.editor(s).is_some_and(|e| e.path.is_empty()) {
+                            can_save_as(s, surface)
+                        } else {
+                            can_save(s, surface)
+                        }
+                    })
+                })),
+                btn("Save as…", move || {
+                    if let Some(id) = state.with(|s| s.desktop_editor.active) {
+                        choose_destination(&save_as_ui, id);
+                    }
+                })
+                .class("editor-save-as")
+                .enabled(state.map(|s| active(s).is_some_and(|surface| can_save_as(s, surface)))),
+                btn("Reload from server", move || {
+                    if let Some(surface) = state.with(active) {
+                        read(&reload, surface);
+                    }
+                })
+                .enabled(state.map(|s| active(s).is_some_and(|surface| can_reload(s, surface)))),
+                btn("Close tab", move || close_selected(&ui)).enabled(state.map(|s| {
+                    active(s)
+                        .and_then(|surface| surface.editor(s))
+                        .is_some_and(|e| e.pending.is_none())
+                })),
+            ),
+        ),
+        menu(
+            "Edit",
+            (
+                fragment(
+                    [
+                        ("Undo", "undo"),
+                        ("Redo", "redo"),
+                        ("Cut", "cut"),
+                        ("Copy", "copy"),
+                        ("Paste", "paste"),
+                        ("Select all", "selectAll"),
+                    ]
+                    .into_iter()
+                    .map(|(label, command)| {
+                        sapid::button()
+                            .class(format!("editor-edit-{command}"))
+                            .label(bind(label))
+                            .enabled(state.map(|s| {
+                                active(s)
+                                    .and_then(|surface| surface.editor(s))
+                                    .is_some_and(|e| {
+                                        !e.preview && e.editable() && e.pending.is_none()
+                                    })
+                            }))
+                    })
+                    .collect::<Vec<_>>(),
+                ),
+                text().class("hidden editor-paste-help").content(bind(
+                    "Use the paste keyboard shortcut to paste from the clipboard.",
+                )),
+            ),
+        ),
+        menu(
+            "View",
+            (
+                each(state.map(|s| s.desktop_editor.active.into_iter().collect::<Vec<_>>()))
+                    .key(|id| *id)
+                    .children(move |item| {
+                        mode_controls(mode_ui.clone(), Surface::Desktop(item.value.get()))
+                    }),
+                btn("Status bar", move || {
+                    state.revise(|s| s.desktop_editor.hide_status = !s.desktop_editor.hide_status)
+                })
+                .pressed(state.map(|s| !s.desktop_editor.hide_status)),
+            ),
+        ),
+    ))
 }
 
 fn filename(path: &str) -> &str {
@@ -798,7 +1019,13 @@ pub(crate) fn file_tabs(ui: Ui) -> impl Widget {
                 let path = state.map(move |s| {
                     surface
                         .editor(s)
-                        .map(|e| e.path.clone())
+                        .map(|e| {
+                            if e.path.is_empty() {
+                                format!("{} {id}", i18n::desktop::translate("Untitled"))
+                            } else {
+                                e.path.clone()
+                            }
+                        })
                         .unwrap_or_default()
                 });
                 row()
@@ -876,6 +1103,14 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let open = ui.clone();
     col().class("desktop-editor editor-file-drop").fill((
+        when(state.map(|s| s.desktop_editor.active.is_some()), {
+            let ui = ui.clone();
+            move || {
+                row()
+                    .class("editor-tabbar")
+                    .fill((file_tabs(ui.clone()), server_desktop::tab_overflow()))
+            }
+        }),
         when(
             state.map(|s| s.desktop_editor.active.is_none()),
             move || {

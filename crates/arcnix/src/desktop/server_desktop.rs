@@ -856,7 +856,6 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let files_settings = ui.clone();
     let window_drop = ui.clone();
     let browse_video = ui.clone();
-    let editor_actions = ui.clone();
     let title = if page == WorkspacePage::Player {
         text().content(state.map(|s| {
             s.video
@@ -875,7 +874,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             files_tabs::tab_strip(ui.clone(), id),
             tab_overflow(),
         )),
-        WorkspacePage::Editor => fragment((text_editor::file_tabs(ui.clone()), tab_overflow())),
+        WorkspacePage::Editor => fragment(text_editor::menubar(ui.clone())),
         WorkspacePage::Monitor => fragment(monitor_ui::window_tools(ui.clone())),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone())),
@@ -957,9 +956,6 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                 .fill((
                     titlebar,
                     row().class("desktop-window-actions").fill((
-                        when(page == WorkspacePage::Editor, move || {
-                            text_editor::title_actions(editor_actions.clone())
-                        }),
                         when(page == WorkspacePage::Player, move || {
                             let ui = browse_video.clone();
                             i18n::desktop::icon_action("Open video", Icon::OpenVideo)

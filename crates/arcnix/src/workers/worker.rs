@@ -64,6 +64,12 @@ pub enum Action {
         cancel: Arc<AtomicBool>,
         sudo: Option<zeroize::Zeroizing<String>>,
     },
+    TextSaveAs {
+        path: String,
+        bytes: zeroize::Zeroizing<Vec<u8>>,
+        replace: Option<arcnix_core::text_files::TextSnapshot>,
+        cancel: Arc<AtomicBool>,
+    },
     Keepalive,
     ServerApps(crate::server_apps_worker::Action),
     Operations(crate::operations_worker::Action),
@@ -936,7 +942,9 @@ pub(crate) fn start_with_limiter(
                 Action::Permissions { .. } => Some(1),
                 Action::FileMetadata(_) => Some(2),
                 Action::CodeFile(_) => Some(3),
-                Action::TextRead { .. } | Action::TextSave { .. } => Some(7),
+                Action::TextRead { .. } | Action::TextSave { .. } | Action::TextSaveAs { .. } => {
+                    Some(7)
+                }
                 Action::ManageRemoteFiles(..) => Some(5),
                 Action::ResolveFileAlias(_) => Some(6),
                 _ => None,
@@ -1130,6 +1138,26 @@ pub(crate) fn start_with_limiter(
                                             generation.load(Ordering::Acquire) == epoch
                                                 && !cancel.load(Ordering::Relaxed),
                                             "File read canceled or connection changed"
+                                        );
+                                        Ok(())
+                                    }),
+                                    false,
+                                    |result| send(Update::TextFile(result)),
+                                )?;
+                            }
+                            Action::TextSaveAs {
+                                path,
+                                bytes,
+                                replace,
+                                cancel,
+                            } => {
+                                file_completed = true;
+                                publish_elevatable_result(
+                                    remote.save_text_as(&path, &bytes, replace, || {
+                                        anyhow::ensure!(
+                                            generation.load(Ordering::Acquire) == epoch
+                                                && !cancel.load(Ordering::Relaxed),
+                                            "File save canceled or connection changed"
                                         );
                                         Ok(())
                                     }),

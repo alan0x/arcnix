@@ -642,13 +642,8 @@ impl RemoteSession {
             .take_if(|reader| cursor.is_none_or(|id| reader.cursor == id));
     }
 
-    pub fn read_text(
-        &self,
-        path: &str,
-        check: impl Fn() -> Result<()>,
-    ) -> Result<crate::text_files::Document> {
+    fn text_path(&self, path: &str) -> Result<PathBuf> {
         use crate::deletion::FileSystem;
-        check()?;
         let files = DeleteFiles(self.sftp()?);
         let path = files.normalize(path)?;
         for parent in path.ancestors().skip(1).filter(|p| p.file_name().is_some()) {
@@ -657,6 +652,16 @@ impl RemoteSession {
                 "Linked parent is not supported"
             );
         }
+        Ok(path)
+    }
+
+    pub fn read_text(
+        &self,
+        path: &str,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::Document> {
+        check()?;
+        let path = self.text_path(path)?;
         let before = self.sftp()?.lstat(&path)?;
         ensure!(
             before.is_file()
@@ -715,44 +720,90 @@ impl RemoteSession {
             current.version == document.version,
             "Remote file changed since it was opened. Reload before saving; the file was not overwritten."
         );
-        let partial = remote_partial(&document.path)?;
+        self.publish_text(&document.path, &bytes, Some(&document.version), check)
+    }
+
+    pub fn save_text_as(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        replace: Option<crate::text_files::TextSnapshot>,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::Document> {
+        check()?;
+        ensure!(
+            bytes.len() <= crate::text_files::LIMIT,
+            "Edited file exceeds 1 MiB"
+        );
+        let existing = if let Some(expected) = replace {
+            let current = self.read_text(path, &check)?;
+            ensure!(
+                current.version.size == expected.size
+                    && current.version.modified == expected.modified,
+                "Remote file changed since it was selected"
+            );
+            Some(current.version)
+        } else {
+            self.text_path(path)?;
+            self.ensure_absent(path)?;
+            None
+        };
+        self.publish_text(path, bytes, existing.as_ref(), check)
+    }
+
+    fn publish_text(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        existing: Option<&crate::text_files::Version>,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::Document> {
+        let partial = remote_partial(path)?;
+        let mut output = self.sftp()?.open_mode(
+            Path::new(&partial),
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
+            0o600,
+            OpenType::File,
+        )?;
         let result = (|| {
-            let mut output = self.sftp()?.open_mode(
-                Path::new(&partial),
-                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
-                0o600,
-                OpenType::File,
-            )?;
             for chunk in bytes.chunks(32768) {
                 check()?;
                 output.write_all(chunk)?;
             }
             output.flush()?;
-            drop(output);
-            self.sftp()?
-                .setstat(
-                    Path::new(&partial),
-                    ssh2::FileStat {
-                        size: None,
-                        uid: document.version.uid,
-                        gid: document.version.gid,
-                        perm: None,
-                        atime: None,
-                        mtime: None,
-                    },
-                )
-                .context("Cannot preserve remote file ownership; original file was not replaced")?;
+            output.close()?;
             check()?;
-            let latest = self.read_text(&document.path, &check)?;
-            ensure!(
-                latest.version == document.version,
-                "Remote file changed during upload. Reload before saving; the file was not overwritten."
-            );
-            self.replace_remote(&partial, &document.path)?;
-            self.read_text(&document.path, &check)
+            if let Some(version) = existing {
+                self.sftp()?
+                    .setstat(
+                        Path::new(&partial),
+                        ssh2::FileStat {
+                            size: None,
+                            uid: version.uid,
+                            gid: version.gid,
+                            perm: None,
+                            atime: None,
+                            mtime: None,
+                        },
+                    )
+                    .context(
+                        "Cannot preserve remote file ownership; original file was not replaced",
+                    )?;
+                check()?;
+                let latest = self.read_text(path, &check)?;
+                ensure!(
+                    &latest.version == version,
+                    "Remote file changed during upload. Reload before saving; the file was not overwritten."
+                );
+                self.replace_remote(&partial, path)?;
+            } else {
+                self.rename(&partial, path)?;
+            }
+            self.read_text(path, &check)
                 .context(file_admin::SavePublished)
         })();
-        if self.sftp()?.lstat(Path::new(&partial)).is_ok() {
+        drop(output);
+        if result.is_err() {
             let _ = self.sftp()?.unlink(Path::new(&partial));
         }
         result

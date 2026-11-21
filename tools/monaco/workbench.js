@@ -365,9 +365,12 @@ const workbenchLayout = await getService(IWorkbenchLayoutService);
 new ResizeObserver(() => workbenchLayout.layout()).observe(
   document.getElementById('workbench'),
 );
-window.arcnixCommandSlot = (physical) => {
+window.arcnixCommandSlot = (physical, titleColors) => {
   const style = document.documentElement.style;
-  style.setProperty('--command-surround', dark ? '#17212f' : '#fff');
+  if (titleColors) {
+    style.setProperty('--command-surround', titleColors[0]);
+    style.setProperty('--command-foreground', titleColors[1]);
+  }
   const [left, width, height, inset, menuLeft, menuWidth] = physical ?? [0, 0, 0, 0, 0, 0];
   for (const [name, n] of Object.entries({ left, width, height, inset, 'menu-left': menuLeft, 'menu-width': menuWidth }))
     style.setProperty('--command-' + name, n / window.devicePixelRatio + 'px');

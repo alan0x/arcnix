@@ -61,13 +61,15 @@ function observeNativeSurface(app) {
         const rank = Number(getComputedStyle(browser).zIndex) || 0;
         const blockers = windows.filter(other => other !== browser && (Number(getComputedStyle(other).zIndex) || 0) > rank);
         const overlays = canvas.querySelectorAll(
-            '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip,.desktop-clock-tooltip,.window-tabs-menu:popover-open'
+            '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip,.desktop-clock-tooltip,.window-tabs-menu:popover-open,.editor-menu-popup:popover-open'
         );
         const clip = area ? [dock, ...blockers, ...overlays].map(rect).filter(box => box
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom
         ).slice(0, 32) : [];
         const epoch = Number(browser.querySelector('.browser-epoch').textContent);
-        const serialized = JSON.stringify({epoch, area, frame: visibleFrame, clip, command_center: commandCenter, menu_slot: rect(menuSlot)});
+        const title = menuSlot && getComputedStyle(menuSlot.closest('.desktop-window-titlebar'));
+        const serialized = JSON.stringify({epoch, area, frame: visibleFrame, clip, command_center: commandCenter,
+            menu_slot: rect(menuSlot), title_colors: title && [title.backgroundColor, title.color]});
         if (bridge !== previousInput || serialized !== previous) {
             previousInput = bridge;
             previous = serialized;
@@ -86,6 +88,7 @@ function observeNativeSurface(app) {
         attributeFilter: ['class', 'hidden', 'inert', 'style', 'data-positioned'],
     });
     addEventListener('resize', schedule);
+    document.addEventListener('toggle', schedule, true);
     addEventListener('scroll', schedule, true);
     function clockHover(event) {
         const clock = event.target.closest?.('.desktop-dock .desktop-panel-clock');

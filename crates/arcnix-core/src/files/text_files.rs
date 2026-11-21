@@ -128,24 +128,24 @@ impl Document {
         })
     }
     pub fn encode(&self, content: &str) -> Result<Vec<u8>> {
-        ensure!(
-            !content.contains(['\0', '\r']),
-            "Text contains unsupported control characters"
-        );
-        let text = if self.crlf {
-            content.replace('\n', "\r\n")
-        } else {
-            content.to_owned()
-        };
-        let mut bytes = if self.bom {
-            vec![0xef, 0xbb, 0xbf]
-        } else {
-            vec![]
-        };
-        bytes.extend_from_slice(text.as_bytes());
-        ensure!(bytes.len() <= LIMIT, "Edited file exceeds 1 MiB");
-        Ok(bytes)
+        encode(content, self.bom, self.crlf)
     }
+}
+
+pub fn encode(content: &str, bom: bool, crlf: bool) -> Result<Vec<u8>> {
+    ensure!(
+        !content.contains(['\0', '\r']),
+        "Text contains unsupported control characters"
+    );
+    let text = if crlf {
+        content.replace('\n', "\r\n")
+    } else {
+        content.to_owned()
+    };
+    let mut bytes = if bom { vec![0xef, 0xbb, 0xbf] } else { vec![] };
+    bytes.extend_from_slice(text.as_bytes());
+    ensure!(bytes.len() <= LIMIT, "Edited file exceeds 1 MiB");
+    Ok(bytes)
 }
 #[cfg(test)]
 mod tests {

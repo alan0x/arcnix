@@ -53,16 +53,7 @@ def check_appearance_choices(panel):
                 active_image = images[0 if mode == 'Light' else 1]
                 expect(background).to_have_css('background-image', active_image)
                 expect(selected_wallpaper.locator('.wallpaper-swatch')).to_have_css('background-image', active_image)
-                moving, mask, animation = background.evaluate("""el => {
-                    const sky = getComputedStyle(el, '::before');
-                    return [matchMedia('(prefers-reduced-motion: no-preference)').matches,
-                            sky.maskImage, sky.animationName];
-                }""")
-                if moving:
-                    assert mask == active_image.replace('.webp', '-mask.webp')
-                    assert animation == 'aurora-drift'
-                else:
-                    assert animation == 'none'
+                assert background.evaluate('el => el.getAnimations({subtree: true}).length') == 0
             if preset == 'Aurora' and mode == 'Dark':
                 button('Auto').click()
                 expect(selected_wallpaper).to_have_text('Aurora')

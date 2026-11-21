@@ -82,7 +82,11 @@ fn position(
             menu.map_or(0, |m| m.width()),
         ]
     });
-    view.evaluate_script(&format!("window.arcnixCommandSlot?.({})", json!(geometry)))?;
+    view.evaluate_script(&format!(
+        "window.arcnixCommandSlot?.({}, {})",
+        json!(geometry),
+        json!(viewport.title_colors)
+    ))?;
     web_browser_native::position(view, &port)
 }
 

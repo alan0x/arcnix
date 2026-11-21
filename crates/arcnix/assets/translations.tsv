@@ -2820,3 +2820,15 @@ Dock 时钟	Dock clock
 行	Line
 列	Column
 纯文本	Plain text
+新建文档	New document
+未命名	Untitled
+另存为…	Save as…
+视图	View
+撤销	Undo
+重做	Redo
+剪切	Cut
+替换	Replace
+替换已有文件“{}”？	Replace existing file {}?
+该文件已在其他标签页中打开。	This file is open in another tab.
+请选择普通文件名。	Choose a regular file name.
+请使用粘贴快捷键粘贴剪贴板内容。	Use the paste keyboard shortcut to paste from the clipboard.

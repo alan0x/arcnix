@@ -451,6 +451,8 @@ fn wallpaper_class(wallpaper: &Wallpaper) -> &'static str {
 
 pub(crate) fn wallpaper_preview_class(wallpaper: &Wallpaper, dark: bool) -> &'static str {
     match wallpaper {
+        Wallpaper::Fjord if dark => "wallpaper-fjord-dark",
+        Wallpaper::Fjord => "wallpaper-fjord-light",
         Wallpaper::Aurora if dark => "wallpaper-aurora-dark",
         Wallpaper::Aurora => "wallpaper-aurora-light",
         Wallpaper::Seaside if dark => "wallpaper-seaside-moonrise",

@@ -2246,20 +2246,16 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             assets: [
                 ("fjord", include_bytes!("../assets/fjord.webp").as_slice()),
                 (
+                    "fjord-daylight",
+                    include_bytes!("../assets/fjord-daylight.webp").as_slice(),
+                ),
+                (
                     "aurora-twilight",
                     include_bytes!("../assets/aurora-twilight.webp").as_slice(),
                 ),
                 (
                     "aurora-night",
                     include_bytes!("../assets/aurora-night.webp").as_slice(),
-                ),
-                (
-                    "aurora-twilight-mask",
-                    include_bytes!("../assets/aurora-twilight-mask.webp").as_slice(),
-                ),
-                (
-                    "aurora-night-mask",
-                    include_bytes!("../assets/aurora-night-mask.webp").as_slice(),
                 ),
                 (
                     "seaside-sunrise",
@@ -2295,6 +2291,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/resource-trends.js"),
                     include_str!("../assets/server-tree-events.js"),
                     include_str!("../assets/desktop-geometry.js"),
+                    include_str!("../assets/modal-drag.js"),
                     include_str!("../assets/window-tabs.js"),
                     include_str!("../assets/files-tabs.js"),
                     if cfg!(windows) {

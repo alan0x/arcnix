@@ -73,7 +73,8 @@ def main():
                 return read_desktop_settings(remote)
 
             def settled():
-                eventually(lambda: not p.locator('html').evaluate('el=>el.classList.contains("desktop-motion")'))
+                p.wait_for_function("""() => !document.documentElement.classList.contains('desktop-motion')
+                    && !document.querySelector('.desktop-window.active')?.getAnimations().length""")
 
             def bounds():
                 return p.locator('.desktop-window.active').bounding_box()
@@ -117,8 +118,8 @@ def main():
 
             app.connect()
             app.application('Files')
-            settled()
             expect(p.locator('.desktop-resize-handle:visible')).to_have_count(8)
+            settled()
             original = bounds()
             reference = work_area()
             p.set_viewport_size(dict(width=1800, height=1100))
@@ -286,6 +287,16 @@ def main():
             expect(palette.get_by_role('button', name='Purple', exact=True)).to_have_attribute('aria-pressed', 'true')
             app.action('Customize folder…')
             customize = p.get_by_role('dialog', name='Customize folder', exact=True)
+            title = customize.locator('.dialog-title')
+            original_dialog = customize.bounding_box()
+            drag(title, -72, 20)
+            moved_dialog = dict(original_dialog, x=original_dialog['x'] - 72, y=original_dialog['y'] + 20)
+            assert same(customize.bounding_box(), moved_dialog), (customize.bounding_box(), moved_dialog)
+            drag(title, 45, -15, cancel=True)
+            assert same(customize.bounding_box(), moved_dialog)
+            drag(title, -1600, -1000)
+            frame = p.locator('.desktop-modal-backdrop').bounding_box()
+            assert same(customize.bounding_box(), dict(original_dialog, x=frame['x'], y=frame['y']))
             customize.get_by_role('button', name='Photos', exact=True).click()
             expect(customize.locator('.folder-icon-preview .folder-icon-photos')).to_be_visible()
             customize.get_by_role('button', name='Done', exact=True).click()
@@ -345,6 +356,7 @@ def main():
             app.file('Desktop').click(button='right')
             app.action('Customize folder…')
             restored = p.get_by_role('dialog', name='Customize folder', exact=True)
+            assert same(restored.bounding_box(), original_dialog)
             restored.get_by_role('button', name='Reset', exact=True).click()
             restored.get_by_role('button', name='Done', exact=True).click()
             expect(p.locator(f'.file-row[aria-label="{desktop_path}"] .glyph-folder')).to_be_visible()

@@ -345,13 +345,27 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
     radial-gradient(ellipse at 85% 100%, #156573a8, transparent 60%),
     linear-gradient(133deg, #1c3151, #111e36 52%, #142d46);
 }
+.modal-backdrop { --modal-edge: 24px; }
+.modal-header { cursor: grab; touch-action: none; }
+.modal-header[data-dragging] { cursor: grabbing; }
+.modal-backdrop[data-modal-moved] {
+  container-type: size;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.modal-backdrop[data-modal-moved] > .modal-card {
+  /* The content box excludes the Dock. Its outer padding is also available to drag into. */
+  translate:
+    clamp(calc(-1 * var(--modal-edge)), var(--modal-x), calc(100cqw - 100% + var(--modal-edge)))
+    clamp(calc(-1 * var(--modal-edge)), var(--modal-y), calc(100cqh - 100% + var(--modal-edge)));
+}
 .desktop-modal-backdrop {
-  --desktop-modal-padding: clamp(8px, 1.5vw, 18px);
+  --modal-edge: clamp(8px, 1.5vw, 18px);
   inset: var(--desktop-frame-inset, 100% 0 0);
-  padding: var(--desktop-modal-padding);
-  padding-left: calc(var(--desktop-modal-padding) + var(--desktop-dock-left, 0px));
-  padding-right: calc(var(--desktop-modal-padding) + var(--desktop-dock-right, 0px));
-  padding-bottom: calc(var(--desktop-modal-padding) + var(--desktop-dock-bottom, 0px));
+  padding: var(--modal-edge);
+  padding-left: calc(var(--modal-edge) + var(--desktop-dock-left, 0px));
+  padding-right: calc(var(--modal-edge) + var(--desktop-dock-right, 0px));
+  padding-bottom: calc(var(--modal-edge) + var(--desktop-dock-bottom, 0px));
   overflow: hidden;
 }
 .desktop-modal-backdrop .modal-card {
@@ -444,34 +458,16 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .wallpaper-aurora, .wallpaper-aurora-light {
   background: #8594ae url("/wallpapers/aurora-twilight.webp") center / cover no-repeat;
-  --aurora-mask: url("/wallpapers/aurora-twilight-mask.webp");
 }
 .desktop-dark .wallpaper-aurora, .wallpaper-aurora-dark {
   background: #142537 url("/wallpapers/aurora-night.webp") center / cover no-repeat;
-  --aurora-mask: url("/wallpapers/aurora-night-mask.webp");
 }
-@media (prefers-reduced-motion: no-preference) {
-  .desktop-wallpaper-art.wallpaper-aurora::before,
-  .desktop-wallpaper-art.wallpaper-aurora::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    mask: var(--aurora-mask) center / cover no-repeat;
-    background: linear-gradient(105deg, transparent 3%, #c2eed4 31%, transparent 65%, #d6c5eb 92%);
-    animation: aurora-drift 29s ease-in-out -8s infinite alternate;
-  }
-  .desktop-wallpaper-art.wallpaper-aurora::after {
-    background: linear-gradient(83deg, transparent 19%, #b1e4d2 60%, transparent 91%);
-    animation-duration: 41s;
-    animation-delay: -19s;
-    animation-direction: alternate-reverse;
-  }
+.wallpaper-fjord, .wallpaper-fjord-light {
+  background: #91b1bc url("/wallpapers/fjord-daylight.webp") center 60% / cover no-repeat;
 }
-@keyframes aurora-drift {
-  from { opacity: .02; transform: translateX(-.45%); }
-  to { opacity: .24; transform: translateX(.45%); }
+.desktop-dark .wallpaper-fjord, .wallpaper-fjord-dark {
+  background: #102736 url("/wallpapers/fjord.webp") center 60% / cover no-repeat;
 }
-.wallpaper-fjord { background: #102736 url("/wallpapers/fjord.webp") center 60% / cover no-repeat; }
 .desktop-wallpaper-copy {
   position: absolute;
   right: calc(clamp(20px, 5vw, 84px) + var(--desktop-dock-right, 0px));
@@ -2199,6 +2195,8 @@ html[data-files-downloading] .files-download-drop {
 .file-picker-custom-format { display: flex; gap: 6px; }
 .file-picker-custom-format > input { flex: 1; min-width: 0; }
 .file-picker-actions { display: flex; gap: 8px; }
+.file-picker-save-name { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+.file-picker-save-name input { flex: 1; min-width: 0; }
 .remote-player-screen video { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none !important; object-fit: contain; }
 .player-feedback {
   position: absolute; inset: 50% auto auto 50%; transform: translate(-50%, -50%); z-index: 1;
@@ -2372,7 +2370,29 @@ button,
 .editor-discard { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 5px; }
 .app-editor { --tile-tint: #467fbc; --tile-shade: #234866; }
 .desktop-window.app-editor { container: editor-window / inline-size; }
-.desktop-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 10px; }
+.desktop-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.editor-menubar { display: flex; align-items: center; gap: 1px; }
+.editor-menu-trigger { padding: 3px 7px !important; border-radius: 4px; font-size: var(--font-label) !important; }
+.editor-menu-trigger:hover, .editor-menu-trigger[aria-expanded=true] { background: var(--raised) !important; }
+.editor-menu-popup:not(:popover-open) { display: none !important; }
+.editor-menu-popup {
+  position: fixed; inset: auto; margin: 0; display: flex; flex-direction: column;
+  min-width: 170px; max-height: 70vh; overflow: auto; padding: 4px;
+  border: 1px solid var(--line-hover); border-radius: 6px;
+  background: var(--surface); color: var(--text); box-shadow: 0 6px 20px #0004;
+}
+.editor-menu-popup .editor-modes { display: contents; }
+.editor-menu-popup button {
+  width: 100%; min-height: 28px !important; padding: 4px 10px !important; border: 0 !important;
+  border-radius: 3px !important; background: transparent !important; color: inherit !important;
+  text-align: start; font: inherit !important; justify-content: flex-start;
+}
+.editor-menu-popup button:is(:hover, :focus-visible):enabled { background: var(--raised) !important; }
+.editor-menu-popup button[aria-pressed=true]::after { content: '✓'; float: right; margin-inline-start: 12px; }
+.editor-tabbar {
+  display: flex; align-items: center; gap: 4px; min-width: 0; flex: none; padding: 2px 6px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
 .editor-tab-strip { display: flex; align-items: center; flex: 1; gap: 4px; min-width: 0; }
 .editor-tab-strip:not(:has(.editor-tab-item)) { flex: 0; }
 .app-editor .desktop-window-title { flex: 0 1 auto; min-width: 0; }
@@ -2409,15 +2429,6 @@ button,
 .editor-file-drop[data-files-item-target] { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 .app-editor > .desktop-window-content { padding: 0; }
 .desktop-editor .remote-editor { gap: 0; flex: 1; min-height: 0; }
-.desktop-editor .editor-toolbar {
-  min-height: 32px; padding: 4px 14px; border-bottom: 1px solid var(--line);
-  background: var(--surface); color: var(--muted);
-}
-.desktop-editor .editor-toolbar .editor-path {
-  font: var(--font-small)/1.5 'Segoe UI', sans-serif; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; unicode-bidi: plaintext;
-}
-.desktop-editor .editor-toolbar > .action-glyph { flex: none; width: 14px; height: 14px; }
 .editor-sheet {
   --editor-gutter-width: 46px;
   --editor-line-height: 22px;

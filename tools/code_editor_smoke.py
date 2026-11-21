@@ -1,6 +1,7 @@
 """Exercise the local VS Code workbench against a disposable SFTP server."""
 import base64
 import json
+import re
 import time
 from desktop_fixture import Desktop, Peer, ROOT, expect, eventually
 
@@ -21,6 +22,20 @@ def main():
             page = app.code()
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
+            host = app.page.locator('.app-code .desktop-window-titlebar')
+            embedded = page.locator('.part.titlebar')
+            label = embedded.locator('.menubar-menu-title:visible').first
+            expect(page.locator('html')).to_have_class(re.compile('has-menu-slot'))
+            def colors(node):
+                return node.evaluate('el => [getComputedStyle(el).backgroundColor, getComputedStyle(el).color]')
+            eventually(lambda: colors(embedded) == colors(host))
+            for background, foreground in [('#222927', '#edfffa'), ('#f3f5fa', '#182233')]:
+                host.evaluate('(el, pair) => { el.style.setProperty("--surface", pair[0]); el.style.color = pair[1]; }',
+                              [background, foreground])
+                eventually(lambda: colors(embedded) == colors(host))
+                eventually(lambda: colors(label)[1] == colors(host)[1])
+            host.evaluate('el => { el.style.removeProperty("--surface"); el.style.removeProperty("color"); }')
+            eventually(lambda: colors(embedded) == colors(host))
             for action, name in [('New Folder...', 'new-folder'), ('New File...', 'new-file.txt')]:
                 page.get_by_role('button',name=action,exact=True).click()
                 field = page.locator('.explorer-viewlet input:visible')

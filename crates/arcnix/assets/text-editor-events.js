@@ -1,12 +1,111 @@
 (() => {
+    const popupSelector = '.editor-menu-popup:popover-open';
+
+    function showMenu(trigger) {
+        const popup = trigger.nextElementSibling;
+        popup.setAttribute('aria-label', trigger.textContent);
+        popup.showPopover({source: trigger});
+        const anchor = trigger.getBoundingClientRect();
+        const left = Math.max(0, Math.min(anchor.left, innerWidth - popup.offsetWidth));
+        popup.style.left = left + 'px';
+        popup.style.top = (anchor.bottom + popup.offsetHeight <= innerHeight ? anchor.bottom : Math.max(0, anchor.top - popup.offsetHeight)) + 'px';
+        popup.querySelector('button:enabled')?.focus();
+    }
+
+    function initMenus() {
+        for (const popup of document.querySelectorAll('.editor-menu-popup:not([popover])')) {
+            const trigger = popup.previousElementSibling;
+            trigger.setAttribute('aria-haspopup', 'true');
+            trigger.setAttribute('aria-expanded', 'false');
+            popup.setAttribute('popover', 'auto');
+            popup.setAttribute('role', 'group');
+            trigger.popoverTargetElement = popup;
+            popup.addEventListener('toggle', () => trigger.setAttribute('aria-expanded', String(popup.matches(':popover-open'))));
+        }
+        const open = document.querySelector(popupSelector);
+        if (open && open.closest('.hidden, [inert], .desktop-window:not(.active)')) open.hidePopover();
+    }
+
+    document.addEventListener('pointerover', event => {
+        const trigger = event.target.closest?.('.editor-menu-trigger');
+        if (!trigger || event.pointerType !== 'mouse') return;
+        const open = trigger.closest('.editor-menubar').querySelector(popupSelector);
+        if (open && open !== trigger.nextElementSibling) showMenu(trigger);
+    });
+
+    document.addEventListener('click', async event => {
+        const button = event.target.closest?.('.editor-menu button');
+        if (!button || button.disabled) return;
+        if (button.matches('.editor-menu-trigger')) {
+            event.preventDefault();
+            const popup = button.nextElementSibling;
+            if (popup.matches(':popover-open')) popup.hidePopover();
+            else showMenu(button);
+            return;
+        }
+        const popup = button.closest('.editor-menu-popup');
+        const input = button.closest('.app-editor').querySelector('.editor-sheet textarea:enabled');
+        if (popup.matches(':popover-open')) popup.hidePopover();
+        const command = [...button.classList].find(name => name.startsWith('editor-edit-'))?.slice('editor-edit-'.length);
+        if (!input || !command) return;
+        input.focus();
+        if (command === 'selectAll') input.select();
+        else if (command === 'paste') {
+            if (!document.execCommand('paste')) {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (input.isConnected && !input.disabled && document.activeElement === input)
+                        document.execCommand('insertText', false, text);
+                } catch {
+                    if (input.isConnected && document.activeElement === input) {
+                        const shortcut = /Mac/.test(navigator.platform) ? '⌘V' : 'Ctrl+V';
+                        input.setCustomValidity(popup.querySelector('.editor-paste-help').textContent + ' (' + shortcut + ')');
+                        input.reportValidity();
+                        input.addEventListener('input', () => input.setCustomValidity(''), {once: true});
+                    }
+                }
+            }
+        } else document.execCommand(command);
+    });
+
     document.addEventListener('keydown', event => {
-        if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 's') return;
-        const editor = event.target.closest?.('.remote-editor-modal, .desktop-window.app-editor');
-        if (!editor) return;
+        if (event.isComposing || event.target.closest?.('[inert]')) return;
+        const menu = event.target.closest?.('.editor-menu');
+        if (menu && ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(event.key)) {
+            const popup = menu.querySelector('.editor-menu-popup');
+            const trigger = popup.previousElementSibling;
+            const opened = popup.matches(':popover-open');
+            if (event.key === 'Escape') {
+                if (!opened) return;
+                popup.hidePopover();
+                trigger.focus();
+            } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                const menus = [...menu.parentElement.querySelectorAll('.editor-menu-trigger')];
+                const index = menus.indexOf(trigger) + (event.key === 'ArrowRight' ? 1 : -1);
+                const next = menus[(index + menus.length) % menus.length];
+                if (opened) showMenu(next);
+                else next.focus();
+            } else if (opened) {
+                const items = [...popup.querySelectorAll('button:enabled')];
+                const index = items.indexOf(document.activeElement) + (event.key === 'ArrowDown' ? 1 : -1);
+                items[(index + items.length) % items.length]?.focus();
+            } else showMenu(trigger);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
+        if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+        const editor = event.target.closest?.('.remote-editor-modal, .desktop-window.app-editor')
+            || (event.target.matches?.('.desktop-canvas') && event.target.querySelector('.app-editor.active:not(.hidden)'));
+        if (!editor || editor.closest('[inert]')) return;
+        const key = event.key.toLowerCase();
+        const selector = event.shiftKey ? (key === 's' && '.editor-save-as')
+            : {s: '.remote-editor-save', n: '.editor-new', o: '.editor-open'}[key];
+        const action = selector && editor.querySelector(selector);
+        if (!action) return;
         event.preventDefault();
-        event.stopPropagation();
-        const save = editor.querySelector('.remote-editor-save');
-        if (save && !save.disabled) save.click();
+        event.stopImmediatePropagation();
+        if (!action.disabled && !event.repeat) action.click();
     }, true);
 
     const rendered = new WeakMap();
@@ -36,7 +135,7 @@
     }
 
     function fileMode(editor) {
-        const name = editor.querySelector('.editor-path')?.textContent.split('/').pop() || '';
+        const name = editor.closest('.desktop-editor')?.querySelector('.editor-tab-item.active .editor-tab-label')?.textContent || '';
         const syntax = CodeMirror.findModeByFileName(name)
             || (/^\.env(?:\.|$)/i.test(name) && CodeMirror.findModeByName('Shell'))
             || (/\.(?:service|socket|timer|ini|conf)$/i.test(name) && CodeMirror.findModeByMIME('text/x-ini'));
@@ -225,6 +324,7 @@
     }
 
     function syncEditors() {
+        initMenus();
         for (const [host, view] of sheets) {
             if (!host.isConnected) {
                 cancelAnimationFrame(view.frame);
@@ -239,6 +339,8 @@
             if (input && !view) {
                 view = new SourceView(host, input);
                 sheets.set(host, view);
+                if (!input.disabled && input.closest('.app-editor.active:not(.hidden)') && !input.closest('[inert]'))
+                    input.focus({preventScroll: true});
             }
             const syntax = fileMode(editor);
             view?.setSyntax(syntax);

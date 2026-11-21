@@ -5,10 +5,11 @@ use crate::i18n::desktop as i18n;
 use crate::server_apps_worker::Action as AppAction;
 use crate::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Purpose {
     Video,
     TextEditor,
+    SaveText(u64),
     Code,
 }
 
@@ -24,6 +25,7 @@ impl Purpose {
     fn title(self) -> &'static str {
         match self {
             Self::Video => "Open video",
+            Self::SaveText(_) => "Save as…",
             _ => "Open file",
         }
     }
@@ -72,6 +74,13 @@ pub(crate) fn open(ui: &Ui, purpose: Purpose, start: Option<String>) {
     if ui.state.with(current) == Some(purpose) {
         let path = start.unwrap_or_else(|| ui.state.with(|s| s.remote_path.clone()));
         read_directory(ui, path);
+        if matches!(purpose, Purpose::SaveText(_)) {
+            ui.state.revise(|s| {
+                if let Some(d) = &mut s.desktop_file_picker {
+                    d.filter = Filter::All;
+                }
+            });
+        }
         ui.files_enter();
     }
 }
@@ -88,6 +97,12 @@ fn confirm(ui: &Ui, path: &str) {
     let Some(purpose) = ui.state.with(current) else {
         return;
     };
+    let open: fn(&Ui, &str) = match purpose {
+        Purpose::SaveText(id) => return submit_save(ui, id, path),
+        Purpose::Video => |ui, path| ui.player.open_from_picker(ui, path),
+        Purpose::TextEditor => text_editor::open,
+        Purpose::Code => code_workbench::open,
+    };
     ui.close_dialog();
     if !ui
         .state
@@ -95,17 +110,13 @@ fn confirm(ui: &Ui, path: &str) {
     {
         return;
     }
-    match purpose {
-        Purpose::Video => ui.player.open_from_picker(ui, path),
-        Purpose::TextEditor => text_editor::open(ui, path),
-        Purpose::Code => code_workbench::open(ui, path),
-    }
+    open(ui, path);
 }
 
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
     let state = ui.state;
     each(state.map(|s| current(s).into_iter().collect::<Vec<_>>()))
-        .key(|purpose| *purpose as u8)
+        .key(|purpose| *purpose)
         .children(move |item| {
             let purpose = item.value.get();
             let formats = purpose.formats();
@@ -116,17 +127,61 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                 purpose.title(),
                 panel(ui.clone(), formats),
                 (
-                    format_filter(state, formats),
+                    match purpose {
+                        Purpose::SaveText(_) => fragment(
+                            row().class("file-picker-save-name").fill((
+                                text().content(i18n::bind("File name")),
+                                input()
+                                    .name(i18n::bind("File name"))
+                                    .value(state.map(|s| {
+                                        s.desktop_file_picker
+                                            .as_ref()
+                                            .map_or_else(String::new, |d| d.name.clone())
+                                    }))
+                                    .on(value_changed, {
+                                        let ui = ui.clone();
+                                        move |event| {
+                                            if let Event::ValueChanged { value, .. } = event {
+                                                set_save_name(&ui, value);
+                                            }
+                                        }
+                                    })
+                                    .on(commit, {
+                                        let ui = ui.clone();
+                                        move |_| {
+                                            if let Some(path) = state.with(save_path) {
+                                                confirm(&ui, &path);
+                                            }
+                                        }
+                                    }),
+                            )),
+                        ),
+                        _ => fragment(format_filter(state, formats)),
+                    },
                     row().class("file-picker-actions").fill((
                         i18n::btn("取消", move || cancel.close_dialog()),
-                        i18n::btn("打开", move || {
-                            if let Some(path) = state.with(|s| selected_path(s).map(str::to_owned))
-                            {
-                                confirm(&choose, &path);
-                            }
-                        })
-                        .class("button primary")
-                        .enabled(state.map(|s| selected_path(s).is_some())),
+                        sapid::button()
+                            .label(i18n::bind(state.map(move |s| {
+                                match purpose {
+                                    Purpose::SaveText(_)
+                                        if s.desktop_file_picker
+                                            .as_ref()
+                                            .is_some_and(|d| d.replace.is_some()) =>
+                                    {
+                                        "Replace"
+                                    }
+                                    Purpose::SaveText(_) => "Save",
+                                    _ => "Open",
+                                }
+                                .to_owned()
+                            })))
+                            .on_press(move || {
+                                if let Some(path) = state.with(chosen_path) {
+                                    confirm(&choose, &path);
+                                }
+                            })
+                            .class("button primary")
+                            .enabled(state.map(|s| chosen_path(s).is_some())),
                     )),
                 ),
             )
@@ -142,6 +197,73 @@ pub(crate) struct Directory {
     error: String,
     filter: Filter,
     selected: Option<String>,
+    name: String,
+    replace: Option<String>,
+}
+
+pub(crate) fn set_save_name(ui: &Ui, name: String) {
+    ui.state.revise(|s| {
+        if let Some(d) = &mut s.desktop_file_picker {
+            d.name = name;
+            d.replace = None;
+            s.dialog_error.clear();
+        }
+    });
+}
+
+fn save_path(s: &State) -> Option<String> {
+    let d = s.desktop_file_picker.as_ref()?;
+    if d.request.is_some()
+        || !d.error.is_empty()
+        || matches!(d.name.as_str(), "" | "." | "..")
+        || d.name.contains(['/', '\\'])
+        || d.name.chars().any(char::is_control)
+    {
+        return None;
+    }
+    if d.collection.is_some() {
+        let parent = parent(d.selected.as_deref()?)?;
+        return Some(remote_join(&parent, &d.name));
+    }
+    Some(remote_join(&d.path, &d.name))
+}
+
+fn chosen_path(s: &State) -> Option<String> {
+    if matches!(current(s), Some(Purpose::SaveText(_))) {
+        save_path(s)
+    } else {
+        selected_path(s).map(str::to_owned)
+    }
+}
+
+fn submit_save(ui: &Ui, id: u64, path: &str) {
+    let ready = ui.state.revise(|s| {
+        if text_editor::open_in_another_tab(s, id, path) {
+            s.dialog_error = i18n::translate("This file is open in another tab.");
+            return None;
+        }
+        let d = s.desktop_file_picker.as_mut()?;
+        let entry = d.entries.iter().find(|e| e.path == path);
+        if let Some(e) = entry {
+            if e.is_dir || e.is_symlink {
+                s.dialog_error = i18n::translate("Choose a regular file name.");
+                return None;
+            }
+            if d.replace.as_deref() != Some(path) {
+                d.replace = Some(path.to_owned());
+                s.dialog_error = i18n::translate(&format!("Replace existing file {}?", e.name));
+                return None;
+            }
+        }
+        Some(entry.map(|e| arcnix_core::text_files::TextSnapshot {
+            size: e.size,
+            modified: e.modified,
+        }))
+    });
+    if let Some(replace) = ready {
+        ui.close_dialog();
+        text_editor::save_as(ui, id, path.to_owned(), replace);
+    }
 }
 
 #[derive(Clone)]
@@ -254,6 +376,8 @@ fn load(ui: &Ui, serial: u64, path: Option<String>, collection: Option<Collectio
         directory.entries.clear();
         directory.error.clear();
         directory.selected = None;
+        directory.replace = None;
+        s.dialog_error.clear();
     });
 }
 
@@ -596,8 +720,15 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                         read_directory(&browse, e.path);
                                     } else {
                                         state.revise(|s| {
+                                            let saving =
+                                                matches!(current(s), Some(Purpose::SaveText(_)));
                                             if let Some(directory) = &mut s.desktop_file_picker {
                                                 directory.selected = Some(e.path);
+                                                if saving {
+                                                    directory.name = e.name;
+                                                    directory.replace = None;
+                                                    s.dialog_error.clear();
+                                                }
                                             }
                                         });
                                     }

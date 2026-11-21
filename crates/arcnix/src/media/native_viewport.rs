@@ -47,6 +47,7 @@ pub(crate) struct Viewport {
     pub clip: Vec<BoxPx>,
     pub command_center: Option<BoxPx>,
     pub menu_slot: Option<BoxPx>,
+    pub title_colors: Option<[String; 2]>,
 }
 
 impl Viewport {

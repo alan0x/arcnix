@@ -65,9 +65,15 @@ def main():
             editor = p.locator('.desktop-editor')
             contents = editor.get_by_role('textbox', name='File contents', exact=True)
             picker = p.get_by_role('dialog', name='Open file', exact=True)
+            save_picker = p.get_by_role('dialog', name='Save as…', exact=True)
+            strip = editor.locator('.editor-tab-strip')
+
+            def command(menu, label):
+                titlebar.get_by_role('button', name=menu, exact=True).click()
+                titlebar.locator('.editor-menu-popup:popover-open').get_by_role('button', name=label, exact=True).click()
 
             def choose_file(name, *, double=False, filesystem=True):
-                window.get_by_role('button', name='Open file…', exact=True).click()
+                command('File', 'Open file…')
                 expect(picker.get_by_role('button', name='File types', exact=True)).to_have_text('All supported text files')
                 confirm = picker.get_by_role('button', name='Open', exact=True)
                 expect(confirm).to_be_disabled()
@@ -83,6 +89,64 @@ def main():
                 expect(picker).to_have_count(0)
 
             expect(editor.get_by_text('Drop files here', exact=True)).to_be_visible()
+            file_menu = titlebar.get_by_role('button', name='File', exact=True)
+            file_menu.click()
+            expect(titlebar.get_by_text('Save as…', exact=True)).to_be_visible()
+            file_menu.click()
+            expect(titlebar.locator('.editor-menu-popup:popover-open')).to_have_count(0)
+            command('File', 'New document')
+            expect(contents).to_be_enabled()
+            expect(contents).to_have_value('')
+            expect(contents).to_be_focused()
+            contents.press_sequentially('draft')
+            command('Edit', 'Select all')
+            assert contents.evaluate('e => e.selectionEnd - e.selectionStart') == 5
+            p.keyboard.insert_text('test')
+            command('Edit', 'Undo')
+            expect(contents).to_have_value('draft')
+            command('Edit', 'Redo')
+            expect(contents).to_have_value('test')
+            contents.fill('draft')
+            contents.press('Control+s')
+            filename = save_picker.get_by_role('textbox', name='File name', exact=True)
+            save_picker.get_by_role('button', name='Filesystem', exact=True).click()
+            filename.fill('新 文档.txt')
+            save_picker.get_by_role('button', name='Save', exact=True).click()
+            eventually(lambda: (peer.root / '新 文档.txt').read_bytes() == b'draft')
+            expect(strip.locator('.editor-tab-label')).to_have_text('新 文档.txt')
+            assert strip.bounding_box()['y'] >= titlebar.bounding_box()['y'] + titlebar.bounding_box()['height'] - 1
+            expect(editor.locator('.editor-path, .editor-toolbar')).to_have_count(0)
+            command('File', 'Save as…')
+            expect(filename).to_have_value('新 文档.txt')
+            filename.fill('copy.md')
+            save_picker.get_by_role('button', name='Save', exact=True).click()
+            eventually(lambda: (peer.root / 'copy.md').read_bytes() == b'draft')
+            expect(strip.locator('.editor-tab-label')).to_have_text('copy.md')
+            contents.fill('second draft')
+            command('File', 'Save as…')
+            filename.fill('race.txt')
+            expect(save_picker.get_by_role('button', name='Save', exact=True)).to_be_enabled()
+            (peer.root / 'race.txt').write_bytes(b'appeared after listing')
+            save_picker.get_by_role('button', name='Save', exact=True).click()
+            expect(editor.locator('.editor-feedback')).to_contain_text('already exists')
+            expect(strip.locator('.editor-tab-label')).to_have_text('copy.md')
+            expect(contents).to_have_value('second draft')
+            assert (peer.root / 'race.txt').read_bytes() == b'appeared after listing'
+            contents.press('Control+Shift+s')
+            filename.fill('新 文档.txt')
+            save_picker.get_by_role('button', name='Save', exact=True).click()
+            expect(save_picker.get_by_text('Replace existing file 新 文档.txt?', exact=True)).to_be_visible()
+            save_picker.get_by_role('button', name='Cancel', exact=True).click()
+            expect(save_picker).to_have_count(0)
+            expect(contents).to_have_value('second draft')
+            assert (peer.root / '新 文档.txt').read_bytes() == b'draft'
+            command('File', 'Save as…')
+            filename.fill('新 文档.txt')
+            save_picker.get_by_role('button', name='Save', exact=True).click()
+            save_picker.get_by_role('button', name='Replace', exact=True).click()
+            eventually(lambda: (peer.root / '新 文档.txt').read_bytes() == b'second draft')
+            assert (peer.root / 'copy.md').read_bytes() == b'draft'
+            command('File', 'Close tab')
             choose_file('drag.html', double=True)
             expect(contents).to_have_value('<p>dragged from Files</p>')
             paint = editor.locator('.editor-code-lines')
@@ -90,7 +154,7 @@ def main():
             expect(paint.locator('p')).to_have_count(0)
             expect(editor.locator('.editor-mode-name')).to_have_text('HTML')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
-            titlebar.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            strip.get_by_role('button', name='Close file tab drag.html', exact=True).click()
             choose_file('example.py')
             expect(contents).to_have_value(python_source)
             expect(contents).to_be_enabled()
@@ -105,7 +169,7 @@ def main():
             expect(editor.locator('.editor-line-value')).to_have_text('305')
             expect(paint.locator('.cm-string').filter(has_text='last comment')).to_have_count(1)
             assert contents.evaluate('el => el.scrollTop > 0 && el.scrollLeft > 0')
-            titlebar.get_by_role('button', name='Close file tab example.py', exact=True).click()
+            strip.get_by_role('button', name='Close file tab example.py', exact=True).click()
             choose_file('plain.txt')
             expect(contents).to_have_value('plain text from SSH')
             expect(editor.locator('.editor-plain-label')).to_be_visible()
@@ -115,10 +179,9 @@ def main():
             p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).click()
             expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Text Editor')
             preview = editor.locator('.markdown-preview')
-            strip = titlebar.locator('.editor-tab-strip')
             actions = titlebar.locator('.desktop-window-actions button')
-            assert actions.evaluate_all("nodes => nodes.map(node => node.getAttribute('aria-label'))")[:4] == [
-                'Open file…', 'Reload from server', 'Save', 'Minimize window',
+            assert actions.evaluate_all("nodes => nodes.map(node => node.getAttribute('aria-label'))") == [
+                'Minimize window', 'Toggle maximize', 'Close application',
             ]
             plain_tab = strip.get_by_role('button', name='/plain.txt', exact=True)
             notes_tab = strip.get_by_role('button', name='/home/arcnix/Desktop/Notes.md', exact=True)
@@ -131,7 +194,7 @@ def main():
             expect(preview).to_contain_text('<img src=')
             app.screenshot('markdown-preview.png')
 
-            editor.get_by_role('button', name='Edit source', exact=True).click()
+            command('View', 'Edit source')
             expect(contents).to_have_value(source)
             expect(editor.locator('.editor-format')).to_have_text('UTF-8 BOM · CRLF')
             contents.press('Control+Home')
@@ -139,7 +202,7 @@ def main():
             expect(editor.locator('.editor-line-value')).to_have_text('2')
             edited = source.replace('# Notes', '# Saved notes')
             contents.fill(edited)
-            editor.get_by_role('button', name='Preview', exact=True).click()
+            command('View', 'Preview')
             expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
             plain_tab.click()
             expect(contents).to_have_value('plain text from SSH')
@@ -149,7 +212,7 @@ def main():
             p.locator('.desktop-window.active .window-minimize').click()
             app.application('Text Editor')
             expect(preview.get_by_role('heading', name='Saved notes')).to_be_visible()
-            editor.get_by_role('button', name='Edit source', exact=True).click()
+            command('View', 'Edit source')
             contents.press('Control+s')
             plain_tab.click()
             expect(contents).to_have_value('unsaved plain draft')
@@ -197,7 +260,7 @@ def main():
                                  target_position={'x': 110, 'y': 160})
             expect(contents).to_have_value('<p>dragged from Files</p>')
             expect(p.locator('.desktop-window.app-browser')).to_have_count(0)
-            titlebar.get_by_role('button', name='Close file tab drag.html', exact=True).click()
+            strip.get_by_role('button', name='Close file tab drag.html', exact=True).click()
             shortcuts.get_by_role('button', name='drop.html', exact=True).drag_to(
                 editor, target_position={'x': 150, 'y': 160})
             expect(contents).to_have_value('<p>dragged from Desktop</p>')
@@ -209,9 +272,9 @@ def main():
                 choose_file(f'sample-{number:02}.txt', double=True, filesystem=False)
                 expect(contents).to_be_enabled()
             p.set_viewport_size(dict(width=720, height=650))
-            more = titlebar.get_by_role('button', name='More tabs', exact=True)
+            more = editor.get_by_role('button', name='More tabs', exact=True)
             more.click()
-            tabs = titlebar.get_by_role('group', name='More tabs', exact=True)
+            tabs = editor.get_by_role('group', name='More tabs', exact=True)
             expect(tabs).to_be_visible()
             expect(tabs.get_by_role('button')).to_have_count(13)
             menu_height = tabs.evaluate('menu => [menu.scrollHeight, menu.clientHeight]')
@@ -224,7 +287,8 @@ def main():
         'Desktop icons fill a column before growing right, with no vertical scroll or visible scrollbar',
         'The shared picker confirms selection and opens HTML directly in Text Editor',
         'The source view tracks the caret, both scroll axes, multiline tokens and undoable auto-indent',
-        'Text Editor puts tabs and actions in the titlebar and opens a scrollable tab picker when space runs out',
+        'File, Edit and View menus work above the tab strip, with a scrollable tab picker when space runs out',
+        'New and Save as write the selected draft and confirm replacement before overwriting',
         'Dragging files from Files and Desktop opens them directly without moving their originals',
         'Markdown renders headings, emphasis, tables and code offline with raw HTML shown as text',
         'Source editing, preview, minimize and Ctrl+S retain the draft and source encoding',
