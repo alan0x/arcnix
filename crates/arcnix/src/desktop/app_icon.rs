@@ -1,14 +1,28 @@
 //! Native window presentation for the server desktop.
 use std::collections::HashMap;
+#[cfg(target_os = "macos")]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::task::Waker;
 
 use glory::wry::shell::{Fullscreen, NativeLifecycle, NativeWindow, ShellError};
+#[cfg(target_os = "macos")]
+use objc2::{rc::Retained, runtime::ProtocolObject};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSNotificationCenter, NSObjectProtocol};
+#[cfg(target_os = "macos")]
+use tao::platform::macos::WindowExtMacOS;
 
 use crate::{Ui, WorkspacePage, code_native};
 
 pub(crate) struct DesktopWindow {
     ui: Ui,
+    #[cfg(not(target_os = "macos"))]
     fullscreen: bool,
+    #[cfg(target_os = "macos")]
+    previous_fullscreen: Option<NativeFullscreenExit>,
     wake: Option<Waker>,
     epoch: Option<u64>,
     code: HashMap<u64, code_native::Host>,
@@ -30,7 +44,10 @@ impl DesktopWindow {
             #[cfg(windows)]
             video: crate::mpv_native::Host::new(ui.clone()),
             ui,
+            #[cfg(not(target_os = "macos"))]
             fullscreen: false,
+            #[cfg(target_os = "macos")]
+            previous_fullscreen: None,
             wake: None,
             epoch: None,
             code: HashMap::new(),
@@ -43,6 +60,102 @@ impl DesktopWindow {
             #[cfg(windows)]
             shortcuts: Default::default(),
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_fullscreen(&mut self, window: &NativeWindow, fullscreen: bool) {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSApplication, NSApplicationPresentationOptions};
+
+        if self
+            .previous_fullscreen
+            .as_ref()
+            .is_some_and(|exit| !exit.finished.load(Ordering::Acquire))
+        {
+            return;
+        }
+        if !fullscreen {
+            if window.simple_fullscreen() {
+                window.set_simple_fullscreen(false);
+            }
+            if let Some(previous) = self.previous_fullscreen.take() {
+                window.set_fullscreen(Some(previous.mode.clone()));
+            }
+            return;
+        }
+        if window.simple_fullscreen() {
+            return;
+        }
+        if let Some(previous) = window.fullscreen() {
+            if self.previous_fullscreen.is_none() {
+                let wake = self.wake.as_ref().expect("native lifecycle has opened");
+                self.previous_fullscreen =
+                    Some(NativeFullscreenExit::observe(window, previous, wake));
+                window.set_fullscreen(None);
+            }
+            return;
+        }
+        // A titleless fullscreen window lets the desktop handle the top edge.
+        // Tao restores the window frame and previous presentation options on exit.
+        if window.set_simple_fullscreen(true) {
+            let mtm = MainThreadMarker::new().expect("native lifecycle runs on the main thread");
+            NSApplication::sharedApplication(mtm).setPresentationOptions(
+                NSApplicationPresentationOptions::HideMenuBar
+                    | NSApplicationPresentationOptions::HideDock,
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct NativeFullscreenExit {
+    mode: Fullscreen,
+    finished: Arc<AtomicBool>,
+    observer: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeFullscreenExit {
+    fn observe(window: &NativeWindow, mode: Fullscreen, wake: &Waker) -> Self {
+        use dispatch2::DispatchQueue;
+        use objc2_app_kit::{NSWindow, NSWindowDidExitFullScreenNotification};
+        use objc2_foundation::NSNotification;
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let signal = finished.clone();
+        let wake = wake.clone();
+        let callback = block2::RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
+            let signal = signal.clone();
+            let wake = wake.clone();
+            // Let AppKit's notification delivery and Tao's queued window restoration finish.
+            DispatchQueue::main().exec_async(move || {
+                DispatchQueue::main().exec_async(move || {
+                    signal.store(true, Ordering::Release);
+                    wake.wake();
+                });
+            });
+        });
+        let observer = unsafe {
+            let native = &*window.ns_window().cast::<NSWindow>();
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(NSWindowDidExitFullScreenNotification),
+                Some(native),
+                None,
+                &callback,
+            )
+        };
+        Self {
+            mode,
+            finished,
+            observer,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for NativeFullscreenExit {
+    fn drop(&mut self) {
+        unsafe { NSNotificationCenter::defaultCenter().removeObserver((*self.observer).as_ref()) };
     }
 }
 
@@ -57,16 +170,18 @@ impl NativeLifecycle for DesktopWindow {
         let state = self.ui.state;
         let fullscreen = state.with(crate::server_desktop::fullscreen);
         self.ui.player.sync_surface(&self.ui);
+        #[cfg(target_os = "macos")]
+        self.sync_fullscreen(window, fullscreen);
+        #[cfg(not(target_os = "macos"))]
         if self.fullscreen != fullscreen {
             window.set_fullscreen(
                 fullscreen.then(|| Fullscreen::Borderless(window.current_monitor())),
             );
             self.fullscreen = fullscreen;
         }
-        let (epoch, live, code_open) = state.with(|s| {
+        let (epoch, code_open) = state.with(|s| {
             (
                 s.connected.then_some(s.epoch),
-                s.connected_epochs(),
                 s.workbench.apps.contains(&WorkspacePage::Code),
             )
         });
@@ -82,7 +197,15 @@ impl NativeLifecycle for DesktopWindow {
             }
             self.epoch = epoch;
         }
-        self.code.retain(|epoch, _| live.contains(epoch));
+        // Code remains available in read-only sessions where Terminal is disabled.
+        state.with(|s| {
+            self.code.retain(|&id, _| {
+                epoch == Some(id)
+                    || s.parked
+                        .values()
+                        .any(|session| session.connected && session.epoch == id)
+            });
+        });
         if let Some(epoch) = epoch {
             if code_open {
                 self.code
@@ -107,6 +230,7 @@ impl NativeLifecycle for DesktopWindow {
                     .values_mut()
                     .all(|browser| browser.exit_ready()));
             }
+            let live = state.with(|s| s.connected_epochs());
             self.browsers.retain(|epoch, _| live.contains(epoch));
             if let Some(epoch) = epoch {
                 if state
@@ -139,6 +263,10 @@ impl NativeLifecycle for DesktopWindow {
     }
 
     fn closed(&mut self, _window: &NativeWindow) {
+        #[cfg(target_os = "macos")]
+        if _window.simple_fullscreen() {
+            _window.set_simple_fullscreen(false);
+        }
         #[cfg(windows)]
         for browser in self.browsers.values_mut() {
             browser.close();
