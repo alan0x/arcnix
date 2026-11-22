@@ -24,6 +24,9 @@ def main():
         def bindings():
             return read_desktop_settings(preferences).get('shortcuts', {}).get('windows', {}).get('overrides', {})
 
+        def disabled_shortcuts():
+            return read_desktop_settings(preferences).get('shortcuts', {}).get('windows', {}).get('disabled', [])
+
         def settings():
             app.application('Settings')
             page.locator('.desktop-settings-tabs').get_by_role(
@@ -131,9 +134,11 @@ def main():
         button = record(fullscreen, 'Control+l')
         expect(button).to_contain_text('Ctrl+L')
         eventually(lambda: bindings().get('fullscreen') == 'Ctrl+L')
-        panel.get_by_role('button', name='Disable shortcut: Switch to previous app', exact=True).click()
-        eventually(lambda: 'previous_app' in bindings() and bindings()['previous_app'] is None)
-        expect(panel.get_by_role('button', name='Change shortcut: Switch to previous app', exact=True)).to_contain_text('Unassigned')
+        previous_app = panel.get_by_role('checkbox', name='Switch to previous app', exact=True)
+        previous_app.uncheck()
+        eventually(lambda: 'previous_app' in disabled_shortcuts())
+        expect(previous_app).not_to_be_checked()
+        expect(panel.get_by_role('button', name='Change shortcut: Switch to previous app', exact=True)).to_contain_text('Ctrl+Shift+Tab')
         page.keyboard.press('Control+Shift+Tab')
         title('Settings')
         page.keyboard.press('Control+l')
@@ -190,13 +195,21 @@ def main():
         app.connect()
         panel = settings()
         expect(panel.get_by_role('button', name=f'Change shortcut: {fullscreen}', exact=True)).to_contain_text('Ctrl+L')
-        expect(panel.get_by_role(
-            'button', name='Change shortcut: Switch to previous app', exact=True,
-        )).to_contain_text('Unassigned')
+        previous_app = panel.get_by_role('checkbox', name='Switch to previous app', exact=True)
+        expect(previous_app).not_to_be_checked()
+        reset_fullscreen = panel.get_by_role('button', name=f'Reset shortcut: {fullscreen} (Default: Ctrl+Shift+F)', exact=True)
+        fullscreen_row = panel.locator('.desktop-key-binding').filter(has=reset_fullscreen)
+        expect(fullscreen_row.get_by_text('Customized', exact=True)).to_be_visible()
         page.keyboard.press('Control+l')
         expect(exit_fullscreen).to_be_visible()
-        reset_group(panel, 'Desktop').click()
+        reset_fullscreen.click()
         eventually(lambda: not bindings())
+        expect(reset_fullscreen).to_have_count(0)
+        expect(previous_app).not_to_be_checked()
+        expect(panel.get_by_role('button', name=f'Change shortcut: {fullscreen}', exact=True)).to_contain_text('Ctrl+Shift+F')
+        reset_group(panel, 'Desktop').click()
+        eventually(lambda: not disabled_shortcuts())
+        expect(previous_app).to_be_checked()
         page.keyboard.press('Control+Shift+F')
         expect(exit_fullscreen).to_have_count(0)
         expect(page.get_by_text('Saved on server', exact=True)).to_have_count(0)
@@ -263,6 +276,12 @@ def main():
         scheme.get_by_role('radio', name='macOS', exact=True).check()
         expect(save).to_contain_text('Cmd+S')
         expect(panel.get_by_text('F7', exact=True)).to_have_count(0)
+        expect(panel.get_by_role('button', name='Change shortcut: Show desktop', exact=True)).to_contain_text('Ctrl+Shift+D')
+        page.locator('.desktop-canvas').focus()
+        page.keyboard.press('Control+Shift+d')
+        expect(page.locator('.desktop-window:visible')).to_have_count(0)
+        page.keyboard.press('Control+Shift+d')
+        title('Settings')
         record('Toggle desktop fullscreen', 'F8', 'Add')
         record('Toggle desktop fullscreen (F8)', 'F9')
         record('Save', 'Control+Alt+m')

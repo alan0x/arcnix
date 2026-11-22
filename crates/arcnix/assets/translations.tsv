@@ -2625,6 +2625,8 @@ Dock 时钟	Dock clock
 当前预设：macOS	Active preset: macOS
 添加快捷键：{label}	Add shortcut: {label}
 移除快捷键	Remove shortcut
+已自定义	Customized
+重置快捷键：{label}（默认：{chord}）	Reset shortcut: {label} (Default: {chord})
 此快捷键已更改。	This shortcut has changed.
 关闭当前标签页	Close active tab
 复制文件	Copy files

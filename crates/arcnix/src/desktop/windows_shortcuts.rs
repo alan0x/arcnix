@@ -266,7 +266,10 @@ fn enabled(s: &State, command: Command) -> bool {
         }
         Command::Binding(action) => {
             let keys = keys(s);
-            !keys.overridden(action) && keys.binding(action).is_some() && can_run(s, action)
+            keys.enabled(action)
+                && !keys.overridden(action)
+                && keys.binding(action).is_some()
+                && can_run(s, action)
         }
         Command::ShowDesktop => keys(s)
             .chords(Action::ShowDesktop)

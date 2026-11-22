@@ -334,13 +334,28 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                         keys.reset_scope(scope);
                         Ok(())
                     });
-                }).enabled(state.map(move |s| editing(s) && definitions.iter().any(|definition| keys(s).overridden(definition.action) || !keys(s).additions(definition.action).is_empty())))),
+                }).enabled(state.map(move |s| editing(s) && definitions.iter().any(|definition| keys(s).modified(definition.action))))),
                 fragment(definitions.iter().map(|definition| {
                     let action = definition.action;
                     let label = definition.label;
-                    let clear = ui.clone();
+                    let enable = ui.clone();
+                    let reset = ui.clone();
+                    let modified = state.map(move |s| keys(s).modified(action));
                     row().class("desktop-key-binding").fill((
-                        text().content(i18n::bind(label)),
+                        row().class("desktop-shortcut-label").fill((
+                            sapid::checkbox()
+                                .class("preference-check desktop-shortcut-enabled")
+                                .name(i18n::bind(label))
+                                .label(i18n::bind(label))
+                                .enabled(state.map(editing))
+                                .checked(state.map(move |s| keys(s).enabled(action)))
+                                .on_checked_change(move |on| change(&enable, |keys, preset| {
+                                    keys.set_enabled(preset, action, on)
+                                })),
+                            when(modified.clone(), || {
+                                text().class("desktop-shortcut-modified").content(i18n::bind("Customized"))
+                            }),
+                        )),
                         row().class("desktop-key-controls").fill((
                             text().class("desktop-shortcut-id hidden").content(
                                 serde_json::to_string(&action).expect("valid desktop shortcut action"),
@@ -355,10 +370,6 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                                     }))),
                                     text().class("desktop-key-recording").content(i18n::bind("Press shortcut…")),
                                 )),
-                            close_action(format!("Disable shortcut: {label}"))
-                                .class("icon-button desktop-shortcut-disable")
-                                .enabled(state.map(move |s| editing(s) && keys(s).binding(action).is_some()))
-                                .on_press(move || change(&clear, |keys, preset| keys.set(preset, action, None))),
                             each(state.map(move |s| keys(s).additions(action).to_vec()))
                                 .key(|chord| chord.clone())
                                 .children({
@@ -389,6 +400,19 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                                     text().class("desktop-key-combination").content("+"),
                                     text().class("desktop-key-recording").content(i18n::bind("Press shortcut…")),
                                 )),
+                            when(modified, move || {
+                                let reset = reset.clone();
+                                sapid::button()
+                                    .class("icon-button desktop-shortcut-reset")
+                                    .name(i18n::bind(state.map(move |s| {
+                                        let preset = keys(s).preset;
+                                        let chord = preset.display(preset.default_key(action));
+                                        format!("Reset shortcut: {label} (Default: {chord})")
+                                    })))
+                                    .enabled(state.map(editing))
+                                    .fill(icons::glyph(Icon::Refresh))
+                                    .on_press(move || change(&reset, |keys, preset| keys.reset(preset, action)))
+                            }),
                         )),
                     ))
                 }).collect::<Vec<_>>()),

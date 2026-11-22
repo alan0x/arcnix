@@ -12,6 +12,8 @@ pub(crate) struct DesktopWindow {
     wake: Option<Waker>,
     epoch: Option<u64>,
     code: HashMap<u64, code_native::Host>,
+    #[cfg(target_os = "macos")]
+    icon_installed: bool,
     #[cfg(windows)]
     browsers: HashMap<u64, crate::web_browser_native::Host>,
     #[cfg(windows)]
@@ -32,6 +34,8 @@ impl DesktopWindow {
             wake: None,
             epoch: None,
             code: HashMap::new(),
+            #[cfg(target_os = "macos")]
+            icon_installed: false,
             #[cfg(windows)]
             browsers: HashMap::new(),
             #[cfg(windows)]
@@ -44,6 +48,12 @@ impl DesktopWindow {
 
 impl NativeLifecycle for DesktopWindow {
     fn poll(&mut self, window: &NativeWindow) -> Result<bool, ShellError> {
+        #[cfg(target_os = "macos")]
+        if !self.icon_installed {
+            // The event loop applies the macOS activation policy before the first poll.
+            install_macos_icon();
+            self.icon_installed = true;
+        }
         let state = self.ui.state;
         let fullscreen = state.with(crate::server_desktop::fullscreen);
         self.ui.player.sync_surface(&self.ui);
@@ -186,5 +196,19 @@ impl NativeLifecycle for DesktopWindow {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_icon() {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let mtm = MainThreadMarker::new().expect("the desktop event loop runs on the main thread");
+    let data = NSData::with_bytes(include_bytes!("../../assets/arcnix.png"));
+    if let Some(icon) = NSImage::initWithData(NSImage::alloc(), &data) {
+        // SAFETY: The setter receives a valid, non-null image on the main thread.
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&icon)) };
     }
 }

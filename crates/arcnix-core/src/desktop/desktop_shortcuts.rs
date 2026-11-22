@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -201,13 +201,13 @@ impl Scheme {
 }
 
 impl Preset {
-    fn default_key(self, action: Action) -> &'static str {
+    pub fn default_key(self, action: Action) -> &'static str {
         if self == Self::MacOs {
             match action {
                 Action::Minimize => return "Meta+M",
                 Action::Maximize => return "Ctrl+Meta+ArrowUp",
                 Action::Fullscreen => return "Ctrl+Meta+F",
-                Action::ShowDesktop => return "F11",
+                Action::ShowDesktop => return "Ctrl+Shift+D",
                 Action::CloseTab => return "Meta+W",
                 Action::CloseWindow => return "Shift+Meta+W",
                 Action::OpenFiles => return "Shift+Meta+E",
@@ -244,6 +244,8 @@ impl Preset {
 pub struct Profile {
     overrides: BTreeMap<Action, Option<String>>,
     additions: BTreeMap<Action, Vec<String>>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    disabled: BTreeSet<Action>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,15 +320,33 @@ impl<'a> Keymap<'a> {
         self.profile.overrides.contains_key(&action)
     }
 
+    pub fn modified(self, action: Action) -> bool {
+        self.overridden(action)
+            || !self.additions(action).is_empty()
+            || self.profile.disabled.contains(&action)
+    }
+
+    pub fn enabled(self, action: Action) -> bool {
+        self.chords(action).next().is_some()
+    }
+
     pub fn binding(self, action: Action) -> Option<&'a str> {
         if let Some(binding) = self.profile.overrides.get(&action) {
             return binding.as_deref();
         }
         let default = self.preset.default_key(action);
-        // A binding from an older preset can already own this new default.
-        let shadowed = self.profile.overrides.iter().any(|(&other, key)| {
-            other.scope() == action.scope() && key.as_deref() == Some(default)
-        });
+        // Existing custom shortcuts take precedence over defaults added by a newer preset.
+        let in_scope = |other: Action| other.scope() == action.scope();
+        let shadowed = self
+            .profile
+            .overrides
+            .iter()
+            .any(|(&other, key)| in_scope(other) && key.as_deref() == Some(default))
+            || self
+                .profile
+                .additions
+                .iter()
+                .any(|(&other, keys)| in_scope(other) && keys.iter().any(|key| key == default));
         (!shadowed).then_some(default)
     }
 
@@ -338,27 +358,46 @@ impl<'a> Keymap<'a> {
             .unwrap_or_default()
     }
 
-    pub fn chords(self, action: Action) -> impl Iterator<Item = &'a str> {
+    fn configured_chords(self, action: Action) -> impl Iterator<Item = &'a str> {
         self.binding(action)
             .into_iter()
             .chain(self.additions(action).iter().map(String::as_str))
     }
 
+    pub fn chords(self, action: Action) -> impl Iterator<Item = &'a str> {
+        self.configured_chords(action)
+            .filter(move |_| !self.profile.disabled.contains(&action))
+    }
+
     pub fn action(self, scope: Scope, chord: &str) -> Option<Action> {
+        self.action_matching(scope, |action| self.chords(action).any(|key| key == chord))
+    }
+
+    fn configured_action(self, scope: Scope, chord: &str) -> Option<Action> {
+        self.action_matching(scope, |action| {
+            self.configured_chords(action).any(|key| key == chord)
+        })
+    }
+
+    fn action_matching(
+        self,
+        scope: Scope,
+        mut matches: impl FnMut(Action) -> bool,
+    ) -> Option<Action> {
         GROUPS
             .iter()
             .find(|(group, _)| *group == scope)?
             .1
             .iter()
             .map(|binding| binding.action)
-            .find(|&action| self.chords(action).any(|key| key == chord))
+            .find(|&action| matches(action))
     }
 
     fn validate(self) -> Result<()> {
         for (_, definitions) in GROUPS {
             let mut seen = HashSet::new();
             for definition in *definitions {
-                for chord in self.chords(definition.action) {
+                for chord in self.configured_chords(definition.action) {
                     validate_chord(self.preset, definition.action, chord)?;
                     ensure!(seen.insert(chord), "This shortcut is already in use.");
                 }
@@ -369,9 +408,43 @@ impl<'a> Keymap<'a> {
 }
 
 impl Profile {
+    pub fn reset(&mut self, preset: Preset, action: Action) -> Result<()> {
+        let keys = Keymap {
+            preset,
+            profile: self,
+        };
+        let default = preset.default_key(action);
+        ensure!(
+            keys.configured_action(action.scope(), default)
+                .is_none_or(|owner| owner == action),
+            "This shortcut is already in use."
+        );
+        self.overrides.remove(&action);
+        self.additions.remove(&action);
+        self.disabled.remove(&action);
+        Ok(())
+    }
+
     pub fn reset_scope(&mut self, scope: Scope) {
         self.overrides.retain(|action, _| action.scope() != scope);
         self.additions.retain(|action, _| action.scope() != scope);
+        self.disabled.retain(|action| action.scope() != scope);
+    }
+
+    pub fn set_enabled(&mut self, preset: Preset, action: Action, enabled: bool) -> Result<()> {
+        if enabled {
+            let keys = Keymap {
+                preset,
+                profile: self,
+            };
+            if keys.configured_chords(action).next().is_none() {
+                self.set(preset, action, Some(preset.default_key(action).into()))?;
+            }
+            self.disabled.remove(&action);
+        } else {
+            self.disabled.insert(action);
+        }
+        Ok(())
     }
 
     pub fn set(&mut self, preset: Preset, action: Action, chord: Option<String>) -> Result<()> {
@@ -382,7 +455,8 @@ impl Profile {
             };
             validate_chord(preset, action, chord)?;
             ensure!(
-                keys.binding(action) == Some(chord) || keys.action(action.scope(), chord).is_none(),
+                keys.binding(action) == Some(chord)
+                    || keys.configured_action(action.scope(), chord).is_none(),
                 "This shortcut is already in use."
             );
         }
@@ -401,7 +475,7 @@ impl Profile {
             profile: self,
         };
         ensure!(
-            keys.action(action.scope(), &chord).is_none(),
+            keys.configured_action(action.scope(), &chord).is_none(),
             "This shortcut is already in use."
         );
         self.additions.entry(action).or_default().push(chord);
@@ -427,7 +501,7 @@ impl Profile {
         if previous != chord {
             validate_chord(preset, action, &chord)?;
             ensure!(
-                keys.action(action.scope(), &chord).is_none(),
+                keys.configured_action(action.scope(), &chord).is_none(),
                 "This shortcut is already in use."
             );
             self.additions.get_mut(&action).unwrap()[index] = chord;
@@ -597,11 +671,89 @@ mod tests {
     }
 
     #[test]
+    fn disabled_actions_keep_their_shortcuts_and_reset_individually() -> Result<()> {
+        let action = Action::Fullscreen;
+        let mut shortcuts = Shortcuts::default();
+        let profile = shortcuts.profile_mut(WIN);
+        profile.set(WIN, action, Some("F7".into()))?;
+        profile.add(WIN, action, "F8".into())?;
+        profile.set_enabled(WIN, action, false)?;
+        assert!(
+            profile
+                .set(WIN, Action::Minimize, Some("F7".into()))
+                .is_err()
+        );
+        profile.set(WIN, Action::Minimize, Some("F9".into()))?;
+
+        let mut loaded: Shortcuts = serde_json::from_str(&serde_json::to_string(&shortcuts)?)?;
+        loaded.validate()?;
+        let keys = loaded.resolved(WIN);
+        assert!(keys.modified(action));
+        assert!(!keys.enabled(action));
+        assert_eq!(keys.binding(action), Some("F7"));
+        assert_eq!(keys.additions(action), &["F8"]);
+        assert_eq!(keys.action(Scope::Desktop, "F7"), None);
+        assert_eq!(keys.action(Scope::Desktop, "F8"), None);
+        assert!(loaded.resolved(Preset::MacOs).enabled(action));
+
+        loaded.profile_mut(WIN).set_enabled(WIN, action, true)?;
+        assert_eq!(
+            loaded.resolved(WIN).chords(action).collect::<Vec<_>>(),
+            ["F7", "F8"]
+        );
+        loaded.profile_mut(WIN).set_enabled(WIN, action, false)?;
+        loaded.profile_mut(WIN).reset(WIN, action)?;
+        let keys = loaded.resolved(WIN);
+        assert!(!keys.modified(action));
+        assert_eq!(keys.chords(action).collect::<Vec<_>>(), ["Ctrl+Shift+F"]);
+        assert_eq!(keys.binding(Action::Minimize), Some("F9"));
+        Ok(())
+    }
+
+    #[test]
+    fn reenabling_an_unassigned_shortcut_checks_for_default_key_conflicts() -> Result<()> {
+        let mut shortcuts: Shortcuts =
+            serde_json::from_str(r#"{"fullscreen":null,"minimize":"Ctrl+Shift+F"}"#)?;
+        let action = Action::Fullscreen;
+        assert!(!shortcuts.resolved(WIN).enabled(action));
+        let profile = shortcuts.profile_mut(WIN);
+        assert!(profile.set_enabled(WIN, action, true).is_err());
+        assert!(profile.reset(WIN, action).is_err());
+        profile.reset(WIN, Action::Minimize)?;
+        profile.set_enabled(WIN, action, true)?;
+        assert!(shortcuts.resolved(WIN).enabled(action));
+        assert!(!shortcuts.resolved(WIN).modified(action));
+        Ok(())
+    }
+
+    #[test]
     fn an_existing_desktop_override_can_shadow_the_new_open_files_default() -> Result<()> {
         let keys: Shortcuts = serde_json::from_str(r#"{"minimize":"Ctrl+E"}"#)?;
         keys.validate()?;
         assert_eq!(keys.resolved(WIN).binding(Action::Minimize), Some("Ctrl+E"));
         assert_eq!(keys.resolved(WIN).binding(Action::OpenFiles), None);
+        Ok(())
+    }
+
+    #[test]
+    fn macos_show_desktop_uses_a_modified_key_and_respects_existing_shortcuts() -> Result<()> {
+        let mac = Preset::MacOs;
+        let action = Action::ShowDesktop;
+        let defaults = Shortcuts::default();
+        assert_eq!(defaults.resolved(mac).binding(action), Some("Ctrl+Shift+D"));
+        assert_eq!(defaults.resolved(WIN).binding(action), Some("Meta+D"));
+
+        let mut saved: Shortcuts =
+            serde_json::from_str(r#"{"macos":{"additions":{"minimize":["Ctrl+Shift+D"]}}}"#)?;
+        saved.validate()?;
+        let keys = saved.resolved(mac);
+        assert_eq!(keys.binding(action), None);
+        assert_eq!(
+            keys.action(Scope::Desktop, "Ctrl+Shift+D"),
+            Some(Action::Minimize)
+        );
+        saved.profile_mut(mac).reset(mac, Action::Minimize)?;
+        assert_eq!(saved.resolved(mac).binding(action), Some("Ctrl+Shift+D"));
         Ok(())
     }
 
@@ -644,7 +796,8 @@ mod tests {
 
     #[test]
     fn independent_clients_can_reset_one_profile_while_adding_to_the_other() -> Result<()> {
-        use crate::{server_apps::DesktopPreferences, sync::merge_desktop};
+        use crate::server_apps::DesktopPreferences;
+        use crate::sync::merge_desktop;
         let mut base = DesktopPreferences::default();
         base.shortcuts
             .profile_mut(WIN)
