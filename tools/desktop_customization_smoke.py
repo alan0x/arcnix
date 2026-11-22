@@ -298,10 +298,11 @@ def main():
             expect(position.get_by_text('Bottom', exact=True)).to_have_css('user-select', 'none')
             expect(settings().locator('.dock-icons-settings').get_by_role('slider', name='Dock icon size', exact=True)).to_be_visible()
             pinned = shortcut_options('App icons')
-            pinned_order = ['Home', *default_apps, 'Trash']
+            pinned_order = ['Home', 'Files', 'Terminal', 'Code Editor', 'Browser', 'Player',
+                            'Monitor', 'App Center', 'Settings', 'Text Editor', 'Trash']
             expect(pinned.locator('.preference-check')).to_have_text(pinned_order)
-            expect(pinned.get_by_role('checkbox', name='Player', exact=True)).to_have_count(0)
-            expect(pinned.get_by_role('checkbox', name='Text Editor', exact=True)).to_have_count(0)
+            for label in ('Player', 'Text Editor', 'Code Editor'):
+                expect(pinned.get_by_role('checkbox', name=label, exact=True)).not_to_be_checked()
             close_dialog(pinned)
             settings().get_by_role('button', name='Desktop', exact=True).click()
             settings().get_by_role('switch', name='Show server info', exact=True).click()

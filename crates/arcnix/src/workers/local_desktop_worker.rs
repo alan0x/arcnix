@@ -87,6 +87,9 @@ impl Session {
         let target = &self.target;
         let file_result = |r| message(r).map_err(FileFailure::ordinary);
         std::ops::ControlFlow::Break(match action {
+            Action::CodeFile(request) => Update::CodeFile(message(
+                request.execute(crate::code_workbench::Files::Local(target), || Ok(())),
+            )),
             Action::Keepalive => Update::Alive,
             Action::Remote(path) => match target.list(&path) {
                 Ok((path, entries)) => Update::Remote(path, entries),

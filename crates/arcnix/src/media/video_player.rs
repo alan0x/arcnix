@@ -3,7 +3,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::result::Result;
 use std::sync::{Mutex, mpsc};
 
-use arcnix_core::remote::RemoteSession;
 use glory::wry::shell::{AssetProvider, AssetSource};
 use glory::wry::{LocalMedia, MediaKind, Renderer};
 
@@ -280,20 +279,20 @@ impl Source {
     }
 }
 
-pub(crate) fn serve(
+pub(crate) fn serve<Session, File: Read + Seek>(
     path: &str,
     prefer_content: bool,
     active: Arc<AtomicBool>,
-    connect: impl FnOnce() -> anyhow::Result<RemoteSession>,
+    open_file: impl FnOnce() -> anyhow::Result<(Session, File, u64)>,
     ready: impl FnOnce(Result<Arc<Source>, String>),
 ) {
     // This thread owns both the connection and the handle, including their
     // potentially blocking destructors. UI and directory listings never wait on it.
     let open = || {
         anyhow::ensure!(active.load(Ordering::Acquire), "Video closed");
-        let session = connect()?;
-        let (file, size) = session.open_media(path)?;
-        Ok::<_, anyhow::Error>((session, file, size))
+        let opened = open_file()?;
+        anyhow::ensure!(opened.2 > 0, "Video file is empty");
+        Ok::<_, anyhow::Error>(opened)
     };
     let (_session, mut file, size) = match open() {
         Ok(value) => value,

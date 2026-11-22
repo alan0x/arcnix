@@ -25,6 +25,11 @@ def main():
             choice.click()
         expect(page.locator('.connection-state')).to_have_text('Connected locally', timeout=30000)
         expect(page.locator('.desktop-dock')).to_be_visible()
+        expect(page.locator('.desktop-wallpaper-copy')).to_contain_text('Connect to a server for more.')
+        catalog = app.apps()
+        for label in ('Code Editor', 'Player'):
+            expect(catalog.get_by_role('button', name=label, exact=True)).to_be_visible()
+        catalog.get_by_role('button', name='Close dialog', exact=True).click()
         expect(page.locator('.workbench-tabs').get_by_role('button', name='Transfer files')).to_have_count(0)
 
     home = linux('sh', '-c', 'printf %s "$HOME"').decode()
@@ -70,15 +75,43 @@ def main():
             set_desktop_mode(app.page.locator('.app-settings.active'), 'Dark')
             prefs = eventually(lambda: next(out.glob('local-desktops/*/desktop.json'), None))
             eventually(lambda: json.loads(prefs.read_bytes()).get('appearance', {}).get('overrides', {}).get('mode') == 'Dark')
+        def put(filename, data):
+            subprocess.run(['wsl.exe', '-d', distro, '--cd', '/', '--exec', 'sh', '-c',
+                            'cat > "$1"', 'arcnix', directory + '/' + filename], input=data, check=True)
+
+        put('example.py', b'print(1)\n')
+        clip = out / 'sample.mp4'
+        subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i',
+                        'testsrc2=size=320x180:rate=12', '-t', '8', '-c:v', 'libx264',
+                        '-pix_fmt', 'yuv420p', str(clip)], check=True)
+        put(clip.name, clip.read_bytes())
         with Desktop(out, None) as app:
             enter(app)
             app.application('Settings')
             panel = app.page.locator('.app-settings.active')
             panel.get_by_role('button', name='Appearance', exact=True).click()
             expect(panel.get_by_role('radio', name='Dark', exact=True)).to_be_checked()
+            app.application('Files')
+            app.file(directory.rsplit('/', 1)[1]).dblclick()
+            app.file('example.py').dblclick()
+            code = app.code()
+            area = code.locator('.monaco-editor textarea.inputarea').first
+            expect(code.locator('.view-lines').first).to_contain_text('print(1)')
+            area.focus()
+            area.press('Control+End')
+            code.keyboard.insert_text('print(2)')
+            area.press('Control+s')
+            eventually(lambda: linux('cat', directory + '/example.py') == b'print(1)\nprint(2)')
+            app.application('Files')
+            app.file(clip.name).dblclick()
+            video = app.page.locator('.remote-player video')
+            eventually(lambda: video.evaluate('v => v.readyState >= 2 && v.duration >= 7'), timeout=25)
+            video.evaluate('v => {v.currentTime = 5;}')
+            eventually(lambda: video.evaluate('v => !v.seeking && v.currentTime >= 5 && v.readyState >= 2'))
             assert not json.loads(app.config.read_bytes())['config']['servers']
     finally:
-        linux('rm', '-f', '--', path, directory + '/New file', directory + '/terminal-result')
+        linux('rm', '-f', '--', path, directory + '/New file', directory + '/terminal-result',
+              directory + '/example.py', directory + '/sample.mp4')
         linux('rmdir', '--', directory)
 
 

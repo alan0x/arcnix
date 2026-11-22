@@ -103,86 +103,27 @@ const CODE_EXTENSIONS: &[&str] = &[
     "htm",
     "html",
     "xhtml",
-    "css",
-    "scss",
-    "sass",
-    "less",
     "csv",
     "tsv",
-    "sql",
-    "graphql",
-    "gql",
-    "c",
-    "h",
-    "cc",
-    "cpp",
-    "cxx",
-    "hpp",
-    "hh",
-    "hxx",
-    "cs",
-    "rs",
-    "go",
-    "java",
-    "kt",
-    "kts",
-    "scala",
-    "swift",
-    "m",
-    "mm",
-    "js",
-    "mjs",
-    "cjs",
-    "jsx",
-    "ts",
-    "mts",
-    "cts",
-    "tsx",
-    "vue",
-    "svelte",
-    "astro",
-    "py",
-    "pyw",
-    "rb",
-    "php",
-    "pl",
-    "pm",
-    "lua",
-    "r",
-    "dart",
-    "ex",
-    "exs",
-    "erl",
-    "hrl",
-    "clj",
-    "fs",
-    "fsx",
-    "sh",
-    "bash",
-    "zsh",
-    "fish",
-    "ps1",
-    "psm1",
-    "bat",
-    "cmd",
-    "cmake",
-    "gradle",
-    "tf",
-    "tfvars",
-    "hcl",
-    "s",
-    "asm",
-    "nix",
-    "proto",
     "vtt",
     "srt",
     "desktop",
+];
+
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "css", "scss", "sass", "less", "sql", "graphql", "gql", "c", "h", "cc", "cpp", "cxx", "hpp",
+    "hh", "hxx", "cs", "rs", "go", "java", "kt", "kts", "scala", "swift", "m", "mm", "js", "mjs",
+    "cjs", "jsx", "ts", "mts", "cts", "tsx", "vue", "svelte", "astro", "py", "pyw", "rb", "php",
+    "pl", "pm", "lua", "r", "dart", "ex", "exs", "erl", "hrl", "clj", "fs", "fsx", "sh", "bash",
+    "zsh", "fish", "ps1", "psm1", "bat", "cmd", "cmake", "gradle", "tf", "tfvars", "hcl", "s",
+    "asm", "nix", "proto",
 ];
 
 static BUILT_IN: LazyLock<BTreeMap<&'static str, BTreeSet<FileApp>>> = LazyLock::new(|| {
     let mut registry = BTreeMap::<_, BTreeSet<_>>::new();
     for (app, ext) in CODE_EXTENSIONS
         .iter()
+        .chain(SOURCE_EXTENSIONS)
         .copied()
         .flat_map(|ext| [(FileApp::TextEditor, ext), (FileApp::Code, ext)])
         .chain(video_player::supported_extensions().map(|ext| (FileApp::Player, ext)))
@@ -227,24 +168,31 @@ fn explicit_default(settings: &AppSettings, ext: &str) -> Option<FileApp> {
         .filter(|app| APPS.contains(app))
 }
 
-fn default_app(settings: &AppSettings, path: &str) -> Option<FileApp> {
-    extension(path)
-        .and_then(|ext| explicit_default(settings, &ext))
+fn available_app(s: &State, app: FileApp) -> bool {
+    APPS.contains(&app) && (s.local_desktop.is_none() || app != FileApp::Browser)
+}
+
+fn default_app(s: &State, path: &str) -> Option<FileApp> {
+    if let Some(ext) = extension(path)
+        && let Some(app) = default_for_extension(s, &ext)
+    {
+        return Some(app);
+    }
+    known_text_name(path).then_some(FileApp::TextEditor)
+}
+
+fn default_for_extension(s: &State, ext: &str) -> Option<FileApp> {
+    explicit_default(&s.config.settings, ext)
+        .filter(|&app| available_app(s, app))
+        .or_else(|| {
+            (s.local_desktop.is_some() && SOURCE_EXTENSIONS.contains(&ext)).then_some(FileApp::Code)
+        })
         .or_else(|| {
             SUGGESTED_ORDER
                 .iter()
                 .copied()
-                .find(|app| known(path, *app))
+                .find(|&app| available_app(s, app) && built_in(ext, app))
         })
-}
-
-fn default_for_extension(settings: &AppSettings, ext: &str) -> Option<FileApp> {
-    explicit_default(settings, ext).or_else(|| {
-        SUGGESTED_ORDER
-            .iter()
-            .copied()
-            .find(|app| built_in(ext, *app))
-    })
 }
 
 fn associated(settings: &AppSettings, ext: &str, app: FileApp) -> bool {
@@ -279,7 +227,7 @@ pub(crate) fn menu(
                     let Some(path) = path(s) else {
                         return Vec::new();
                     };
-                    let default = default_app(&s.config.settings, &path);
+                    let default = default_app(s, &path);
                     default
                         .into_iter()
                         .chain(APPS.iter().copied().filter(|app| Some(*app) != default))
@@ -350,10 +298,7 @@ pub(crate) fn menu(
 }
 
 fn direct_action(s: &State, path: &str, app: FileApp) -> bool {
-    if s.local_desktop.is_some() {
-        return app == FileApp::TextEditor;
-    }
-    APPS.contains(&app)
+    available_app(s, app)
         && (known(path, app)
             || extension(path)
                 .and_then(|ext| s.config.settings.file_associations.get(&ext))
@@ -417,7 +362,7 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
     if !ui.state.with(code_workbench::available) {
         return;
     }
-    if ui.state.with(|s| s.local_desktop.is_some()) && app != FileApp::TextEditor {
+    if !ui.state.with(|s| available_app(s, app)) {
         return;
     }
     match app {
@@ -432,11 +377,7 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
 }
 
 pub(crate) fn open(ui: &Ui, path: &str) {
-    if ui.state.with(|s| s.local_desktop.is_some()) {
-        text_editor::open(ui, path);
-        return;
-    }
-    if let Some(app) = ui.state.with(|s| default_app(&s.config.settings, path)) {
+    if let Some(app) = ui.state.with(|s| default_app(s, path)) {
         launch(ui, path, app);
     } else {
         choose(ui, path);
@@ -444,14 +385,10 @@ pub(crate) fn open(ui: &Ui, path: &str) {
 }
 
 pub(crate) fn choose(ui: &Ui, path: &str) {
-    if ui.state.with(|s| s.local_desktop.is_some()) {
-        text_editor::open(ui, path);
-        return;
-    }
     if !ui.state.with(code_workbench::available) {
         return;
     }
-    let selected = ui.state.with(|s| default_app(&s.config.settings, path));
+    let selected = ui.state.with(|s| default_app(s, path));
     ui.open_dialog(Dialog::OpenWith {
         path: path.to_owned(),
         selected,
@@ -513,8 +450,8 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                         let Some(Dialog::OpenWith { path, .. }) = &s.dialog else {
                             return Vec::new();
                         };
-                        let default = default_app(&s.config.settings, path);
-                        let mut apps = APPS.to_vec();
+                        let default = default_app(s, path);
+                        let mut apps: Vec<_> = APPS.iter().copied().filter(|&app| available_app(s, app)).collect();
                         apps.sort_by_key(|app| (Some(*app) != default, !direct_action(s, path, *app)));
                         apps
                     })).key(|app| *app).children({
@@ -577,11 +514,15 @@ fn matching_extensions(s: &State) -> Vec<ExtensionRow> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(|ext| {
-            let default = default_for_extension(settings, ext);
+            let default = default_for_extension(s, ext);
             let alternatives = APPS
                 .iter()
                 .copied()
-                .filter(|app| Some(*app) != default && associated(settings, ext, *app))
+                .filter(|app| {
+                    available_app(s, *app)
+                        && Some(*app) != default
+                        && associated(settings, ext, *app)
+                })
                 .collect();
             ExtensionRow {
                 extension: ext.to_owned(),
@@ -713,7 +654,10 @@ fn add_app_picker(ui: Ui) -> impl Widget {
                     .map(move |s| {
                         APPS.iter()
                             .copied()
-                            .filter(|app| !associated(&s.config.settings, &extension, *app))
+                            .filter(|app| {
+                                available_app(s, *app)
+                                    && !associated(&s.config.settings, &extension, *app)
+                            })
                             .collect::<Vec<_>>()
                     })
                     .with_partial_eq();
@@ -789,11 +733,11 @@ fn association_apps(ui: Ui) -> impl Widget {
             return Vec::new();
         };
         let settings = &s.config.settings;
-        let default = default_for_extension(settings, &ext);
+        let default = default_for_extension(s, &ext);
         let mut candidates = APPS
             .iter()
             .copied()
-            .filter(|app| associated(settings, &ext, *app))
+            .filter(|app| available_app(s, *app) && associated(settings, &ext, *app))
             .collect::<Vec<_>>();
         candidates.sort_by_key(|app| Some(*app) != default);
         candidates
@@ -811,8 +755,7 @@ fn association_apps(ui: Ui) -> impl Widget {
         each(candidates).key(|app| *app).children(move |item| {
             let app = item.value.get();
             let selected = state.map(move |s| {
-                edited_extension(s)
-                    .is_some_and(|ext| default_for_extension(&s.config.settings, &ext) == Some(app))
+                edited_extension(s).is_some_and(|ext| default_for_extension(s, &ext) == Some(app))
             });
             let default = ui.clone();
             let remove = ui.clone();

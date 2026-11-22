@@ -1,6 +1,50 @@
 //! Bounded UTF-8 editing with optimistic content checks and preserved formatting.
 use anyhow::{Result, ensure};
 use sha2::{Digest, Sha256};
+pub(crate) fn sample_tail(
+    file: &mut (impl std::io::Read + std::io::Seek),
+    current: TextSnapshot,
+    previous: TextSnapshot,
+    stamp: Option<[u8; 32]>,
+) -> Result<(TextSnapshot, [u8; 32])> {
+    use std::io::SeekFrom;
+    let mut sample = |end: u64| -> Result<Vec<u8>> {
+        let start = end.saturating_sub(512);
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = vec![0; (end - start) as usize];
+        file.read_exact(&mut bytes)?;
+        Ok(bytes)
+    };
+    if let Some(expected) = stamp {
+        let actual: [u8; 32] = Sha256::digest(sample(previous.size)?).into();
+        ensure!(actual == expected, "Remote file changed. Reopen the file.");
+    }
+    // Attach to the original extent first, including for historical search
+    // anchors. A writer may have emitted only part of its last UTF-8 scalar.
+    let mut end = if stamp.is_some() {
+        current.size
+    } else {
+        previous.size
+    };
+    let mut bytes = sample(end)?;
+    let pending = incomplete_tail(&bytes);
+    if pending > 0 {
+        end -= pending as u64;
+        bytes = sample(end)?;
+    }
+    Ok((
+        TextSnapshot {
+            size: end,
+            modified: if end == previous.size {
+                previous.modified
+            } else {
+                current.modified
+            },
+        },
+        Sha256::digest(bytes).into(),
+    ))
+}
+
 pub const LIMIT: usize = 1024 * 1024;
 pub const RANGE_BYTES: usize = 128 * 1024;
 // Reserve room for UTF-8 and CRLF alignment on both sides of a nominal page.

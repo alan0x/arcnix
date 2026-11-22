@@ -152,10 +152,10 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
 }
 
 fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
-    shortcut_app(app) && prefs.show_apps && !prefs.hidden.contains(&app)
+    default_app_shortcut(app) && prefs.show_apps && !prefs.hidden.contains(&app)
 }
 
-fn shortcut_app(app: DesktopApp) -> bool {
+fn default_app_shortcut(app: DesktopApp) -> bool {
     !matches!(
         app,
         DesktopApp::Player | DesktopApp::Editor | DesktopApp::Code
@@ -187,17 +187,17 @@ fn set_shortcut_visible(ui: &Ui, app: DesktopApp, visible: bool) {
     });
 }
 
-fn shortcut_choices(apps: impl IntoIterator<Item = WorkspacePage>) -> Vec<DockItem> {
+fn shortcut_choices(apps: impl IntoIterator<Item = WorkspacePage>, zone: Zone) -> Vec<DockItem> {
     apps.into_iter()
         .filter_map(server_desktop::app_id)
-        .filter(|&app| shortcut_app(app))
+        .filter(|&app| zone == Zone::Dock || default_app_shortcut(app))
         .map(DockItem::App)
         .chain([SystemIcon::Home, SystemIcon::Trash].map(|system| DockItem::System { system }))
         .collect()
 }
 
-fn available_shortcuts(s: &State) -> Vec<DockItem> {
-    let mut choices = shortcut_choices(server_desktop::available_apps(s));
+fn available_shortcuts(s: &State, zone: Zone) -> Vec<DockItem> {
+    let mut choices = shortcut_choices(server_desktop::available_apps(s), zone);
     if s.local_desktop.is_some() {
         choices.retain(|item| {
             !matches!(
@@ -213,35 +213,52 @@ fn available_shortcuts(s: &State) -> Vec<DockItem> {
 
 fn dock_choices(s: &State) -> Vec<DockItem> {
     ordered(
-        available_shortcuts(s),
+        available_shortcuts(s, Zone::Dock),
         &appearance(s).dock.order,
     )
 }
 
 fn dock_icons(s: &State) -> Vec<Shortcut> {
     let dock = &appearance(s).dock;
-    let order = dock_choices(s);
-    order
-        .iter()
-        .copied()
+    let mut icons: Vec<_> = dock_choices(s)
+        .into_iter()
         .filter(|&item| {
             dock_pinned(dock, item) && (s.sftp_available || matches!(item, DockItem::App(_)))
         })
-        .chain(order.iter().copied().filter(|item| match *item {
-            DockItem::App(app) => {
-                !dock_pinned(dock, *item)
-                    && server_desktop::launcher_running(s, server_desktop::app_page(app))
-            }
-            DockItem::System { .. } => false,
-        }))
         .map(Shortcut::from)
-        .collect()
+        .collect();
+    for app in s
+        .workbench
+        .apps
+        .iter()
+        .copied()
+        .filter_map(server_desktop::app_id)
+    {
+        let icon = Shortcut::App(app);
+        if !icons.contains(&icon) {
+            icons.push(icon);
+        }
+    }
+    icons
 }
 
 fn dock_pinned(dock: &Dock, item: DockItem) -> bool {
     match item {
-        DockItem::App(app) => shortcut_app(app) && !dock.unpinned.contains(&app),
+        DockItem::App(app) => {
+            !dock.unpinned.contains(&app)
+                && (default_app_shortcut(app) || dock.extra_pins.contains(&app))
+        }
         DockItem::System { .. } => dock.order.contains(&item),
+    }
+}
+
+fn set_app_pin(dock: &mut Dock, app: DesktopApp, pinned: bool) {
+    dock.unpinned.retain(|&id| id != app);
+    dock.extra_pins.retain(|&id| id != app);
+    match (default_app_shortcut(app), pinned) {
+        (true, false) => dock.unpinned.push(app),
+        (false, true) => dock.extra_pins.push(app),
+        _ => {}
     }
 }
 
@@ -250,17 +267,10 @@ fn toggle_dock_pin(ui: &Ui, item: DockItem) {
         let dock = &mut prefs.dock;
         let pinned = dock_pinned(dock, item);
         match item {
-            DockItem::App(app) if shortcut_app(app) => {
-                if pinned {
-                    dock.unpinned.push(app);
-                } else {
-                    dock.unpinned.retain(|&id| id != app);
-                }
-            }
-            DockItem::App(_) => (),
+            DockItem::App(app) => set_app_pin(dock, app, !pinned),
             _ if pinned => dock.order.retain(|&id| id != item),
             _ => {
-                for candidate in shortcut_choices(server_desktop::APP_LAUNCHERS) {
+                for candidate in shortcut_choices(server_desktop::APP_LAUNCHERS, Zone::Dock) {
                     if (candidate == item || dock_pinned(dock, candidate))
                         && !dock.order.contains(&candidate)
                     {
@@ -680,7 +690,7 @@ fn gesture(ui: &Ui, value: &str) {
                     }
                     dock.order = order;
                     if let DockItem::App(app) = item {
-                        dock.unpinned.retain(|id| *id != app);
+                        set_app_pin(dock, app, true);
                     }
                 }
             });
@@ -1342,6 +1352,7 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                     let appearance = &mut prefs.appearance;
                     if dock {
                         appearance.dock.unpinned.clear();
+                        appearance.dock.extra_pins.clear();
                         appearance
                             .dock
                             .order
@@ -1352,7 +1363,8 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                 }),
                 col().class("desktop-shortcut-options").fill(
                     each(state.map(move |s| {
-                        let choices = available_shortcuts(s);
+                        let zone = if dock { Zone::Dock } else { Zone::Desktop };
+                        let choices = available_shortcuts(s, zone);
                         if dock {
                             ordered(
                                 choices,
@@ -1690,6 +1702,7 @@ fn dock_icons_settings(ui: Ui) -> impl Widget {
                     let dock = &mut prefs.appearance.dock;
                     dock.order = defaults.order;
                     dock.unpinned = defaults.unpinned;
+                    dock.extra_pins = defaults.extra_pins;
                     dock.size = defaults.size;
                     dock.icon_size = defaults.icon_size;
                     dock.panel_centered = defaults.panel_centered;

@@ -541,8 +541,6 @@ impl RemoteSession {
         previous: crate::text_files::TextSnapshot,
         stamp: Option<[u8; 32]>,
     ) -> Result<(crate::text_files::TextSnapshot, [u8; 32])> {
-        use std::io::{Seek, SeekFrom};
-
         use crate::deletion::FileSystem;
         use crate::text_files::TextSnapshot;
         let sftp = self.sftp()?;
@@ -565,26 +563,15 @@ impl RemoteSession {
             "Linked paths cannot be followed"
         );
         let mut file = sftp.open(&path)?;
-        let mut sample = |end: u64| -> Result<Vec<u8>> {
-            let start = end.saturating_sub(512);
-            file.seek(SeekFrom::Start(start))?;
-            let mut bytes = vec![0; (end - start) as usize];
-            file.read_exact(&mut bytes)?;
-            Ok(bytes)
-        };
-        if let Some(expected) = stamp {
-            let actual: [u8; 32] = Sha256::digest(sample(previous.size)?).into();
-            ensure!(actual == expected, "Remote file changed. Reopen the file.");
-        }
-        // Attach to the original extent first, including for historical search
-        // anchors. A writer may have emitted only part of its last UTF-8 scalar.
-        let mut end = if stamp.is_some() { size } else { previous.size };
-        let mut bytes = sample(end)?;
-        let pending = crate::text_files::incomplete_tail(&bytes);
-        if pending > 0 {
-            end -= pending as u64;
-            bytes = sample(end)?;
-        }
+        let result = crate::text_files::sample_tail(
+            &mut file,
+            TextSnapshot {
+                size,
+                modified: stat.mtime,
+            },
+            previous,
+            stamp,
+        )?;
         let after = file.stat()?;
         ensure!(
             after
@@ -592,17 +579,7 @@ impl RemoteSession {
                 .is_some_and(|len| len > size || (len == size && after.mtime == stat.mtime)),
             "Remote file changed. Reopen the file."
         );
-        Ok((
-            TextSnapshot {
-                size: end,
-                modified: if end == previous.size {
-                    previous.modified
-                } else {
-                    stat.mtime
-                },
-            },
-            Sha256::digest(bytes).into(),
-        ))
+        Ok(result)
     }
 
     pub fn read_text_range(

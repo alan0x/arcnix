@@ -368,6 +368,7 @@ def run(preview, binary=None, read_delay=.003):
             picker_button('All files').click()
             picker_button(renamed.name).press('Enter')
             expect(window.locator('.desktop-window-title')).to_have_text(media.name)
+            expect(confirm).to_be_enabled()
             confirm.press('Enter')
             expect(picker).to_have_count(0)
             expect(window.locator('.desktop-window-title')).to_have_text(renamed.name)

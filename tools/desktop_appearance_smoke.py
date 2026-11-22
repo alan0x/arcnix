@@ -22,6 +22,43 @@ def check_symbol_centers(page, selector):
         cdp.detach()
 
 
+def check_app_artwork(page):
+    # A centered CSS mask can still contain an off-center drawing.
+    icons = ROOT / 'crates/arcnix/assets/icons'
+    line_names = ('home', 'folder', 'file', 'edit', 'code', 'play', 'trash',
+                  'browser', 'docker', 'monitor', 'app-center', 'terminal', 'settings')
+    files = [icons / f'{name}.svg' for name in line_names] + sorted((icons / 'color').glob('*.svg'))
+    for path in files:
+        samples = page.evaluate('''async svg => {
+            const image = new Image();
+            image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            await image.decode();
+            return [32, 48, 64].map(size => {
+                const canvas = document.createElement('canvas');
+                canvas.width = canvas.height = size;
+                const context = canvas.getContext('2d');
+                context.drawImage(image, 0, 0, size, size);
+                const {data} = context.getImageData(0, 0, size, size);
+                let left = size, top = size, right = -1, bottom = -1;
+                for (let y = 0; y < size; y++) {
+                    for (let x = 0; x < size; x++) {
+                        if (data[4 * (y * size + x) + 3] < 128) continue;
+                        left = Math.min(left, x);
+                        right = Math.max(right, x);
+                        top = Math.min(top, y);
+                        bottom = Math.max(bottom, y);
+                    }
+                }
+                return [size, left, size - 1 - right, top, size - 1 - bottom];
+            });
+        }''', path.read_text(encoding='utf-8'))
+        for size, left, right, top, bottom in samples:
+            assert 0 < min(left, right, top, bottom) and max(left, right, top, bottom) < size / 2, (path, size)
+            # The play triangle's envelope sits one 24-unit grid step to the right for optical balance.
+            optical_shift = size / 24 if path == icons / 'play.svg' else 0
+            assert abs(left - right - 2 * optical_shift) <= 1 and abs(top - bottom) <= 1, (path, samples)
+
+
 def check_appearance_choices(panel):
     def button(name):
         return panel.get_by_role('button', name=name, exact=True)
@@ -412,6 +449,7 @@ def main():
             files_symbol = grid.locator('.app-files .desktop-app-icon').first
             symbol_mask = lambda: files_symbol.evaluate("icon => getComputedStyle(icon, '::before').maskImage")
             line_mask = symbol_mask()
+            check_app_artwork(page)
             check_symbol_centers(page, '.desktop-dock-app .desktop-app-icon')
             panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             expect(desktop).to_have_attribute('data-desktop-icon-family', 'color')

@@ -17,7 +17,7 @@ Desktop downloads are available for Windows x64, macOS on Apple Silicon, and Lin
 
 Choose **Try the local desktop** on the home screen. Linux and macOS use your current account. Windows opens an installed WSL distribution using its default account and offers a choice when several are installed. No SSH service or credentials are required.
 
-Open Files to browse your home directory and create a file. Double-click a text file to edit and save it, or choose **View → Edit source** in a Markdown preview. Choose **Terminal here** on a file or directory to open a shell in that location. Changes affect real files. Desktop preferences are saved on the client separately for each local target. The standalone File Transfer workspace is disabled for local desktops.
+Open Files to browse your home directory and create a file. Double-click a text file to edit and save it, or choose **View → Edit source** in a Markdown preview. Source files open in Code Editor and supported videos open in Player. Both apps also appear in Apps and Open with. Choose **Terminal here** on a file or directory to open a shell in that location. Changes affect real files. Desktop preferences are saved on the client separately for each local target. The standalone File Transfer workspace is disabled for local desktops.
 
 ## Connect to local WSL on Windows
 

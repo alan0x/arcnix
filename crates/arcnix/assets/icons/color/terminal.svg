@@ -10,5 +10,5 @@
   <circle cx="14" cy="18" r="2" fill="#ff9b82"/>
   <circle cx="21" cy="18" r="2" fill="#ffd47c"/>
   <circle cx="28" cy="18" r="2" fill="#80e9b5"/>
-  <path d="m16 32 8 5-8 5m14 1h13" fill="none" stroke="#9ff3cb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m18 31 7 6-7 6m14 0h14" fill="none" stroke="#9ff3cb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -334,13 +334,7 @@ pub fn css() -> String {
         Terminal => "terminal",
         Settings => "settings",
     } {
-        // Recenter app artwork without shifting the original toolbar glyphs.
-        let line = match icon {
-            Icon::Play => STANDARD.encode(icon.svg().replace("0 0 24 24", "2 0 24 24")),
-            Icon::Docker => STANDARD.encode(icon.svg().replace("0 0 24 24", "0 1 24 24")),
-            Icon::AppCenter => STANDARD.encode(icon.svg().replace("0 0 24 24", "0 -0.5 24 24")),
-            _ => STANDARD.encode(icon.svg()),
-        };
+        let line = STANDARD.encode(icon.svg());
         let color = STANDARD.encode(color);
         css.push_str(&format!(
             ".app-{app} .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n"

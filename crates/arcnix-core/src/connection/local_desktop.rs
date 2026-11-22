@@ -1,5 +1,11 @@
 //! Desktop file operations run as the selected Unix account, including inside WSL.
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
+
+#[cfg(windows)]
+#[path = "wsl_reader.rs"]
+mod wsl_reader;
+
+use crate::text_files::{TextRange, TextSnapshot};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -144,6 +150,12 @@ impl Target {
                 .split_once('\t')
                 .context("Invalid directory record")?;
             let m = metadata(info)?;
+            let kind = match info.as_bytes().first() {
+                Some(b'f') => 0o100000,
+                Some(b'd') => 0o040000,
+                Some(b'l') => 0o120000,
+                _ => 0,
+            };
             entries.push(FileEntry {
                 name: name.into(),
                 path: join(&directory, name),
@@ -151,7 +163,7 @@ impl Target {
                 is_symlink: m.symlink,
                 size: m.size,
                 modified: m.modified,
-                permissions: m.mode,
+                permissions: m.mode.map(|mode| kind | mode),
             });
         }
         entries.sort_by(|a, b| (!a.is_dir, &a.name).cmp(&(!b.is_dir, &b.name)));
@@ -260,6 +272,94 @@ impl Target {
         self.run(&["write", path, &digest, &signature], bytes)?;
         self.read(path)
     }
+    /// Read from the selected account's filesystem and keep the open file across seeks.
+    pub fn open_binary(&self, path: &str) -> Result<(impl Read + Seek + use<>, TextSnapshot)> {
+        validate_file(path)?;
+        #[cfg(windows)]
+        {
+            wsl_reader::open(self.shell()?, path)
+        }
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags, open};
+            use std::os::unix::fs::MetadataExt;
+            let fd = open(
+                path,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            let file = std::fs::File::from(fd);
+            let metadata = file.metadata()?;
+            ensure!(metadata.is_file(), "Choose a regular file");
+            Ok((
+                file,
+                TextSnapshot {
+                    size: metadata.len(),
+                    modified: metadata.mtime().try_into().ok(),
+                },
+            ))
+        }
+    }
+
+    pub fn read_text_range(
+        &self,
+        path: &str,
+        offset: u64,
+        snapshot: TextSnapshot,
+    ) -> Result<TextRange> {
+        use crate::text_files::{PAGE_BYTES, decode_page};
+        ensure!(
+            offset <= snapshot.size && offset.is_multiple_of(PAGE_BYTES),
+            "Invalid page offset"
+        );
+        let (mut file, actual) = self.open_binary(path)?;
+        let matches = |size, modified| {
+            size > snapshot.size || (size == snapshot.size && modified == snapshot.modified)
+        };
+        ensure!(
+            matches(actual.size, actual.modified),
+            "File changed. Run the search again."
+        );
+        let next = offset.saturating_add(PAGE_BYTES).min(snapshot.size);
+        let start = offset.saturating_sub(3);
+        let end = next.saturating_add(1).min(snapshot.size);
+        let mut bytes = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut bytes)?;
+        let after = self.metadata(path)?;
+        ensure!(
+            !after.directory && !after.symlink && matches(after.size, after.modified),
+            "File changed. Run the search again."
+        );
+        decode_page(&bytes, start, offset, next)
+    }
+
+    pub fn poll_text_tail(
+        &self,
+        path: &str,
+        previous: TextSnapshot,
+        stamp: Option<[u8; 32]>,
+    ) -> Result<(TextSnapshot, [u8; 32])> {
+        let (mut file, current) = self.open_binary(path)?;
+        ensure!(
+            current.size > previous.size || current == previous,
+            "File changed. Reopen the file."
+        );
+        if let Some(stamp) = stamp
+            && current == previous
+        {
+            return Ok((previous, stamp));
+        }
+        let result = crate::text_files::sample_tail(&mut file, current, previous, stamp)?;
+        let after = self.metadata(path)?;
+        ensure!(
+            after.size > current.size
+                || (after.size == current.size && after.modified == current.modified),
+            "File changed. Reopen the file."
+        );
+        Ok(result)
+    }
+
     pub fn clock(&self) -> Result<crate::server_apps::ClockSample> {
         crate::server_apps::parse_clock(&String::from_utf8(self.run(&["clock"], &[])?)?)
     }

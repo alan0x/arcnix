@@ -85,6 +85,7 @@ def main():
             eventually(lambda: 'files' in dock_preferences().get('unpinned', []))
             expect(dock_files).to_be_visible()
             for remaining in range(3, -1, -1):
+                expect(dock_files).to_have_count(1)
                 dock_files.click(button='right')
                 choose('Close window')
                 expect(windows).to_have_count(remaining)
@@ -106,8 +107,16 @@ def main():
             search.press('Enter')
             expect(catalog).to_have_count(0)
             expect(page.locator('.desktop-window.app-player.active')).to_be_visible()
-            expect(icon('.desktop-dock', 'Player')).to_have_count(0)
+            player = icon('.desktop-dock', 'Player')
+            expect(player).to_be_visible()
+            page.locator('.desktop-window.app-player .window-minimize').click()
+            player.click()
+            expect(page.locator('.desktop-window.app-player.active')).to_be_visible()
+            player.click(button='right')
+            choose('Keep in dock')
+            eventually(lambda: 'player' in dock_preferences().get('extra_pins', []))
             page.locator('.desktop-window.app-player .window-close').click()
+            expect(player).to_be_visible()
 
             app.application('Files')
             active.locator('.files-sidebar').get_by_role('button', name='Home', exact=True).click()
@@ -119,8 +128,9 @@ def main():
             files_catalog.get_by_role('textbox', name='Search apps', exact=True).fill('text editor')
             files_catalog.get_by_role('button', name='Text Editor', exact=True).click()
             expect(page.locator('.desktop-window.app-editor.active')).to_be_visible()
-            expect(icon('.desktop-dock', 'Text Editor')).to_have_count(0)
+            expect(icon('.desktop-dock', 'Text Editor')).to_be_visible()
             page.locator('.desktop-window.app-editor .window-close').click()
+            expect(icon('.desktop-dock', 'Text Editor')).to_have_count(0)
             expect(files_catalog).to_be_visible()
             active.get_by_role('button', name='Back to folder', exact=True).click()
             expect(files_catalog).to_have_count(0)
@@ -137,8 +147,9 @@ def main():
             options = pins.locator('.preference-check')
             initial_order = options.all_text_contents()
             assert initial_order[:3] == ['Home', 'Files', 'Terminal']
-            for label in ('Player', 'Text Editor', 'Code Editor'):
-                expect(pins.get_by_role('checkbox', name=label, exact=True)).to_have_count(0)
+            expect(pins.get_by_role('checkbox', name='Player', exact=True)).to_be_checked()
+            for label in ('Text Editor', 'Code Editor'):
+                expect(pins.get_by_role('checkbox', name=label, exact=True)).not_to_be_checked()
             pins.get_by_role('checkbox', name='Files', exact=True).check()
             eventually(lambda: 'files' not in dock_preferences().get('unpinned', []))
             expect(options).to_have_text(initial_order)
@@ -157,7 +168,19 @@ def main():
             choose('Close application')
             expect(page.locator('.desktop-window.app-terminal')).to_be_hidden()
 
-            print('Files window shortcuts, launcher menus, folder links and Dock pins passed.')
+        with Desktop(out / 'restarted', peer.config([profile], out)) as app:
+            app.connect()
+            app.workspace('Desktop')
+            player = app.page.locator('.desktop-dock').get_by_role('button', name='Player', exact=True)
+            player.click()
+            player.click(button='right')
+            app.page.locator('.desktop-context-menu').get_by_role('button', name='Remove from dock', exact=True).click()
+            eventually(lambda: 'player' not in dock_preferences().get('extra_pins', []))
+            expect(player).to_be_visible()
+            app.page.locator('.desktop-window.app-player .window-close').click()
+            expect(player).to_have_count(0)
+
+        print('Files window shortcuts, running apps, launcher menus and persistent Dock pins passed.')
 
 
 if __name__ == '__main__':

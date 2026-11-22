@@ -1,4 +1,5 @@
-//! Files exposed to the local workbench through the existing SSH worker.
+//! Files exposed to the embedded workbench from the active desktop.
+use anyhow::Context;
 use arcnix_core::remote::RemoteSession;
 use arcnix_core::text_files::{Document, Version};
 use serde::Deserialize;
@@ -104,25 +105,77 @@ fn page_snapshot(
         .then_some(arcnix_core::text_files::TextSnapshot { size, modified })
 }
 
+pub enum Files<'a> {
+    Remote(&'a mut RemoteSession),
+    Local(&'a arcnix_core::local_desktop::Target),
+}
+
+impl Files<'_> {
+    fn list(&self, path: &str) -> anyhow::Result<(String, Vec<arcnix_core::FileEntry>)> {
+        match self {
+            Self::Remote(remote) => remote.list_dir(path),
+            Self::Local(target) => target.list(path),
+        }
+    }
+
+    fn create(&self, path: &str, directory: bool) -> anyhow::Result<()> {
+        match self {
+            Self::Remote(remote) if directory => remote.mkdir(path),
+            Self::Remote(remote) => remote.create_file(path),
+            Self::Local(target) => {
+                let (parent, name) = path
+                    .rsplit_once('/')
+                    .context("Expected an absolute file path")?;
+                anyhow::ensure!(
+                    target.try_create(
+                        if parent.is_empty() { "/" } else { parent },
+                        name,
+                        directory
+                    )?,
+                    "File already exists"
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn range(
+        &mut self,
+        path: &str,
+        offset: u64,
+        snapshot: arcnix_core::text_files::TextSnapshot,
+        cursor: Option<u64>,
+        check: impl Fn() -> anyhow::Result<()>,
+    ) -> anyhow::Result<arcnix_core::text_files::TextRange> {
+        match self {
+            Self::Remote(remote) => remote.read_text_range(path, offset, snapshot, cursor, check),
+            Self::Local(target) => target.read_text_range(path, offset, snapshot),
+        }
+    }
+}
+
 impl FileRequest {
     pub fn execute(
         self,
-        remote: &mut RemoteSession,
+        mut files: Files<'_>,
         check: impl Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<Value> {
         use base64::Engine;
         check()?;
         match self {
             Self::Create { path } => {
-                remote.create_file(&path)?;
+                files.create(&path, false)?;
                 Ok(Value::Null)
             }
             Self::Mkdir { path } => {
-                remote.mkdir(&path)?;
+                files.create(&path, true)?;
                 Ok(Value::Null)
             }
             Self::Stat { path } => {
-                let m = remote.file_metadata(&path)?;
+                let m = match &files {
+                    Files::Remote(remote) => remote.file_metadata(&path)?,
+                    Files::Local(target) => target.metadata(&path)?,
+                };
                 Ok(
                     json!({"type":if m.directory {2} else {1}, "size":m.size,"ctime":0,
                     "mtime":m.modified.unwrap_or_default()*1000,
@@ -130,7 +183,7 @@ impl FileRequest {
                 )
             }
             Self::List { path } => {
-                let (_, entries) = remote.list_dir(&path)?;
+                let (_, entries) = files.list(&path)?;
                 Ok(Value::Array(
                     entries
                         .into_iter()
@@ -146,7 +199,24 @@ impl FileRequest {
                 ))
             }
             Self::Image { path } => {
-                let image = arcnix_core::desktop_customization::read_wallpaper(remote, &path)?;
+                let image = match files {
+                    Files::Remote(remote) => {
+                        arcnix_core::desktop_customization::read_wallpaper(remote, &path)?
+                    }
+                    Files::Local(target) => {
+                        arcnix_core::desktop_customization::read_image(&path, |limit| {
+                            use std::io::Read;
+                            let (file, snapshot) = target.open_binary(&path)?;
+                            anyhow::ensure!(
+                                snapshot.size <= limit as u64,
+                                "Image exceeds maximum size"
+                            );
+                            let mut bytes = Vec::with_capacity(snapshot.size as usize + 1);
+                            file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+                            Ok(bytes)
+                        })?
+                    }
+                };
                 Ok(json!(format!(
                     "data:{};base64,{}",
                     image.mime,
@@ -154,7 +224,7 @@ impl FileRequest {
                 )))
             }
             Self::SearchDirectory { path, max_bytes } => {
-                let (canonical, entries) = remote.list_dir(&path)?;
+                let (canonical, entries) = files.list(&path)?;
                 anyhow::ensure!(canonical == path, "Search directory changed");
                 Ok(Value::Array(
                     entries
@@ -180,7 +250,10 @@ impl FileRequest {
                 ))
             }
             Self::Read { path } => {
-                let d = remote.read_text(&path, check)?;
+                let d = match files {
+                    Files::Remote(remote) => remote.read_text(&path, check)?,
+                    Files::Local(target) => target.read(&path)?,
+                };
                 Ok(json!({"content":d.content,"version":d.version,"bom":d.bom,"crlf":d.crlf}))
             }
             Self::ReadRange {
@@ -189,14 +262,17 @@ impl FileRequest {
                 snapshot,
                 cursor,
             } => Ok(serde_json::to_value(
-                remote.read_text_range(&path, offset, snapshot, cursor, check)?,
+                files.range(&path, offset, snapshot, cursor, check)?,
             )?),
             Self::PollTail {
                 path,
                 snapshot,
                 stamp,
             } => {
-                let (snapshot, stamp) = remote.poll_text_tail(&path, snapshot, stamp)?;
+                let (snapshot, stamp) = match files {
+                    Files::Remote(remote) => remote.poll_text_tail(&path, snapshot, stamp)?,
+                    Files::Local(target) => target.poll_text_tail(&path, snapshot, stamp)?,
+                };
                 Ok(json!({ "snapshot": snapshot, "stamp": stamp }))
             }
             Self::CountLines {
@@ -205,11 +281,13 @@ impl FileRequest {
                 snapshot,
                 cursor,
             } => {
-                let page = remote.read_text_range(&path, offset, snapshot, Some(cursor), check)?;
+                let page = files.range(&path, offset, snapshot, Some(cursor), check)?;
                 Ok(json!({"next":page.next, "breaks":page.breaks}))
             }
             Self::CloseRange { cursor } => {
-                remote.close_search_reader(cursor);
+                if let Files::Remote(remote) = files {
+                    remote.close_search_reader(cursor);
+                }
                 Ok(Value::Null)
             }
         }

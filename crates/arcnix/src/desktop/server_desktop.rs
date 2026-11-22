@@ -224,6 +224,8 @@ fn local_app(page: WorkspacePage) -> bool {
     matches!(
         page.base(),
         WorkspacePage::Files(_)
+            | WorkspacePage::Code
+            | WorkspacePage::Player
             | WorkspacePage::Editor
             | WorkspacePage::Terminal
             | WorkspacePage::Settings
@@ -1248,6 +1250,12 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                                 text()
                                     .class("desktop-wallpaper-address")
                                     .content(state.map(|s| {
+                                        if s.local_desktop.is_some() {
+                                            return i18n::translate_for(
+                                                "本机体验提供部分功能，连接服务器可使用更多功能。",
+                                                desktop_system_settings::language(s),
+                                            );
+                                        }
                                         let address = desktop_address(s);
                                         if address == selected_name(s) {
                                             String::new()

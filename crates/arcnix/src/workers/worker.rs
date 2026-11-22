@@ -641,31 +641,49 @@ pub(crate) fn start_with_limiter(
                 active,
             } = action
             {
-                if let Some((profile, (fingerprint, secret))) = connection() {
-                    let profile = profile.clone();
-                    let fingerprint = fingerprint.clone();
-                    let secret = secret.clone();
-                    let events = events.clone();
+                let events = events.clone();
+                let ready = move |result| {
+                    let _ = events.send_blocking(Response {
+                        epoch,
+                        serial,
+                        update: Update::Video(result),
+                    });
+                };
+                if let Some(desktop) = &local_desktop {
+                    let target = desktop.target.clone();
                     thread::spawn(move || {
                         crate::video_player::serve(
                             &path,
                             prefer_content,
                             active,
                             || {
-                                PendingConnection::open_for_known_host(&profile, &fingerprint)?
-                                    .authenticate(&secret, &fingerprint)
+                                let (file, snapshot) = target.open_binary(&path)?;
+                                Ok(((), file, snapshot.size))
                             },
-                            |result| {
-                                let _ = events.send_blocking(Response {
-                                    epoch,
-                                    serial,
-                                    update: Update::Video(result),
-                                });
+                            ready,
+                        )
+                    });
+                } else if let Some((profile, (fingerprint, secret))) = connection() {
+                    let profile = profile.clone();
+                    let fingerprint = fingerprint.clone();
+                    let secret = secret.clone();
+                    thread::spawn(move || {
+                        crate::video_player::serve(
+                            &path,
+                            prefer_content,
+                            active,
+                            || {
+                                let session =
+                                    PendingConnection::open_for_known_host(&profile, &fingerprint)?
+                                        .authenticate(&secret, &fingerprint)?;
+                                let (file, size) = session.open_media(&path)?;
+                                Ok((session, file, size))
                             },
-                        );
+                            ready,
+                        )
                     });
                 } else {
-                    send(Update::Video(Err("Connect a server first".into())));
+                    ready(Err("Connect a server first".into()));
                 }
                 continue;
             }
@@ -1277,13 +1295,16 @@ pub(crate) fn start_with_limiter(
                                 )?;
                             }
                             Action::CodeFile(request) => {
-                                let result = request.execute(remote, || {
-                                    anyhow::ensure!(
-                                        generation.load(Ordering::Acquire) == epoch,
-                                        "Connection changed"
-                                    );
-                                    Ok(())
-                                });
+                                let result = request.execute(
+                                    crate::code_workbench::Files::Remote(remote),
+                                    || {
+                                        anyhow::ensure!(
+                                            generation.load(Ordering::Acquire) == epoch,
+                                            "Connection changed"
+                                        );
+                                        Ok(())
+                                    },
+                                );
                                 file_completed = true;
                                 match result {
                                     Ok(value) => send(Update::CodeFile(Ok(value))),

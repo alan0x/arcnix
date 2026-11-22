@@ -18,7 +18,7 @@ def main():
         with Desktop(out/'app',peer.config([peer.profile('Workbench')],out)) as app:
             app.connect()
             app.application('Code Editor')
-            expect(app.page.locator('.desktop-dock').get_by_role('button',name='Editor',exact=True)).to_have_count(0)
+            expect(app.page.locator('.desktop-dock').get_by_role('button', name='Code Editor', exact=True)).to_be_visible()
             page = app.code()
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))

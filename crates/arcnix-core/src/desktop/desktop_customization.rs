@@ -109,6 +109,9 @@ fn discard_magnification<'de, D: serde::Deserializer<'de>>(
 pub struct Dock {
     pub order: Vec<DockItem>,
     pub unpinned: Vec<DesktopApp>,
+    /// Explicit pins for applications outside the default set. Legacy order is only a layout hint.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_pins: Vec<DesktopApp>,
     #[serde(deserialize_with = "appearance_value")]
     pub size: DockSize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,6 +139,7 @@ impl Default for Dock {
         Self {
             order: vec![],
             unpinned: vec![],
+            extra_pins: vec![],
             size: DockSize::Medium,
             icon_size: None,
             position: DockPosition::Bottom,
@@ -359,7 +363,7 @@ impl Appearance {
                 ensure!(valid_name(name), "Invalid desktop filename");
             }
         }
-        for apps in [&self.hidden, &self.dock.unpinned] {
+        for apps in [&self.hidden, &self.dock.unpinned, &self.dock.extra_pins] {
             ensure!(
                 apps.len() <= DesktopApp::COUNT && unique(apps),
                 "Invalid application list"
@@ -513,9 +517,20 @@ pub fn read_wallpaper(session: &RemoteSession, path: &str) -> Result<WallpaperIm
     } else {
         path.to_owned()
     };
-    validate_image_path(&path)?;
-    let (extension, mime) = format(Path::new(&path))?;
-    let bytes = session.read_bounded_file(&path, MAX_WALLPAPER)?;
+    read_image(&path, |limit| session.read_bounded_file(&path, limit))
+}
+
+pub fn read_image(
+    path: &str,
+    read: impl FnOnce(usize) -> Result<Vec<u8>>,
+) -> Result<WallpaperImage> {
+    validate_image_path(path)?;
+    let (extension, mime) = format(Path::new(path))?;
+    let bytes = read(MAX_WALLPAPER)?;
     validate_image(extension, &bytes)?;
-    Ok(WallpaperImage { path, mime, bytes })
+    Ok(WallpaperImage {
+        path: path.into(),
+        mime,
+        bytes,
+    })
 }
