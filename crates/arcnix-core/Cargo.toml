@@ -11,6 +11,9 @@ readme = "../../README.md"
 keywords = ["ssh", "sftp", "server", "management"]
 categories = ["network-programming"]
 
+[features]
+bundled-wallpapers = []
+
 [dependencies]
 trash = "5.4"
 percent-encoding = "2"

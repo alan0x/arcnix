@@ -9,6 +9,35 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::Theme as Mode;
 use crate::desktop_customization::{Wallpaper, validate_image_path};
 
+/// Built-in WebP wallpapers served by the desktop under each theme asset name.
+#[cfg(feature = "bundled-wallpapers")]
+pub const BUNDLED_WALLPAPERS: &[(&str, &[u8])] = &[
+    (
+        "fjord",
+        include_bytes!("../../assets/wallpapers/fjord.webp"),
+    ),
+    (
+        "fjord-daylight",
+        include_bytes!("../../assets/wallpapers/fjord-daylight.webp"),
+    ),
+    (
+        "aurora-twilight",
+        include_bytes!("../../assets/wallpapers/aurora-twilight.webp"),
+    ),
+    (
+        "aurora-night",
+        include_bytes!("../../assets/wallpapers/aurora-night.webp"),
+    ),
+    (
+        "seaside-sunrise",
+        include_bytes!("../../assets/wallpapers/seaside-sunrise.webp"),
+    ),
+    (
+        "seaside-moonrise",
+        include_bytes!("../../assets/wallpapers/seaside-moonrise.webp"),
+    ),
+];
+
 pub(crate) fn appearance_value<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     deserializer: D,
 ) -> Result<T, D::Error> {

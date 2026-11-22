@@ -2437,30 +2437,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         window,
         Config {
             native: Some(Box::new(app_icon::DesktopWindow::new(ui.clone()))),
-            assets: [
-                ("fjord", include_bytes!("../assets/fjord.webp").as_slice()),
-                (
-                    "fjord-daylight",
-                    include_bytes!("../assets/fjord-daylight.webp").as_slice(),
-                ),
-                (
-                    "aurora-twilight",
-                    include_bytes!("../assets/aurora-twilight.webp").as_slice(),
-                ),
-                (
-                    "aurora-night",
-                    include_bytes!("../assets/aurora-night.webp").as_slice(),
-                ),
-                (
-                    "seaside-sunrise",
-                    include_bytes!("../assets/seaside-sunrise.webp").as_slice(),
-                ),
-                (
-                    "seaside-moonrise",
-                    include_bytes!("../assets/seaside-moonrise.webp").as_slice(),
-                ),
-            ]
-            .into_iter()
+            assets: arcnix_core::desktop_theme::BUNDLED_WALLPAPERS.iter()
             .map(|(name, bytes)| {
                 (
                     format!("/wallpapers/{name}.webp"),

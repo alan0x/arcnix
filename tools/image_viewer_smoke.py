@@ -9,7 +9,7 @@ from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
 def images(folder):
     folder.mkdir(exist_ok=True)
-    (folder / '01 海岸.WEBP').write_bytes((ROOT / 'crates/arcnix/assets/fjord.webp').read_bytes())
+    (folder / '01 海岸.WEBP').write_bytes((ROOT / 'crates/arcnix-core/assets/wallpapers/fjord.webp').read_bytes())
     (folder / '02.svg').write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="512">'
         '<rect width="2048" height="512" fill="teal"/></svg>', encoding='utf-8')
