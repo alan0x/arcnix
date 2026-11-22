@@ -2281,13 +2281,30 @@ html[data-files-downloading] .files-download-drop {
   color: var(--text);
 }
 .files-tab:not(.selected):hover { background: var(--raised); color: var(--text); }
-.files-tab-dragging { opacity: .55; }
-.files-tab-drag-source {
-  display: flex; align-items: center; flex: 1; min-width: 0;
-  --gly-drag-preview-bg: var(--accent-bg);
-  --gly-drag-preview-text: var(--text);
-  --gly-drag-preview-line: var(--accent);
+.terminal-parked-surface { flex: 1; min-height: 0; overflow: hidden; padding: 10px; pointer-events: none; }
+.window-tab-select { touch-action: none; }
+.window-tab-item[data-tab-dragging] { opacity: .55; }
+.window-tab-item .window-tab-select:focus { outline: none !important; }
+.window-tab-item:has(.window-tab-select:focus-visible) {
+  outline: 2px solid var(--accent); outline-offset: -2px;
 }
+.window-tab-strip:has(> .window-tab-slot) > [data-tab-dragging] { display: none; }
+.window-tab-slot {
+  position: relative; flex: none; align-self: center; max-width: 100%;
+  border-radius: 4px; background: color-mix(in srgb, var(--accent) 9%, transparent);
+  pointer-events: none;
+}
+.window-tab-slot::before {
+  content: ''; position: absolute; inset: 1px auto 1px 0; width: 2px;
+  border-radius: 2px; background: var(--accent);
+}
+.window-tab-preview {
+  position: fixed; top: 0; left: 0; z-index: 2147483647; pointer-events: none;
+  box-sizing: border-box; display: flex; align-items: center; overflow: hidden;
+  border: 1px solid; border-radius: 6px; box-shadow: 0 4px 12px #0004;
+  white-space: nowrap; user-select: none;
+}
+.files-tab-drag-source { display: flex; align-items: center; flex: 1; min-width: 0; }
 .files-trash .trash-item > [data-gly-context] { width: 100%; }
 .files-trash [data-gly-layer="context-point"] {
   min-width: 160px; background: var(--raised); border: 1px solid var(--line); color: var(--text);
@@ -2430,7 +2447,7 @@ button,
   border-bottom: 1px solid var(--line); background: var(--surface);
 }
 .editor-tab-strip { display: flex; align-items: center; flex: 1; gap: 4px; min-width: 0; }
-.editor-tab-strip:not(:has(.editor-tab-item)) { flex: 0; }
+.editor-tabbar:not(:has(.editor-tab-item, .window-tab-slot)) { display: none; }
 .app-editor .desktop-window-title { flex: 0 1 auto; min-width: 0; }
 .app-editor .desktop-window-actions { gap: 2px; }
 .app-editor .desktop-window-actions > .icon-button { width: 25px !important; min-width: 25px !important; padding: 5px !important; }
@@ -2440,7 +2457,7 @@ button,
   .app-editor .desktop-window-actions { gap: 1px; }
   .app-editor .desktop-window-actions > .icon-button { width: 23px !important; min-width: 23px !important; }
 }
-.window-tab-strip { overflow: auto hidden; scrollbar-width: none; }
+.window-tab-strip { position: relative; overflow: auto hidden; scrollbar-width: none; }
 .window-tabs-overflow { flex: none; }
 .window-tabs-overflow:not([data-tabs-overflow]), .window-tabs-menu:not(:popover-open) { display: none !important; }
 .window-tabs-menu {

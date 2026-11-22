@@ -9,3 +9,4 @@ pub(crate) mod desktop_system_settings;
 pub(crate) mod server_apps_ui;
 pub(crate) mod server_apps_worker;
 pub(crate) mod server_desktop;
+pub(crate) mod window_tabs;

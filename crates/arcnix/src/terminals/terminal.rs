@@ -48,6 +48,7 @@ pub struct SessionState {
 }
 #[derive(Clone, Default)]
 pub struct TerminalState {
+    pub(crate) groups: window_tabs::Groups,
     active: SessionState,
     background: Vec<SessionState>,
     next_id: u64,
@@ -83,19 +84,31 @@ impl TerminalState {
     pub(crate) fn session_count(&self) -> usize {
         self.background.len() + usize::from(self.active.id > 0)
     }
-    fn tabs(&self) -> Vec<Tab> {
-        let mut tabs: Vec<_> = self
-            .background
+    pub(crate) fn select(&mut self, id: u64) {
+        if let Some(index) = self.background.iter().position(|session| session.id == id) {
+            std::mem::swap(&mut self.active, &mut self.background[index]);
+        }
+        self.groups.select(id);
+    }
+
+    fn session(&self, id: u64) -> Option<&SessionState> {
+        self.background
             .iter()
-            .chain((self.active.id > 0).then_some(&self.active))
+            .chain([&self.active])
+            .find(|session| session.id == id)
+    }
+
+    fn tabs(&self, window: u32) -> Vec<Tab> {
+        self.groups
+            .tabs(window)
+            .iter()
+            .filter_map(|id| self.session(*id))
             .map(|session| Tab {
                 id: session.id,
                 directory: session.directory.clone(),
                 name: session.name.clone(),
             })
-            .collect();
-        tabs.sort_by_key(|tab| tab.id);
-        tabs
+            .collect()
     }
 }
 #[derive(Clone)]
@@ -111,15 +124,10 @@ fn tab_label(tab: &Tab) -> String {
         .unwrap_or_else(|| i18n::translate(&format!("终端 {}", tab.id)))
 }
 pub(crate) fn session_status(s: &State, id: u64) -> Option<Status> {
-    if s.terminal.id == id && id > 0 {
-        Some(s.terminal.status)
-    } else {
-        s.terminal
-            .background
-            .iter()
-            .find(|session| session.id == id)
-            .map(|session| session.status)
-    }
+    s.terminal
+        .session(id)
+        .filter(|session| session.id > 0)
+        .map(|session| session.status)
 }
 #[derive(Clone, Serialize)]
 struct UiCommand {
@@ -175,11 +183,17 @@ pub(crate) fn restore(s: &mut State, layout: &arcnix_core::server_apps::Terminal
         .iter()
         .position(|v| v.persistent_id == layout.active)
         .unwrap_or(0);
+    let mut groups = window_tabs::Groups::default();
+    for session in &sessions {
+        groups.add(session.id);
+    }
     let active = sessions.remove(index);
+    groups.select(active.id);
     s.terminal = TerminalState {
         active,
         background: sessions,
         next_id: layout.tabs.len() as u64,
+        groups,
         ..Default::default()
     };
 }
@@ -254,7 +268,7 @@ impl Ui {
     pub(crate) fn terminal_enter(&self) {
         if self.state.with(|s| {
             navigation::workspace_visible(s)
-                && s.workspace_page == WorkspacePage::Terminal
+                && s.workspace_page.base() == WorkspacePage::Terminal
                 && s.terminal.status == Status::Idle
                 && s.server_apps.discover_pending.is_none()
                 && s.server_apps.preferences_pending.is_none()
@@ -294,7 +308,8 @@ impl Ui {
         self.state.revise(|s| {
             s.file_menu = None;
             s.file_context = None;
-            server_desktop::select_app(s, WorkspacePage::Terminal);
+            let page = window_tabs::current(s, WorkspacePage::Terminal);
+            server_desktop::select_app(s, page);
         });
         self.terminal_open(100, 30, Some(directory), true);
     }
@@ -331,6 +346,10 @@ impl Ui {
             }
             terminal.next_id += 1;
             let id = terminal.next_id;
+            if let Some(old) = previous {
+                terminal.groups.remove(old);
+            }
+            terminal.groups.add(id);
             terminal.active = SessionState {
                 id,
                 persistent_id,
@@ -383,30 +402,42 @@ impl Ui {
     fn terminal_switch(&self, id: u64) {
         self.state.revise(|s| {
             s.terminal.menu = None;
-            if let Some(index) = s
-                .terminal
-                .background
-                .iter()
-                .position(|session| session.id == id)
-            {
-                let terminal = &mut s.terminal;
-                std::mem::swap(&mut terminal.active, &mut terminal.background[index]);
-            }
+            s.terminal.select(id);
         });
         self.remember_desktop_layout();
         self.terminal_enter();
     }
-    pub(crate) fn terminal_close_tab(&self, id: u64) {
+    pub(crate) fn terminal_remove_tab(&self, id: u64) {
         self.state.revise(|s| {
             s.terminal.menu = None;
             let terminal = &mut s.terminal;
+            terminal.groups.remove(id);
             if terminal.id == id {
                 terminal.active = terminal.background.pop().unwrap_or_default();
+                if let Some(selected) = terminal.groups.selected(terminal.groups.current) {
+                    terminal.select(selected);
+                }
             } else {
                 terminal.background.retain(|session| session.id != id);
             }
         });
         self.send(Action::Terminal(TerminalAction::Close { id }));
+    }
+    pub(crate) fn terminal_close_tab(&self, id: u64) {
+        let page = self
+            .state
+            .with(|s| window_tabs::current(s, WorkspacePage::Terminal));
+        self.terminal_remove_tab(id);
+        self.state.revise(|s| {
+            if s.terminal
+                .groups
+                .tabs(page.tab_window().unwrap())
+                .is_empty()
+                && server_desktop::has_siblings(s, page)
+            {
+                server_desktop::remove_window(s, page);
+            }
+        });
         self.remember_desktop_layout();
         if self.state.with(|s| s.terminal.session_count() > 0) {
             self.terminal_enter();
@@ -435,7 +466,7 @@ impl Ui {
     }
     fn terminal_cycle(&self, delta: isize) {
         let target = self.state.with(|s| {
-            let tabs = s.terminal.tabs();
+            let tabs = s.terminal.tabs(s.terminal.groups.current);
             let index = tabs.iter().position(|tab| tab.id == s.terminal.id)?;
             Some(tabs[(index as isize + delta).rem_euclid(tabs.len() as isize) as usize].id)
         });
@@ -480,7 +511,7 @@ impl Ui {
     fn terminal_begin_name(&self, id: u64) {
         let draft = self.state.with(|s| {
             s.terminal
-                .tabs()
+                .tabs(s.terminal.groups.current)
                 .iter()
                 .find(|tab| tab.id == id)
                 .map(tab_label)
@@ -522,7 +553,7 @@ impl Ui {
             if menu.identity != identity
                 || menu.epoch != s.epoch
                 || !navigation::workspace_visible(s)
-                || s.workspace_page != WorkspacePage::Terminal
+                || s.workspace_page.base() != WorkspacePage::Terminal
                 || s.dialog.is_some()
             {
                 return None;
@@ -605,6 +636,22 @@ pub(crate) fn update(ui: &Ui, event: TerminalEvent) {
     });
 }
 
+fn consume(ui: &Ui, id: u64, packet: u64) {
+    let bytes = ui.state.revise(|s| {
+        let Some(session) = s.terminal.session_mut(id) else {
+            return 0;
+        };
+        let mut bytes = 0;
+        while session.packets.front().is_some_and(|p| p.id <= packet) {
+            bytes += session.packets.pop_front().unwrap().bytes;
+        }
+        bytes
+    });
+    if bytes != 0 {
+        ui.send(Action::Terminal(TerminalAction::Consumed { id, bytes }));
+    }
+}
+
 fn handle_input(ui: &Ui, json: String) {
     if json.len() > 400_000 || !ui.state.with(|s| s.connected) {
         return;
@@ -641,7 +688,7 @@ fn handle_input(ui: &Ui, json: String) {
             too_large,
         } => ui.state.revise(|s| {
             if navigation::workspace_visible(s)
-                && s.workspace_page == WorkspacePage::Terminal
+                && s.workspace_page.base() == WorkspacePage::Terminal
                 && s.dialog.is_none()
                 && (id == 0 || session_status(s, id).is_some())
             {
@@ -659,7 +706,7 @@ fn handle_input(ui: &Ui, json: String) {
             if id == current
                 && ui.state.with(|s| {
                     navigation::workspace_visible(s)
-                        && s.workspace_page == WorkspacePage::Terminal
+                        && s.workspace_page.base() == WorkspacePage::Terminal
                         && s.dialog.is_none()
                 }) =>
         {
@@ -712,16 +759,7 @@ fn handle_input(ui: &Ui, json: String) {
             }));
         }
         Input::Consumed { id, packet } if id == current => {
-            let bytes = ui.state.revise(|s| {
-                let mut bytes = 0;
-                while s.terminal.packets.front().is_some_and(|p| p.id <= packet) {
-                    bytes += s.terminal.packets.pop_front().unwrap().bytes;
-                }
-                bytes
-            });
-            if bytes != 0 {
-                ui.send(Action::Terminal(TerminalAction::Consumed { id, bytes }));
-            }
+            consume(ui, id, packet);
         }
         Input::Selection { id, selected } if id == current => ui.state.revise(|s| {
             s.terminal.selected = selected;
@@ -745,7 +783,7 @@ fn handle_input(ui: &Ui, json: String) {
         _ => {}
     }
 }
-fn tabs(ui: Ui) -> impl Widget {
+fn tabs(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let new_tab = ui.clone();
     row()
@@ -759,20 +797,22 @@ fn tabs(ui: Ui) -> impl Widget {
         }))
         .fill((
             row().class("terminal-tab-list window-tab-strip").fill(
-                each(state.map(|s| s.terminal.tabs()))
+                each(state.map(move |s| s.terminal.tabs(window)))
                     .key(|tab| tab.id)
                     .children(move |item| {
                         let tab = item.value;
                         let select = ui.clone();
                         let close = ui.clone();
-                        row().class("terminal-tab-item").fill((
+                        row().class("terminal-tab-item window-tab-item").fill((
                             text()
-                                .class("terminal-tab-id")
+                                .class("terminal-tab-id window-tab-id")
                                 .content(tab.map(|tab| tab.id.to_string())),
                             sapid::button()
-                                .pressed(state.map(move |s| s.terminal.id == tab.get().id))
+                                .pressed(state.map(move |s| {
+                                    s.terminal.groups.selected(window) == Some(tab.get().id)
+                                }))
                                 .class(state.map(move |s| {
-                                    if s.terminal.id == tab.get().id {
+                                    if s.terminal.groups.selected(window) == Some(tab.get().id) {
                                         "terminal-tab window-tab-select active"
                                     } else {
                                         "terminal-tab window-tab-select"
@@ -800,22 +840,29 @@ fn tabs(ui: Ui) -> impl Widget {
                 }),
         ))
 }
-pub(crate) fn header(ui: Ui) -> impl Widget {
+pub(crate) fn header(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
+    let status = move |s: &State| {
+        s.terminal
+            .groups
+            .selected(window)
+            .and_then(|id| session_status(s, id))
+            .unwrap_or(Status::Idle)
+    };
     let reconnect = ui.clone();
     row().class("terminal-controls").fill((
-        tabs(ui),
+        tabs(ui, window),
         text()
-            .class(state.map(|s| {
-                if s.terminal.status == Status::Running {
+            .class(state.map(move |s| {
+                if status(s) == Status::Running {
                     "terminal-status running"
                 } else {
                     "terminal-status"
                 }
                 .to_owned()
             }))
-            .content(i18n::bind(state.map(|s| {
-                match s.terminal.status {
+            .content(i18n::bind(state.map(move |s| {
+                match status(s) {
                     Status::Running => "交互式 SSH",
                     Status::Starting => "正在启动终端…",
                     Status::Exited => "终端已关闭",
@@ -825,12 +872,12 @@ pub(crate) fn header(ui: Ui) -> impl Widget {
                 .to_owned()
             }))),
         when(
-            state.map(|s| s.terminal.status != Status::Running),
+            state.map(move |s| status(s) != Status::Running),
             move || {
                 let reconnect = reconnect.clone();
                 icon_action("Reconnect terminal", Icon::Refresh)
                     .class("icon-button terminal-restart")
-                    .enabled(state.map(|s| s.connected && s.terminal.status != Status::Starting))
+                    .enabled(state.map(move |s| s.connected && status(s) != Status::Starting))
                     .on_press(move || reconnect.terminal_start(100, 30))
             },
         ),
@@ -840,13 +887,74 @@ pub(crate) fn header(ui: Ui) -> impl Widget {
             .fill(icons::glyph(Icon::More)),
     ))
 }
-pub(crate) fn page(ui: Ui) -> impl Widget {
+fn packets(state: Cage<State>, window: u32) -> impl Widget {
+    col().class("terminal-packets").fill(
+        each(state.map(move |s| {
+            s.terminal
+                .groups
+                .selected(window)
+                .and_then(|id| s.terminal.session(id))
+                .map(|session| session.packets.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        }))
+        .key(|p| p.id)
+        .children(|item| {
+            text().class("terminal-packet").content(
+                item.value
+                    .map(|packet| serde_json::to_string(packet).unwrap_or_default()),
+            )
+        }),
+    )
+}
+
+pub(crate) fn window_page(ui: Ui, window: u32) -> impl Widget {
+    let state = ui.state;
+    let live = ui.clone();
+    when(
+        state.map(move |s| s.terminal.groups.current == window),
+        move || page(live.clone(), window),
+    )
+    .otherwise(move || {
+        let ui = ui.clone();
+        col().class("terminal-module terminal-parked").fill((
+            text()
+                .class("hidden terminal-parked-key")
+                .content(state.map(move |s| {
+                    format!(
+                        "{}:{}",
+                        s.epoch,
+                        s.terminal.groups.selected(window).unwrap_or_default()
+                    )
+                })),
+            packets(state, window),
+            input()
+                .class("terminal-output-ack hidden")
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event
+                        && value.len() <= 128
+                        && let Ok((epoch, id, packet)) =
+                            serde_json::from_str::<(u64, u64, u64)>(&value)
+                        && state.with(|s| {
+                            s.epoch == epoch && s.terminal.groups.selected(window) == Some(id)
+                        })
+                    {
+                        consume(&ui, id, packet);
+                    }
+                }),
+            view().class("terminal-parked-surface"),
+        ))
+    })
+}
+fn page(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let bridge = ui.clone();
     let menu_ui = ui.clone();
     col()
         .class(state.map(|s| {
-            if server_desktop::visible(s) && s.workbench.window_visible(WorkspacePage::Terminal) {
+            if server_desktop::visible(s)
+                && s.workbench
+                    .window_visible(window_tabs::current(s, WorkspacePage::Terminal))
+            {
                 "terminal-module"
             } else {
                 "terminal-module hidden"
@@ -887,16 +995,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 })
                 .unwrap_or_default()
             })),
-            col().class("terminal-packets").fill(
-                each(state.map(|s| s.terminal.packets.iter().cloned().collect::<Vec<_>>()))
-                    .key(|p| p.id)
-                    .children(|item| {
-                        text().class("terminal-packet").content(
-                            item.value
-                                .map(|packet| serde_json::to_string(packet).unwrap_or_default()),
-                        )
-                    }),
-            ),
+            packets(state, window),
             view()
                 .class("terminal-surface")
                 .name(i18n::bind("交互式 SSH 终端")),

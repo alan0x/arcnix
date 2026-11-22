@@ -2,34 +2,11 @@ use std::collections::BTreeMap;
 use std::result::Result;
 use std::sync::Arc;
 
-use arcnix_core::server_apps::DesktopWindow;
-use glory::render::{DragCapture, DragPhase, EventKind, NodeId, Query, QueryValue, Semantics};
 use serde::Deserialize;
 
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::close_action;
 use crate::*;
-
-#[derive(Clone)]
-struct Tab {
-    id: u32,
-    saved: Option<Arc<file_browser::TabSnapshot>>,
-}
-
-#[derive(Clone)]
-struct Window {
-    tabs: Vec<Tab>,
-    selected: u32,
-    layout: DesktopWindow,
-}
-
-#[derive(Clone, Copy)]
-struct TabDrag {
-    from: NodeId,
-    window: u32,
-    tab: u32,
-    epoch: u64,
-}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum Location {
@@ -41,10 +18,10 @@ pub(crate) enum Location {
 
 #[derive(Clone, Default)]
 pub(crate) struct Windows {
-    windows: BTreeMap<u32, Window>,
+    pub groups: window_tabs::Groups,
+    saved: BTreeMap<u64, Arc<file_browser::TabSnapshot>>,
     live: Option<u32>,
-    next_id: u32,
-    drag: Option<TabDrag>,
+    next_tab: u64,
     pub location: Location,
     pub clipboard: Vec<String>,
     refreshes: BTreeMap<u64, String>,
@@ -55,58 +32,43 @@ impl Windows {
         self.live == Some(id)
     }
     pub(crate) fn current(&self) -> Option<u32> {
-        self.live.or_else(|| self.windows.keys().next().copied())
+        self.live.or_else(|| self.groups.first_window())
     }
 
-    pub(crate) fn layout(&self, id: u32) -> Option<DesktopWindow> {
-        Some(self.windows.get(&id)?.layout)
-    }
-
-    pub(crate) fn layout_mut(&mut self, id: u32) -> &mut DesktopWindow {
-        &mut self.windows.get_mut(&id).expect("open Files window").layout
-    }
-
-    fn next(&mut self) -> u32 {
-        self.next_id += 1;
-        self.next_id
-    }
-
-    fn insert(&mut self, id: u32, tab: Tab) {
-        self.windows.insert(
-            id,
-            Window {
-                selected: tab.id,
-                tabs: vec![tab],
-                layout: DesktopWindow::default(),
-            },
-        );
+    fn add_tab(&mut self, window: u32) -> u64 {
+        self.next_tab += 1;
+        self.groups.current = window;
+        self.groups.add(self.next_tab);
+        self.next_tab
     }
 }
 
 fn save(s: &mut State) {
     let files = &s.workbench.files;
-    let Some(id) = files.live else {
-        return;
-    };
-    let snapshot = Arc::new(file_browser::capture_tab(s));
-    if let Some(window) = s.workbench.files.windows.get_mut(&id)
-        && let Some(tab) = window.tabs.iter_mut().find(|tab| tab.id == window.selected)
-    {
-        tab.saved = Some(snapshot);
+    if let Some(tab) = files.live.and_then(|id| files.groups.selected(id)) {
+        let snapshot = Arc::new(file_browser::capture_tab(s));
+        s.workbench.files.saved.insert(tab, snapshot);
     }
 }
 
 fn load(s: &mut State, id: u32) {
-    let w = &s.workbench.files.windows[&id];
-    let saved = w
-        .tabs
-        .iter()
-        .find(|tab| tab.id == w.selected)
-        .and_then(|tab| tab.saved.clone());
-    s.workbench.files.live = Some(id);
-    if let Some(saved) = saved {
+    let files = &mut s.workbench.files;
+    files.live = Some(id);
+    files.groups.current = id;
+    if let Some(saved) = files
+        .groups
+        .selected(id)
+        .and_then(|tab| files.saved.get(&tab))
+        .cloned()
+    {
         file_browser::restore_tab(s, &saved);
     }
+}
+
+// Capture the live view while the source window still owns its selected tab.
+pub(crate) fn prepare_move(s: &mut State) {
+    save(s);
+    s.workbench.files.live = None;
 }
 
 pub(crate) fn focus(s: &mut State, id: u32) {
@@ -114,24 +76,20 @@ pub(crate) fn focus(s: &mut State, id: u32) {
         return;
     }
     save(s);
-    if !s.workbench.files.windows.contains_key(&id) {
-        let tab = s.workbench.files.next();
-        s.workbench.files.insert(
-            id,
-            Tab {
-                id: tab,
-                saved: None,
-            },
-        );
+    if s.workbench.files.groups.tabs(id).is_empty() {
+        s.workbench.files.add_tab(id);
     }
     load(s, id);
 }
 
 pub(crate) fn remove(s: &mut State, id: u32) {
-    s.workbench.files.windows.remove(&id);
-    if s.workbench.files.live == Some(id) {
-        s.workbench.files.live = None;
-        s.workbench.files.location = Location::Directory;
+    let files = &mut s.workbench.files;
+    for tab in files.groups.tabs(id) {
+        files.saved.remove(tab);
+    }
+    if files.live == Some(id) {
+        files.live = None;
+        files.location = Location::Directory;
     }
 }
 
@@ -144,13 +102,11 @@ pub(crate) fn apps_active(s: &State) -> bool {
 }
 
 fn snapshot(s: &State, id: u32) -> Option<&file_browser::TabSnapshot> {
-    let window = s.workbench.files.windows.get(&id)?;
-    window
-        .tabs
-        .iter()
-        .find(|tab| tab.id == window.selected)?
+    let files = &s.workbench.files;
+    files
         .saved
-        .as_deref()
+        .get(&files.groups.selected(id)?)
+        .map(Arc::as_ref)
 }
 
 pub(crate) fn showing_trash(s: &State, id: u32) -> bool {
@@ -259,10 +215,10 @@ pub(crate) fn refresh_windows(ui: &Ui) {
     let directories = ui.state.with(|s| {
         s.workbench
             .files
-            .windows
-            .iter()
-            .filter(|(id, _)| Some(**id) != s.workbench.files.live)
-            .filter_map(|(id, _)| directory(s, *id).map(str::to_owned))
+            .groups
+            .window_ids()
+            .filter(|id| Some(*id) != s.workbench.files.live)
+            .filter_map(|id| directory(s, id).map(str::to_owned))
             .collect::<std::collections::BTreeSet<_>>()
     });
     for path in directories {
@@ -286,13 +242,9 @@ pub(crate) fn refreshed(ui: &Ui, serial: u64, path: &str, result: Result<Vec<Fil
             return;
         }
         if let Ok(entries) = result {
-            for window in s.workbench.files.windows.values_mut() {
-                for tab in &mut window.tabs {
-                    if let Some(saved) = tab.saved.as_mut()
-                        && saved.directory() == Some(path)
-                    {
-                        Arc::make_mut(saved).refresh_entries(&entries);
-                    }
+            for saved in s.workbench.files.saved.values_mut() {
+                if saved.directory() == Some(path) {
+                    Arc::make_mut(saved).refresh_entries(&entries);
                 }
             }
         }
@@ -333,9 +285,11 @@ pub(crate) fn new_window(ui: &Ui, start: WindowStart) {
             WindowStart::Directory(path) => (None, Some(path)),
         };
         let files = &mut s.workbench.files;
-        let id = files.next();
-        let tab = files.next();
-        files.insert(id, Tab { id: tab, saved });
+        let id = files.groups.new_window();
+        let tab = files.add_tab(id);
+        if let Some(saved) = saved {
+            files.saved.insert(tab, saved);
+        }
         server_desktop::select_app(s, WorkspacePage::Files(id));
         if let Some(path) = path {
             file_browser::fresh_tab(s);
@@ -351,7 +305,7 @@ pub(crate) fn new_window(ui: &Ui, start: WindowStart) {
     }
 }
 
-fn after_change(ui: &Ui) {
+pub(crate) fn after_change(ui: &Ui) {
     ui.state.revise(|s| {
         s.file_context = None;
         s.file_menu = None;
@@ -380,18 +334,7 @@ pub(crate) fn open_tab(ui: &Ui, id: u32, path: Option<String>) {
     ui.focus_desktop_app(WorkspacePage::Files(id));
     ui.state.revise(|s| {
         save(s);
-        let tab = s.workbench.files.next();
-        let window = s
-            .workbench
-            .files
-            .windows
-            .get_mut(&id)
-            .expect("open Files window");
-        window.tabs.push(Tab {
-            id: tab,
-            saved: None,
-        });
-        window.selected = tab;
+        s.workbench.files.add_tab(id);
         file_browser::fresh_tab(s);
     });
     if let Some(path) = path {
@@ -401,23 +344,19 @@ pub(crate) fn open_tab(ui: &Ui, id: u32, path: Option<String>) {
     }
 }
 
-fn select(ui: &Ui, window: u32, tab: u32) {
+fn select(ui: &Ui, window: u32, tab: u64) {
     if !ui.state.with(|s| {
         available(s)
             && s.workbench.window_visible(WorkspacePage::Files(window))
-            && s.workbench
-                .files
-                .windows
-                .get(&window)
-                .is_some_and(|w| w.tabs.iter().any(|item| item.id == tab))
+            && s.workbench.files.groups.tabs(window).contains(&tab)
     }) {
         return;
     }
     ui.focus_desktop_app(WorkspacePage::Files(window));
     ui.state.revise(|s| {
-        if s.workbench.files.windows[&window].selected != tab {
+        if s.workbench.files.groups.selected(window) != Some(tab) {
             save(s);
-            s.workbench.files.windows.get_mut(&window).unwrap().selected = tab;
+            s.workbench.files.groups.select(tab);
             load(s, window);
         }
     });
@@ -425,35 +364,28 @@ fn select(ui: &Ui, window: u32, tab: u32) {
 }
 
 pub(crate) fn close_selected(ui: &Ui, id: u32) {
-    if let Some(tab) = ui
-        .state
-        .with(|s| s.workbench.files.windows.get(&id).map(|w| w.selected))
-    {
+    if let Some(tab) = ui.state.with(|s| s.workbench.files.groups.selected(id)) {
         close(ui, id, tab);
     }
 }
 
-fn close(ui: &Ui, id: u32, tab: u32) {
+fn close(ui: &Ui, id: u32, tab: u64) {
     if !ui.state.with(available) {
         return;
     }
     let empty = ui.state.revise(|s| {
         let files = &mut s.workbench.files;
-        let Some(w) = files.windows.get_mut(&id) else {
+        if !files.groups.tabs(id).contains(&tab) {
             return false;
-        };
-        let Some(index) = w.tabs.iter().position(|t| t.id == tab) else {
-            return false;
-        };
-        w.tabs.remove(index);
-        if w.tabs.is_empty() {
+        }
+        let selected = files.groups.selected(id) == Some(tab);
+        files.groups.remove(tab);
+        files.saved.remove(&tab);
+        if files.groups.tabs(id).is_empty() {
             return true;
         }
-        if w.selected == tab {
-            w.selected = w.tabs[index.min(w.tabs.len() - 1)].id;
-            if files.live == Some(id) {
-                load(s, id);
-            }
+        if selected && files.live == Some(id) {
+            load(s, id);
         }
         false
     });
@@ -467,172 +399,9 @@ fn close(ui: &Ui, id: u32, tab: u32) {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Gesture {
     New { window: u32 },
-    Close { window: u32, tab: u32 },
+    Close { window: u32, tab: u64 },
     ToggleHidden { window: u32 },
-    Zoom { window: u32, tab: u32, larger: bool },
-}
-
-fn move_tab(ui: &Ui, source: u32, tab: u32, target: Option<u32>, before: Option<u32>) {
-    let moved = ui.state.revise(|s| {
-        let files = &s.workbench.files;
-        let source_page = WorkspacePage::Files(source);
-        if !available(s)
-            || !s.workbench.window_visible(source_page)
-            || target.is_some_and(|id| !s.workbench.window_visible(WorkspacePage::Files(id)))
-        {
-            return None;
-        }
-        let index = files
-            .windows
-            .get(&source)?
-            .tabs
-            .iter()
-            .position(|t| t.id == tab)?;
-        if target == Some(source) && before == Some(tab) {
-            return None;
-        }
-        save(s);
-        let files = &mut s.workbench.files;
-        let from = files.windows.get_mut(&source)?;
-        let moved = from.tabs.remove(index);
-        let empty = from.tabs.is_empty();
-        if !empty && from.selected == tab {
-            from.selected = from.tabs[index.min(from.tabs.len() - 1)].id;
-        }
-        let destination = if let Some(id) = target {
-            let w = files.windows.get_mut(&id)?;
-            let index = before
-                .and_then(|anchor| w.tabs.iter().position(|t| t.id == anchor))
-                .unwrap_or(w.tabs.len());
-            w.tabs.insert(index, moved);
-            w.selected = tab;
-            id
-        } else {
-            let id = files.next();
-            files.insert(id, moved);
-            id
-        };
-        // The old live tab was already captured before editing the window lists.
-        files.live = None;
-        if empty && destination != source {
-            server_desktop::remove_window(s, source_page);
-        }
-        load(s, destination);
-        Some(destination)
-    });
-    if let Some(id) = moved {
-        ui.focus_desktop_app(WorkspacePage::Files(id));
-        after_change(ui);
-    }
-}
-
-fn drag_source(ui: &Ui, window: u32, tab: u32, event: Event) {
-    match event {
-        Event::Drag {
-            from,
-            phase: DragPhase::Start,
-            ..
-        } => {
-            ui.state.revise(|s| {
-                if available(s) && s.workbench.window_visible(WorkspacePage::Files(window)) {
-                    s.workbench.files.drag = Some(TabDrag {
-                        from,
-                        window,
-                        tab,
-                        epoch: s.epoch,
-                    });
-                }
-            });
-        }
-        Event::Drag {
-            from,
-            phase: DragPhase::Cancel,
-            ..
-        } => {
-            take_drag(ui, from);
-        }
-        _ => {}
-    }
-}
-
-fn take_drag(ui: &Ui, from: NodeId) -> Option<TabDrag> {
-    ui.state.revise(|s| {
-        let source = s.workbench.files.drag?;
-        (source.from == from)
-            .then(|| s.workbench.files.drag.take())
-            .flatten()
-    })
-}
-
-fn drop_position(event: Event) -> Option<(NodeId, f64)> {
-    if let Event::Drag {
-        from,
-        phase: DragPhase::Drop,
-        x,
-        ..
-    } = event
-    {
-        Some((from, x))
-    } else {
-        None
-    }
-}
-
-pub(crate) fn drop_on_window(ui: &Ui, window: Option<u32>, event: Event) {
-    if let Some((from, _)) = drop_position(event)
-        && let Some(source) = take_drag(ui, from)
-        && window != Some(source.window)
-    {
-        move_tab(ui, source.window, source.tab, window, None);
-    }
-}
-
-fn drop_on_strip(ui: &Ui, window: u32, event: Event) {
-    if let Some((from, _)) = drop_position(event)
-        && let Some(source) = take_drag(ui, from)
-    {
-        move_tab(ui, source.window, source.tab, Some(window), None);
-    }
-}
-
-fn drop_on_tab(
-    ui: &Ui,
-    window: u32,
-    tab: u32,
-    scope: glory::ui::WeakScope,
-    node: Option<NodeId>,
-    event: Event,
-) {
-    let Some((from, x)) = drop_position(event) else {
-        return;
-    };
-    let Some(source) = take_drag(ui, from) else {
-        return;
-    };
-    if window == source.window && tab == source.tab {
-        return;
-    }
-    let (Some(scope), Some(node)) = (scope.upgrade(), node) else {
-        return;
-    };
-    let ui = ui.clone();
-    let _ = scope.request(Query::Bounds(node), move |result| {
-        let Ok(QueryValue::Bounds(bounds)) = result else {
-            return;
-        };
-        let before = ui.state.with(|s| {
-            if s.epoch != source.epoch {
-                return None;
-            }
-            let tabs = &s.workbench.files.windows.get(&window)?.tabs;
-            let index = tabs.iter().position(|item| item.id == tab)?;
-            let next = index + usize::from(x > bounds.x + bounds.width / 2.0);
-            Some(tabs.get(next).map(|item| item.id))
-        });
-        if let Some(before) = before {
-            move_tab(&ui, source.window, source.tab, Some(window), before);
-        }
-    });
+    Zoom { window: u32, tab: u64, larger: bool },
 }
 
 pub(crate) fn bridge(ui: Ui) -> impl Widget {
@@ -656,11 +425,7 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
                         if ui.state.with(|s| {
                             available(s)
                                 && s.workbench.window_visible(page)
-                                && s.workbench
-                                    .files
-                                    .windows
-                                    .get(&window)
-                                    .is_some_and(|w| w.selected == tab)
+                                && s.workbench.files.groups.selected(window) == Some(tab)
                                 && directory(s, window).is_some()
                                 && s.file_menu.is_none()
                         }) {
@@ -686,18 +451,14 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
         })
 }
 
-fn title(s: &State, window: u32, id: u32) -> String {
+fn title(s: &State, window: u32, id: u64) -> String {
     let files = &s.workbench.files;
-    let Some(w) = files.windows.get(&window) else {
-        return String::new();
-    };
-    if files.live == Some(window) && w.selected == id {
+    if files.live == Some(window) && files.groups.selected(window) == Some(id) {
         file_browser::live_tab_title(s)
     } else {
-        w.tabs
-            .iter()
-            .find(|tab| tab.id == id)
-            .and_then(|tab| tab.saved.as_ref())
+        files
+            .saved
+            .get(&id)
             .map_or_else(|| i18n::translate("Files"), |view| view.title())
     }
 }
@@ -705,115 +466,45 @@ fn title(s: &State, window: u32, id: u32) -> String {
 pub(crate) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
     let state = ui.state;
     let choose = ui.clone();
-    let strip = ui.clone();
     row()
         .class("files-tabs window-tab-strip")
         .name(i18n::bind("File tabs"))
-        .on(EventKind::Drag, move |event| {
-            drop_on_strip(&strip, id, event)
-        })
         .fill(
-            each(state.map(move |s| {
-                s.workbench
-                    .files
-                    .windows
-                    .get(&id)
-                    .map(|w| w.tabs.clone())
-                    .unwrap_or_default()
-            }))
-            .key(|t| t.id)
-            .children(move |t| {
-                let tab = t.value.get().id;
-                let choose = choose.clone();
-                glory::ui::widget(move |scope| {
+            each(state.map(move |s| s.workbench.files.groups.tabs(id).to_vec()))
+                .key(|tab| *tab)
+                .children(move |t| {
+                    let tab = t.value.get();
                     let remove = choose.clone();
                     let select_ui = choose.clone();
-                    let source = choose.clone();
-                    let target = choose.clone();
-                    let source_drop = choose.clone();
-                    let ref_node = scope.cage(None);
-                    let target_scope = scope.downgrade();
-                    let source_scope = target_scope.clone();
                     row()
-                        .node_ref(ref_node)
                         .class(state.map(move |s| {
-                            let selected = s
-                                .workbench
-                                .files
-                                .windows
-                                .get(&id)
-                                .is_some_and(|w| w.selected == tab);
-                            let dragging = s
-                                .workbench
-                                .files
-                                .drag
-                                .is_some_and(|item| item.window == id && item.tab == tab);
-                            format!(
-                                "files-tab{}{}",
-                                if selected { " selected" } else { "" },
-                                if dragging { " files-tab-dragging" } else { "" }
-                            )
+                            let selected = s.workbench.files.groups.selected(id) == Some(tab);
+                            if selected {
+                                "files-tab window-tab-item selected"
+                            } else {
+                                "files-tab window-tab-item"
+                            }
+                            .to_owned()
                         }))
-                        .on(EventKind::Drag, move |event| {
-                            drop_on_tab(
-                                &target,
-                                id,
-                                tab,
-                                target_scope.clone(),
-                                ref_node.get(),
-                                event,
-                            )
-                        })
                         .fill((
-                            text().class("files-tab-id hidden").content(tab.to_string()),
-                            row()
-                                .class("files-tab-drag-source")
-                                .name(state.map(move |s| title(s, id, tab)))
-                                .semantics(Some(Box::new(Semantics {
-                                    drag_capture: Some(DragCapture::ThresholdPreview),
-                                    ..Default::default()
-                                })))
-                                .on(EventKind::Drag, move |event| {
-                                    if matches!(
-                                        event,
-                                        Event::Drag {
-                                            phase: DragPhase::Drop,
-                                            ..
-                                        }
-                                    ) {
-                                        drop_on_tab(
-                                            &source_drop,
-                                            id,
-                                            tab,
-                                            source_scope.clone(),
-                                            ref_node.get(),
-                                            event,
-                                        );
-                                    } else {
-                                        drag_source(&source, id, tab, event);
-                                    }
-                                })
-                                .fill(
-                                    sapid::button()
-                                        .class("files-tab-select window-tab-select")
-                                        .name(state.map(move |s| title(s, id, tab)))
-                                        .pressed(state.map(move |s| {
-                                            s.workbench
-                                                .files
-                                                .windows
-                                                .get(&id)
-                                                .is_some_and(|w| w.selected == tab)
-                                        }))
-                                        .fill(text().content(state.map(move |s| title(s, id, tab))))
-                                        .on_press(move || select(&select_ui, id, tab)),
-                                ),
+                            text()
+                                .class("files-tab-id window-tab-id hidden")
+                                .content(tab.to_string()),
+                            row().class("files-tab-drag-source").fill(
+                                sapid::button()
+                                    .class("files-tab-select window-tab-select")
+                                    .name(state.map(move |s| title(s, id, tab)))
+                                    .pressed(state.map(move |s| {
+                                        s.workbench.files.groups.selected(id) == Some(tab)
+                                    }))
+                                    .fill(text().content(state.map(move |s| title(s, id, tab))))
+                                    .on_press(move || select(&select_ui, id, tab)),
+                            ),
                             close_action("Close file tab")
                                 .class("icon-button files-tab-close")
                                 .on_press(move || close(&remove, id, tab)),
                         ))
-                        .show_in(scope)
-                })
-            }),
+                }),
         )
 }
 

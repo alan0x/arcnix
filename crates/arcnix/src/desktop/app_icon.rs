@@ -99,7 +99,9 @@ impl NativeLifecycle for DesktopWindow {
             }
             self.browsers.retain(|epoch, _| live.contains(epoch));
             if let Some(epoch) = epoch {
-                if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) {
+                if state
+                    .with(|s| crate::server_desktop::launcher_running(s, WorkspacePage::Browser))
+                {
                     self.browsers.entry(epoch).or_insert_with(|| {
                         let mut browser = crate::web_browser_native::Host::new(self.ui.clone());
                         if let Some(wake) = &self.wake {

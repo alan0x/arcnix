@@ -537,6 +537,7 @@ enum Gesture {
         permanent: bool,
     },
     OpenInTextEditor {
+        window: u32,
         epoch: u64,
         name: String,
     },
@@ -595,15 +596,16 @@ fn gesture(ui: &Ui, value: &str) {
         return;
     }
     match gesture {
-        Gesture::OpenInTextEditor { name, .. } => {
+        Gesture::OpenInTextEditor { window, name, .. } => {
             let file = ui.state.with(|s| {
                 find_file(s, &name)
                     .filter(|entry| {
-                        text_editor::accepts_drop(s) && !entry.is_dir && !entry.is_symlink
+                        text_editor::accepts_drop(s, window) && !entry.is_dir && !entry.is_symlink
                     })
                     .map(|entry| entry.path.clone())
             });
             if let Some(path) = file {
+                ui.focus_desktop_app(text_editor::window_page(window));
                 text_editor::open(ui, &path);
             }
         }

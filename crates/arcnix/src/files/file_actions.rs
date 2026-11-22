@@ -146,7 +146,7 @@ enum DropTarget {
     Tag { color: FolderColor },
     Favorite { anchor: Option<String>, after: bool },
     Desktop { action: DesktopDrop },
-    TextEditor,
+    TextEditor { window: u32 },
 }
 
 #[derive(Deserialize)]
@@ -175,8 +175,8 @@ pub(crate) fn drop_input(ui: Ui, window: u32) -> impl Widget {
 
 fn drop_files(ui: &Ui, window: u32, drop: Drop) {
     let valid = ui.state.with(|s| {
-        (if matches!(drop.target, DropTarget::TextEditor) {
-            text_editor::accepts_drop(s)
+        (if let DropTarget::TextEditor { window } = drop.target {
+            text_editor::accepts_drop(s, window)
         } else {
             available(s)
         }) && s.workbench.window_visible(WorkspacePage::Files(window))
@@ -198,7 +198,8 @@ fn drop_files(ui: &Ui, window: u32, drop: Drop) {
         .map(|item| item.path.clone())
         .collect();
     match drop.target {
-        DropTarget::TextEditor => {
+        DropTarget::TextEditor { window } => {
+            ui.focus_desktop_app(text_editor::window_page(window));
             for entry in entries
                 .iter()
                 .filter(|entry| !entry.directory && !entry.symlink)

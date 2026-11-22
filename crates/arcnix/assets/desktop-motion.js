@@ -17,7 +17,7 @@
         return app && document.querySelector(`.desktop-window.${app}:not(.hidden)`);
     }
     function appClass(element) {
-        return element && ([ ...element.classList ].find(name=>name.startsWith('files-window-')) || [...element.classList].find(name=>name.startsWith('app-')));
+        return element && ([ ...element.classList ].find(name=>name.startsWith('files-window-') || name.startsWith('tab-window-')) || [...element.classList].find(name=>name.startsWith('app-')));
     }
     function animate(element,frames,duration) {
         if(!element || reduced.matches || !element.animate)return;
@@ -66,7 +66,7 @@
     function kind(button,before) {
         if(button.matches('.desktop-shortcut,.desktop-dock-app')){
             const app=appClass(button);
-            return app && !before.windows.some(window=>window.class===app)
+            return app && !before.windows.some(window=>windowFor(window.class)?.classList.contains(app))
                 ? { motion:before.app?'switch':'open', app } : null;
         }
         const app=appClass(button.closest('.desktop-window')) || before.app;
@@ -124,7 +124,8 @@
         const deliver=()=>{if(!delivered){delivered=true;if(pendingDeliver===deliver)pendingDeliver=null;forward(button);}};
         const launchRect=button.querySelector('.desktop-app-icon')?.getBoundingClientRect();
         if(motion==='minimize') {
-            const dock=document.querySelector(`.desktop-dock-app.${app} .desktop-app-icon`);
+            const family=[...button.closest('.desktop-window').classList].find(name=>name.startsWith('app-'));
+            const dock=document.querySelector(`.desktop-dock-app.${family} .desktop-app-icon`);
             windowOffset(app,dock?.getBoundingClientRect());
         }
         const clear=()=>{

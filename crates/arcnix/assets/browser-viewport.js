@@ -1,8 +1,7 @@
 // Keep the native browser surface inside its DOM window. Subtract the
 // rectangles of apps and overlays above it before exposing the child HWND.
 function observeNativeSurface(app) {
-    let previousInput;
-    let previous;
+    const previous = new WeakMap();
     let frame;
     const watched = new Set();
     const resize = new ResizeObserver(schedule);
@@ -22,14 +21,16 @@ function observeNativeSurface(app) {
 
     function sync() {
         frame = 0;
-        const browser = document.querySelector(`.desktop-window.app-${app}`);
-        const bridge = browser?.querySelector('.browser-viewport-input');
-        if (!bridge) {
-            previousInput = previous = undefined;
-            for (const node of watched) resize.unobserve(node);
-            watched.clear();
-            return;
+        const next = new Set();
+        for (const browser of document.querySelectorAll(`.desktop-window.app-${app}`)) {
+            const bridge = browser.querySelector('.browser-viewport-input');
+            if (bridge) syncWindow(browser, bridge, next);
         }
+        for (const node of watched) if (!next.has(node)) { resize.unobserve(node); watched.delete(node); }
+        for (const node of next) if (!watched.has(node)) { resize.observe(node); watched.add(node); }
+    }
+
+    function syncWindow(browser, bridge, next) {
         const surface = browser.querySelector(app === 'player' ? '.remote-player-screen' : '.browser-surface');
         const commandButton = app === 'code' ? browser.querySelector('.code-quick-open') : null;
         const menuSlot = app === 'code' ? browser.querySelector('.code-menu-slot') : null;
@@ -38,19 +39,7 @@ function observeNativeSurface(app) {
         const frameElement = nativeSurfaceRegionClipping ? canvas : layer;
         const dock = nativeSurfaceRegionClipping ? canvas.querySelector('.desktop-dock-zone') : null;
         const windows = Array.from(layer.querySelectorAll('.desktop-window:not(.hidden)'));
-        const next = new Set([surface, commandButton, menuSlot, frameElement, dock, ...windows].filter(Boolean));
-        for (const node of watched) {
-            if (!next.has(node)) {
-                resize.unobserve(node);
-                watched.delete(node);
-            }
-        }
-        for (const node of next) {
-            if (!watched.has(node)) {
-                resize.observe(node);
-                watched.add(node);
-            }
-        }
+        for (const node of [surface, commandButton, menuSlot, frameElement, dock, ...windows]) if (node) next.add(node);
         const visibleFrame = rect(frameElement);
         const surfaceBox = rect(surface);
         const area = visibleFrame && surfaceBox && !browser.closest('[inert]')
@@ -63,16 +52,15 @@ function observeNativeSurface(app) {
         const overlays = canvas.querySelectorAll(
             '.file-context-menu,.file-actions-menu,.terminal-context-menu,.desktop-context-menu,.desktop-icon-menu,.sapid-tooltip,.desktop-clock-tooltip,.window-tabs-menu:popover-open,.editor-menu-popup:popover-open'
         );
-        const clip = area ? [dock, ...blockers, ...overlays].map(rect).filter(box => box
+        const clip = area ? [document.querySelector('.window-tab-preview'), dock, ...blockers, ...overlays].map(rect).filter(box => box
             && box.right > area.left && box.left < area.right && box.bottom > top && box.top < area.bottom
         ).slice(0, 32) : [];
         const epoch = Number(browser.querySelector('.browser-epoch').textContent);
         const title = menuSlot && getComputedStyle(menuSlot.closest('.desktop-window-titlebar'));
         const serialized = JSON.stringify({epoch, area, frame: visibleFrame, clip, command_center: commandCenter,
             menu_slot: rect(menuSlot), title_colors: title && [title.backgroundColor, title.color]});
-        if (bridge !== previousInput || serialized !== previous) {
-            previousInput = bridge;
-            previous = serialized;
+        if (serialized !== previous.get(bridge)) {
+            previous.set(bridge, serialized);
             bridge.value = serialized;
             bridge.dispatchEvent(new Event('input', {bubbles: true}));
         }
@@ -114,9 +102,7 @@ observeNativeSurface('player');
         }
         const browser = event.target.closest?.('.desktop-window.app-browser.active');
         if (!browser || browser.closest('[inert]') || event.isComposing) return;
-        if (event.key === 'Enter' && event.target.matches('.browser-address')) {
-            browser.querySelector('.browser-open-address')?.click();
-        } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'l') {
+        if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'l') {
             const address = browser.querySelector('.browser-address');
             address?.focus();
             address?.select();

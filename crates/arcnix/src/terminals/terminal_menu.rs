@@ -18,7 +18,7 @@ pub(crate) struct Context {
 fn current(s: &State, context: &Context) -> bool {
     context.epoch == s.epoch
         && navigation::workspace_visible(s)
-        && s.workspace_page == WorkspacePage::Terminal
+        && s.workspace_page.base() == WorkspacePage::Terminal
         && s.dialog.is_none()
 }
 

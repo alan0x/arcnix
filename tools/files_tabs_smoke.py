@@ -57,11 +57,11 @@ def main():
             expect(note).to_be_visible()
             expect(note.locator('..')).to_have_class(re.compile('row-selected'))
 
-            preview = page.locator('[data-gly-drag-preview]')
+            preview = page.locator('.window-tab-preview')
 
             def press_tab(tab):
                 box = tab.bounding_box()
-                x, y = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+                x, y = box['x'] + 4, box['y'] + 5
                 page.mouse.move(x, y)
                 page.mouse.down()
                 return x, y
@@ -73,6 +73,7 @@ def main():
                 expect(preview).to_have_count(0)
 
             canvas = page.locator('.desktop-canvas').bounding_box()
+            origin = active.locator('.files-tab').last.bounding_box()
             x, y = press_tab(root.last)
             page.mouse.move(x + 2, y)
             expect(preview).to_have_count(0)
@@ -81,9 +82,9 @@ def main():
             expect(preview).to_be_visible()
             expect(preview).to_have_css('pointer-events', 'none')
             page.wait_for_function("""([x, y]) => {
-                const box = document.querySelector('[data-gly-drag-preview]')?.getBoundingClientRect();
-                return box && Math.abs(box.left - (x + 14)) < 2 && Math.abs(box.top - (y + 16)) < 2;
-            }""", arg=[x + 55, y + 45])
+                const box = document.querySelector('.window-tab-preview')?.getBoundingClientRect();
+                return box && Math.abs(box.left - x) < 2 && Math.abs(box.top - y) < 2;
+            }""", arg=[origin['x'] + 55, origin['y'] + 45])
             page.keyboard.press('Escape')
             expect(preview).to_have_count(0)
             page.mouse.up()
@@ -97,7 +98,18 @@ def main():
             inactive = page.locator('.app-files.desktop-window:not(.hidden):not(.active)')
             expect(inactive.locator('.files-tab-select')).to_have_text('/')
             target = inactive.locator('.files-tab-select').bounding_box()
-            drag(active.locator('.files-tab-select'), target['x'] + 6, target['y'] + target['height'] / 2)
+            press_tab(active.locator('.files-tab-select'))
+            page.mouse.move(target['x'] + 6, target['y'] + target['height'] / 2, steps=14)
+            slot = inactive.locator('.window-tab-slot')
+            expect(slot).to_be_visible()
+            assert slot.evaluate("el => el.nextElementSibling.matches('.files-tab')")
+            assert 1 <= slot.evaluate("el => parseFloat(getComputedStyle(el, '::before').width)") <= 3
+            assert inactive.locator('.files-tab-select').bounding_box()['x'] > target['x'] + 20
+            page.mouse.move(canvas['x'] + 5, canvas['y'] + 5)
+            expect(page.locator('.window-tab-slot')).to_have_count(0)
+            page.mouse.move(target['x'] + 6, target['y'] + target['height'] / 2)
+            page.mouse.up()
+            expect(preview).to_have_count(0)
             expect(windows).to_have_count(1)
             expect(active.locator('.files-tab-select')).to_have_text(['Projects', '/'])
             expect(note).to_be_visible()

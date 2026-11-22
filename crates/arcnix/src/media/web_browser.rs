@@ -1,5 +1,6 @@
 //! The browser chrome belongs to the desktop. Web content is hosted separately.
-use std::collections::VecDeque;
+use arcnix_core::server_apps::DesktopApp;
+use std::collections::{BTreeMap, VecDeque};
 
 use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT, normalize_address, parse_address};
 use arcnix_core::browser_proxy::Diagnosis;
@@ -16,7 +17,8 @@ pub(crate) struct Browser {
     pub tabs: Vec<Tab>,
     pub active: Option<u64>,
     pub proxy: Proxy,
-    pub viewport: Option<Viewport>,
+    pub groups: window_tabs::Groups,
+    pub viewports: BTreeMap<u32, Viewport>,
     pub commands: VecDeque<(u64, Command)>,
     pub reconnecting: bool,
     next_id: u64,
@@ -60,6 +62,9 @@ struct ForwardingReview {
 }
 
 impl Tab {
+    pub fn html_serial(&self) -> Option<u64> {
+        self.html.as_ref().map(|html| html.serial)
+    }
     pub fn clear_diagnostic(&mut self) {
         self.diagnostic = None;
     }
@@ -124,6 +129,7 @@ impl Browser {
     }
 
     pub fn select(&mut self, id: u64) {
+        self.groups.select(id);
         if let Some(tab) = self.tab(id) {
             self.draft = tab.url.clone();
             self.draft_dirty = false;
@@ -138,6 +144,7 @@ impl Browser {
         }
         self.next_id += 1;
         let id = self.next_id;
+        self.groups.add(id);
         self.tabs.push(Tab {
             id,
             url: String::new(),
@@ -177,6 +184,7 @@ impl Browser {
             return;
         };
         self.tabs.remove(index);
+        self.groups.remove(id);
         self.commands.retain(|(tab, _)| *tab != id);
         if self.active != Some(id) {
             return;
@@ -187,7 +195,11 @@ impl Browser {
             self.reconnecting = false;
             self.add_tab(None);
         } else {
-            self.select(self.tabs[index.min(self.tabs.len() - 1)].id);
+            let next = self
+                .groups
+                .selected(self.groups.current)
+                .unwrap_or(self.tabs[index.min(self.tabs.len() - 1)].id);
+            self.select(next);
         }
     }
 
@@ -224,38 +236,57 @@ impl Browser {
     }
 }
 
-pub(crate) fn native_viewport(s: &State) -> Option<(u64, Viewport)> {
-    if !shown(s)
-        || s.dialog.is_some()
-        || s.fingerprint.is_some()
-        || s.web_browser.reconnecting
-        || !error(s).is_empty()
-    {
-        return None;
-    }
-    if s.web_browser.selected()?.html.is_some() {
-        return None;
-    }
-    let id = s.web_browser.active?;
-    let viewport = s.web_browser.viewport.as_ref()?;
-    (viewport.epoch == s.epoch && viewport.area.is_some()).then(|| (id, viewport.clone()))
+pub(crate) fn visible_tabs(s: &State) -> impl Iterator<Item = (u32, &Tab, &Viewport)> {
+    s.web_browser.viewports.iter().filter_map(move |(&id, vp)| {
+        let page = window_tabs::page(DesktopApp::Browser, id);
+        let tab = s.web_browser.tab(s.web_browser.groups.selected(id)?)?;
+        (server_desktop::visible(s)
+            && s.workbench.window_visible(page)
+            && s.dialog.is_none()
+            && s.fingerprint.is_none()
+            && vp.epoch == s.epoch
+            && vp.area.is_some()
+            && tab.error.is_none()
+            && (s.web_browser.groups.current != id || error(s).is_empty()))
+        .then_some((id, tab, vp))
+    })
 }
 
-pub(crate) fn html_viewport(s: &State) -> Option<(u64, u64, Arc<str>, Viewport)> {
-    if !shown(s) || s.dialog.is_some() || s.fingerprint.is_some() || !error(s).is_empty() {
-        return None;
-    }
-    let tab = s.web_browser.selected()?;
-    let html = tab.html.as_ref()?;
-    let viewport = s.web_browser.viewport.as_ref()?;
-    if viewport.epoch != s.epoch || viewport.area.is_none() {
-        return None;
-    }
-    Some((tab.id, html.serial, html.source.clone()?, viewport.clone()))
+pub(crate) fn native_viewports(s: &State) -> BTreeMap<u64, Viewport> {
+    visible_tabs(s)
+        .filter(|(_, tab, _)| tab.html.is_none() && !s.web_browser.reconnecting)
+        .map(|(_, tab, vp)| (tab.id, vp.clone()))
+        .collect()
+}
+
+pub(crate) fn html_viewports(s: &State) -> Vec<(u64, u64, Arc<str>, Viewport)> {
+    visible_tabs(s)
+        .filter_map(|(_, tab, vp)| {
+            let html = tab.html.as_ref()?;
+            Some((tab.id, html.serial, html.source.clone()?, vp.clone()))
+        })
+        .collect()
 }
 
 pub(crate) fn shown(s: &State) -> bool {
-    server_desktop::visible(s) && s.workbench.window_visible(WorkspacePage::Browser)
+    server_desktop::visible(s)
+        && s.workbench
+            .apps
+            .iter()
+            .any(|&page| page.base() == WorkspacePage::Browser && s.workbench.window_visible(page))
+}
+
+pub fn close_tab(s: &mut State, tab: u64) {
+    let page = window_tabs::current(s, WorkspacePage::Browser);
+    s.web_browser.close_tab(tab);
+    if s.web_browser
+        .groups
+        .tabs(page.tab_window().unwrap())
+        .is_empty()
+        && server_desktop::has_siblings(s, page)
+    {
+        server_desktop::remove_window(s, page);
+    }
 }
 
 impl Ui {
@@ -575,7 +606,7 @@ pub(crate) fn proxy_event(
     });
 }
 
-fn geometry(ui: &Ui, input: &str) {
+fn geometry(ui: &Ui, window: u32, input: &str) {
     if input.len() > 8192 {
         return;
     }
@@ -586,19 +617,24 @@ fn geometry(ui: &Ui, input: &str) {
         return;
     }
     if ui.state.with(|s| {
-        shown(s) && s.epoch == viewport.epoch && s.web_browser.viewport.as_ref() != Some(&viewport)
+        shown(s)
+            && s.epoch == viewport.epoch
+            && s.web_browser.viewports.get(&window) != Some(&viewport)
     }) {
-        ui.state.revise(|s| s.web_browser.viewport = Some(viewport));
+        ui.state.revise(|s| {
+            s.web_browser.viewports.insert(window, viewport);
+        });
     }
 }
 
-pub(crate) fn address_bar(ui: Ui) -> impl Widget {
+pub(crate) fn address_bar(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let back = ui.clone();
     let forward = ui.clone();
     let refresh = ui.clone();
     let stop = ui.clone();
     let go = ui.clone();
+    let submit = ui.clone();
     let star = ui.clone();
     let bookmarks = ui.clone();
     row().class("desktop-app-tools browser-toolbar").fill((
@@ -634,7 +670,25 @@ pub(crate) fn address_bar(ui: Ui) -> impl Widget {
         input()
             .class("browser-address")
             .name(i18n::bind("Web address"))
-            .value(state.map(|s| s.web_browser.draft.clone()))
+            .value(state.map(move |s| {
+                if window == s.web_browser.groups.current {
+                    s.web_browser.draft.clone()
+                } else {
+                    s.web_browser
+                        .groups
+                        .selected(window)
+                        .and_then(|id| s.web_browser.tab(id))
+                        .map(|t| t.url.clone())
+                        .unwrap_or_default()
+                }
+            }))
+            .on(commit, move |event| {
+                if let Event::Commit { value, .. } = event
+                    && value.len() <= URL_LIMIT
+                {
+                    submit.navigate_web(value);
+                }
+            })
             .on(value_changed, move |event| {
                 if let Event::ValueChanged { value, .. } = event
                     && value.len() <= URL_LIMIT
@@ -685,44 +739,56 @@ pub(crate) fn address_bar(ui: Ui) -> impl Widget {
     ))
 }
 
-fn browser_tabs(ui: Ui) -> impl Widget {
+fn browser_tabs(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     row().class("browser-tabs").fill((
         row().class("browser-tab-strip window-tab-strip").fill(
-            each(state.map(|s| s.web_browser.tabs.clone()))
-                .key(|tab| tab.id)
-                .children(move |item| {
-                    let tab = item.value;
-                    let id = tab.get().id;
-                    row()
-                        .class(state.map(move |s| {
-                            if s.web_browser.active == Some(id) {
-                                "browser-tab active"
-                            } else {
-                                "browser-tab"
-                            }
-                            .to_owned()
-                        }))
-                        .fill((
-                            sapid::button()
-                                .class("browser-tab-label window-tab-select")
-                                .label(tab.map(|tab| {
-                                    if tab.title.is_empty() {
-                                        parse_address(&tab.url)
-                                            .ok()
-                                            .and_then(|url| url.host_str().map(ToOwned::to_owned))
-                                            .unwrap_or_else(|| i18n::translate("New web tab"))
-                                    } else {
-                                        tab.title.clone()
-                                    }
-                                }))
-                                .pressed(state.map(move |s| s.web_browser.active == Some(id)))
-                                .on_press(move || state.revise(|s| s.web_browser.select(id))),
-                            close_action("Close web tab")
-                                .class("icon-button browser-close-tab")
-                                .on_press(move || state.revise(|s| s.web_browser.close_tab(id))),
-                        ))
-                }),
+            each(state.map(move |s| {
+                s.web_browser
+                    .groups
+                    .tabs(window)
+                    .iter()
+                    .filter_map(|id| s.web_browser.tab(*id).cloned())
+                    .collect::<Vec<_>>()
+            }))
+            .key(|tab| tab.id)
+            .children(move |item| {
+                let tab = item.value;
+                let id = tab.get().id;
+                row()
+                    .class(state.map(move |s| {
+                        if s.web_browser.groups.selected(window) == Some(id) {
+                            "window-tab-item browser-tab active"
+                        } else {
+                            "window-tab-item browser-tab"
+                        }
+                        .to_owned()
+                    }))
+                    .fill((
+                        text().class("hidden window-tab-id").content(id.to_string()),
+                        sapid::button()
+                            .class("browser-tab-label window-tab-select")
+                            .label(tab.map(|tab| {
+                                if tab.title.is_empty() {
+                                    parse_address(&tab.url)
+                                        .ok()
+                                        .and_then(|url| url.host_str().map(ToOwned::to_owned))
+                                        .unwrap_or_else(|| i18n::translate("New web tab"))
+                                } else {
+                                    tab.title.clone()
+                                }
+                            }))
+                            .pressed(
+                                state.map(move |s| {
+                                    s.web_browser.groups.selected(window) == Some(id)
+                                }),
+                            )
+                            .on_press(move || state.revise(|s| s.web_browser.select(id))),
+                        close_action("Close web tab")
+                            .class("icon-button browser-close-tab")
+                            .on_press(move || state.revise(|s| close_tab(s, id))),
+                    ))
+            }),
         ),
         server_desktop::tab_overflow(),
         icon_action("New web tab", Icon::Plus)
@@ -971,24 +1037,52 @@ fn diagnostic_text(s: &State) -> &'static str {
     }
 }
 
-pub(crate) fn page(ui: Ui) -> impl Widget {
+pub(crate) fn window_page(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let geometry_ui = ui.clone();
-    let error_ui = ui.clone();
-    let resource_ui = ui.clone();
     col().class("browser-page").fill((
         input()
             .class("browser-viewport-input hidden")
             .value("")
             .on(value_changed, move |event| {
                 if let Event::ValueChanged { value, .. } = event {
-                    geometry(&geometry_ui, &value);
+                    geometry(&geometry_ui, window, &value);
                 }
             }),
         text()
             .class("browser-epoch hidden")
             .content(state.map(|s| s.epoch.to_string())),
-        browser_tabs(ui.clone()),
+        browser_tabs(ui.clone(), window),
+        when(
+            state.map(move |s| s.web_browser.groups.current == window),
+            move || live_content(ui.clone()),
+        )
+        .otherwise(move || {
+            col()
+                .class("browser-surface")
+                .fill(text().class("browser-start").content(state.map(move |s| {
+                    let tab = s
+                        .web_browser
+                        .groups
+                        .selected(window)
+                        .and_then(|id| s.web_browser.tab(id));
+                    if let Some(error) = tab.and_then(|t| t.error.as_ref()) {
+                        error.to_owned()
+                    } else if tab.is_none_or(|t| t.url.is_empty() && t.html.is_none()) {
+                        i18n::translate("Enter web address")
+                    } else {
+                        String::new()
+                    }
+                })))
+        }),
+    ))
+}
+
+fn live_content(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let error_ui = ui.clone();
+    let resource_ui = ui.clone();
+    fragment((
         when(
             state.map(|s| {
                 s.web_browser

@@ -31,11 +31,12 @@ impl Surface {
 #[derive(Clone, Copy)]
 enum CloseTarget {
     Tab(u64),
-    Window,
+    Window(WorkspacePage),
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct Tabs {
+    pub groups: window_tabs::Groups,
     documents: BTreeMap<u64, Editor>,
     active: Option<u64>,
     next_id: u64,
@@ -48,7 +49,12 @@ impl Tabs {
         self.confirm_close.is_some()
     }
 
+    pub fn focus_window(&mut self, selected: Option<u64>) {
+        self.active = selected;
+    }
+
     fn select(&mut self, id: u64) {
+        self.groups.select(id);
         if self.documents.contains_key(&id) {
             self.active = Some(id);
             self.confirm_close = None;
@@ -59,22 +65,19 @@ impl Tabs {
         self.next_id += 1;
         let id = self.next_id;
         self.documents.insert(id, editor);
+        self.groups.add(id);
         self.select(id);
         id
     }
 
     fn remove(&mut self, id: u64) {
         self.documents.remove(&id);
+        self.groups.remove(id);
         if matches!(self.confirm_close, Some(CloseTarget::Tab(closing)) if closing == id) {
             self.confirm_close = None;
         }
         if self.active == Some(id) {
-            self.active = self
-                .documents
-                .range(id..)
-                .next()
-                .or_else(|| self.documents.last_key_value())
-                .map(|(&id, _)| id);
+            self.active = self.groups.selected(self.groups.current);
         }
     }
 }
@@ -189,8 +192,12 @@ pub(crate) fn open(ui: &Ui, path: &str) {
     open_path(ui, path, true);
 }
 
-pub(crate) fn accepts_drop(s: &State) -> bool {
-    available(s) && server_desktop::visible(s) && s.workbench.window_visible(WorkspacePage::Editor)
+pub(crate) fn window_page(window: u32) -> WorkspacePage {
+    window_tabs::page(arcnix_core::server_apps::DesktopApp::Editor, window)
+}
+
+pub(crate) fn accepts_drop(s: &State, window: u32) -> bool {
+    available(s) && server_desktop::visible(s) && s.workbench.window_visible(window_page(window))
 }
 
 fn open_path(ui: &Ui, path: &str, preview: bool) {
@@ -314,18 +321,20 @@ pub(crate) fn dismiss(ui: &Ui) -> bool {
     true
 }
 
-pub(crate) fn close_desktop(ui: &Ui) -> bool {
+pub(crate) fn close_desktop(ui: &Ui, page: WorkspacePage) -> bool {
     ui.state.revise(|s| {
         if desktop_busy(s) {
             return false;
         }
         let tabs = &mut s.desktop_editor;
-        if tabs.documents.values().any(|e| e.dirty) {
-            tabs.confirm_close = Some(CloseTarget::Window);
+        let ids = tabs.groups.tabs(page.tab_window().unwrap()).to_vec();
+        if ids.iter().any(|id| tabs.documents[id].dirty) {
+            tabs.confirm_close = Some(CloseTarget::Window(page));
             return false;
         }
-        tabs.documents.clear();
-        tabs.active = None;
+        for id in ids {
+            tabs.remove(id);
+        }
         tabs.confirm_close = None;
         true
     })
@@ -351,8 +360,21 @@ fn close_tab(ui: &Ui, id: u64) {
             tabs.confirm_close = Some(CloseTarget::Tab(id));
         } else {
             tabs.remove(id);
+            prune_empty(s);
         }
     });
+}
+
+fn prune_empty(s: &mut State) {
+    let page = window_tabs::current(s, WorkspacePage::Editor);
+    if s.desktop_editor
+        .groups
+        .tabs(page.tab_window().unwrap())
+        .is_empty()
+        && server_desktop::has_siblings(s, page)
+    {
+        server_desktop::remove_window(s, page);
+    }
 }
 
 pub(crate) fn disconnect(s: &mut State) {
@@ -376,19 +398,22 @@ fn discard_desktop(ui: &Ui) {
             {
                 tabs.remove(id);
                 tabs.confirm_close = None;
-                false
+                prune_empty(s);
+                None
             }
-            Some(CloseTarget::Window) if !busy => {
-                tabs.documents.clear();
-                tabs.active = None;
+            Some(CloseTarget::Window(page)) if !busy => {
+                let ids = tabs.groups.tabs(page.tab_window().unwrap()).to_vec();
+                for id in ids {
+                    tabs.remove(id);
+                }
                 tabs.confirm_close = None;
-                true
+                Some(page)
             }
-            _ => false,
+            _ => None,
         }
     });
-    if close_window {
-        ui.finish_desktop_close(WorkspacePage::Editor);
+    if let Some(page) = close_window {
+        ui.finish_desktop_close(page);
     }
 }
 
@@ -999,87 +1024,88 @@ fn filename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-pub(crate) fn file_tabs(ui: Ui) -> impl Widget {
+pub(crate) fn file_tabs(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     row()
         .class("editor-tab-strip window-tab-strip")
         .name(i18n::bind("Open files"))
         .fill(
-            each(state.map(|s| {
-                s.desktop_editor
-                    .documents
-                    .keys()
-                    .copied()
-                    .collect::<Vec<_>>()
-            }))
-            .key(|id| *id)
-            .children(move |item| {
-                let id = item.value.get();
-                let surface = Surface::Desktop(id);
-                let close = ui.clone();
-                let path = state.map(move |s| {
-                    surface
-                        .editor(s)
-                        .map(|e| {
-                            if e.path.is_empty() {
-                                format!("{} {id}", i18n::desktop::translate("Untitled"))
-                            } else {
-                                e.path.clone()
-                            }
-                        })
-                        .unwrap_or_default()
-                });
-                row()
-                    .class(state.map(move |s| {
-                        if s.desktop_editor.active == Some(id) {
-                            "editor-tab-item active"
-                        } else {
-                            "editor-tab-item"
-                        }
-                        .to_owned()
-                    }))
-                    .fill((
-                        sapid::button()
-                            .class(state.map(move |s| {
-                                if surface.editor(s).is_some_and(|e| e.dirty) {
-                                    "editor-tab window-tab-select dirty"
+            each(state.map(move |s| s.desktop_editor.groups.tabs(window).to_vec()))
+                .key(|id| *id)
+                .children(move |item| {
+                    let id = item.value.get();
+                    let surface = Surface::Desktop(id);
+                    let close = ui.clone();
+                    let path = state.map(move |s| {
+                        surface
+                            .editor(s)
+                            .map(|e| {
+                                if e.path.is_empty() {
+                                    format!("{} {id}", i18n::desktop::translate("Untitled"))
                                 } else {
-                                    "editor-tab window-tab-select"
+                                    e.path.clone()
                                 }
-                                .to_owned()
-                            }))
-                            .name(path)
-                            .pressed(state.map(move |s| s.desktop_editor.active == Some(id)))
-                            .fill(
-                                text()
-                                    .class("editor-tab-label")
-                                    .content(state.map(move |_| filename(&path.get()).to_owned())),
-                            )
-                            .on_press(move || state.revise(|s| s.desktop_editor.select(id))),
-                        sapid::button()
-                            .class("icon-button editor-tab-close")
-                            .name(i18n::bind(state.map(move |_| {
-                                format!("Close file tab {}", filename(&path.get()))
-                            })))
-                            .enabled(state.map(move |s| {
-                                surface.editor(s).is_some_and(|e| e.pending.is_none())
-                            }))
-                            .fill(icons::glyph(Icon::Close))
-                            .on_press(move || close_tab(&close, id)),
-                    ))
-            }),
+                            })
+                            .unwrap_or_default()
+                    });
+                    row()
+                        .class(state.map(move |s| {
+                            if s.desktop_editor.groups.selected(window) == Some(id) {
+                                "window-tab-item editor-tab-item active"
+                            } else {
+                                "window-tab-item editor-tab-item"
+                            }
+                            .to_owned()
+                        }))
+                        .fill((
+                            text().class("window-tab-id hidden").content(id.to_string()),
+                            sapid::button()
+                                .class(state.map(move |s| {
+                                    if surface.editor(s).is_some_and(|e| e.dirty) {
+                                        "editor-tab window-tab-select dirty"
+                                    } else {
+                                        "editor-tab window-tab-select"
+                                    }
+                                    .to_owned()
+                                }))
+                                .name(path)
+                                .pressed(state.map(move |s| {
+                                    s.desktop_editor.groups.selected(window) == Some(id)
+                                }))
+                                .fill(
+                                    text().class("editor-tab-label").content(
+                                        state.map(move |_| filename(&path.get()).to_owned()),
+                                    ),
+                                )
+                                .on_press(move || state.revise(|s| s.desktop_editor.select(id))),
+                            sapid::button()
+                                .class("icon-button editor-tab-close")
+                                .name(i18n::bind(state.map(move |_| {
+                                    format!("Close file tab {}", filename(&path.get()))
+                                })))
+                                .enabled(state.map(move |s| {
+                                    surface.editor(s).is_some_and(|e| e.pending.is_none())
+                                }))
+                                .fill(icons::glyph(Icon::Close))
+                                .on_press(move || close_tab(&close, id)),
+                        ))
+                }),
         )
 }
 
-fn close_confirmation(ui: Ui) -> impl Widget {
+fn close_confirmation(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     when(
-        state.map(|s| s.desktop_editor.confirm_close.is_some()),
+        state.map(move |s| match s.desktop_editor.confirm_close {
+            Some(CloseTarget::Window(page)) => page == window_page(window),
+            Some(CloseTarget::Tab(id)) => s.desktop_editor.groups.tabs(window).contains(&id),
+            None => false,
+        }),
         move || {
             let ui = ui.clone();
             col().class("editor-discard").fill((
                 text().content(i18n::bind(state.map(|s| {
-                    if matches!(s.desktop_editor.confirm_close, Some(CloseTarget::Window)) {
+                    if matches!(s.desktop_editor.confirm_close, Some(CloseTarget::Window(_))) {
                         "Discard unsaved changes in all open files?"
                     } else {
                         "Discard unsaved changes?"
@@ -1100,20 +1126,19 @@ fn close_confirmation(ui: Ui) -> impl Widget {
     )
 }
 
-pub(crate) fn page(ui: Ui) -> impl Widget {
+pub(crate) fn page(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let open = ui.clone();
     col().class("desktop-editor editor-file-drop").fill((
-        when(state.map(|s| s.desktop_editor.active.is_some()), {
-            let ui = ui.clone();
-            move || {
-                row()
-                    .class("editor-tabbar")
-                    .fill((file_tabs(ui.clone()), server_desktop::tab_overflow()))
-            }
-        }),
+        text()
+            .class("editor-window-id hidden")
+            .content(window.to_string()),
+        row().class("editor-tabbar").fill((
+            file_tabs(ui.clone(), window),
+            server_desktop::tab_overflow(),
+        )),
         when(
-            state.map(|s| s.desktop_editor.active.is_none()),
+            state.map(move |s| s.desktop_editor.groups.selected(window).is_none()),
             move || {
                 let open = open.clone();
                 col().class("editor-empty").fill((
@@ -1126,10 +1151,16 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 ))
             },
         ),
-        close_confirmation(ui.clone()),
-        each(state.map(|s| s.desktop_editor.active.into_iter().collect::<Vec<_>>()))
-            .key(|id| *id)
-            .children(move |item| body(ui.clone(), Surface::Desktop(item.value.get()))),
+        close_confirmation(ui.clone(), window),
+        each(state.map(move |s| {
+            s.desktop_editor
+                .groups
+                .selected(window)
+                .into_iter()
+                .collect::<Vec<_>>()
+        }))
+        .key(|id| *id)
+        .children(move |item| body(ui.clone(), Surface::Desktop(item.value.get()))),
     ))
 }
 

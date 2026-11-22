@@ -39,6 +39,7 @@ pub(crate) struct Workbench {
     stack: Vec<WorkspacePage>,
     desktop_restore: Vec<WorkspacePage>,
     slots: BTreeMap<WorkspacePage, usize>,
+    detached: BTreeMap<WorkspacePage, DesktopWindow>,
     pub files: files_tabs::Windows,
     pub windows: BTreeMap<DesktopApp, DesktopWindow>,
     pub fullscreen: bool,
@@ -54,6 +55,7 @@ impl Default for Workbench {
             stack: Vec::new(),
             desktop_restore: Vec::new(),
             slots: BTreeMap::new(),
+            detached: BTreeMap::new(),
             files: Default::default(),
             windows: BTreeMap::new(),
             fullscreen: false,
@@ -63,6 +65,7 @@ impl Default for Workbench {
 
 pub(crate) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
     Some(match page {
+        WorkspacePage::Detached(app, _) => app,
         WorkspacePage::Terminal => DesktopApp::Terminal,
         WorkspacePage::Monitor => DesktopApp::Monitor,
         WorkspacePage::AppCenter => DesktopApp::AppCenter,
@@ -96,8 +99,8 @@ pub(crate) fn app_page(app: DesktopApp) -> WorkspacePage {
 
 impl Workbench {
     pub(crate) fn window(&self, page: WorkspacePage) -> DesktopWindow {
-        if let Some(id) = page.files_window_id().filter(|id| *id != 0) {
-            return self.files.layout(id).unwrap_or_default();
+        if page.tab_window().is_some_and(|id| id != 0) {
+            return self.detached.get(&page).copied().unwrap_or_default();
         }
         app_id(page)
             .and_then(|app| self.windows.get(&app).copied())
@@ -126,6 +129,7 @@ impl Workbench {
         self.stack.clear();
         self.desktop_restore.clear();
         self.slots.clear();
+        self.detached.clear();
         self.files = Default::default();
         self.desktop_page = WorkspacePage::Desktop;
     }
@@ -148,9 +152,10 @@ fn save_bounds(ui: &Ui, input: &str) {
     if event.bounds.validate().is_err() {
         return;
     }
-    let page = event
-        .window
-        .map_or_else(|| app_page(event.app), WorkspacePage::Files);
+    let page = event.window.map_or_else(
+        || app_page(event.app),
+        |id| window_tabs::page(event.app, id),
+    );
     let changed = ui.state.revise(|s| {
         if !visible(s)
             || s.dialog.is_some()
@@ -167,7 +172,7 @@ fn save_bounds(ui: &Ui, input: &str) {
         window.bounds = Some(event.bounds);
         true
     });
-    if changed && page.files_window_id().is_none_or(|id| id == 0) {
+    if changed && page.tab_window().is_none_or(|id| id == 0) {
         ui.remember_desktop_layout();
     }
 }
@@ -185,9 +190,10 @@ fn focus_window(ui: &Ui, input: &str) {
     let Ok(event) = serde_json::from_str::<FocusEvent>(input) else {
         return;
     };
-    let page = event
-        .window
-        .map_or_else(|| app_page(event.app), WorkspacePage::Files);
+    let page = event.window.map_or_else(
+        || app_page(event.app),
+        |id| window_tabs::page(event.app, id),
+    );
     if ui.state.with(|s| {
         visible(s)
             && s.epoch == event.epoch
@@ -225,7 +231,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
         .collect()
 }
 pub(crate) fn app_label(page: WorkspacePage) -> &'static str {
-    match page {
+    match page.base() {
         WorkspacePage::Docker => "Docker",
         WorkspacePage::Files(_) => "文件管理",
         WorkspacePage::Code => "Code Editor",
@@ -247,14 +253,14 @@ fn launcher_page(s: &State, page: WorkspacePage) -> WorkspacePage {
             .current()
             .map_or(page, WorkspacePage::Files)
     } else {
-        page
+        window_tabs::current(s, page)
     }
 }
 
 pub(crate) fn can_close_app(s: &State, page: WorkspacePage) -> bool {
     !s.system_task_running
         && (page != WorkspacePage::Code || s.code.pending.is_empty())
-        && (page != WorkspacePage::Editor || !text_editor::desktop_busy(s))
+        && (page.base() != WorkspacePage::Editor || !text_editor::desktop_busy(s))
 }
 
 pub(crate) fn show_desktop_label(s: &State) -> &'static str {
@@ -266,22 +272,27 @@ pub(crate) fn show_desktop_label(s: &State) -> &'static str {
 }
 
 fn window_class(page: WorkspacePage) -> String {
-    match page.files_window_id() {
-        Some(id) => format!("files-window-{id}"),
-        None => app_class(page).into(),
+    match page {
+        WorkspacePage::Files(id) => format!("files-window-{id}"),
+        _ if page.tab_window().is_some() => format!(
+            "tab-window-{}-{}",
+            app_class(page),
+            page.tab_window().unwrap()
+        ),
+        _ => app_class(page).into(),
     }
 }
 
 fn window_mut(s: &mut State, page: WorkspacePage, app: DesktopApp) -> &mut DesktopWindow {
-    if let Some(id) = page.files_window_id().filter(|id| *id != 0) {
-        s.workbench.files.layout_mut(id)
+    if page.tab_window().is_some_and(|id| id != 0) {
+        s.workbench.detached.entry(page).or_default()
     } else {
         s.workbench.windows.entry(app).or_default()
     }
 }
 
 pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
-    match page {
+    match page.base() {
         WorkspacePage::Docker => "app-docker",
         WorkspacePage::Files(_) => "app-files",
         WorkspacePage::Code => "app-code",
@@ -297,7 +308,7 @@ pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
 }
 
 pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
-    match page {
+    match page.base() {
         WorkspacePage::Terminal => Icon::Terminal,
         WorkspacePage::Monitor => Icon::Monitor,
         WorkspacePage::AppCenter => Icon::AppCenter,
@@ -397,6 +408,7 @@ pub(crate) fn select_app(s: &mut State, page: WorkspacePage) {
     if let Some(id) = page.files_window_id() {
         files_tabs::focus(s, id);
     }
+    window_tabs::focus(s, page);
     s.workbench.open_window(page);
     s.workspace_page = page;
     s.workbench.desktop_page = page;
@@ -417,8 +429,16 @@ fn front_window(s: &mut State) {
         s.file_context = None;
         s.file_menu = None;
         s.file_browser.cancel_drag();
+        window_tabs::focus(s, page);
         s.workspace_page = page;
     }
+}
+
+pub(crate) fn has_siblings(s: &State, page: WorkspacePage) -> bool {
+    s.workbench
+        .apps
+        .iter()
+        .any(|&other| other != page && app_id(other) == app_id(page))
 }
 
 pub(crate) fn remove_window(s: &mut State, page: WorkspacePage) {
@@ -429,9 +449,11 @@ pub(crate) fn remove_window(s: &mut State, page: WorkspacePage) {
     s.workbench.stack.retain(|&open| open != page);
     s.workbench.desktop_restore.retain(|&open| open != page);
     s.workbench.slots.remove(&page);
+    s.workbench.detached.remove(&page);
     if let Some(id) = page.files_window_id() {
         files_tabs::remove(s, id);
     }
+    window_tabs::forget(s, page);
     front_window(s);
 }
 
@@ -555,7 +577,7 @@ impl Ui {
         }
         self.state.revise(|s| select_app(s, page));
         #[cfg(windows)]
-        if page == WorkspacePage::Browser {
+        if page.base() == WorkspacePage::Browser {
             self.open_web_browser();
         }
         self.desktop_enter();
@@ -577,7 +599,7 @@ impl Ui {
             (apps[index] != s.workspace_page).then_some(apps[index])
         });
         if let Some(page) = next {
-            self.open_desktop_app(page);
+            self.focus_desktop_app(page);
         }
     }
 
@@ -613,7 +635,7 @@ impl Ui {
             window.maximized = !window.maximized;
             true
         });
-        if changed && page.files_window_id().is_none_or(|id| id == 0) {
+        if changed && page.tab_window().is_none_or(|id| id == 0) {
             self.remember_desktop_layout();
         }
     }
@@ -624,7 +646,7 @@ impl Ui {
             (s.workbench.window_visible(page)
                 && can_close_app(s, page)
                 && !(page == WorkspacePage::Code && s.code.confirm)
-                && !(page == WorkspacePage::Editor && s.desktop_editor.confirming_close()))
+                && !(page.base() == WorkspacePage::Editor && s.desktop_editor.confirming_close()))
             .then_some(page)
         }) else {
             return;
@@ -633,7 +655,7 @@ impl Ui {
             self.close_desktop_app(page);
             return;
         }
-        match page {
+        match page.base() {
             WorkspacePage::Files(id) => files_tabs::close_selected(self, id),
             WorkspacePage::Terminal => {
                 let id = self.state.with(|s| s.terminal.id);
@@ -648,7 +670,7 @@ impl Ui {
             #[cfg(windows)]
             WorkspacePage::Browser => self.state.revise(|s| {
                 if let Some(id) = s.web_browser.active {
-                    s.web_browser.close_tab(id);
+                    web_browser::close_tab(s, id);
                 }
             }),
             _ => {}
@@ -656,7 +678,7 @@ impl Ui {
     }
 
     fn close_desktop_app(&self, page: WorkspacePage) {
-        if page == WorkspacePage::Editor && !text_editor::close_desktop(self) {
+        if page.base() == WorkspacePage::Editor && !text_editor::close_desktop(self, page) {
             return;
         }
         if page == WorkspacePage::Code && !code_workbench::close(self) {
@@ -673,12 +695,36 @@ impl Ui {
         if page == WorkspacePage::Player {
             self.player.stop(self);
         }
+        let siblings = self.state.with(|s| has_siblings(s, page));
         #[cfg(windows)]
-        if page == WorkspacePage::Browser {
-            self.close_web_browser();
+        if page.base() == WorkspacePage::Browser {
+            if siblings {
+                self.state.revise(|s| {
+                    let tabs = s
+                        .web_browser
+                        .groups
+                        .tabs(page.tab_window().unwrap())
+                        .to_vec();
+                    for id in tabs {
+                        s.web_browser.close_tab(id);
+                    }
+                });
+            } else {
+                self.close_web_browser();
+            }
         }
-        if page == WorkspacePage::Terminal {
-            self.terminal_close_all();
+        if page.base() == WorkspacePage::Terminal {
+            if siblings {
+                let tabs = self
+                    .state
+                    .with(|s| s.terminal.groups.tabs(page.tab_window().unwrap()).to_vec());
+                for id in tabs {
+                    self.terminal_remove_tab(id);
+                }
+                self.remember_desktop_layout();
+            } else {
+                self.terminal_close_all();
+            }
         }
         let changed = self.state.revise(|s| {
             let previous = s.workspace_page;
@@ -796,11 +842,11 @@ pub(crate) fn launcher_running(s: &State, page: WorkspacePage) -> bool {
     s.workbench
         .apps
         .iter()
-        .any(|open| *open == page || (page.is_files() && open.is_files()))
+        .any(|open| app_id(*open) == app_id(page))
 }
 
 fn launcher_active(s: &State, page: WorkspacePage) -> bool {
-    s.workspace_page == page || (page.is_files() && s.workspace_page.is_files())
+    app_id(s.workspace_page) == app_id(page)
 }
 
 pub(crate) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
@@ -854,7 +900,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let close = ui.clone();
     let add_tab = ui.clone();
     let files_settings = ui.clone();
-    let window_drop = ui.clone();
+    let id = page.tab_window().unwrap_or_default();
     let browse_video = ui.clone();
     let title = if page == WorkspacePage::Player {
         text().content(state.map(|s| {
@@ -866,8 +912,8 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     } else {
         text().content(i18n::desktop::bind(app_label(page)))
     };
-    let tools = match page {
-        WorkspacePage::Terminal => fragment(terminal::header(ui.clone())),
+    let tools = match page.base() {
+        WorkspacePage::Terminal => fragment(terminal::header(ui.clone(), id)),
         WorkspacePage::Code => fragment(code_workbench::title_tools(ui.clone())),
         WorkspacePage::Files(id) => fragment((
             files_ui::sidebar_toggle(ui.clone()),
@@ -877,7 +923,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Editor => fragment(text_editor::menubar(ui.clone())),
         WorkspacePage::Monitor => fragment(monitor_ui::window_tools(ui.clone())),
         #[cfg(windows)]
-        WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone())),
+        WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone(), id)),
         _ => fragment(()),
     };
     let mark = row()
@@ -905,32 +951,29 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     } else {
         fragment((mark, title, tools))
     };
-    let content = match page {
-        WorkspacePage::Terminal => fragment(terminal::page(ui)),
+    let content = match page.base() {
+        WorkspacePage::Terminal => fragment(terminal::window_page(ui, id)),
         WorkspacePage::Files(id) => fragment(files_tabs::window_content(ui, id)),
         WorkspacePage::Monitor => fragment(monitor_ui::page(ui)),
         WorkspacePage::AppCenter => fragment(app_center_ui::page(ui)),
         WorkspacePage::Settings => fragment(server_apps_ui::settings(ui)),
         WorkspacePage::Docker => fragment(docker_ui::page(ui)),
         WorkspacePage::Code => fragment(code_workbench::page(ui)),
-        WorkspacePage::Editor => fragment(text_editor::page(ui)),
+        WorkspacePage::Editor => fragment(text_editor::page(ui, id)),
         WorkspacePage::Player => fragment(video_player::panel(ui)),
         #[cfg(windows)]
-        WorkspacePage::Browser => fragment(web_browser::page(ui)),
+        WorkspacePage::Browser => fragment(web_browser::window_page(ui, id)),
         _ => fragment(()),
     };
-    let mut window = col();
-    if let Some(id) = files {
-        window = window.on(glory::render::EventKind::Drag, move |event| {
-            files_tabs::drop_on_window(&window_drop, Some(id), event);
-        });
-    }
-    window
+    col()
         .class(state.map(move |s| {
             let mut class = format!("desktop-window {}", app_class(page));
-            if files.is_some() {
+            if page.tab_window().is_some() {
                 class.push(' ');
                 class.push_str(&window_class(page));
+                if window_tabs::movable(s, page) {
+                    class.push_str(" window-tabs-movable");
+                }
             }
             if !s.workbench.window_visible(page) {
                 class.push_str(" hidden");
@@ -1069,7 +1112,7 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
     let apps = ui.clone();
     let exit_fullscreen = ui.clone();
     let geometry = ui.clone();
-    let desktop_drop = ui.clone();
+
     let focus = ui.clone();
     col()
         .class(state.map(|s| {
@@ -1122,6 +1165,7 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                     }
                 }),
             files_tabs::bridge(ui.clone()),
+            window_tabs::bridge(ui.clone()),
             text().class("desktop-motion-state").content(state.map(|s| {
                 let shown = visible(s);
                 let windows: Vec<_> = s
@@ -1134,7 +1178,7 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                         let layout = s.workbench.window(page);
                         Some(serde_json::json!({
                             "id": app,
-                            "window": page.files_window_id(),
+                            "window": page.tab_window(),
                             "class": window_class(page),
                             "order": index + 1,
                             "slot": s.workbench.slots.get(&page).copied().unwrap_or_default(),
@@ -1172,9 +1216,6 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
             }),
             col()
                 .class("desktop-canvas")
-                .on(glory::render::EventKind::Drag, move |event| {
-                    files_tabs::drop_on_window(&desktop_drop, None, event);
-                })
                 .name(i18n::desktop::bind("Desktop"))
                 .focus(FocusMode::Programmatic)
                 .fill((

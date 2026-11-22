@@ -138,6 +138,7 @@ enum WorkspacePage {
     Monitor,
     Terminal,
     Files(u32),
+    Detached(arcnix_core::server_apps::DesktopApp, u32),
     Docker,
     Editor,
     Code,
@@ -507,7 +508,7 @@ impl Ui {
             s.code.viewport = None;
             #[cfg(windows)]
             {
-                s.web_browser.viewport = None;
+                s.web_browser.viewports.clear();
             }
             s.parked.insert(incoming.selected.clone(), incoming);
             fresh
@@ -718,7 +719,7 @@ impl Ui {
             && self.state.with(|s| {
                 s.dialog.is_none()
                     && navigation::workspace_visible(s)
-                    && s.workspace_page == WorkspacePage::Terminal
+                    && s.workspace_page.base() == WorkspacePage::Terminal
             })
         {
             let id = self.state.with(|s| s.terminal.id);
@@ -860,7 +861,7 @@ impl Ui {
             }
             Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
                 #[cfg(windows)]
-                if state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) { events.open_web_browser(); }
+                if state.with(|s| server_desktop::launcher_running(s, WorkspacePage::Browser)) { events.open_web_browser(); }
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}

@@ -323,6 +323,20 @@
         if(copyButton && !copyButton.disabled){event.preventDefault();event.stopImmediatePropagation();copy();engine?.term.focus();}
         if(pasteButton && !pasteButton.disabled && engine){event.preventDefault();event.stopImmediatePropagation();emit({kind:"paste",id:engine.id});engine.term.focus();}
     },true);
+    function renderPackets(current, module, acknowledge) {
+        for (const element of module.querySelectorAll('.terminal-packet')) {
+            const packet = JSON.parse(element.textContent);
+            if (packet.id <= current.lastPacket) continue;
+            current.lastPacket = packet.id;
+            const bytes = Uint8Array.from(atob(packet.data), c => c.charCodeAt(0));
+            current.term.write(bytes, () => {
+                if (engines.get(current.key) !== current) return;
+                current.ackPacket = Math.max(current.ackPacket, packet.id);
+                acknowledge(current);
+            });
+        }
+        acknowledge(current);
+    }
     function scan() {
         scheduled=false;
         const source=document.querySelector(".terminal-state"),surface=document.querySelector(".terminal-surface");
@@ -343,6 +357,19 @@
         const visible=!!surface.getClientRects().length;
         if(!visible && !engines.has(`${metadata.epoch}:${metadata.id}`)){detach();return;}
         activate(metadata,surface);
+        for (const parked of document.querySelectorAll('.terminal-parked')) {
+            const cached = engines.get(parked.querySelector('.terminal-parked-key').textContent);
+            const surface = parked.querySelector('.terminal-parked-surface');
+            if (!cached || cached === engine || !parked.getClientRects().length) continue;
+            if (cached.wrapper.parentElement !== surface) surface.replaceChildren(cached.wrapper);
+            const input = parked.querySelector('.terminal-output-ack');
+            renderPackets(cached, parked, current => {
+                if (!input.isConnected || current.ackPacket <= current.sentAckPacket) return;
+                current.sentAckPacket = current.ackPacket;
+                input.value = JSON.stringify([current.epoch, current.id, current.ackPacket]);
+                input.dispatchEvent(new Event('input', {bubbles: true}));
+            });
+        }
         const term=engine.term;
         const app=document.querySelector(".server-desktop:not(.hidden)") || document.querySelector(".app");
         if(app){
@@ -381,19 +408,7 @@
                 emit({kind:'command_done',id:engine.id,revision:command.revision});
             }
         }
-        for(const element of document.querySelectorAll(".terminal-packet")){
-            let packet;try{packet=JSON.parse(element.textContent);}catch(_){continue;}
-            if(packet.id<=engine.lastPacket)continue;
-            engine.lastPacket=packet.id;
-            const bytes=Uint8Array.from(atob(packet.data),c=>c.charCodeAt(0));
-            const current=engine;
-            term.write(bytes,()=>{
-                if(engines.get(current.key)!==current)return;
-                current.ackPacket=Math.max(current.ackPacket,packet.id);
-                consumed(current);
-            });
-        }
-        consumed(engine);
+        renderPackets(engine, source.closest('.terminal-module'), consumed);
         if(pending&&pending.epoch===metadata.epoch&&pending.session===metadata.id&&metadata.input_ack>=pending.token){pending=null;dispatch();}
         placeContext();
     }

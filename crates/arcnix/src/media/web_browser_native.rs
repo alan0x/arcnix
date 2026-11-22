@@ -106,7 +106,7 @@ pub(crate) struct Host {
     context: Option<WebContext>,
     applied_dark: Option<bool>,
     views: BTreeMap<u64, PageView>,
-    current: Option<(u64, Viewport)>,
+    current: BTreeMap<u64, Viewport>,
     tx: Sender<(u64, BrowserEvent)>,
     rx: Receiver<(u64, BrowserEvent)>,
     wake: Option<Waker>,
@@ -118,7 +118,7 @@ pub(crate) struct Host {
     last_capture: Option<Instant>,
     retiring: bool,
     exiting: bool,
-    html_preview: Option<HtmlView>,
+    html_preview: BTreeMap<u64, HtmlView>,
 }
 
 enum BrowserEvent {
@@ -195,7 +195,7 @@ impl Host {
             context: None,
             applied_dark: None,
             views: BTreeMap::new(),
-            current: None,
+            current: Default::default(),
             tx,
             rx,
             wake: None,
@@ -207,7 +207,7 @@ impl Host {
             last_capture: None,
             retiring: false,
             exiting: false,
-            html_preview: None,
+            html_preview: Default::default(),
         }
     }
 
@@ -217,12 +217,12 @@ impl Host {
 
     pub fn close(&mut self) {
         self.ui.close_web_browser();
-        self.html_preview = None;
+        self.html_preview.clear();
         self.reset();
     }
 
     fn reset(&mut self) {
-        self.current = None;
+        self.current.clear();
         self.views.clear();
         self.context = None;
         self.applied_dark = None;
@@ -364,13 +364,15 @@ impl Host {
                 continue;
             }
             if matches!(event, BrowserEvent::Focus) {
-                if self.ui.state.with(|s| {
-                    web_browser::shown(s)
-                        && s.dialog.is_none()
-                        && s.web_browser.active == Some(id)
-                        && s.workspace_page != WorkspacePage::Browser
+                if let Some(page) = self.ui.state.with(|s| {
+                    web_browser::visible_tabs(s)
+                        .find(|(_, tab, _)| tab.id == id)
+                        .map(|(window, _, _)| {
+                            window_tabs::page(arcnix_core::server_apps::DesktopApp::Browser, window)
+                        })
+                        .filter(|page| *page != s.workspace_page)
                 }) {
-                    self.ui.open_desktop_app(WorkspacePage::Browser);
+                    self.ui.focus_desktop_app(page);
                 }
                 continue;
             }
@@ -461,65 +463,65 @@ impl Host {
     }
 
     pub fn hide(&mut self) {
-        if let Some((id, _)) = self.current.take()
-            && let Some(page) = self.views.get(&id)
-        {
-            let _ = page.view.set_visible(false);
+        for id in std::mem::take(&mut self.current).keys() {
+            if let Some(page) = self.views.get(id) {
+                let _ = page.view.set_visible(false);
+            }
         }
-        self.hide_html_preview();
-    }
-
-    fn hide_html_preview(&mut self) {
-        if let Some(preview) = &mut self.html_preview
-            && preview.viewport.take().is_some()
-        {
-            let _ = preview.view.set_visible(false);
+        for preview in self.html_preview.values_mut() {
+            if preview.viewport.take().is_some() {
+                let _ = preview.view.set_visible(false);
+            }
         }
     }
 
     fn sync_html_preview(&mut self, window: &NativeWindow) {
-        let state = self.ui.state;
-        let Some((id, serial, source, viewport)) = state.with(web_browser::html_viewport) else {
-            self.hide_html_preview();
-            if !state.with(|s| s.workbench.apps.contains(&WorkspacePage::Browser)) {
-                self.html_preview = None;
+        let next = self.ui.state.with(web_browser::html_viewports);
+        self.html_preview.retain(|id, preview| {
+            if !self.ui.state.with(|s| {
+                s.web_browser
+                    .tab(*id)
+                    .is_some_and(|tab| tab.html_serial() == Some(preview.serial))
+            }) {
+                return false;
             }
-            return;
-        };
-        if let Some((id, _)) = self.current.take()
-            && let Some(page) = self.views.get(&id)
-        {
-            let _ = page.view.set_visible(false);
-        }
-        if self
-            .html_preview
-            .as_ref()
-            .is_none_or(|preview| preview.serial != serial)
-        {
-            self.html_preview = None;
-            match html_child(window, source) {
-                Ok(view) => {
-                    self.html_preview = Some(HtmlView {
-                        serial,
-                        view,
-                        viewport: None,
-                    })
+            if !next.iter().any(|(tab, _, _, _)| id == tab) && preview.viewport.take().is_some() {
+                let _ = preview.view.set_visible(false);
+            }
+            true
+        });
+        for (id, serial, source, viewport) in next {
+            if self
+                .html_preview
+                .get(&id)
+                .is_none_or(|preview| preview.serial != serial)
+            {
+                match html_child(window, source) {
+                    Ok(view) => {
+                        self.html_preview.insert(
+                            id,
+                            HtmlView {
+                                serial,
+                                view,
+                                viewport: None,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        self.tab_error(id, format!("{error:#}"));
+                        continue;
+                    }
                 }
-                Err(error) => {
+            }
+            let preview = self.html_preview.get_mut(&id).unwrap();
+            if preview.viewport.as_ref() != Some(&viewport) {
+                if let Err(error) = position(&preview.view, &viewport) {
+                    self.html_preview.remove(&id);
                     self.tab_error(id, format!("{error:#}"));
-                    return;
+                } else {
+                    preview.viewport = Some(viewport);
                 }
             }
-        }
-        let preview = self.html_preview.as_mut().expect("HTML preview created");
-        if preview.viewport.as_ref() != Some(&viewport) {
-            if let Err(error) = position(&preview.view, &viewport) {
-                self.hide_html_preview();
-                self.html_preview = None;
-                self.tab_error(id, format!("{error:#}"));
-                return;
-            }
-            preview.viewport = Some(viewport);
         }
     }
 
@@ -530,7 +532,7 @@ impl Host {
         }
         self.sync_html_preview(window);
         let connection = self.ui.state.with(|s| {
-            if !s.connected || !s.workbench.apps.contains(&WorkspacePage::Browser) {
+            if !s.connected || !server_desktop::launcher_running(s, WorkspacePage::Browser) {
                 return None;
             }
             match &s.web_browser.proxy {
@@ -600,27 +602,33 @@ impl Host {
             self.capture_cookies();
         }
 
-        let next = state.with(web_browser::native_viewport).filter(|(id, _)| {
+        let mut next = state.with(web_browser::native_viewports);
+        next.retain(|id, _| {
             self.views
                 .get(id)
                 .is_some_and(|page| !page.identity_pending)
         });
-        if self.current == next {
-            return;
-        }
-        let old = self.current.take();
-        if let Some((id, _)) = old
-            && next.as_ref().is_none_or(|(next, _)| *next != id)
-            && let Some(view) = self.views.get(&id)
-        {
-            let _ = view.view.set_visible(false);
-        }
-        if let Some((id, viewport)) = next {
+        self.current.retain(|id, _| {
+            if next.contains_key(id) {
+                return true;
+            }
+            if let Some(page) = self.views.get(id) {
+                let _ = page.view.set_visible(false);
+            }
+            false
+        });
+        for (id, viewport) in next {
+            if self.current.get(&id) == Some(&viewport) {
+                continue;
+            }
             let view = &self.views[&id].view;
             match position(view, &viewport) {
-                Ok(()) => self.current = Some((id, viewport)),
+                Ok(()) => {
+                    self.current.insert(id, viewport);
+                }
                 Err(error) => {
                     let _ = view.set_visible(false);
+                    self.current.remove(&id);
                     self.tab_error(id, format!("{error:#}"));
                 }
             }

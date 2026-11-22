@@ -255,7 +255,7 @@ fn enabled(s: &State, command: Command) -> bool {
         _ if !can_dispatch(s) => false,
         Command::CloseTab => {
             let keys = keys(s);
-            let scope = match s.workspace_page {
+            let scope = match s.workspace_page.base() {
                 WorkspacePage::Files(_) => Scope::Files,
                 WorkspacePage::Terminal => Scope::Terminal,
                 WorkspacePage::Code => Scope::Code,

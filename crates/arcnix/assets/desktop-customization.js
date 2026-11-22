@@ -132,8 +132,9 @@
         event.preventDefault();
         const target = dropTarget(event);
         if (event.dataTransfer.getData(dragType) === String(drag.epoch)) {
-            if (editorTarget(event)) {
-                send(drag.canvas, {kind: 'open_in_text_editor', name: drag.item.id});
+            const editor = editorTarget(event);
+            if (editor) {
+                send(drag.canvas, {kind: 'open_in_text_editor', name: drag.item.id, window: Number(editor.querySelector('.editor-window-id').textContent)});
             } else if (target) {
                 send(drag.canvas, {kind: 'reorder', zone: drag.zone, item: drag.item, anchor: shortcut(target.slot), after: target.after});
             }
