@@ -365,6 +365,10 @@ pub(crate) fn settings_visible(s: &State) -> bool {
     server_desktop::visible(s) && s.workspace_page == WorkspacePage::Settings
 }
 pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, String>) {
+    if ui.state.with(|s| s.images.request == Some(serial)) {
+        image_viewer::received(ui, serial, result);
+        return;
+    }
     if desktop_file_picker::awaiting_directory(ui, serial) {
         desktop_file_picker::listed(
             ui,

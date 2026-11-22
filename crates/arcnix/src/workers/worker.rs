@@ -71,6 +71,7 @@ pub(crate) type TextAuthorization = (remote::AdminTextRetry, zeroize::Zeroizing<
 
 pub enum Action {
     LocalDesktop(local_desktop::Target, PathBuf),
+    OpenPdf(String, async_channel::Receiver<crate::pdf_reader::Command>),
     PlayVideo {
         path: String,
         prefer_content: bool,
@@ -234,6 +235,7 @@ impl BrowserProxyControl {
 
 pub enum Update {
     LocalDesktop(Result<String, String>),
+    Pdf(crate::pdf_reader::Reply),
     Video(Result<Arc<crate::video_player::Source>, String>),
     #[cfg(windows)]
     Html(Result<String, String>),
@@ -708,6 +710,13 @@ pub(crate) fn start_with_limiter(
                 if epoch != active_epoch || epoch != generation.load(Ordering::Acquire) {
                     continue;
                 }
+                if let Action::OpenPdf(path, commands) = action {
+                    match desktop.target.read_bounded_file(&path, crate::pdf_reader::LIMIT) {
+                        Ok(bytes) => crate::pdf_reader::start(bytes, commands, events.clone(), epoch, serial),
+                        Err(error) => send(Update::Pdf(crate::pdf_reader::Reply::Failed(format!("{error:#}")))),
+                    }
+                    continue;
+                }
                 match desktop.dispatch(action) {
                     std::ops::ControlFlow::Break(update) => {
                         send(update);
@@ -1129,6 +1138,7 @@ pub(crate) fn start_with_limiter(
             }
             let browsing = matches!(action, Action::Remote(_));
             let file_kind = match &action {
+                Action::OpenPdf(..) => Some(8),
                 Action::Trash { .. } => Some(4),
                 Action::Delete { .. } => Some(0),
                 Action::Permissions { .. } => Some(1),
@@ -1324,6 +1334,11 @@ pub(crate) fn start_with_limiter(
                             .as_mut()
                             .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                         match action {
+                            Action::OpenPdf(path, commands) => {
+                                let bytes = remote.read_bounded_file(&path, crate::pdf_reader::LIMIT)?;
+                                crate::pdf_reader::start(bytes, commands, events.clone(), epoch, serial);
+                                file_completed = true;
+                            }
                             Action::TextRead { path, cancel, sudo } => {
                                 file_completed = true;
                                 let check = || {
@@ -1663,6 +1678,7 @@ pub(crate) fn start_with_limiter(
                             5 => Update::ManagedRemoteFiles(Err(message)),
                             6 => Update::FileAlias(Err(message)),
                             7 => Update::TextFile(Err(FileFailure::ordinary(message))),
+                            8 => Update::Pdf(crate::pdf_reader::Reply::Failed(message)),
                             _ => Update::FileMetadata(Err(message)),
                         });
                     }

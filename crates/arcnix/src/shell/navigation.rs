@@ -285,26 +285,29 @@ fn empty_state(
     ))
 }
 
-pub(crate) fn local_desktop_label(target: &local_desktop::Target) -> String {
-    let name = match target {
+pub(crate) fn local_desktop_name(target: &local_desktop::Target, language: Language) -> String {
+    match target {
         #[cfg(windows)]
         local_desktop::Target::Wsl(name) => format!("WSL · {name}"),
         local_desktop::Target::Native | local_desktop::Target::ReadOnlyHost => {
-            i18n::translate(if cfg!(windows) {
+            let name = if cfg!(windows) {
                 "Local Windows"
             } else if cfg!(target_os = "macos") {
                 "本机 Mac"
             } else {
                 "本机 Linux"
-            })
+            };
+            i18n::translate_for(name, language)
         }
-    };
-    let mode = if target.read_only() {
+    }
+}
+
+pub(crate) fn local_desktop_mode(target: &local_desktop::Target) -> &'static str {
+    if target.read_only() {
         "Read-only mode"
     } else {
         "Read-write mode"
-    };
-    format!("{name} · {}", i18n::translate(mode))
+    }
 }
 
 pub(crate) fn local_desktop_entry(ui: Ui) -> impl Widget {

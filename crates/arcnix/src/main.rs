@@ -146,6 +146,8 @@ enum WorkspacePage {
     Editor,
     Code,
     Player,
+    ImageViewer,
+    PdfReader,
     Browser,
     Settings,
 }
@@ -224,6 +226,8 @@ define_state! {
         code: code_workbench::Runtime = Default::default(),
         remote_editor: Option<text_editor::Editor> = None,
         desktop_editor: text_editor::Tabs = Default::default(),
+        pdf: pdf_reader::Reader = Default::default(),
+        images: image_viewer::Viewer = Default::default(),
         video: Option<video_player::Playback> = None,
         desktop_file_picker: Option<desktop_file_picker::Directory> = None,
         desktop_file_picker_sidebar_hidden: bool = false,
@@ -950,6 +954,7 @@ impl Ui {
         match response.update {
             #[cfg(windows)]
             Update::WslFiles(result)=>wsl_workspace::receive(events,response.serial,result),
+            Update::Pdf(event)=>pdf_reader::received(events,response.serial,event),
             Update::Video(result)=>events.player.ready(events,response.serial,result),
             #[cfg(windows)]
             Update::Html(result)=>web_browser::html_result(events,response.serial,result),
@@ -974,6 +979,8 @@ impl Ui {
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
+            Update::Children{remote:true,result,..} if state.with(|s|s.images.directory_request == Some(response.serial)) =>
+                state.revise(|s|image_viewer::listed(s,result.unwrap_or_default())),
             Update::Children{remote:true,result,..} if desktop_file_picker::awaiting_directory(events, response.serial) =>
                 desktop_file_picker::listed(events,result),
             Update::Children{remote:true,parent,result} if files_tabs::awaiting_refresh(events, response.serial) =>
@@ -988,6 +995,8 @@ impl Ui {
             Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(events,response.serial,result),
             Update::ConnectionLost(message)=>{
                 state.revise(|s| {
+                    s.images = Default::default();
+                    s.pdf = Default::default();
                     desktop_file_picker::dismiss(s);
                     file_elevation::reset(s);
                     if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::DesktopApps)) {
@@ -1261,6 +1270,8 @@ impl Ui {
             s.compose = Default::default();
             s.install = Default::default();
             s.code = Default::default();
+            s.images = Default::default();
+            s.pdf = Default::default();
             text_editor::disconnect(s);
             s.operations = Default::default();
             s.metrics = Default::default();
@@ -2486,6 +2497,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     },
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),
+                    include_str!("../assets/image-viewer.js"),
+                    include_str!("../assets/pdf-reader.js"),
                     include_str!("../assets/vendor/codemirror/modes.js"),
                     include_str!("../assets/text-editor-events.js"),
                     include_str!("../assets/desktop-motion.js"),

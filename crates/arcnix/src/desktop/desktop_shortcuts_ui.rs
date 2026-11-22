@@ -21,7 +21,9 @@ pub(super) fn can_run(s: &State, action: Shortcut) -> bool {
         }
         Shortcut::Fullscreen | Shortcut::ShowDesktop => true,
         Shortcut::CloseWindow | Shortcut::CloseTab => s.workbench.window_visible(s.workspace_page),
-        Shortcut::ExitFullscreen => server_desktop::fullscreen(s),
+        Shortcut::ExitFullscreen => {
+            server_desktop::reader_fullscreen(s, s.workspace_page) || server_desktop::fullscreen(s)
+        }
         Shortcut::OpenFiles => files_tabs::available(s),
         Shortcut::FilesDuplicateWindow => s.workspace_page.is_files() && files_tabs::available(s),
         _ => false,
@@ -118,6 +120,17 @@ pub(super) fn run(ui: &Ui, action: Shortcut) {
         Shortcut::PreviousApp => ui.cycle_desktop_apps(true),
         Shortcut::Maximize => ui.toggle_desktop_maximize(),
         Shortcut::Minimize => ui.minimize_desktop_window(),
+        Shortcut::ExitFullscreen
+            if ui
+                .state
+                .with(|s| server_desktop::reader_fullscreen(s, s.workspace_page)) =>
+        {
+            ui.state.revise(|s| match s.workspace_page {
+                WorkspacePage::PdfReader => s.pdf.fullscreen = false,
+                WorkspacePage::ImageViewer => s.images.fullscreen = false,
+                _ => {}
+            });
+        }
         Shortcut::Fullscreen | Shortcut::ExitFullscreen => ui.toggle_desktop_fullscreen(),
         Shortcut::ShowDesktop => ui.toggle_show_desktop(),
         Shortcut::CloseWindow | Shortcut::CloseTab => {

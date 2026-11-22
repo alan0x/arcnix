@@ -229,13 +229,15 @@ pub enum DesktopApp {
     Code,
     #[serde(alias = "video")]
     Player,
+    ImageViewer,
+    PdfReader,
     Trash,
     Browser,
     Settings,
 }
 
 impl DesktopApp {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 16;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

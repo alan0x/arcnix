@@ -482,15 +482,17 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   pointer-events: none;
 }
 .desktop-wallpaper-name {
-  font-size: clamp(26px, 3.1vw, 47px);
-  line-height: 1.2;
-  font-weight: 500;
-  letter-spacing: -.028em;
+  font-size: clamp(20px, 2.5cqi, 30px);
+  line-height: 1.18;
+  font-weight: 600;
+  letter-spacing: -.02em;
   color: var(--desktop-ink);
   overflow-wrap: anywhere;
 }
-.desktop-wallpaper-address { color: var(--desktop-ink); opacity: .86; margin-top: 6px; font-size: 13px; overflow-wrap: anywhere; }
-.desktop-canvas:has(.desktop-wallpaper-image, .wallpaper-seaside, .wallpaper-aurora, .wallpaper-fjord) :is(.desktop-wallpaper-name, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
+.desktop-wallpaper-mode { color: var(--desktop-ink); margin-top: 3px; font-size: 15px; line-height: 1.35; font-weight: 500; }
+.desktop-wallpaper-mode:empty { display: none; }
+.desktop-wallpaper-address { color: var(--desktop-ink); opacity: .9; margin-top: 7px; font-size: 12px; line-height: 1.45; text-wrap: pretty; overflow-wrap: anywhere; }
+.desktop-canvas:has(.desktop-wallpaper-image, .wallpaper-seaside, .wallpaper-aurora, .wallpaper-fjord) :is(.desktop-wallpaper-name, .desktop-wallpaper-mode, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
   color: #fff; text-shadow: 0 1px 3px #000, 0 1px 12px #000c;
 }
 .desktop-shortcuts {
@@ -2216,6 +2218,38 @@ html[data-files-downloading] .files-download-drop {
 .browser-resource-warning-row { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 .browser-page:has(.browser-surface.loading) .browser-tabs::after { content: ''; position: absolute; inset: 0 auto auto 0; width: 32%; height: 2px; background: var(--accent); }
 
+.app-image { --tile-tint: #368478; --tile-shade: #205b59; }
+.desktop-window:is(.app-image, .app-document) > .desktop-window-content { padding: 0; overflow: hidden; }
+.image-viewer, .pdf-reader { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--surface); }
+.viewer-toolbar, .viewer-status { flex: none; display: flex; align-items: center; padding: 5px 10px; gap: 10px; }
+.viewer-toolbar { flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.viewer-controls { display: flex; align-items: center; gap: 3px; padding-left: 8px; border-left: 1px solid var(--line); }
+.viewer-controls .icon-button { width: 34px !important; height: 34px !important; }
+.viewer-controls .action-glyph { width: 18px; height: 18px; }
+.viewer-controls :is(.viewer-previous, .viewer-next) { width: 36px !important; height: 36px !important; }
+.viewer-controls :is(.viewer-previous, .viewer-next) .action-glyph { width: 24px; height: 24px; }
+.viewer-previous .glyph-chevron-right { transform: rotate(180deg); }
+.viewer-left .glyph-refresh { transform: scaleX(-1); }
+.viewer-fit[aria-pressed=true] { color: var(--accent); }
+.viewer-stage { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; isolation: isolate; background: #202326; color: #e4e7e8; touch-action: none; user-select: none; }
+.viewer-stage.can-pan { cursor: grab; }
+.viewer-stage.panning { cursor: grabbing; }
+.viewer-stage .viewer-picture { position: absolute; top: 50%; left: 50%; max-width: none; max-height: none; transform: translate(-50%, -50%); }
+.viewer-placeholder { height: 100%; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; overflow-wrap: anywhere; }
+.viewer-placeholder .action-glyph { width: 36px; height: 36px; opacity: .65; }
+.viewer-status { min-width: 0; gap: 14px; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.viewer-filename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pdf-page-number { width: 52px; min-width: 0; text-align: center; font-variant-numeric: tabular-nums; }
+.pdf-total { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pdf-stage { display: block; flex: 1 1 0; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; background: #303338; color: #e4e7e8; padding: 12px; }
+.pdf-sheet { margin: 0 auto; flex: none; }
+.pdf-sheet img { display: block; width: 100%; height: auto; background: white; box-shadow: 0 1px 6px #0005; }
+.pdf-unlock { display: flex; gap: 6px; align-items: center; }
+.pdf-fit[aria-pressed=true], .pdf-width[aria-pressed=true] { color: var(--accent); }
+.desktop-window-layer:has(> .viewer-expanded) { inset: 0; }
+.desktop-window-layer:has(> .viewer-expanded) ~ .desktop-dock-zone { visibility: hidden; }
+.desktop-window.viewer-expanded { inset: 0; width: auto; height: auto; border: 0; border-radius: 0; }
+.viewer-expanded > :is(.desktop-window-titlebar, .desktop-resize-handle) { display: none; }
 .app-player { --tile-tint: #795db8; --tile-shade: #4a376f; }
 .app-player > .desktop-window-content { padding: 0; }
 .remote-player { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: clip; }

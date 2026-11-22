@@ -449,6 +449,10 @@ const FORMATS: [(&str, &str); 8] = [
     ("svg", "image/svg+xml"),
 ];
 
+pub fn image_extensions() -> impl Iterator<Item = &'static str> {
+    FORMATS.iter().map(|&(ext, _)| ext)
+}
+
 fn format(path: &Path) -> Result<(&'static str, &'static str)> {
     let ext = path
         .extension()
@@ -458,7 +462,7 @@ fn format(path: &Path) -> Result<(&'static str, &'static str)> {
     FORMATS
         .into_iter()
         .find(|(extension, _)| *extension == ext)
-        .context("Supported wallpaper formats: PNG, JPEG, WebP, GIF, BMP, AVIF and SVG")
+        .context("Supported image formats: PNG, JPEG, WebP, GIF, BMP, AVIF and SVG")
 }
 
 pub(crate) fn validate_image_path(path: &str) -> Result<()> {
@@ -475,7 +479,7 @@ pub(crate) fn validate_image_path(path: &str) -> Result<()> {
 fn validate_image(extension: &str, bytes: &[u8]) -> Result<()> {
     ensure!(
         !bytes.is_empty() && bytes.len() <= MAX_WALLPAPER,
-        "Wallpaper must be at most 8 MiB"
+        "Images must be nonempty and at most 8 MiB"
     );
     let valid = match extension {
         "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -500,7 +504,7 @@ fn validate_image(extension: &str, bytes: &[u8]) -> Result<()> {
         }),
         _ => false,
     };
-    ensure!(valid, "Wallpaper content does not match its image format");
+    ensure!(valid, "Image content does not match its file format");
     Ok(())
 }
 

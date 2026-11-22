@@ -157,7 +157,9 @@ fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
 
 fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
     match app {
-        DesktopApp::Code | DesktopApp::Player => s.local_desktop.is_some(),
+        DesktopApp::Code | DesktopApp::Player | DesktopApp::ImageViewer | DesktopApp::PdfReader => {
+            s.local_desktop.is_some()
+        }
         DesktopApp::Editor => false,
         _ => true,
     }
@@ -788,6 +790,14 @@ fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
                 })
                 .enabled(state.map(|s| s.web_browser.tabs.len() < web_browser::TAB_LIMIT))
             }
+        })),
+        WorkspacePage::PdfReader => fragment(menu_action(&ui, "Open PDF", move |ui| {
+            ui.open_desktop_app(page);
+            pdf_reader::browse(ui);
+        })),
+        WorkspacePage::ImageViewer => fragment(menu_action(&ui, "Open image", move |ui| {
+            ui.open_desktop_app(page);
+            image_viewer::browse(ui);
         })),
         WorkspacePage::Player => fragment(menu_action(&ui, "Open video", move |ui| {
             ui.open_desktop_app(page);

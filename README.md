@@ -6,7 +6,7 @@ Arcnix is a desktop app for managing Linux servers over SSH. The interface runs 
 
 ## What you can do
 
-- **Files and code.** Transfer files between your computer and the server, edit remote text and preview Markdown. On Windows x64, stream remote MP4 and MKV files.
+- **Files and code.** Transfer files between your computer and the server, view images and PDFs, edit remote text and preview Markdown. On Windows x64, stream remote MP4 and MKV files.
 - **Terminal.** Open an interactive shell in a remote folder or use the terminal inside the editor.
 - **Monitoring and Docker.** Check resource usage, services and logs. Inspect containers, ports and volumes on Docker hosts.
 - **Tasks and backups.** Review scripts across hosts, check the results of server-owned tasks and restore files from restic snapshots.

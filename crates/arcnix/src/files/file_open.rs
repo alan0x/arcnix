@@ -10,10 +10,18 @@ const APPS: &[FileApp] = if cfg!(windows) {
         FileApp::TextEditor,
         FileApp::Code,
         FileApp::Player,
+        FileApp::ImageViewer,
+        FileApp::PdfReader,
         FileApp::Browser,
     ]
 } else {
-    &[FileApp::TextEditor, FileApp::Code, FileApp::Player]
+    &[
+        FileApp::TextEditor,
+        FileApp::Code,
+        FileApp::Player,
+        FileApp::ImageViewer,
+        FileApp::PdfReader,
+    ]
 };
 
 fn label(app: FileApp) -> &'static str {
@@ -21,6 +29,8 @@ fn label(app: FileApp) -> &'static str {
         FileApp::TextEditor => "Text Editor",
         FileApp::Code => server_desktop::app_label(WorkspacePage::Code),
         FileApp::Player => "Player",
+        FileApp::PdfReader => server_desktop::app_label(WorkspacePage::PdfReader),
+        FileApp::ImageViewer => server_desktop::app_label(WorkspacePage::ImageViewer),
         FileApp::Browser => server_desktop::app_label(WorkspacePage::Browser),
     }
 }
@@ -30,13 +40,21 @@ fn icon(app: FileApp) -> Icon {
         FileApp::TextEditor => Icon::Edit,
         FileApp::Code => Icon::Code,
         FileApp::Player => Icon::Play,
+        FileApp::ImageViewer => Icon::Image,
+        FileApp::PdfReader => Icon::File,
         FileApp::Browser => Icon::Browser,
     }
 }
 
 const BROWSER_EXTENSIONS: &[&str] = &["htm", "html", "xhtml"];
 // HTML keeps the browser default. Text formats, including TypeScript, use Text Editor.
-const SUGGESTED_ORDER: &[FileApp] = &[FileApp::Browser, FileApp::TextEditor, FileApp::Player];
+const SUGGESTED_ORDER: &[FileApp] = &[
+    FileApp::Browser,
+    FileApp::ImageViewer,
+    FileApp::PdfReader,
+    FileApp::TextEditor,
+    FileApp::Player,
+];
 
 const CODE_FILENAMES: &[&str] = &[
     ".bashrc",
@@ -126,6 +144,8 @@ static BUILT_IN: LazyLock<BTreeMap<&'static str, BTreeSet<FileApp>>> = LazyLock:
         .chain(SOURCE_EXTENSIONS)
         .copied()
         .flat_map(|ext| [(FileApp::TextEditor, ext), (FileApp::Code, ext)])
+        .chain([(FileApp::PdfReader, "pdf")])
+        .chain(image_viewer::extensions().map(|ext| (FileApp::ImageViewer, ext)))
         .chain(video_player::supported_extensions().map(|ext| (FileApp::Player, ext)))
         .chain(
             BROWSER_EXTENSIONS
@@ -370,6 +390,8 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
         FileApp::TextEditor => text_editor::open(ui, path),
         FileApp::Code => code_workbench::open(ui, path),
         FileApp::Player => ui.player.open(ui, path),
+        FileApp::ImageViewer => image_viewer::open(ui, path),
+        FileApp::PdfReader => pdf_reader::open(ui, path),
         #[cfg(windows)]
         FileApp::Browser => ui.open_html_preview(path),
         #[cfg(not(windows))]

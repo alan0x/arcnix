@@ -8,6 +8,8 @@ use crate::*;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Purpose {
     Video,
+    Image,
+    Pdf,
     TextEditor,
     SaveText(u64),
     Code,
@@ -25,6 +27,8 @@ impl Purpose {
     fn title(self) -> &'static str {
         match self {
             Self::Video => "Open video",
+            Self::Image => "Open image",
+            Self::Pdf => "Open PDF",
             Self::SaveText(_) => "Save as…",
             _ => "Open file",
         }
@@ -32,6 +36,20 @@ impl Purpose {
 
     fn formats(self) -> Formats {
         match self {
+            Self::Pdf => Formats {
+                label: "PDF documents",
+                empty: "No PDFs in this folder.",
+                includes: |path| {
+                    arcnix_core::file_associations::extension(path).as_deref() == Some("pdf")
+                },
+                extensions: || vec!["pdf"],
+            },
+            Self::Image => Formats {
+                label: "All supported images",
+                empty: "No images in this folder.",
+                includes: image_viewer::supports,
+                extensions: || image_viewer::extensions().collect(),
+            },
             Self::Video => Formats {
                 label: "All supported videos",
                 empty: "No playable videos in this folder.",
@@ -100,6 +118,8 @@ fn confirm(ui: &Ui, path: &str) {
     let open: fn(&Ui, &str) = match purpose {
         Purpose::SaveText(id) => return submit_save(ui, id, path),
         Purpose::Video => |ui, path| ui.player.open_from_picker(ui, path),
+        Purpose::Image => image_viewer::open,
+        Purpose::Pdf => pdf_reader::open,
         Purpose::TextEditor => text_editor::open,
         Purpose::Code => code_workbench::open,
     };

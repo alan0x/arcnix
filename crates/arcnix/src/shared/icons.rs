@@ -68,6 +68,7 @@ icons! {
     OpenVideo => "open-video";
     Clear => "trash" as "clear", "trash";
     Plus => "plus";
+    Minus => "minus";
     Upload => "upload";
     Download => "download", "download";
     Star => "star", "star";

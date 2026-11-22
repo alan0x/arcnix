@@ -74,6 +74,8 @@ pub(crate) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Editor => DesktopApp::Editor,
         WorkspacePage::Code => DesktopApp::Code,
         WorkspacePage::Player => DesktopApp::Player,
+        WorkspacePage::ImageViewer => DesktopApp::ImageViewer,
+        WorkspacePage::PdfReader => DesktopApp::PdfReader,
         WorkspacePage::Browser => DesktopApp::Browser,
         WorkspacePage::Settings => DesktopApp::Settings,
         _ => return None,
@@ -92,6 +94,8 @@ pub(crate) fn app_page(app: DesktopApp) -> WorkspacePage {
         DesktopApp::Editor => WorkspacePage::Editor,
         DesktopApp::Code => WorkspacePage::Code,
         DesktopApp::Player => WorkspacePage::Player,
+        DesktopApp::ImageViewer => WorkspacePage::ImageViewer,
+        DesktopApp::PdfReader => WorkspacePage::PdfReader,
         DesktopApp::Browser => WorkspacePage::Browser,
         DesktopApp::Settings => WorkspacePage::Settings,
     }
@@ -207,12 +211,14 @@ fn focus_window(ui: &Ui, input: &str) {
     }
 }
 
-pub(crate) const APP_LAUNCHERS: [WorkspacePage; 10] = [
+pub(crate) const APP_LAUNCHERS: [WorkspacePage; 12] = [
     WorkspacePage::Files(0),
     WorkspacePage::Terminal,
     WorkspacePage::Code,
     WorkspacePage::Browser,
     WorkspacePage::Player,
+    WorkspacePage::ImageViewer,
+    WorkspacePage::PdfReader,
     WorkspacePage::Monitor,
     WorkspacePage::Docker,
     WorkspacePage::AppCenter,
@@ -231,6 +237,8 @@ fn local_app(s: &State, page: WorkspacePage) -> bool {
         page.base(),
         WorkspacePage::Files(_)
             | WorkspacePage::Code
+            | WorkspacePage::ImageViewer
+            | WorkspacePage::PdfReader
             | WorkspacePage::Player
             | WorkspacePage::Editor
             | WorkspacePage::Terminal
@@ -256,6 +264,8 @@ pub(crate) fn app_label(page: WorkspacePage) -> &'static str {
         WorkspacePage::Code => "Code Editor",
         WorkspacePage::Editor => "Text Editor",
         WorkspacePage::Player => "Player",
+        WorkspacePage::ImageViewer => "Image Viewer",
+        WorkspacePage::PdfReader => "PDF Reader",
         WorkspacePage::Browser => "Browser",
         WorkspacePage::Terminal => "终端",
         WorkspacePage::Monitor => "Monitor",
@@ -317,12 +327,22 @@ pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
         WorkspacePage::Code => "app-code",
         WorkspacePage::Editor => "app-editor",
         WorkspacePage::Player => "app-player",
+        WorkspacePage::ImageViewer => "app-image",
+        WorkspacePage::PdfReader => "app-document",
         WorkspacePage::Browser => "app-browser",
         WorkspacePage::Terminal => "app-terminal",
         WorkspacePage::Monitor => "app-monitor",
         WorkspacePage::AppCenter => "app-center",
         WorkspacePage::Settings => "app-settings",
         _ => "app-desktop",
+    }
+}
+
+pub(crate) fn reader_fullscreen(s: &State, page: WorkspacePage) -> bool {
+    match page {
+        WorkspacePage::PdfReader => s.pdf.fullscreen,
+        WorkspacePage::ImageViewer => s.images.fullscreen,
+        _ => false,
     }
 }
 
@@ -336,6 +356,8 @@ pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Code => Icon::Code,
         WorkspacePage::Editor => Icon::Edit,
         WorkspacePage::Player => Icon::Play,
+        WorkspacePage::ImageViewer => Icon::Image,
+        WorkspacePage::PdfReader => Icon::File,
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         _ => Icon::Grid,
@@ -724,6 +746,12 @@ impl Ui {
             crate::code_terminal::close_all(self);
             self.state.revise(|s| s.code = Default::default());
         }
+        if page == WorkspacePage::PdfReader {
+            self.state.revise(|s| s.pdf = Default::default());
+        }
+        if page == WorkspacePage::ImageViewer {
+            self.state.revise(|s| s.images = Default::default());
+        }
         if page == WorkspacePage::Player {
             self.player.stop(self);
         }
@@ -996,6 +1024,8 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Code => fragment(code_workbench::page(ui)),
         WorkspacePage::Editor => fragment(text_editor::page(ui, id)),
         WorkspacePage::Player => fragment(video_player::panel(ui)),
+        WorkspacePage::ImageViewer => fragment(image_viewer::panel(ui)),
+        WorkspacePage::PdfReader => fragment(pdf_reader::panel(ui)),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::window_page(ui, id)),
         _ => fragment(()),
@@ -1015,6 +1045,9 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             } else {
                 if s.workbench.desktop_page == page {
                     class.push_str(" active");
+                    if reader_fullscreen(s, page) {
+                        class.push_str(" viewer-expanded");
+                    }
                 }
                 if s.workbench.window(page).maximized {
                     class.push_str(" maximized");
@@ -1122,7 +1155,9 @@ fn app_windows(ui: Ui) -> impl Widget {
 
 pub(crate) fn selected_name(s: &State) -> String {
     if let Some(target) = &s.local_desktop {
-        return navigation::local_desktop_label(target);
+        let name = navigation::local_desktop_name(target, s.config.settings.language);
+        let mode = i18n::translate(navigation::local_desktop_mode(target));
+        return format!("{name} · {mode}");
     }
     s.config
         .servers
@@ -1280,7 +1315,23 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                             col().class("desktop-wallpaper-copy").fill((
                                 text()
                                     .class("desktop-wallpaper-name")
-                                    .content(state.map(selected_name)),
+                                    .content(state.map(|s| match &s.local_desktop {
+                                        Some(target) => navigation::local_desktop_name(
+                                            target,
+                                            desktop_system_settings::language(s),
+                                        ),
+                                        None => selected_name(s),
+                                    })),
+                                text()
+                                    .class("desktop-wallpaper-mode")
+                                    .content(state.map(|s| {
+                                        s.local_desktop.as_ref().map_or_else(String::new, |target| {
+                                            i18n::translate_for(
+                                                navigation::local_desktop_mode(target),
+                                                desktop_system_settings::language(s),
+                                            )
+                                        })
+                                    })),
                                 text()
                                     .class("desktop-wallpaper-address")
                                     .content(state.map(|s| {

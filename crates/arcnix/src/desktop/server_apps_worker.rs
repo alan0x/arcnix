@@ -8,6 +8,7 @@ pub enum Action {
     SetTimeZone(String),
     FileLocations,
     FileItem(String),
+    ReadImage(String),
     PickerEntries(Vec<String>),
     PickerTrash,
     CheckDesktopPaths(Vec<String>),
@@ -41,6 +42,7 @@ pub enum Reply {
     TimeZone(desktop_time_zone::TimeZones),
     FileLocations(Vec<arcnix_core::remote::FileLocation>),
     FileItem(arcnix_core::permissions::Metadata),
+    Image(crate::image_viewer::Picture),
     PickerEntries(Vec<arcnix_core::FileEntry>),
     MissingDesktopPaths {
         paths: Vec<String>,
@@ -84,6 +86,9 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::ReadTimeZone => Reply::TimeZone(desktop_time_zone::read(session)?),
         Action::SetTimeZone(zone) => Reply::TimeZone(desktop_time_zone::set(session, &zone)?),
         Action::FileLocations => Reply::FileLocations(session.file_locations()?),
+        Action::ReadImage(path) => {
+            Reply::Image(desktop_customization::read_wallpaper(session, &path)?.into())
+        }
         Action::FileItem(path) => Reply::FileItem(session.file_metadata(&path)?),
         Action::PickerEntries(paths) => Reply::PickerEntries(picker_entries(
             session,

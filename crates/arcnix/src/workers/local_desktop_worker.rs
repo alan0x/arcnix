@@ -32,6 +32,7 @@ impl Session {
                 choices: Vec::new(),
             }),
             AppAction::FileLocations => Reply::FileLocations(target.locations(&self.home)?),
+            AppAction::ReadImage(path) => Reply::Image(target.read_image(&path)?.into()),
             AppAction::FileItem(path) => Reply::FileItem(target.metadata(&path)?),
             AppAction::PickerEntries(paths) => {
                 let mut entries = Vec::new();

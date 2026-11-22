@@ -2708,3 +2708,46 @@ Linux 目录	Linux directory
 未找到 PowerShell。文件和监控仍可使用。请恢复 Windows PowerShell 或安装 PowerShell 7 后再使用终端。	PowerShell was not found. Files and Monitor are available. Restore Windows PowerShell or install PowerShell 7 to use Terminal.
 静音	Mute
 取消静音	Unmute
+图片查看器	Image Viewer
+打开图片	Open image
+所有支持的图片	All supported images
+此文件夹中没有图片。	No images in this folder.
+上一张图片	Previous image
+下一张图片	Next image
+放大	Zoom in
+缩小	Zoom out
+适应窗口	Fit to window
+实际大小	Actual size
+向左旋转	Rotate left
+向右旋转	Rotate right
+在桌面内全屏查看	View fullscreen in Desktop
+退出图片全屏	Exit image fullscreen
+打开一张图片以查看。	Open an image to view it.
+正在加载图片…	Loading image…
+无法加载这张图片。	Could not load this image.
+无法解码这张图片。	Could not decode this image.
+图片不能为空，且不能超过 8 MiB。	Images must be nonempty and at most 8 MiB
+图片内容与文件格式不符。	Image content does not match its file format
+支持的图片格式：PNG、JPEG、WebP、GIF、BMP、AVIF 和 SVG	Supported image formats: PNG, JPEG, WebP, GIF, BMP, AVIF and SVG
+远程图片必须是大小不超过 8 MiB 的普通文件。	Remote image must be a regular file at most 8 MiB
+PDF 阅读器	PDF Reader
+打开 PDF	Open PDF
+PDF 文档	PDF documents
+此文件夹中没有 PDF。	No PDFs in this folder.
+退出 PDF 全屏	Exit PDF fullscreen
+页码	Page number
+适应页面	Fit page
+适应页宽	Fit width
+打开一个 PDF 以阅读。	Open a PDF to read it.
+正在加载 PDF…	Loading PDF…
+无法读取此 PDF。	Could not read this PDF.
+无法渲染此 PDF。	Could not render this PDF.
+无法启动 PDF 阅读器。	Could not start the PDF reader.
+此 PDF 没有页面。	This PDF has no pages.
+PDF 页面尺寸无效。	Invalid PDF page dimensions.
+PDF 页码无效。	Invalid PDF page number.
+请输入 PDF 密码。	Enter the PDF password.
+PDF 密码错误。	Incorrect PDF password.
+PDF 密码	PDF password
+解锁 PDF	Unlock PDF
+文件超过 {} MiB。	File exceeds {} MiB

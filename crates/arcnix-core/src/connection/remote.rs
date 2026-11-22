@@ -1619,22 +1619,25 @@ impl RemoteSession {
             Err(error) => Err(error).context("Cannot inspect remote directory"),
         }
     }
-    pub(crate) fn read_bounded_file(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
+    pub fn read_bounded_file(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
         validate_path(path)?;
         let path = Path::new(path);
         let stat = self.sftp()?.lstat(path)?;
+        ensure!(stat.is_file(), "Choose a regular file");
         ensure!(
-            stat.is_file() && stat.size.is_some_and(|size| size <= limit as u64),
-            "Remote image must be a regular file at most 8 MiB"
+            stat.size.is_some_and(|size| size <= limit as u64),
+            "File exceeds {} MiB",
+            limit / (1024 * 1024)
         );
         let mut file = self.sftp()?.open(path)?;
-        ensure!(
-            file.stat()?.is_file(),
-            "Remote image must be a regular file"
-        );
+        ensure!(file.stat()?.is_file(), "Choose a regular file");
         let mut bytes = Vec::new();
         file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= limit, "Remote image exceeds 8 MiB");
+        ensure!(
+            bytes.len() <= limit,
+            "File exceeds {} MiB",
+            limit / (1024 * 1024)
+        );
         Ok(bytes)
     }
     pub fn file_metadata(&self, path: &str) -> Result<crate::permissions::Metadata> {

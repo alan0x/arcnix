@@ -355,6 +355,27 @@ impl Target {
         self.run(&["write", path, &digest, &signature], bytes)?;
         self.read(path)
     }
+    pub fn read_image(&self, path: &str) -> Result<crate::desktop_customization::WallpaperImage> {
+        crate::desktop_customization::read_image(path, |limit| self.read_bounded_file(path, limit))
+    }
+
+    pub fn read_bounded_file(&self, path: &str, limit: usize) -> Result<Vec<u8>> {
+        let (file, snapshot) = self.open_binary(path)?;
+        ensure!(
+            snapshot.size <= limit as u64,
+            "File exceeds {} MiB",
+            limit / (1024 * 1024)
+        );
+        let mut bytes = Vec::with_capacity(snapshot.size as usize);
+        file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() <= limit,
+            "File exceeds {} MiB",
+            limit / (1024 * 1024)
+        );
+        Ok(bytes)
+    }
+
     /// Read from the selected account's filesystem and keep the open file across seeks.
     pub fn open_binary(&self, path: &str) -> Result<(Box<dyn ReadSeek + Send>, TextSnapshot)> {
         validate_file(path)?;
