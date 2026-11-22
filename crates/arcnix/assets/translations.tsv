@@ -377,7 +377,6 @@ SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问�
 文件	Files
 隐藏文件	Hidden files
 显示隐藏文件	Show hidden files
-隐藏隐藏文件	Hide hidden files
 切换隐藏文件显示	Toggle hidden files
 文件设置	Files settings
 监控	Monitoring
@@ -389,7 +388,7 @@ SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问�
 自定义此计算机上的应用。	Customize this application on your computer.
 选择整个应用使用的语言。	Choose the language used throughout the application.
 选择配色主题。	Choose a color theme.
-显示或隐藏本地和远程列表中以点开头的文件。	Show or hide dotfiles in local and remote file lists.
+适用于本地和远程列表中名称以点（.）开头的文件和文件夹。	Applies to files and folders whose names start with a dot in local and remote lists.
 仅在资源页面打开时刷新数值。	Refresh resource values only while the Resources page is open.
 偏好设置保存在此计算机上。文件分栏和冲突选择仍按服务器独立保存。	Preferences are saved on this computer. File pane sizes and conflict choices remain separate for each server.
 更改会自动保存。	Changes are saved automatically.

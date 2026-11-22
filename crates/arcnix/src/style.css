@@ -346,6 +346,11 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .modal-backdrop[data-modal-sized] > .modal-card > .modal-body { flex: 1; }
 .modal-header { cursor: grab; touch-action: none; }
+.modal-header .sapid-close-button:focus { outline: none; }
+.keyboard-navigation .modal-header .sapid-close-button:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
 .modal-header[data-dragging] { cursor: grabbing; }
 .modal-backdrop[data-modal-moved] {
   container-type: size;
@@ -1228,16 +1233,17 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .time-zone-local-time { grid-area: time; color: var(--muted); text-align: end; font-variant-numeric: tabular-nums; }
 .time-zone-empty { padding: 22px 12px; text-align: center; color: var(--muted); }
 .dock-status-settings .desktop-setting-row { grid-template-columns: minmax(0, 1fr) auto; }
-.desktop-settings-pane .sapid-switch { min-width: 44px; min-height: 44px; justify-content: center; }
-.desktop-settings-pane .sapid-switch-track { background: var(--line-hover) !important; }
-.desktop-settings-pane .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill) !important; }
-.desktop-settings-pane .sapid-switch-thumb { background: var(--surface) !important; }
-.desktop-settings-pane .sapid-switch-thumb { box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent); }
-.desktop-settings-pane .sapid-switch:has(input:checked) .sapid-switch-track { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
-.desktop-settings-pane .sapid-switch-focus { display: none !important; }
-.desktop-settings-pane .sapid-switch:has(input:focus-visible) .sapid-switch-track {
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch { min-width: 44px; min-height: 44px; justify-content: center; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch-track { background: var(--line-hover) !important; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill) !important; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch-thumb { background: var(--surface) !important; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch-thumb { box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent); }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch-focus { display: none !important; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:focus-visible) .sapid-switch-track {
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
+.settings-choices .sapid-switch-label { color: var(--text) !important; }
 .update-panel .preference-check { color: var(--text) !important; }
 .desktop-settings-page .desktop-time-preview {
   margin: 0; padding: 0; color: var(--text); font-size: var(--font-body);

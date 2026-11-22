@@ -220,16 +220,16 @@ impl Ui {
     }
 }
 
-fn hidden_file_choices(ui: &Ui, desktop: bool, title: &'static str) -> impl Widget + use<> {
-    select(
-        ui,
-        desktop,
-        title,
-        [(true, "Show hidden files"), (false, "Hide hidden files")],
-        |s| s.config.settings.show_hidden_files,
-        |_| true,
-        Ui::change_hidden_files,
-    )
+fn hidden_files_switch(ui: &Ui, desktop: bool) -> sapid::Switch {
+    let ui = ui.clone();
+    sapid::switch()
+        .label(i18n::bind_in(desktop, "Show hidden files"))
+        .checked(
+            ui.state
+                .map(|s| s.config.settings.show_hidden_files)
+                .with_partial_eq(),
+        )
+        .on_checked_change(move |show| ui.change_hidden_files(show))
 }
 pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
     when(
@@ -246,11 +246,11 @@ pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
                 (
                     text().class("dialog-description").content(i18n::bind_in(
                         desktop,
-                        "Show or hide dotfiles in local and remote file lists.",
+                        "Applies to files and folders whose names start with a dot in local and remote lists.",
                     )),
                     row()
                         .class("choice-list settings-choices")
-                        .fill(hidden_file_choices(&ui, desktop, "Hidden files")),
+                        .fill(hidden_files_switch(&ui, desktop)),
                     text().class("dialog-error").content(i18n::bind_in(
                         desktop,
                         ui.state.map(|s| s.settings.error.clone()),
@@ -351,11 +351,11 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 &ui,
                 navigation::SettingsSection::Files,
                 "Hidden files",
-                "Show or hide dotfiles in local and remote file lists.",
+                "Applies to files and folders whose names start with a dot in local and remote lists.",
                 local_reset(&ui, false, |s, defaults| {
                     s.show_hidden_files = defaults.show_hidden_files
                 }),
-                hidden_file_choices(&ui, false, "Hidden files"),
+                hidden_files_switch(&ui, false),
             ),
             preferences_ui::display(ui.clone()),
             section(

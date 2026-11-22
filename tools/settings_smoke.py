@@ -65,7 +65,10 @@ def main():
             page.screenshot(path=str(output / "settings-light.png"))
 
             app.settings("Files")
-            page.get_by_role("radio", name="Hide hidden files", exact=True).check()
+            show_hidden = page.get_by_role("switch", name="Show hidden files", exact=True)
+            expect(show_hidden).to_be_checked()
+            show_hidden.uncheck()
+            expect(show_hidden).not_to_be_checked()
             app.servers()
             expect(app.file("visible.txt", False)).to_be_visible()
             expect(app.file(".hidden-test", False)).to_have_count(0)
