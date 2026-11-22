@@ -1070,9 +1070,9 @@ fn page(ui: Ui, window: u32) -> impl Widget {
             packets(state, window),
             view()
                 .class("terminal-surface")
-                .name(i18n::bind(state.map(|s| {
+                .name(i18n::bind(state.map(|_state| {
                     #[cfg(windows)]
-                    if s.local_wsl_selected() {
+                    if _state.local_wsl_selected() {
                         return "WSL 终端".to_owned();
                     }
                     "交互式 SSH 终端".to_owned()

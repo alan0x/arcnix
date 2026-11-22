@@ -789,9 +789,9 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         }),
                 )),
             )),
-            text().class("subtle").content(i18n::bind(state.map(|s| {
+            text().class("subtle").content(i18n::bind(state.map(|_state| {
                 #[cfg(windows)]
-                if s.editor.direct_wsl().is_some() {
+                if _state.editor.direct_wsl().is_some() {
                     return "本机直连使用发行版的默认 Linux 账号。".to_owned();
                 }
                 "密码与私钥口令将在连接时输入。".to_owned()
