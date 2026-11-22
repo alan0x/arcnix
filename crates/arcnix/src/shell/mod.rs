@@ -11,3 +11,5 @@ pub(crate) mod updates_ui;
 pub(crate) mod workspace;
 #[cfg(windows)]
 pub(crate) mod wsl_ui;
+#[cfg(windows)]
+pub(crate) mod wsl_workspace;

@@ -1,4 +1,4 @@
-//! Source-aware software operations; all mutations use reviewed server tasks.
+//! Package operations for server-owned tasks and interactive terminal commands.
 use anyhow::{Result, ensure};
 
 use crate::operations::Snippet;
@@ -22,6 +22,50 @@ pub enum Action {
 pub fn supported(manager: Manager) -> bool {
     manager != Manager::Unknown
 }
+
+pub(crate) fn repository_candidates(
+    remote: &RemoteSession,
+    source: Source,
+    names: &[&str],
+) -> Result<Vec<String>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    for name in names {
+        package_name(source, name)?;
+    }
+    let probe = match source {
+        Source::Native(Manager::Apt) => {
+            "apt-cache madison \"$name\" | awk -F '|' '$3 ~ /Packages[[:space:]]*$/ { found=1 } END { exit !found }' && apt-get --simulate --no-remove install -- \"$name\" >/dev/null"
+        }
+        Source::Native(Manager::Dnf) => {
+            "dnf -q --cacheonly repoquery --available --queryformat '%{name}\\n' \"$name\" | grep -Fxq -- \"$name\""
+        }
+        Source::Native(Manager::Yum) => "yum -q -C list available \"$name\" >/dev/null",
+        Source::Native(Manager::Zypper) => {
+            "zypper --non-interactive --no-refresh search --match-exact --type package \"$name\" | awk -F '|' -v name=\"$name\" '$2 ~ (\"^[[:space:]]*\" name \"[[:space:]]*$\") { found=1 } END { exit !found }'"
+        }
+        Source::Native(Manager::Apk) => "apk search -x \"$name\" | grep -q .",
+        Source::Native(Manager::Pacman) => "pacman -Si \"$name\" >/dev/null",
+        Source::Snap => {
+            "snap info \"$name\" | awk '$1 == \"latest/stable:\" && NF > 1 && $2 != \"-\" && $2 != \"–\" && $2 != \"↑\" { found=1 } END { exit !found }'"
+        }
+        Source::Native(Manager::Unknown) => return Ok(Vec::new()),
+    };
+    let names = names
+        .iter()
+        .map(|name| q(name))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = format!(
+        "# arcnix:software:candidates\nset -- {names}\ncommand -v timeout >/dev/null || exit 125\nfor name do\n  if LC_ALL=C timeout -k 1s 5s sh -c {} sh \"$name\" 2>/dev/null; then printf '%s\\n' \"$name\"; fi\ndone",
+        q(&format!("name=$1; {probe}")),
+    );
+    let result = crate::server_apps::execute(remote, &command, 4096)?;
+    ensure!(result.exit_code == 0, "Cannot check software repositories");
+    Ok(result.stdout.lines().map(str::to_owned).collect())
+}
+
 fn package_name(source: Source, name: &str) -> Result<()> {
     if source == Source::Native(Manager::Apt) {
         return crate::packages::validate_package(name);
@@ -44,6 +88,91 @@ fn package_name(source: Source, name: &str) -> Result<()> {
     }
     Ok(())
 }
+fn validate_names(source: Source, action: Action, names: &[String]) -> Result<()> {
+    ensure!(
+        names.len() <= 32 && (action == Action::RefreshIndex || !names.is_empty()),
+        "Select between 1 and 32 software packages"
+    );
+    for name in names {
+        package_name(source, name)?;
+    }
+    Ok(())
+}
+
+fn validate_channel(channel: &str) -> Result<()> {
+    ensure!(
+        !channel.is_empty()
+            && channel.len() <= 128
+            && !channel.starts_with('-')
+            && channel
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b)),
+        "Invalid snap channel"
+    );
+    Ok(())
+}
+
+/// Command shown for manual execution when server-owned jobs are unavailable.
+/// Keep provider confirmation prompts active and never put credentials in the command.
+pub fn terminal_command(
+    source: Source,
+    action: Action,
+    names: &[String],
+    channel: &str,
+    classic: bool,
+    is_root: bool,
+) -> Result<String> {
+    validate_names(source, action, names)?;
+    let command = match (source, action) {
+        (Source::Native(Manager::Apt), Action::Install) => "apt-get --no-remove install",
+        (Source::Native(Manager::Apt), Action::Upgrade) => "apt-get --only-upgrade install",
+        (Source::Native(Manager::Apt), Action::Remove) => "apt-get remove",
+        (Source::Native(Manager::Apt), Action::RefreshIndex) => "apt-get update",
+        (Source::Native(Manager::Dnf), Action::Install) => "dnf install",
+        (Source::Native(Manager::Dnf), Action::Upgrade) => "dnf upgrade",
+        (Source::Native(Manager::Dnf), Action::Remove) => "dnf remove",
+        (Source::Native(Manager::Dnf), Action::RefreshIndex) => "dnf --refresh makecache",
+        (Source::Native(Manager::Yum), Action::Install) => "yum install",
+        (Source::Native(Manager::Yum), Action::Upgrade) => "yum upgrade",
+        (Source::Native(Manager::Yum), Action::Remove) => "yum remove",
+        (Source::Native(Manager::Yum), Action::RefreshIndex) => "yum makecache",
+        (Source::Native(Manager::Zypper), Action::Install) => "zypper install",
+        (Source::Native(Manager::Zypper), Action::Upgrade) => "zypper update",
+        (Source::Native(Manager::Zypper), Action::Remove) => "zypper remove",
+        (Source::Native(Manager::Zypper), Action::RefreshIndex) => "zypper refresh",
+        (Source::Native(Manager::Apk), Action::Install) => "apk add",
+        (Source::Native(Manager::Apk), Action::Upgrade) => "apk upgrade",
+        (Source::Native(Manager::Apk), Action::Remove) => "apk del",
+        (Source::Native(Manager::Apk), Action::RefreshIndex) => "apk update",
+        (Source::Native(Manager::Pacman), Action::Install) => "pacman --needed -S",
+        (Source::Native(Manager::Pacman), Action::Upgrade) => "pacman -Syu",
+        (Source::Native(Manager::Pacman), Action::Remove) => "pacman -R",
+        (Source::Snap, Action::Install) => "snap install",
+        (Source::Snap, Action::Upgrade) => "snap refresh",
+        (Source::Snap, Action::Remove) => "snap remove",
+        _ => anyhow::bail!("Unsupported package operation"),
+    };
+    let mut command = format!("{}{command}", if is_root { "" } else { "sudo " });
+    if source == Source::Snap && action == Action::Install {
+        validate_channel(channel)?;
+        command.push_str(&format!(" --channel={}", q(channel)));
+        if classic {
+            command.push_str(" --classic");
+        }
+    }
+    if !names.is_empty()
+        && action != Action::RefreshIndex
+        && !(source == Source::Native(Manager::Pacman) && action == Action::Upgrade)
+    {
+        command.push_str(" --");
+        for name in names {
+            command.push(' ');
+            command.push_str(&q(name));
+        }
+    }
+    Ok(command)
+}
+
 pub fn template(
     source: Source,
     action: Action,
@@ -51,13 +180,7 @@ pub fn template(
     channel: &str,
     classic: bool,
 ) -> Result<Template> {
-    ensure!(
-        names.len() <= 32 && (action == Action::RefreshIndex || !names.is_empty()),
-        "Select between 1 and 32 software packages"
-    );
-    for name in &names {
-        package_name(source, name)?;
-    }
+    validate_names(source, action, &names)?;
     if source == Source::Native(Manager::Apt) {
         if action == Action::Install {
             return Template::package(PackageAction::Install(names));
@@ -145,15 +268,7 @@ pub fn template(
             )
         }
         Source::Snap => {
-            ensure!(
-                !channel.is_empty()
-                    && channel.len() <= 128
-                    && !channel.starts_with('-')
-                    && channel
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b)),
-                "Invalid snap channel"
-            );
+            validate_channel(channel)?;
             let command = match action {
                 Action::Install => format!(
                     "install --channel={} {} -- {args}",
@@ -356,6 +471,45 @@ pub fn parse(source: Source, text: &str, installed: bool) -> Result<Vec<Package>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_commands_preserve_interactive_confirmation_and_privilege_boundaries() {
+        let command = |source, action, name: &str, root| {
+            terminal_command(source, action, &[name.into()], "stable", false, root)
+        };
+        let apt = Source::Native(Manager::Apt);
+        assert_eq!(
+            command(apt, Action::Install, "nginx", false).unwrap(),
+            "sudo apt-get --no-remove install -- 'nginx'"
+        );
+        assert_eq!(
+            command(apt, Action::Remove, "nginx", true).unwrap(),
+            "apt-get remove -- 'nginx'"
+        );
+        assert!(command(apt, Action::Install, "nginx\nwhoami", false).is_err());
+        assert!(command(apt, Action::Install, "--quiet", true).is_err());
+        assert_eq!(
+            command(
+                Source::Native(Manager::Pacman),
+                Action::Upgrade,
+                "git",
+                false
+            )
+            .unwrap(),
+            "sudo pacman -Syu"
+        );
+        assert!(
+            terminal_command(
+                Source::Snap,
+                Action::Install,
+                &["caddy".into()],
+                "stable\n",
+                true,
+                false
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn repository_rows_do_not_turn_headings_or_descriptions_into_packages() {
         let rows = parse(

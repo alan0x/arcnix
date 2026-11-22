@@ -5,6 +5,43 @@ import time
 from desktop_fixture import Desktop, Peer, ROOT, expect, eventually
 
 
+def check_modal_resize(page, dialog):
+    expect(dialog.locator('.desktop-resize-handle')).to_have_count(8)
+    header = dialog.locator('.modal-header')
+    expect(header.get_by_role('button')).to_have_count(1)
+    expect(header.get_by_role('button', name='Close dialog', exact=True)).to_be_visible()
+    area = page.locator('.desktop-canvas')
+
+    def drag_to(edge, x, y):
+        dialog.locator('.edge-' + edge).hover()
+        page.mouse.down()
+        page.mouse.move(x, y, steps=5)
+        page.mouse.up()
+
+    def dimensions():
+        frame, box = area.bounding_box(), dialog.bounding_box()
+        for axis in ('width', 'height'):
+            assert box[axis] <= .8 * frame[axis] + 1, (frame, box)
+        return frame, box
+
+    frame, original = dimensions()
+    drag_to('nw', original['x'] + 45, original['y'] + 35)
+    _, smaller = dimensions()
+    assert smaller['height'] < original['height'] - 10
+    assert abs(smaller['x'] + smaller['width'] - original['x'] - original['width']) < 2
+    header.hover(position={'x': 25, 'y': 18})
+    page.mouse.down()
+    page.mouse.move(frame['x'] + 26, frame['y'] + 19, steps=5)
+    page.mouse.up()
+    drag_to('se', frame['x'] + frame['width'] - 2, frame['y'] + frame['height'] - 2)
+    _, largest = dimensions()
+    assert all(abs(largest[axis] - .8 * frame[axis]) < 2 for axis in ('width', 'height')), (largest, frame)
+    viewport = page.viewport_size
+    page.set_viewport_size(dict(width=viewport['width'] - 150, height=viewport['height'] - 100))
+    eventually(lambda: dimensions()[1]['width'] < largest['width'])
+    page.set_viewport_size(viewport)
+
+
 def main():
     out = ROOT / 'artifacts/desktop-editor' / f'run-{time.time_ns()}'
     local = out / 'local'
@@ -34,7 +71,20 @@ def main():
             app.workspace('Desktop')
             p.set_viewport_size(dict(width=900, height=620))
             shortcuts = p.locator('.desktop-shortcuts')
-            launcher = app.apps().get_by_role('button', name='Text Editor', exact=True)
+            apps = app.apps()
+            close_apps = apps.get_by_role('button', name='Close dialog', exact=True)
+            close_apps.focus()
+            page_last_app = apps.locator('.desktop-app-catalog-item').last
+            close_apps.press('Shift+Tab')
+            expect(page_last_app).to_be_focused()
+            page_last_app.press('Tab')
+            expect(close_apps).to_be_focused()
+            expect(apps.locator('.modal-footer')).to_be_hidden()
+            assert apps.evaluate('''dialog => dialog.getBoundingClientRect().bottom
+                - dialog.querySelector('.desktop-app-catalog').getBoundingClientRect().bottom < 2''')
+            check_modal_resize(p, apps)
+            expect(apps.locator('.modal-footer')).to_be_hidden()
+            launcher = apps.get_by_role('button', name='Text Editor', exact=True)
             editor_icon = launcher.locator('.desktop-app-icon')
             assert editor_icon.evaluate("icon => getComputedStyle(icon, '::before').maskImage") != 'none'
             p.keyboard.press('Escape')
@@ -104,6 +154,7 @@ def main():
             file_menu.click()
             expect(titlebar.locator('.editor-menu-popup:popover-open')).to_have_count(0)
             file_menu.press('Control+o')
+            check_modal_resize(p, picker)
             picker.get_by_role('button', name='Cancel', exact=True).click()
             expect(picker).to_have_count(0)
             file_menu.press('Control+n')

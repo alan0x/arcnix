@@ -190,7 +190,6 @@ fn clock_shows_seconds(s: &State) -> bool {
 
 pub(crate) fn clock_options_data(s: &State) -> String {
     let clock = server_apps_ui::current(s).clock;
-    let side = side_dock(s);
     let format = if clock_format(s) == ClockFormat::TwelveHour {
         "h12"
     } else {
@@ -202,7 +201,7 @@ pub(crate) fn clock_options_data(s: &State) -> String {
     };
     format!(
         "{locale},{format},{},{},{}",
-        side && clock.show_weekday,
+        clock.show_weekday,
         clock.show_date,
         clock_shows_seconds(s),
     )
@@ -381,23 +380,19 @@ pub(crate) fn date_time(ui: Ui) -> impl Widget {
 }
 
 pub(crate) fn dock_clock_settings(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let weekday = ui.clone();
     col()
         .class("dock-clock-settings desktop-settings-rows")
         .fill((
             settings_row("Time format", time_format_choices(&ui)),
-            when(state.map(side_dock), move || {
-                settings_row(
+            settings_row(
+                "Weekday",
+                row().class("dock-clock-weekday").fill(clock_switch(
+                    &ui,
                     "Weekday",
-                    clock_switch(
-                        &weekday,
-                        "Weekday",
-                        |s| server_apps_ui::current(s).clock.show_weekday,
-                        |clock, show| clock.show_weekday = show,
-                    ),
-                )
-            }),
+                    |s| server_apps_ui::current(s).clock.show_weekday,
+                    |clock, show| clock.show_weekday = show,
+                )),
+            ),
             settings_row(
                 "Date",
                 clock_switch(
@@ -409,9 +404,12 @@ pub(crate) fn dock_clock_settings(ui: Ui) -> impl Widget {
             ),
             settings_row(
                 "Seconds",
-                clock_switch(&ui, "Seconds", clock_shows_seconds, |clock, show| {
-                    clock.show_seconds = Some(show)
-                }),
+                row().class("dock-clock-seconds").fill(clock_switch(
+                    &ui,
+                    "Seconds",
+                    clock_shows_seconds,
+                    |clock, show| clock.show_seconds = Some(show),
+                )),
             ),
         ))
 }

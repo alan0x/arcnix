@@ -23,6 +23,15 @@ fn selected(s: &State) -> Option<Project> {
         .cloned()
 }
 impl Ui {
+    pub(crate) fn open_compose_project(&self, name: String) {
+        self.state.revise(|s| {
+            s.docker.view = 3;
+            s.compose.selected = name;
+            s.compose.preview = false;
+        });
+        self.open_desktop_app(WorkspacePage::Docker);
+        self.compose_refresh();
+    }
     pub(crate) fn compose_enter(&self) {
         if self
             .state
@@ -88,6 +97,7 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
     let apply = ui.clone();
     let stop = ui.clone();
     let restart = ui.clone();
+    let remove = ui.clone();
     let folder = ui.clone();
     col().class("compose-projects").fill((
   row().class("compose-toolbar").fill((
@@ -102,6 +112,7 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
    btn("Apply…",move||apply.compose_action(compose_apps::Action::Apply)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
    btn("Stop project…",move||stop.compose_action(compose_apps::Action::Stop)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
    btn("Restart project…",move||restart.compose_action(compose_apps::Action::Restart)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
+   btn("Remove project…",move||remove.compose_action(compose_apps::Action::Remove)).enabled(state.map(|s|ready(s)&&selected(s).is_some()&&!scripts_ui::busy(s))),
    text_action("Open folder",Icon::Folder).enabled(state.map(|s|s.sftp_available&&selected(s).is_some())).on_press(move||{let path=state.with(|s|s.compose.projects.as_ref().and_then(|v|selected(s).map(|p|format!("{}/{}",v.root,p.definition.name))));if let Some(path)=path{folder.open_desktop_app(WorkspacePage::Files(0));file_browser::navigate(&folder,true,path);}}),
    btn("Compose file",move||state.revise(|s|s.compose.preview = !s.compose.preview)),
   )),

@@ -10,6 +10,7 @@ const LIMIT: usize = 2 * 1024 * 1024;
 const ROW_LIMIT: usize = 1000;
 const PREFIX: &str = r#"set -eu
 command -v timeout >/dev/null 2>&1 || { printf 'The server needs the timeout command\n' >&2; exit 1; }
+if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH="$PATH:/snap/bin"; fi
 command -v docker >/dev/null 2>&1 || { printf 'Docker is no longer installed\n' >&2; exit 1; }
 unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 arcnix_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -28,12 +29,34 @@ pub struct Container {
     pub mounts: String,
     #[serde(default)]
     pub networks: String,
+    #[serde(default)]
+    pub compose_project: String,
+    #[serde(default)]
+    pub compose_service: String,
+    #[serde(default)]
+    pub compose_working_dir: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Volume {
     pub name: String,
     pub driver: String,
     pub scope: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Image {
+    pub id: String,
+    pub repository: String,
+    pub tag: String,
+    pub size: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Stats {
+    pub cpu: String,
+    pub memory: String,
+    pub network: String,
+    pub block: String,
+    pub processes: String,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -68,6 +91,9 @@ pub enum Operation {
     Start,
     Stop,
     Restart,
+    Pause,
+    Resume,
+    Remove,
     Configure {
         restart: String,
         cpu_millis: Option<u32>,
@@ -80,6 +106,9 @@ impl Operation {
             Self::Start => "Start container",
             Self::Stop => "Stop container",
             Self::Restart => "Restart container",
+            Self::Pause => "Pause container",
+            Self::Resume => "Resume container",
+            Self::Remove => "Remove container",
             Self::Configure { .. } => "Configure container",
         }
     }
@@ -147,7 +176,7 @@ pub fn snapshot_command() -> String {
 printf 'ARCNIX_DOCKER_V1\n'
 arcnix_docker version --format '{{{{.Server.Version}}}}'
 printf 'ARCNIX_CONTAINERS\n'
-arcnix_docker container ls -a --no-trunc --format '{{"id":{{{{json .ID}}}},"name":{{{{json .Names}}}},"image":{{{{json .Image}}}},"state":{{{{json .State}}}},"status":{{{{json .Status}}}},"ports":{{{{json .Ports}}}},"mounts":{{{{json .Mounts}}}},"networks":{{{{json .Networks}}}}}}'
+arcnix_docker container ls -a --no-trunc --format '{{"id":{{{{json .ID}}}},"name":{{{{json .Names}}}},"image":{{{{json .Image}}}},"state":{{{{json .State}}}},"status":{{{{json .Status}}}},"ports":{{{{json .Ports}}}},"mounts":{{{{json .Mounts}}}},"networks":{{{{json .Networks}}}},"compose_project":{{{{json (.Label "com.docker.compose.project")}}}},"compose_service":{{{{json (.Label "com.docker.compose.service")}}}},"compose_working_dir":{{{{json (.Label "com.docker.compose.project.working_dir")}}}}}}'
 printf 'ARCNIX_VOLUMES\n'
 arcnix_docker volume ls --format '{{"name":{{{{json .Name}}}},"driver":{{{{json .Driver}}}},"scope":{{{{json .Scope}}}}}}'
 printf 'ARCNIX_DOCKER_END\n'
@@ -213,6 +242,33 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot> {
 }
 pub fn snapshot(session: &RemoteSession) -> Result<Snapshot> {
     parse_snapshot(&run(session, &snapshot_command())?.stdout)
+}
+pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
+    let command = format!(
+        r#"# arcnix:docker:images
+{PREFIX}
+arcnix_docker image ls --no-trunc --format '{{"id":{{{{json .ID}}}},"repository":{{{{json .Repository}}}},"tag":{{{{json .Tag}}}},"size":{{{{json .Size}}}}}}'"#
+    );
+    run(session, &command)?
+        .stdout
+        .lines()
+        .take(ROW_LIMIT + 1)
+        .enumerate()
+        .map(|(index, row)| {
+            ensure!(index < ROW_LIMIT, "Too many Docker images");
+            Ok(serde_json::from_str(row)?)
+        })
+        .collect()
+}
+
+pub fn stats(session: &RemoteSession, id: &str) -> Result<Stats> {
+    ensure!(id_valid(id), "Invalid container ID");
+    let command = format!(
+        r#"# arcnix:docker:stats
+{PREFIX}
+arcnix_docker stats --no-stream --format '{{"cpu":{{{{json .CPUPerc}}}},"memory":{{{{json .MemUsage}}}},"network":{{{{json .NetIO}}}},"block":{{{{json .BlockIO}}}},"processes":{{{{json .PIDs}}}}}}' {id}"#
+    );
+    Ok(serde_json::from_str(run(session, &command)?.stdout.trim())?)
 }
 
 pub fn inspect_command(id: &str) -> Result<String> {
@@ -283,6 +339,9 @@ pub fn operation_command(id: &str, operation: &Operation) -> Result<String> {
         Operation::Start => ("start", "start".to_owned()),
         Operation::Stop => ("stop", "stop --time 10".to_owned()),
         Operation::Restart => ("restart", "restart --time 10".to_owned()),
+        Operation::Pause => ("pause", "pause".to_owned()),
+        Operation::Resume => ("unpause", "unpause".to_owned()),
+        Operation::Remove => ("remove", "rm".to_owned()),
         Operation::Configure {
             restart,
             cpu_millis,

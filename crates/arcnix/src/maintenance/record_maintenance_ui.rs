@@ -78,8 +78,7 @@ fn target(s: &State, id: &str) -> anyhow::Result<batch_worker::Target> {
         .ok_or_else(|| anyhow::anyhow!("Reconnect to record storage"))?;
     let profile = s
         .config
-        .servers
-        .iter()
+        .available_servers()
         .find(|p| p.id == id)
         .ok_or_else(|| anyhow::anyhow!("Server inventory changed; reconnect to record storage"))?;
     anyhow::ensure!(
@@ -200,8 +199,7 @@ impl Ui {
             let mut peers = HashSet::new();
             for profile in s
                 .config
-                .servers
-                .iter()
+                .available_servers()
                 .filter(|p| s.record_storage.selected.contains(&p.id))
             {
                 let user = if scope == Scope::Task {
@@ -469,7 +467,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
             row().class("script-actions").fill(each(vec![Scope::Task,Scope::Configuration]).key(|scope|*scope as u8).children(move|item|{let scope=item.value.get();btn(scope.label(),move||state.revise(|s|{s.record_storage.form_scope=scope;s.record_storage.keep=storage::Policy::for_scope(scope).keep_latest.to_string();})).class(state.map(move|s|if s.record_storage.form_scope==scope{"choice active"}else{"choice"}.to_owned()))})),
             col().class("field").fill((text().class("field-label").content(i18n::bind("Minimum record age (days)")),input().name(i18n::bind("Minimum record age (days)")).value(state.map(|s|s.record_storage.days.clone())).on(value_changed,move|event|if let Event::ValueChanged{value,..}=event{state.revise(|s|s.record_storage.days=value);}))),
             col().class("field").fill((text().class("field-label").content(i18n::bind("Keep latest records (per path for configuration originals)")),input().name(i18n::bind("Keep latest records (per path for configuration originals)")).value(state.map(|s|s.record_storage.keep.clone())).on(value_changed,move|event|if let Event::ValueChanged{value,..}=event{state.revise(|s|s.record_storage.keep=value);}))),
-            each(state.map(|s|s.config.servers.clone())).key(|p|p.id.clone()).children(move|item|{
+            each(state.map(|s|s.config.available_servers().cloned().collect::<Vec<_>>())).key(|p|p.id.clone()).children(move|item|{
                 let profile=item.value.get();let id=profile.id.clone();let chosen=id.clone();let visibility=id.clone();let form_id=id.clone();
                 col().class("record-target-picker").fill((
                     btn(format!("{} · {}@{}:{}",profile.name,profile.username,profile.host,profile.port),move||state.revise(|s|{if !s.record_storage.selected.remove(&id){s.record_storage.selected.insert(id.clone());}else{s.record_storage.form.remove(&id);}})).class(state.map(move|s|if s.record_storage.selected.contains(&chosen){"record-target active"}else{"record-target"}.to_owned())).enabled(state.map(move|s|s.config.trusted_fingerprint(&profile.host,profile.port).is_some())),

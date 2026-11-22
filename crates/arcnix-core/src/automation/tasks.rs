@@ -89,7 +89,8 @@ pub struct Task {
     pub configuration_targets:
         Option<std::collections::BTreeMap<String, crate::configurations::Record>>,
     #[serde(default)]
-    pub diagnostic: Option<crate::diagnostics::Plan>,
+    // Preserve the request stored by older clients when rewriting task history.
+    pub diagnostic: Option<serde_json::Value>,
     #[serde(default)]
     pub backup: Option<crate::backup_evidence::TaskInfo>,
     pub id: String,
@@ -286,6 +287,48 @@ fn replace_history(source: &Path, destination: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(windows))]
     fs::rename(source, destination)
+}
+
+/// Keep protocol constants intact when a credential happens to be a short
+/// number or a status word. Redact decoded details before storing the log.
+pub fn redact_log(output: &str, secrets: &[&str]) -> String {
+    fn plain(text: &str, secrets: &[&str]) -> String {
+        let mut text = text.to_owned();
+        for secret in secrets.iter().filter(|s| !s.is_empty()) {
+            text = text.replace(*secret, "[redacted]");
+        }
+        text
+    }
+    output
+        .split_inclusive('\n')
+        .map(|line| {
+            let body = line.strip_suffix('\n').unwrap_or(line);
+            let newline = if line.ends_with('\n') { "\n" } else { "" };
+            if body.len() <= 32 * 1024 + crate::recovery_drills::MARKER.len()
+                && let Some(safe) = crate::recovery_drills::redact_line(body, secrets)
+            {
+                return format!("{safe}{newline}");
+            }
+            if body.len() <= 32 * 1024
+                && let Some(safe) = crate::installers::redact_line(body, secrets)
+            {
+                return format!("{safe}{newline}");
+            }
+            if let Some((_, id)) = body
+                .strip_prefix("ARCNIX_CONFIG_V1\t")
+                .and_then(|v| v.split_once('\t'))
+                && crate::remote_tasks::validate_id(id).is_ok()
+                && crate::configurations::phase(body, id).is_some()
+            {
+                return line.to_owned();
+            }
+            if body.starts_with("ARCNIX_DIAG_") {
+                // Legacy diagnostic packets can contain encoded credentials.
+                return format!("[redacted]{newline}");
+            }
+            plain(line, secrets)
+        })
+        .collect()
 }
 
 #[cfg(test)]

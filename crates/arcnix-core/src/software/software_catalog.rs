@@ -1,5 +1,6 @@
 //! Built-in application identities, separate from installation providers.
 use crate::compose_apps;
+use crate::docker::{self, Container};
 use crate::packages::{Package, PackageManager as Manager};
 use crate::remote::RemoteSession;
 use crate::software_install::{self, Source};
@@ -73,6 +74,23 @@ impl App {
 }
 macro_rules! app { ($id:literal,$name:literal,$mark:literal,$category:ident,$color:literal,$summary:literal,$uses:literal,$url:literal,[$($package:literal),+],$snap:expr,$compose:expr) => { App{id:$id,name:$name,mark:$mark,category:Category::$category,color:$color,summary:$summary,uses:$uses,website:$url,native:[$($package),+],snap:$snap,compose:$compose} }; }
 pub const APPS: &[App] = &[
+    app!(
+        "docker",
+        "Docker",
+        "D",
+        Containers,
+        "blue",
+        "Container engine",
+        "Run containers and manage their networks, images and volumes",
+        "https://www.docker.com/",
+        ["docker.io", "moby-engine", "docker", "docker", "docker"],
+        Some(Snap {
+            name: "docker",
+            publisher: "Canonical",
+            classic: false
+        }),
+        None
+    ),
     app!(
         "nginx",
         "Nginx",
@@ -335,13 +353,52 @@ pub const APPS: &[App] = &[
 pub fn get(id: &str) -> Option<App> {
     APPS.iter().find(|a| a.id == id).copied()
 }
+pub const DISCOVERABLE: &[&str] = &[
+    "docker",
+    "nginx",
+    "caddy",
+    "redis",
+    "postgresql",
+    "git",
+    "htop",
+    "certbot",
+];
+
+impl App {
+    fn alternate_package(self, manager: Manager) -> Option<&'static str> {
+        (self.id == "docker" && matches!(manager, Manager::Apt | Manager::Dnf | Manager::Yum))
+            .then_some("docker-ce")
+    }
+
+    pub fn matches_package(self, manager: Manager, name: &str) -> bool {
+        self.package(manager) == Some(name) || self.alternate_package(manager) == Some(name)
+    }
+}
+
 pub fn for_package(source: Source, name: &str) -> Option<App> {
     APPS.iter()
         .find(|a| match source {
-            Source::Native(m) => a.package(m) == Some(name),
+            Source::Native(m) => a.matches_package(m, name),
             Source::Snap => a.snap.is_some_and(|s| s.name == name),
         })
         .copied()
+}
+
+pub fn for_container(container: &Container) -> Option<App> {
+    let reference = container.image.split('@').next()?;
+    let repository = match reference.rsplit_once(':') {
+        Some((name, tag)) if !tag.contains('/') => name,
+        _ => reference,
+    };
+    match repository {
+        "nginx"
+        | "library/nginx"
+        | "docker.io/nginx"
+        | "docker.io/library/nginx"
+        | "index.docker.io/nginx"
+        | "index.docker.io/library/nginx" => get("nginx"),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -350,8 +407,33 @@ pub struct Inventory {
     pub native: Vec<Package>,
     pub snap: Vec<Package>,
     pub projects: Vec<compose_apps::Project>,
+    pub containers: Vec<Container>,
+    pub is_root: bool,
+    pub sudo_available: bool,
+    pub hosted_tasks: bool,
+    pub docker_cli: bool,
+    pub compose_ready: bool,
+    native_candidates: Vec<String>,
+    snap_candidates: Vec<String>,
     pub errors: Vec<String>,
 }
+impl Inventory {
+    pub fn native_package(&self, app: App) -> Option<&'static str> {
+        [
+            app.package(self.manager),
+            app.alternate_package(self.manager),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|name| self.native_candidates.iter().any(|found| found == name))
+    }
+
+    pub fn snap_available(&self, app: App) -> bool {
+        app.snap
+            .is_some_and(|snap| self.snap_candidates.iter().any(|name| name == snap.name))
+    }
+}
+
 pub fn inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {
     let env = crate::packages::detect(remote)?;
     let apps = crate::server_apps::discover(remote)?;
@@ -360,11 +442,31 @@ pub fn inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {
         native: vec![],
         snap: vec![],
         projects: vec![],
+        containers: vec![],
+        is_root: env.is_root,
+        sudo_available: env.sudo_available,
+        hosted_tasks: crate::remote_tasks::preflight(remote).is_ok(),
+        docker_cli: apps.docker,
+        compose_ready: false,
+        native_candidates: vec![],
+        snap_candidates: vec![],
         errors: vec![],
     };
     if software_install::supported(env.manager) {
         match software_install::query(remote, Source::Native(env.manager), None) {
             Ok(rows) => result.native = rows,
+            Err(e) => result
+                .errors
+                .push(format!("{}: {e:#}", env.manager.label())),
+        }
+        let names: Vec<_> = DISCOVERABLE
+            .iter()
+            .filter_map(|id| get(id))
+            .flat_map(|app| [app.package(env.manager), app.alternate_package(env.manager)])
+            .flatten()
+            .collect();
+        match software_install::repository_candidates(remote, Source::Native(env.manager), &names) {
+            Ok(names) => result.native_candidates = names,
             Err(e) => result
                 .errors
                 .push(format!("{}: {e:#}", env.manager.label())),
@@ -375,11 +477,50 @@ pub fn inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {
             Ok(rows) => result.snap = rows,
             Err(e) => result.errors.push(format!("Snap: {e:#}")),
         }
+        let names: Vec<_> = DISCOVERABLE
+            .iter()
+            .filter_map(|id| get(id)?.snap.map(|snap| snap.name))
+            .collect();
+        match software_install::repository_candidates(remote, Source::Snap, &names) {
+            Ok(names) => result.snap_candidates = names,
+            Err(e) => result.errors.push(format!("Snap: {e:#}")),
+        }
     }
+    let mut compose_root = String::new();
     if apps.compose {
         match compose_apps::list(remote) {
-            Ok(projects) => result.projects = projects.entries,
+            Ok(projects) => {
+                compose_root = projects.root;
+                result.projects = projects.entries;
+            }
             Err(e) => result.errors.push(format!("Compose: {e:#}")),
+        }
+    }
+    if apps.docker {
+        match docker::snapshot(remote) {
+            Ok(snapshot) => {
+                result.compose_ready = apps.compose;
+                result.containers = snapshot
+                    .containers
+                    .into_iter()
+                    .filter(|container| {
+                        let managed = container.compose_service == "application"
+                            && container
+                                .compose_project
+                                .strip_prefix("arcnix-")
+                                .is_some_and(|name| {
+                                    container.compose_working_dir
+                                        == format!("{compose_root}/{name}")
+                                        && result
+                                            .projects
+                                            .iter()
+                                            .any(|project| project.definition.name == name)
+                                });
+                        for_container(container).is_some() && !managed
+                    })
+                    .collect();
+            }
+            Err(e) => result.errors.push(format!("Docker: {e:#}")),
         }
     }
     Ok(result)
@@ -387,6 +528,29 @@ pub fn inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_identity_matches_nginx_repositories_and_ignores_names_and_private_images() {
+        for (image, matches) in [
+            ("nginx", true),
+            ("nginx:alpine", true),
+            ("docker.io/library/nginx:stable", true),
+            ("docker.io/library/nginx@sha256:1234", true),
+            ("example.test:5000/library/nginx:stable", false),
+            ("example.test/nginx", false),
+            ("nginx-proxy", false),
+        ] {
+            let container = serde_json::from_value(serde_json::json!({
+                "id": "a".repeat(64), "name": "nginx", "image": image, "state": "exited",
+                "status": "Exited (0)", "ports": "80/tcp", "mounts": ""
+            }))
+            .unwrap();
+            assert_eq!(
+                for_container(&container).map(|app| app.id),
+                matches.then_some("nginx")
+            );
+        }
+    }
     #[test]
     fn providers_keep_application_identity_and_distro_specific_names() {
         assert_eq!(

@@ -314,6 +314,20 @@ fn card(
     ))
 }
 
+fn load_period(state: Cage<State>, index: usize, label: &'static str) -> impl Widget {
+    col().class("monitor-load-period").fill((
+        text().class("metric-value").content(state.map(move |s| {
+            s.metrics
+                .usage
+                .as_ref()
+                .and_then(|u| u.snapshot.load_average)
+                .map(|load| format!("{:.2}", load[index]))
+                .unwrap_or_else(|| "—".into())
+        })),
+        text().class("subtle").content(i18n::bind(label)),
+    ))
+}
+
 fn cpu_cards(state: Cage<State>) -> impl Widget {
     fragment((
         card(
@@ -327,16 +341,14 @@ fn cpu_cards(state: Cage<State>) -> impl Widget {
                     .map(|cpu| format!("{} logical processors", cpu.logical_cpus))
             },
         ),
-        card(
-            state,
-            "系统负载",
-            |u| {
-                u.snapshot
-                    .load_average
-                    .map(|[one, five, fifteen]| format!("{one:.2} / {five:.2} / {fifteen:.2}"))
-            },
-            |_| Some("1 / 5 / 15 分钟".into()),
-        ),
+        col().class("metric-card monitor-load-card").fill((
+            text().class("subtle").content(i18n::bind("系统负载")),
+            row().class("monitor-load-periods").fill((
+                load_period(state, 0, "1 分钟"),
+                load_period(state, 1, "5 分钟"),
+                load_period(state, 2, "15 分钟"),
+            )),
+        )),
     ))
 }
 

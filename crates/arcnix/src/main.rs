@@ -57,7 +57,12 @@ enum Dialog {
         selected: Option<arcnix_core::file_associations::FileApp>,
     },
     SoftwareInstall,
-    SoftwareAction(arcnix_core::software_install::Action, String),
+    SoftwareAction(
+        arcnix_core::software_install::Action,
+        String,
+        arcnix_core::software_install::Source,
+        Vec<String>,
+    ),
     DesktopTask(String),
     ConfigureNetwork,
     #[cfg(windows)]
@@ -109,10 +114,6 @@ enum Dialog {
     TaskRecordConnect,
     TaskRecordLog,
     TaskStop,
-    DiagnosticExport,
-    DiagnosticLogs,
-    DeletedFiles,
-    TcpListeners,
     TerminatePortProcess,
     ConfigurationBackup,
     ConfigurationRestore,
@@ -208,6 +209,8 @@ define_state! {
     |config, local_path, notice|
     session {
         selected: Option<String> = None,
+        #[cfg(windows)]
+        wsl: wsl_workspace::Workspace = Default::default(),
         dialog: Option<Dialog> = None,
         dialog_error: String = String::new(),
         file_menu: Option<bool> = None,
@@ -312,12 +315,9 @@ define_state! {
         unread_notifications: usize = 0,
         scripts: scripts_ui::ScriptsState = Default::default(),
         task_records: task_records_ui::RecordState = Default::default(),
-        deleted_files: deleted_files_ui::DeletedFilesState = Default::default(),
-        tcp_listeners: tcp_listeners_ui::TcpListenersState = Default::default(),
         record_storage: record_maintenance_ui::StorageState = Default::default(),
         cleanup_reports: cleanup_records_ui::ReportsState = Default::default(),
         backups: backups_ui::BackupState = Default::default(),
-        diagnostics: diagnostics_ui::DiagnosticsState = Default::default(),
         settings: settings::SettingsState = Default::default(),
         system_dark: bool = true,
         transfer_details: HashMap<String, transfer_details::Details> = Default::default(),
@@ -330,6 +330,16 @@ define_state! {
         background: bool = false,
     }
 }
+impl ServerSession {
+    fn terminal_available(&self) -> bool {
+        #[cfg(windows)]
+        if self.wsl.directory.is_some() {
+            return true;
+        }
+        self.connected
+    }
+}
+
 impl State {
     fn advance_epoch(&mut self) {
         file_elevation::reset(self);
@@ -341,10 +351,10 @@ impl State {
         let mut epochs = self
             .parked
             .values()
-            .filter(|session| session.connected)
+            .filter(|session| session.terminal_available())
             .map(|session| session.epoch)
             .collect::<Vec<_>>();
-        if self.connected {
+        if self.terminal_available() {
             epochs.push(self.epoch);
         }
         epochs.sort_unstable();
@@ -352,7 +362,12 @@ impl State {
     }
 
     fn active_connections(&self) -> usize {
-        usize::from(self.connected) + self.parked.values().filter(|s| s.connected).count()
+        usize::from(self.terminal_available())
+            + self
+                .parked
+                .values()
+                .filter(|s| s.terminal_available())
+                .count()
     }
 
     fn transfer_cancel(&self, id: &str) -> Option<&Arc<AtomicBool>> {
@@ -363,13 +378,26 @@ impl State {
         })
     }
 
+    fn local_wsl_selected(&self) -> bool {
+        cfg!(windows)
+            && selected_profile(self)
+                .and_then(ServerProfile::direct_wsl)
+                .is_some()
+    }
+    fn terminal_available(&self) -> bool {
+        #[cfg(windows)]
+        if self.wsl.directory.is_some() {
+            return true;
+        }
+        self.connected
+    }
     fn server_connection(&self, id: &str) -> (bool, bool) {
         if self.selected.as_deref() == Some(id) {
-            (self.connected, self.connecting)
+            (self.terminal_available(), self.connecting)
         } else {
             self.parked
                 .get(&Some(id.to_owned()))
-                .map(|session| (session.connected, session.connecting))
+                .map(|session| (session.terminal_available(), session.connecting))
                 .unwrap_or_default()
         }
     }
@@ -452,7 +480,7 @@ impl Ui {
     fn select_server(&self, id: String, connect_now: bool) {
         if self.state.with(|s| {
             s.selected.as_ref() != Some(&id)
-                && (s.system_task_running || !s.config.servers.iter().any(|p| p.id == id))
+                && (s.system_task_running || !s.config.available_servers().any(|p| p.id == id))
         }) {
             return;
         }
@@ -464,7 +492,11 @@ impl Ui {
             dismiss_menus(s);
         });
         self.desktop_enter();
-        if connect_now && self.state.with(|s| !s.connected && !s.connecting) {
+        if connect_now
+            && self
+                .state
+                .with(|s| !s.terminal_available() && !s.connecting)
+        {
             self.request_connect();
         }
     }
@@ -673,7 +705,6 @@ impl Ui {
             }
             task_refresh_ui::dismiss(s);
             task_records_ui::dismiss(s);
-            diagnostics_ui::dismiss(s);
             if matches!(
                 s.dialog,
                 Some(Dialog::ConfigurationBackup | Dialog::ConfigurationRestore)
@@ -848,6 +879,8 @@ impl Ui {
         let events = self;
         if !accepts_response(state.with(|s|s.epoch),response.epoch) && !matches!(&response.update, Update::Children {remote:false,..}|Update::Trash{..}|Update::Deleted{..}|Update::Permissions(_)|Update::CredentialNotice(_)){return;}
         match response.update {
+            #[cfg(windows)]
+            Update::WslFiles(result)=>wsl_workspace::receive(events,response.serial,result),
             Update::Video(result)=>events.player.ready(events,response.serial,result),
             #[cfg(windows)]
             Update::Html(result)=>web_browser::html_result(events,response.serial,result),
@@ -998,6 +1031,11 @@ impl Ui {
         }
     }
     fn request_connect(&self) {
+        #[cfg(windows)]
+        if self.state.with(State::local_wsl_selected) {
+            wsl_workspace::connect(self);
+            return;
+        }
         if self.file_task_blocks_dialog() {
             return;
         }
@@ -1031,8 +1069,7 @@ impl Ui {
         }
         let profile = self.state.with(|s| {
             s.config
-                .servers
-                .iter()
+                .available_servers()
                 .find(|p| Some(&p.id) == s.selected.as_ref())
                 .cloned()
         });
@@ -1116,6 +1153,11 @@ impl Ui {
         }
         self.state.revise(|s| {
             desktop_file_picker::dismiss(s);
+            #[cfg(windows)]
+            {
+                s.wsl.cancel();
+                s.wsl = Default::default();
+            }
             s.advance_epoch();
             s.terminal = Default::default();
             s.cancels.clear();
@@ -1582,8 +1624,7 @@ fn show_dialog(s: &mut State, dialog: Dialog) {
 }
 fn selected_profile(s: &State) -> Option<&ServerProfile> {
     s.config
-        .servers
-        .iter()
+        .available_servers()
         .find(|p| Some(&p.id) == s.selected.as_ref())
 }
 /// Whether connecting to the selected server must go through the credential
@@ -1693,6 +1734,15 @@ fn enqueue_transfers(s: &mut State, jobs: Vec<TransferJob>) {
     s.jobs.extend(jobs);
 }
 
+fn resize_handles() -> impl Widget {
+    fragment(
+        ["n", "s", "e", "w", "ne", "nw", "se", "sw"]
+            .into_iter()
+            .map(|edge| view().class(format!("desktop-resize-handle edge-{edge}")))
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn modal(
     ui: Ui,
     title: impl Into<String>,
@@ -1733,7 +1783,27 @@ fn modal_with_header(
             i18n::bind(title)
         };
         let mounted = scope.mount_with(|| {
-            col()
+            let mut backdrop = col();
+            // Glory bounds the number of nodes in a focus scope. These app catalogues
+            // have a fixed set of entries, unlike a remote directory listing.
+            if ui.state.with(|s| {
+                matches!(
+                    s.dialog,
+                    Some(Dialog::DesktopApps | Dialog::DesktopIcons | Dialog::DockShortcuts)
+                )
+            }) {
+                backdrop = backdrop
+                    .focus(FocusMode::Programmatic)
+                    .semantics(Some(Box::new(Semantics {
+                        focus_scope: Some(glory::render::FocusScopeConfig {
+                            auto_focus: false,
+                            restore_focus: false,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })));
+            }
+            backdrop
                 .class(ui.state.map(|s| {
                     if server_desktop::owns_dialog(s) && s.fingerprint.is_none() {
                         server_apps_ui::themed(s, "modal-backdrop desktop-modal-backdrop")
@@ -1825,6 +1895,7 @@ fn modal_with_header(
                                 }))
                                 .content(i18n::bind(ui.state.map(|s| s.dialog_error.clone()))),
                             row().class("modal-footer").fill(footer),
+                            resize_handles(),
                         )),
                 ))
         })?;
@@ -1870,7 +1941,7 @@ fn connection_controls(ui: Ui) -> impl Widget {
                     "SSH 已连接"
                 } else if s.connecting {
                     "SSH 正在连接…"
-                } else if s.config.servers.is_empty() {
+                } else if s.config.available_servers().next().is_none() {
                     "尚未添加服务器"
                 } else if s.selected.is_none() {
                     "请选择左侧服务器"
@@ -1893,7 +1964,7 @@ fn connection_controls(ui: Ui) -> impl Widget {
                     "断开连接"
                 } else if s.connecting {
                     "取消连接"
-                } else if s.config.servers.is_empty() {
+                } else if s.config.available_servers().next().is_none() {
                     "添加服务器"
                 } else {
                     "Desktop"
@@ -1901,12 +1972,13 @@ fn connection_controls(ui: Ui) -> impl Widget {
                 .to_string()
             })))
             .enabled(state.map(|s| {
-                !s.system_task_running && (s.selected.is_some() || s.config.servers.is_empty())
+                !s.system_task_running
+                    && (s.selected.is_some() || s.config.available_servers().next().is_none())
             }))
             .on_press(move || {
                 if state.with(|s| s.connected || s.connecting) {
                     ui.disconnect();
-                } else if state.with(|s| s.config.servers.is_empty()) {
+                } else if state.with(|s| s.config.available_servers().next().is_none()) {
                     servers::new_server(&ui);
                 } else {
                     ui.open_workbench(server_desktop::Tab::Desktop);
@@ -2046,7 +2118,6 @@ fn app(ui: Ui) -> impl Widget {
             operations::dialogs(ui.clone()),
             scripts_ui::dialogs(ui.clone()),
             fragment((
-                diagnostics_ui::dialogs(ui.clone()),
                 task_records_ui::dialogs(ui.clone()),
                 configuration_backup_ui::dialogs(ui.clone()),
                 #[cfg(windows)]
@@ -2088,6 +2159,15 @@ fn app(ui: Ui) -> impl Widget {
             }),
         ))
 }
+
+#[cfg(windows)]
+const APP_CSS: &str = concat!(
+    include_str!("style.css"),
+    "\n",
+    include_str!("shell/wsl.css")
+);
+#[cfg(not(windows))]
+const APP_CSS: &str = include_str!("style.css");
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -2333,7 +2413,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             css: format!(
                 "@layer sapid-settings {{ @scope (.settings-segment-field, .settings-select-field) {{ {} }} }}\n{}\n{}\n{}\n{}\n{}",
                 sapid::STRUCTURAL_CSS,
-                include_str!("style.css"),
+                APP_CSS,
                 icons::css(),
                 folder_icons::css(),
                 desktop_customization_ui::customization_css(),

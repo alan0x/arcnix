@@ -86,6 +86,7 @@ fn choose(ui: &Ui, name: String) {
             s.editor.name = format!("WSL · {name}");
             s.editor.host = host;
             s.editor.username = username;
+            s.editor.wsl_use_ssh = false;
             s.editor.wsl_distribution = Some(name);
             show_dialog(s, Dialog::Server);
         },
@@ -101,7 +102,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
         "本机 WSL 发行版",
         col().class("form-stack").fill((
             text().class("subtle").content(i18n::bind(
-                "选择发行版会启动它。连接使用发行版的 SSH 服务，文件和命令会作用于该 Linux 环境。",
+                "选择发行版会启动它。终端和文件操作使用该发行版的默认 Linux 账号。",
             )),
             when(
                 state.map(|s| matches!(&s.dialog, Some(Dialog::LocalWsl(p)) if p.loading)),
@@ -116,7 +117,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                 let ui = ui.clone();
                 let entry = item.value;
                 sapid::button()
-                    .class("button")
+                    .class("button wsl-distribution")
                     .fill((
                         text().content(entry.map(|v| v.0.clone())),
                         text().class("subtle").content(i18n::bind(entry.map(|v| {

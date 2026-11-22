@@ -186,6 +186,7 @@ impl ServerProfile {
         nonempty(&self.id, "服务器标识", 256)?;
         nonempty(&self.name, "服务器名称", 256)?;
         validate_host(&self.host)?;
+        #[cfg(windows)]
         if let Some(name) = &self.wsl_distribution {
             ensure!(
                 self.host == crate::wsl::profile_host(name)?,
@@ -201,7 +202,7 @@ impl ServerProfile {
             .flatten()
         {
             ensure!(
-                path.is_absolute(),
+                !self.available_on_this_platform() || path.is_absolute(),
                 "Local server directories must be absolute"
             );
         }
@@ -473,16 +474,14 @@ impl AppConfig {
             return false;
         }
         let removed: HashSet<_> = self
-            .servers
-            .iter()
+            .available_servers()
             .filter(|s| s.group_id.as_deref() == Some(id))
             .map(|s| s.id.clone())
             .collect();
         self.servers.retain(|s| !removed.contains(&s.id));
         self.transfer_rules
             .retain(|rule| !removed.contains(&rule.server_id));
-        self.groups.retain(|g| g.id != id);
-        true
+        self.delete_group(id)
     }
 
     pub fn trusted_fingerprint(&self, host: &str, port: u16) -> Option<&str> {
@@ -543,6 +542,51 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn foreign_local_profiles_round_trip_without_becoming_ssh_targets() {
+        let ssh = server();
+        let group = ServerGroup {
+            id: "local".into(),
+            name: "Local".into(),
+        };
+        let mut local = ServerProfile {
+            host: "Ubuntu.wsl.localhost".into(),
+            wsl_distribution: Some("Ubuntu".into()),
+            group_id: Some(group.id.clone()),
+            ..server()
+        };
+        local.locations.last_local = Some(PathBuf::from(r"C:\Users\chris"));
+        for use_ssh in [false, true] {
+            local.wsl_use_ssh = use_ssh;
+            let config = AppConfig {
+                groups: vec![group.clone()],
+                servers: vec![ssh.clone(), local.clone()],
+                ..Default::default()
+            };
+            let mut loaded = decoded(&encoded(&config).unwrap()).unwrap();
+            assert_eq!(loaded, config);
+            assert_eq!(
+                loaded.available_servers().count(),
+                if cfg!(windows) { 2 } else { 1 }
+            );
+            #[cfg(not(windows))]
+            {
+                assert!(loaded.available_servers().all(|p| p.id == ssh.id));
+                let error = crate::remote::PendingConnection::open(&local)
+                    .err()
+                    .unwrap();
+                assert_eq!(error.to_string(), "Local WSL connections require Windows");
+            }
+            assert!(loaded.delete_group_and_servers(&group.id));
+            assert!(loaded.servers.iter().any(|p| p.id == ssh.id));
+            assert_eq!(
+                loaded.servers.iter().any(|p| p.id == local.id),
+                !cfg!(windows)
+            );
+            loaded.validate().unwrap();
+        }
+    }
+
     fn fingerprint() -> String {
         format!("SHA256:{}", STANDARD_NO_PAD.encode([42_u8; 32]))
     }

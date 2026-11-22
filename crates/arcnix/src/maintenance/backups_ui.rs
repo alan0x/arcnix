@@ -304,8 +304,7 @@ impl Ui {
             );
             let mut profile = s
                 .config
-                .servers
-                .iter()
+                .available_servers()
                 .find(|p| p.id == s.backups.access_server)
                 .cloned()
                 .ok_or_else(|| {
@@ -472,8 +471,7 @@ impl Ui {
                 .ok_or_else(|| anyhow::anyhow!("Load snapshots again to authenticate"))?;
             let current = s
                 .config
-                .servers
-                .iter()
+                .available_servers()
                 .find(|p| p.id == target.profile.id)
                 .ok_or_else(|| anyhow::anyhow!("Backup server no longer exists"))?;
             anyhow::ensure!(
@@ -696,7 +694,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                 field("Keep last snapshots per group",&ui,|s|s.backups.keep.clone(),|s,v|s.backups.keep=v),
                 btn("Run as administrator",move||admin.state.revise(|s|{if let Some(p)=&mut s.backups.editor{p.administrator = !p.administrator;}})).class(state.map(|s|if s.backups.editor.as_ref().is_some_and(|p|p.administrator){"choice active"}else{"choice"}.to_owned())),
                 text().class("field-label").content(i18n::bind("Backup servers")),
-                each(state.map(|s|s.config.servers.clone())).key(|p|p.id.clone()).children(move|item|{let p=item.value.get();let id=p.id.clone();let selected=id.clone();btn(p.name,move||state.revise(|s|{if let Some(p)=&mut s.backups.editor{if p.servers.contains(&id){p.servers.retain(|v|v!=&id);}else{p.servers.push(id.clone());}}})).class(state.map(move|s|if s.backups.editor.as_ref().is_some_and(|p|p.servers.contains(&selected)){"target-choice active"}else{"target-choice"}.to_owned()))}),
+                each(state.map(|s|s.config.available_servers().cloned().collect::<Vec<_>>())).key(|p|p.id.clone()).children(move|item|{let p=item.value.get();let id=p.id.clone();let selected=id.clone();btn(p.name,move||state.revise(|s|{if let Some(p)=&mut s.backups.editor{if p.servers.contains(&id){p.servers.retain(|v|v!=&id);}else{p.servers.push(id.clone());}}})).class(state.map(move|s|if s.backups.editor.as_ref().is_some_and(|p|p.servers.contains(&selected)){"target-choice active"}else{"target-choice"}.to_owned()))}),
                 text().class("hint").content(i18n::bind("Deleting a policy removes its local settings only. Retention removes snapshots after a dry-run preview; reclaiming repository space is a separate operation.")),
             )),(btn("Cancel",move||cancel.close_dialog()),btn("Save policy",move||save.save_backup()).class("button primary")))
             }
@@ -752,7 +750,7 @@ fn recovery_access_picker(ui: Ui) -> impl Widget {
         text().class("hint").content(i18n::bind("The source server is not contacted. Choose a trusted server that can access this repository. Repository and credential-file paths come from the policy and must already be prepared on each access or restore server.")),
         field("Recovery server search",&ui,|s|s.backups.access_search.clone(),|s,v|s.backups.access_search=v),
         text().class("snapshot-access-summary subtle").content(state.map(|s|{
-            s.config.servers.iter().find(|p|p.id==s.backups.access_server)
+            s.config.available_servers().find(|p|p.id==s.backups.access_server)
                 .map(|p|format!("{} {} · {}@{}:{}",i18n::translate("Repository access server:"),p.name,p.username,p.host,p.port))
                 .unwrap_or_else(||i18n::translate("Choose a repository access server"))
         })),
@@ -802,8 +800,7 @@ fn browse_dialog(ui: Ui) -> impl Widget {
                             .map(|id| {
                                 let name = s
                                     .config
-                                    .servers
-                                    .iter()
+                                    .available_servers()
                                     .find(|p| &p.id == id)
                                     .map(|p| p.name.clone())
                                     .unwrap_or_else(|| {
@@ -1199,8 +1196,7 @@ fn confirmation_summary(s: &State, policy: &Policy) -> String {
     for server in &policy.servers {
         let name = s
             .config
-            .servers
-            .iter()
+            .available_servers()
             .find(|p| &p.id == server)
             .map(|p| p.name.as_str())
             .unwrap_or(server);
@@ -1221,8 +1217,7 @@ fn confirmation_summary(s: &State, policy: &Policy) -> String {
                         format!(" · {}", i18n::translate("Earlier policy settings"))
                     } else if s
                         .config
-                        .servers
-                        .iter()
+                        .available_servers()
                         .find(|p| &p.id == server)
                         .is_none_or(|p| {
                             r.endpoint != format!("{}@{}:{}", p.username, p.host, p.port)

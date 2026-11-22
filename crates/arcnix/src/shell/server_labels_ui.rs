@@ -23,8 +23,7 @@ pub(crate) fn filters(
             !read(s).environment.is_empty()
                 || !read(s).tag.is_empty()
                 || s.config
-                    .servers
-                    .iter()
+                    .available_servers()
                     .any(|p| !p.environment.is_empty() || !p.tags.is_empty())
         }),
         move || {

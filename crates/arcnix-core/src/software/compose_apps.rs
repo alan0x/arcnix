@@ -61,6 +61,7 @@ impl Default for Definition {
     }
 }
 pub const SHELL: &str = r#"set -eu
+if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH="$PATH:/snap/bin"; fi
 command -v docker >/dev/null
 command -v timeout >/dev/null
 unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES
@@ -266,6 +267,7 @@ pub enum Action {
     Apply,
     Stop,
     Restart,
+    Remove,
 }
 pub fn action(project: &Project, action: Action) -> Result<Template> {
     project.definition.validate()?;
@@ -278,6 +280,13 @@ pub fn action(project: &Project, action: Action) -> Result<Template> {
         Action::Apply => "up --detach --no-build --wait --wait-timeout 120",
         Action::Stop => "stop --timeout 10",
         Action::Restart => "restart --timeout 10",
+        Action::Remove => "down --timeout 10",
+    };
+    let archive = match action {
+        Action::Remove => format!(
+            "cd \"$arcnix_base\"\narchive=$(mktemp -d \"$arcnix_base/.removed-{name}.XXXXXX\")\nmv -T -- \"$arcnix_dir\" \"$archive/project\"\nprintf 'Project files saved at %s\\n' \"$archive/project\""
+        ),
+        _ => String::new(),
     };
     let script = format!(
         r#"# arcnix:compose:manage
@@ -289,6 +298,7 @@ arcnix_digest=$(sha256sum "$arcnix_dir/compose.yaml" | cut -d' ' -f1)
 test "$arcnix_digest" = '{digest}' || {{ printf 'Compose file changed; refresh and review again\n' >&2; exit 1; }}
 cd "$arcnix_dir"
 timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml {verb}
+{archive}
 "#,
         digest = project.digest
     );
@@ -299,6 +309,7 @@ timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix
                 Action::Apply => "apply",
                 Action::Stop => "stop",
                 Action::Restart => "restart",
+                Action::Remove => "remove and keep volumes, images and project files",
             }
         ),
         script,

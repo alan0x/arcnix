@@ -101,9 +101,10 @@ pub(crate) mod desktop {
     }
 }
 fn catalog() -> impl Iterator<Item = (&'static str, &'static str)> {
-    include_str!("../../assets/translations.tsv")
-        .lines()
-        .filter_map(|line| line.split_once('\t'))
+    let lines = include_str!("../../assets/translations.tsv").lines();
+    #[cfg(windows)]
+    let lines = lines.chain(include_str!("../../assets/translations-wsl.tsv").lines());
+    lines.filter_map(|line| line.split_once('\t'))
 }
 fn parts(pattern: &str) -> (Vec<String>, Vec<String>) {
     let mut literals = Vec::new();

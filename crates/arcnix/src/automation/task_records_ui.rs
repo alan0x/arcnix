@@ -72,8 +72,7 @@ fn credentials(s: &State, id: &str) -> anyhow::Result<batch_worker::Target> {
         .ok_or_else(|| anyhow::anyhow!("Reconnect to server records"))?;
     let profile = s
         .config
-        .servers
-        .iter()
+        .available_servers()
         .find(|p| p.id == id)
         .ok_or_else(|| anyhow::anyhow!("Server inventory changed; reconnect to server records"))?;
     anyhow::ensure!(
@@ -94,114 +93,7 @@ fn credentials(s: &State, id: &str) -> anyhow::Result<batch_worker::Target> {
         sudo: Zeroizing::new(String::new()),
     })
 }
-fn diagnostic_record(s: &State) -> anyhow::Result<arcnix_core::tasks::Task> {
-    let viewer = s
-        .task_records
-        .viewer
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Read a saved diagnostic log first"))?;
-    let detail = viewer
-        .detail
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Read a saved diagnostic log first"))?;
-    let metadata = detail
-        .record
-        .metadata
-        .as_ref()
-        .filter(|m| m.kind == records::Kind::Diagnostic)
-        .ok_or_else(|| anyhow::anyhow!("Choose a saved diagnostic record"))?;
-    let group = s
-        .task_records
-        .groups
-        .iter()
-        .find(|g| g.profile.id == viewer.server)
-        .ok_or_else(|| anyhow::anyhow!("Original server identity is unavailable"))?;
-    Ok(arcnix_core::tasks::Task {
-        stops: None,
-        drill: None,
-        installation: None,
-        configuration: None,
-        configuration_targets: None,
-        diagnostic: metadata.diagnostic.as_deref().cloned(),
-        backup: None,
-        id: detail.record.id.clone(),
-        name: metadata.name.clone(),
-        script_id: arcnix_core::diagnostics::SCRIPT_ID.into(),
-        revision: metadata.revision.clone(),
-        created: metadata.created,
-        targets: vec![arcnix_core::tasks::Target {
-            id: group.profile.id.clone(),
-            name: group.profile.name.clone(),
-            endpoint: format!(
-                "{}@{}:{}",
-                group.profile.username, group.profile.host, group.profile.port
-            ),
-            fingerprint: group.fingerprint.clone(),
-            status: detail.record.service.status(detail.record.exit_code),
-            preview: String::new(),
-            output: detail.output.clone(),
-            exit_code: detail.record.exit_code,
-            remote_directory: format!("{}/{}", detail.root, detail.record.id),
-            result_read_at: None,
-        }],
-    })
-}
-fn record_log_context(s: &State) -> Option<arcnix_core::diagnostic_logs::Context> {
-    let task = diagnostic_record(s).ok()?;
-    arcnix_core::diagnostic_logs::Context::new(
-        &task.id,
-        task.targets.first()?,
-        task.diagnostic.as_ref(),
-    )
-    .ok()
-}
-fn record_deleted_target(s: &State) -> Option<arcnix_core::tasks::Target> {
-    let task = diagnostic_record(s).ok()?;
-    let target = task.targets.first()?;
-    (deleted_files_ui::offered(target, task.diagnostic.as_ref())
-        && deleted_files_ui::available(s, target))
-    .then(|| target.clone())
-}
-fn record_tcp_target(s: &State) -> Option<(arcnix_core::tasks::Target, Vec<u16>)> {
-    let task = diagnostic_record(s).ok()?;
-    let target = task.targets.first()?;
-    (tcp_listeners_ui::offered(target, task.diagnostic.as_ref())
-        && tcp_listeners_ui::available(s, target))
-    .then(|| {
-        (
-            target.clone(),
-            task.diagnostic
-                .as_ref()
-                .and_then(|p| p.tcp_ports().ok())
-                .unwrap_or_default(),
-        )
-    })
-}
 impl Ui {
-    fn export_record_diagnostics(&self) {
-        match self.state.with(diagnostic_record) {
-            Ok(task) => self.open_diagnostic_report(
-                task,
-                arcnix_core::diagnostic_exports::Source::ServerRecord,
-            ),
-            Err(e) => self.state.revise(|s| s.dialog_error = e.to_string()),
-        }
-    }
-    fn read_record_service_logs(&self) {
-        if let Some(context) = self.state.with(record_log_context) {
-            self.open_diagnostic_logs(context);
-        }
-    }
-    fn read_record_deleted_files(&self) {
-        if let Some(target) = self.state.with(record_deleted_target) {
-            self.open_deleted_files(target);
-        }
-    }
-    fn read_record_tcp_listeners(&self) {
-        if let Some((target, ports)) = self.state.with(record_tcp_target) {
-            self.open_tcp_listeners(target, ports);
-        }
-    }
     fn connect_records(&self) {
         self.state.revise(|s| {
             s.task_records.selected = s
@@ -220,8 +112,7 @@ impl Ui {
             let mut targets = Vec::new();
             for profile in s
                 .config
-                .servers
-                .iter()
+                .available_servers()
                 .filter(|p| s.task_records.selected.contains(&p.id))
             {
                 anyhow::ensure!(
@@ -549,8 +440,8 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                     let all = ui.clone();
                     modal(ui.clone(),"Connect to server records",col().class("form-stack").fill((
                 text().class("hint").content(i18n::bind("Select server accounts independently of the workspace. This only reads saved records and service state; it does not require SFTP or sudo.")),
-                btn("Select trusted servers",move||all.state.revise(|s|s.task_records.selected=s.config.servers.iter().filter(|p|s.config.trusted_fingerprint(&p.host,p.port).is_some()).map(|p|p.id.clone()).collect())),
-                each(state.map(|s|s.config.servers.clone())).key(|p|p.id.clone()).children(move|item|{
+                btn("Select trusted servers",move||all.state.revise(|s|s.task_records.selected=s.config.available_servers().filter(|p|s.config.trusted_fingerprint(&p.host,p.port).is_some()).map(|p|p.id.clone()).collect())),
+                each(state.map(|s|s.config.available_servers().cloned().collect::<Vec<_>>())).key(|p|p.id.clone()).children(move|item|{
                     let profile=item.value.get();let id=profile.id.clone();let selected=id.clone();let visibility=id.clone();let secret_id=id.clone();let label=profile.name;
                     col().class("record-target-picker").fill((
                         btn(format!("{} · {}@{}:{}",label,profile.username,profile.host,profile.port),move||state.revise(|s|{if !s.task_records.selected.remove(&id){s.task_records.selected.insert(id.clone());}else{s.task_records.secrets.remove(&id);}})).enabled(state.map({let host=profile.host.clone();let port=profile.port;move|s|s.config.trusted_fingerprint(&host,port).is_some()})).class(state.map(move|s|if s.task_records.selected.contains(&selected){"record-target active"}else{"record-target"}.to_owned())),
@@ -566,10 +457,6 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             move || {
                 let close = ui.clone();
                 let refresh = ui.clone();
-                let export = ui.clone();
-                let service_logs = ui.clone();
-                let deleted_files = ui.clone();
-                let tcp_listeners = ui.clone();
                 modal(ui.clone(),"Saved server task log",col().class("form-stack record-log-dialog").fill((
                 text().class("section-title").content(state.map(|s|s.task_records.viewer.as_ref().map(|v|v.record.clone()).unwrap_or_default())),
                 text().class("subtle").content(state.map(|s|s.task_records.viewer.as_ref().and_then(|v|s.task_records.groups.iter().find(|g|g.profile.id==v.server)).map(|g|format!("{} · {}@{}:{}",g.profile.name,g.profile.username,g.profile.host,g.profile.port)).unwrap_or_default())),
@@ -581,12 +468,8 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                 text().class("script-code task-stop-report").selectable(true).content(state.map(|s|s.task_records.viewer.as_ref().and_then(|v|v.detail.as_ref()).map(|d|d.record.metadata.as_ref().map(|m|stop_report(&d.output,&d.record.id,&m.revision,m.stops.as_ref())).unwrap_or_default()).unwrap_or_default())),
                 text().class("script-code drill-report").selectable(true).content(state.map(|s|s.task_records.viewer.as_ref().and_then(|v|v.detail.as_ref()).map(crate::recovery_ui::saved).unwrap_or_default())),
                 crate::log_text::output_view("script-code record-saved-output",state.map(|s|crate::log_text::shown(s.task_records.viewer.as_ref().and_then(|v|v.detail.as_ref()).map(|d|if d.record.log_bytes.is_none(){i18n::translate("Log unavailable")}else if d.record.metadata.as_ref().is_some_and(|m|m.kind==arcnix_core::task_records::Kind::Package){arcnix_core::installers::human_log(&d.output)}else if d.record.metadata.as_ref().is_some_and(|m|m.kind==arcnix_core::task_records::Kind::RecoveryDrill){arcnix_core::recovery_drills::human_log(&d.output)}else if d.record.metadata.as_ref().is_some_and(|m|m.stops.is_some()){arcnix_core::task_stops::human_log(&d.output)}else{d.output.clone()}).unwrap_or_default()))),
-                fragment((
-                    when(state.map(|s|record_deleted_target(s).is_some()),move||{let ui=deleted_files.clone();btn("Inspect deleted open files…",move||ui.read_record_deleted_files()).class("button diagnostic-deleted-files")}),
-                    when(state.map(|s|record_tcp_target(s).is_some()),move||{let ui=tcp_listeners.clone();btn("Inspect TCP listeners…",move||ui.read_record_tcp_listeners()).class("button diagnostic-tcp-listeners")}),
                     text().class("hint").content(i18n::bind("This is a bounded tail of the saved server log. No job is started by viewing it; an unknown result remains unknown.")),
-                )),
-            )),(when(state.map(|s|record_log_context(s).is_some()),move||{let ui=service_logs.clone();btn("Failed service logs…",move||ui.read_record_service_logs()).class("button diagnostic-service-logs")}),when(state.map(|s|s.task_records.viewer.as_ref().and_then(|v|v.detail.as_ref()).and_then(|d|d.record.metadata.as_ref()).is_some_and(|m|m.kind==records::Kind::Diagnostic)),move||{let export=export.clone();btn("Export diagnostic report…",move||export.export_record_diagnostics())}),btn("Close",move||close.close_dialog()),btn("Refresh saved log",move||{if let Some((server,id))=state.with(|s|s.task_records.viewer.as_ref().map(|v|(v.server.clone(),v.record.clone()))) {refresh.read_record(server,id);}}).enabled(state.map(|s|s.task_records.viewer.as_ref().is_some_and(|v|v.pending.is_none())))))
+            )),(btn("Close",move||close.close_dialog()),btn("Refresh saved log",move||{if let Some((server,id))=state.with(|s|s.task_records.viewer.as_ref().map(|v|(v.server.clone(),v.record.clone()))) {refresh.read_record(server,id);}}).enabled(state.map(|s|s.task_records.viewer.as_ref().is_some_and(|v|v.pending.is_none())))))
             },
         ),
     ))

@@ -28,6 +28,8 @@ pub enum Action {
     WriteCookies(String, sync::Revision, Vec<u8>),
     WritePreferences(Box<sync::Pending<server_apps::DesktopPreferences>>),
     DockerSnapshot,
+    DockerImages,
+    DockerStats(String),
     DockerInspect(String),
     DockerVolume(String),
     DockerLogs(String, u16),
@@ -58,6 +60,8 @@ pub enum Reply {
     CookiesSaved(bool),
     SavedPreferences(sync::DesktopResult),
     Snapshot(docker::Snapshot),
+    Images(Vec<docker::Image>),
+    ContainerStats(docker::Stats),
     Container(docker::ContainerDetails),
     Volume(docker::VolumeDetails),
     Logs(String),
@@ -116,6 +120,8 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             Reply::SavedPreferences(sync::sync_desktop(session, &pending)?)
         }
         Action::DockerSnapshot => Reply::Snapshot(docker::snapshot(session)?),
+        Action::DockerImages => Reply::Images(docker::images(session)?),
+        Action::DockerStats(id) => Reply::ContainerStats(docker::stats(session, &id)?),
         Action::DockerInspect(id) => Reply::Container(docker::inspect(session, &id)?),
         Action::DockerVolume(name) => Reply::Volume(docker::volume(session, &name)?),
         Action::DockerLogs(id, lines) => Reply::Logs(docker::logs_with_tail(session, &id, lines)?),

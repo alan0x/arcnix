@@ -106,6 +106,10 @@ pub enum Action {
         sudo: Option<zeroize::Zeroizing<String>>,
     },
     ImportSshConfig(PathBuf),
+    #[cfg(windows)]
+    WslTerminal(String),
+    #[cfg(windows)]
+    WslFiles(String, crate::wsl_workspace::Operation),
     RemoteRename(String, String),
     ManageRemoteFiles(arcnix_core::remote::FileAction, Vec<String>),
     ResolveFileAlias(String),
@@ -253,6 +257,8 @@ pub enum Update {
     CredentialPrompt(Option<&'static str>),
     CredentialNotice(&'static str),
     Imported(arcnix_core::ssh_config::ImportReport),
+    #[cfg(windows)]
+    WslFiles(Result<crate::wsl_workspace::ResultView, String>),
     BrowseError {
         remote: bool,
         message: String,
@@ -374,6 +380,20 @@ pub(crate) fn start_with_limiter(
     thread::spawn(move || {
         for request in rx {
             match request.action {
+                #[cfg(windows)]
+                Action::WslTerminal(name) => {
+                    router_generation.store(request.epoch, Ordering::Release);
+                    let _ = routed_terminal.send(crate::terminal_worker::Command::Attach {
+                        epoch: request.epoch,
+                        target: crate::terminal_worker::Target::Wsl(name),
+                    });
+                }
+                #[cfg(windows)]
+                Action::WslFiles(..) => {
+                    if local_tx.send(request).is_err() {
+                        break;
+                    }
+                }
                 Action::Terminal(action) => {
                     let _ = routed_terminal.send(crate::terminal_worker::Command::Request {
                         epoch: request.epoch,
@@ -487,6 +507,10 @@ pub(crate) fn start_with_limiter(
                     )
                     .map_err(|e| FileFailure::ordinary(format!("{e:#}"))),
                 }),
+                #[cfg(windows)]
+                Action::WslFiles(name, op) => Ok(Update::WslFiles(
+                    op.run(&name).map_err(|e| format!("{e:#}")),
+                )),
                 Action::ImportSshConfig(path) => {
                     arcnix_core::ssh_config::import_file(&path).map(Update::Imported)
                 }
@@ -612,7 +636,7 @@ pub(crate) fn start_with_limiter(
                 }) {
                     Some(remote) => arcnix_core::browser_proxy::repair_forwarding(remote, &sudo)
                         .map_err(|error| {
-                            arcnix_core::diagnostics::redact_log(
+                            arcnix_core::tasks::redact_log(
                                 &format!("{error:#}"),
                                 &[sudo.as_str()],
                             )
@@ -1102,9 +1126,11 @@ pub(crate) fn start_with_limiter(
                             );
                             let _ = terminal.send(crate::terminal_worker::Command::Attach {
                                 epoch,
-                                profile: Box::new(profile),
-                                fingerprint,
-                                secret,
+                                target: crate::terminal_worker::Target::Ssh {
+                                    profile: Box::new(profile),
+                                    fingerprint,
+                                    secret,
+                                },
                             });
                         }
                         send(Update::Connected(

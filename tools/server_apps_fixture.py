@@ -30,7 +30,7 @@ def apply_task(server,record):
         seed=root/'docker-fixture.json'
         if seed.exists():
             data=json.loads(seed.read_text());name='arcnix-'+manifest['name']+'-application-1';identifier=hashlib.sha256(name.encode()).hexdigest()
-            row=dict(id=identifier,name=name,image=manifest['image'],state='running',status='Up 1 second',ports=f"{manifest['address']}:{manifest['port']}->80/tcp",mounts='',networks='bridge',details=dict(restart='unless-stopped',retries=0,memory=0,nano_cpus=0,network='bridge',ports={},bindings={},mounts=[]))
+            row=dict(id=identifier,name=name,image=manifest['image'],state='running',status='Up 1 second',ports=f"{manifest['address']}:{manifest['port']}->80/tcp",mounts='',networks='bridge',compose_project='arcnix-'+manifest['name'],compose_service='application',compose_working_dir=f"/home/{record['application_user']}/.arcnix/apps/{manifest['name']}",details=dict(restart='unless-stopped',retries=0,memory=0,nano_cpus=0,network='bridge',ports={},bindings={},mounts=[]))
             data['containers']=[v for v in data['containers'] if v['id']!=identifier]+[row];seed.write_text(json.dumps(data))
     if '# arcnix:startup:install' in script:
         unit=next(v for v in decoded if v.startswith('[Unit]\n'))
@@ -38,6 +38,15 @@ def apply_task(server,record):
         server.services['arcnix-startup-'+name+'.service']='inactive'
         state=root/'services-startup.json';values=json.loads(state.read_text()) if state.exists() else {}
         values['arcnix-startup-'+name+'.service']='enabled';state.write_text(json.dumps(values))
+    if '# arcnix:compose:manage' in script and ' down --timeout 10' in script:
+        name = re.search(r'\.removed-([a-z0-9-]+)\.XXXXXX', script).group(1)
+        projects = root/'home'/record['application_user']/'.arcnix/apps'
+        archive = Path(tempfile.mkdtemp(prefix=f'.removed-{name}.', dir=projects))
+        (projects/name).rename(archive/'project')
+        seed = root/'docker-fixture.json'
+        data = json.loads(seed.read_text())
+        data['containers'] = [row for row in data['containers'] if row.get('compose_project') != 'arcnix-'+name]
+        seed.write_text(json.dumps(data))
     marker=re.search(r'# arcnix:software:definition ([A-Za-z0-9+/=]+)',script)
     if marker:
         definition=json.loads(base64.b64decode(marker.group(1)))
@@ -46,6 +55,16 @@ def apply_task(server,record):
         for name in definition['names']:
             values[source]=[v for v in values[source] if v['name']!=name]
             if definition['action']!='Remove':values[source].append(dict(name=name,version='1.0-fixture',summary=definition['source']))
+            if name == 'nginx' and definition['action'] == 'Remove' and not (root/'software-manager').exists():
+                type(server).nginx_installed = False
+            if name in ('docker', 'docker.io', 'docker-ce', 'moby-engine'):
+                if definition['action'] == 'Install':
+                    seed = root/'docker-fixture.json'
+                    if not seed.exists():
+                        seed.write_text(json.dumps(dict(version='28.5.1',containers=[],volumes=[])))
+                    (root/'docker-cli-removed').unlink(missing_ok=True)
+                if definition['action'] == 'Remove':
+                    (root/'docker-cli-removed').touch()
         state.write_text(json.dumps(values))
 
 
@@ -212,7 +231,7 @@ def reply(server, channel, command):
             'nameserver fe80::53%eth0\n\nARCNIX_NETWORK_END\n'
         )
     if marker == '# arcnix:apps:discover':
-        return send('ARCNIX_APPS_V1\n' + ('docker\ncompose\n' if seed.exists() else '') + ('snap\n' if (root/'software-snap-enabled').exists() else '') + ('tmux\n' if (root/'tmux-enabled').exists() else ''))
+        return send('ARCNIX_APPS_V1\n' + ('docker\ncompose\n' if seed.exists() and not (root/'docker-cli-removed').exists() else '') + ('snap\n' if (root/'software-snap-enabled').exists() else '') + ('tmux\n' if (root/'tmux-enabled').exists() else ''))
     locale = root / 'system-locale'
     if marker == '# arcnix:desktop:locale':
         if not locale.exists():
@@ -354,6 +373,15 @@ def reply(server, channel, command):
         for path in sorted(directory.glob('*/arcnix.json')):
             lines += ['ARCNIX_PROJECT',base64.b64encode(path.read_bytes()).decode(),base64.b64encode(path.with_name('compose.yaml').read_bytes()).decode()]
         return send('\n'.join(lines+['ARCNIX_COMPOSE_END'])+'\n')
+    if marker == '# arcnix:software:candidates':
+        names = shlex.split(command.splitlines()[1])[2:]
+        if 'snap info' in command:
+            available = {'docker', 'caddy', 'htop', 'certbot'} if (root/'software-snap-enabled').exists() else set()
+        elif 'dnf ' in command:
+            available = {'moby-engine', 'nginx', 'redis', 'postgresql-server', 'git', 'htop', 'certbot'}
+        else:
+            available = {'docker.io', 'nginx', 'caddy', 'redis-server', 'postgresql', 'git', 'htop', 'certbot'}
+        return send(''.join(name+'\n' for name in names if name in available))
     if marker == '# arcnix:software:query':
         state=root/'software-fixture.json'
         data=json.loads(state.read_text()) if state.exists() else dict(native=[dict(name='curl',version='8.5',summary='Transfer tool')],snap=[dict(name='hello-world',version='6.4',summary='latest/stable canonical -')])
@@ -374,13 +402,15 @@ def reply(server, channel, command):
     kind = marker.rsplit(':', 1)[-1]
     if kind == 'snapshot':
         rows = ['ARCNIX_DOCKER_V1', data['version'], 'ARCNIX_CONTAINERS']
-        rows += [json.dumps({key: row[key] for key in ['id', 'name', 'image', 'state', 'status', 'ports', 'mounts', 'networks']}) for row in data['containers']]
+        rows += [json.dumps({key: row.get(key, '') for key in ['id', 'name', 'image', 'state', 'status', 'ports', 'mounts', 'networks', 'compose_project', 'compose_service', 'compose_working_dir']}) for row in data['containers']]
         rows += ['ARCNIX_VOLUMES']
         rows += [json.dumps({key: row[key] for key in ['name', 'driver', 'scope']}) for row in data['volumes']]
         rows += ['ARCNIX_DOCKER_END']
         if (root / 'docker-truncated').exists():
             rows.pop()
         return send('\n'.join(rows) + '\n')
+    if kind == 'images':
+        return send(json.dumps(dict(id='sha256:'+'a'*64, repository='nginx', tag='alpine', size='25 MB'))+'\n')
     arguments = shlex.split(command.splitlines()[-1])
     if merged:
         arguments.pop()
@@ -394,6 +424,8 @@ def reply(server, channel, command):
     if kind == 'inspect':
         detail = dict(container['details'], id=target, name='/' + container['name'], image=container['image'], state=container['state'])
         return send(json.dumps(detail))
+    if kind == 'stats':
+        return send(json.dumps(dict(cpu='0.12%', memory='6 MiB / 256 MiB', network='3 kB / 6 kB', block='0 B / 4 kB', processes='3'))+'\n')
     if kind == 'logs':
         if (root / 'docker-slow').exists():
             time.sleep(1.2)
@@ -406,9 +438,13 @@ def reply(server, channel, command):
         return send(''.join(stdout.splitlines(keepends=True)[-tail:]), error=''.join(stderr.splitlines(keepends=True)[-tail:]))
     if (root / 'docker-action-failed').exists():
         return send(status=1, error='Docker fixture operation failed')
-    if kind in ['start', 'restart', 'stop']:
-        container['state'] = 'exited' if kind == 'stop' else 'running'
-        container['status'] = 'Exited (0)' if kind == 'stop' else 'Up 1 second'
+    if kind in ['start', 'restart', 'stop', 'pause', 'unpause']:
+        container['state'] = {'stop': 'exited', 'pause': 'paused'}.get(kind, 'running')
+        container['status'] = {'stop': 'Exited (0)', 'pause': 'Up 1 second (Paused)'}.get(kind, 'Up 1 second')
+    elif kind == 'remove':
+        if container['state'] not in ('exited', 'created', 'dead'):
+            return fail(1, 'Container must be stopped before removal')
+        data['containers'].remove(container)
     elif kind == 'configure':
         policy = arguments[arguments.index('--restart') + 1]
         name, _, retries = policy.partition(':')

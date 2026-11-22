@@ -77,11 +77,11 @@ with Peer(out/'peer') as peer:
         app.screenshot('installation-narrow.png')
         p.keyboard.press('Escape'); d.get_by_role('button',name='Cancel',exact=True).click()
         passed('Installation help fits the modal and narrow viewport; Escape preserves the form and the failure warning stays visible')
-        for rail in ['tasks','backups','diagnostics']:
+        for rail in ['tasks','backups']:
             p.locator('.rail-'+rail).click(); readable(p)
             assert p.locator('.context-sidebar .context-hint').count() == 0
             app.screenshot(rail+'-narrow.png')
-        passed('Scripts, Tasks, Backups and Diagnostics have no tiny text or horizontal overflow at 900 × 700')
+        passed('Scripts, Tasks and Backups have no tiny text or horizontal overflow at 900 × 700')
         p.set_viewport_size(dict(width=1440,height=980))
         app.settings('General')
         language = p.get_by_role('button',name='Help: Language',exact=True)

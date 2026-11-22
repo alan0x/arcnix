@@ -72,12 +72,6 @@ class Authentication(paramiko.ServerInterface):
                 finished = bool(job and self.task_finished(job))
                 metadata = self.task_metadata.get(identifier)
                 log=self.drill_output(identifier,job) if finished and job.get('drill') else self.installation_output(identifier,job) if finished and job.get('installation') else 'Saved fixture log · 中文\n'
-                if finished and job.get('diagnostic'):
-                    if job.get('diagnostic_definition'):log=self.diagnostic_output(job)
-                    else:
-                        log='ARCNIX_DIAG_START_V1\t1794640000\t4\n'+''.join('ARCNIX_DIAG_V1\t'+key+'\twarning\t1\t'+base64.b64encode(('saved '+key+' detail').encode()).decode()+'\n' for key in ['disk','inodes','services','ports'])+'ARCNIX_DIAG_END_V1\t4\n'
-                    if job.get('environment'):
-                        first,rest=log.split('\n',1);log=first+'\n'+self.diagnostic_environment_packet(identifier,job)+rest
                 if finished and job.get('stop_control'):log=self.stop_output(identifier)
                 records.append(dict(id=identifier, modified=metadata['created'] if metadata else int(time.time()), state=('failed' if job['code'] else 'inactive') if finished else 'active' if job else 'not-found', code=job['code'] if finished else None, metadata=metadata, log=log))
                 options=self.observation_options()
@@ -206,95 +200,6 @@ class Authentication(paramiko.ServerInterface):
         probes=dict(packages=[],python3=['python'],nginx=['nginx-version','nginx-config','nginx-service'],restic=['restic'],git=['git'],tools=['tools'],postgresql_client=['pg-dump','pg-restore','psql'],mysql_client=['mysql','mysql-dump'])
         keys=['environment']+(['plan'] if definition['version']==2 else [])+['install']+['package:'+name for name in definition['packages']]+probes[definition['kind']]
         return dict(definition=definition,revision=revision,keys=keys,plan=shlex.split(fields.get('expected_plan',"''"))[0],mode=next((m for m in ['environment-change','state-change','plan-change','protocol-v2','unconfirmed-plan','apt-fail','check-fail','service-fail','report-incomplete','report-wrong-id'] if (self.fixture_root/('installer-'+m)).exists()),'passed'))
-
-    @staticmethod
-    def diagnostic_environment(script):
-        payload=script
-        for _ in range(6):
-            if payload.startswith(('# arcnix:diagnostics:v1\n','# arcnix:diagnostics:v2\n')):break
-            tokens=shlex.split(payload)
-            inner=next(tokens[n+2] for n in range(len(tokens)-2) if tokens[n] in ['sh','/bin/sh'] and tokens[n+1]=='-c' and '# arcnix:diagnostics:v' in tokens[n+2])
-            payload=inner.replace('$$','$') if 'exec systemd-run --quiet --unit=' in payload else inner
-        if '# arcnix:diagnostics:environment:v1' not in payload:return None
-        calls=[shlex.split(line)[1] for line in payload.splitlines() if line.startswith('arcnix_environment_version ')]
-        rows=[dict(key='os',recorded=True,value='Fixture Linux 24.04'),dict(key='kernel',recorded=True,value='Linux 6.8 fixture x86_64'),dict(key='systemd',recorded=True,value='systemd 255')]
-        for key in ['coreutils','iproute2','openssl','python','nginx','openssh']:
-            if key in calls:rows.append(dict(key=key,recorded=key!='openssh',value={'coreutils':'df (GNU coreutils) 9.4','iproute2':'ss utility, iproute2-6.1','openssl':'OpenSSL 3.0 fixture','python':'Python 3.12 fixture','nginx':'nginx version: nginx/1.24','openssh':'sshd version unavailable'}[key]))
-        return rows
-
-    def diagnostic_environment_packet(self,identifier,record):
-        rows=record.get('environment')
-        if rows is None:return ''
-        if (self.fixture_root/'diagnostic-env-missing').exists():return ''
-        packet=f'ARCNIX_DIAG_ENV_START_V1\t{len(rows)}\n'+''.join('ARCNIX_DIAG_ENV_V1\t'+row['key']+'\t'+('recorded' if row['recorded'] else 'unavailable')+'\t'+base64.b64encode(row['value'].encode()).decode()+'\n' for row in rows)
-        if not (self.fixture_root/'diagnostic-env-truncated').exists():packet+=f'ARCNIX_DIAG_ENV_END_V1\t{len(rows)}\n'
-        return packet
-
-    @staticmethod
-    def diagnostic_definition(script):
-        payload=script
-        markers=('# arcnix:diagnostics:v1\n','# arcnix:diagnostics:v2\n')
-        for _ in range(6):
-            if payload.startswith(markers):break
-            tokens=shlex.split(payload)
-            inner=next(tokens[n+2] for n in range(len(tokens)-2) if tokens[n] in ['sh','/bin/sh'] and tokens[n+1]=='-c' and any(marker in tokens[n+2] for marker in markers))
-            payload=inner.replace('$$','$') if 'exec systemd-run --quiet --unit=' in payload else inner
-        assert payload.startswith(markers),'Expected the diagnostic payload after shell wrappers'
-        header=re.search(r'ARCNIX_DIAG_START_V([12])\\t%s\\t([0-9]+)(?:\\t([a-f0-9]{64}))?\\n',payload)
-        assert header,'Expected bounded diagnostic header'
-        items=[]
-        for enabled,key in [('if test 1 = 1; then usage disk','disk'),('if test 1 = 1; then usage inodes','inodes')]:
-            if enabled in payload:items.append((key,''))
-        if 'if test 1 = 1; then\n    if timeout --kill-after=2 15 systemctl' in payload:items.append(('services',''))
-        if 'if test 1 = 1; then\n    if timeout --kill-after=2 15 ss ' in payload:items.append(('ports',''))
-        for line in payload.splitlines():
-            if line.startswith('arcnix_certificate_check '):
-                args=shlex.split(line);items.append((args[2],args[1]))
-            elif line.startswith('arcnix_configuration_check '):
-                args=shlex.split(line);items.append((args[3],args[1]+' '+args[2]))
-            elif line.startswith('arcnix_tls_check '):
-                args=shlex.split(line);items.append((args[4],args[1]+' → '+args[2]))
-            elif line.startswith('arcnix_name_check '):
-                args=shlex.split(line);items.append((args[3],args[1]+' → '+args[2]))
-        assert len(items)==int(header.group(2)),(items,header.groups())
-        return dict(items=items,version=int(header.group(1)),selection=header.group(3))
-
-    def diagnostic_output(self,record):
-        definition=record['diagnostic_definition'];items=definition['items'];selection=definition['selection'];version=definition['version']
-        fields=[]
-        for key,subject in items:
-            level,value,detail='pass','-',subject+' checked'
-            if key=='disk':level,value,detail='warning','92%','/dev/test 100 92 8 92% /srv/中文\n'
-            elif key=='inodes':level,value,detail='critical','98%','/dev/test 100 98 2 98% /srv\n'
-            elif key=='services':
-                level,value,detail='warning','1','nginx.service loaded failed failed\n'
-                if (self.fixture_root/'diagnostic-log-units').exists():
-                    value='3';detail='nginx.service loaded failed failed\nworker@blue\\x20team.service loaded failed failed Worker\na\\x2ablue.service loaded failed failed Escaped\nhealthy.service loaded active running Healthy\nbad;name.service loaded failed failed Invalid\n'
-            elif key=='ports':level,value,detail='warning','1','Missing expected TCP port: 443\n'
-            elif key.startswith('tls:'):
-                detail=subject+'\nsubject=CN='+subject.rsplit(' → ',1)[-1]+'\nissuer=CN=Controlled fixture CA\nnotAfter=Nov 16 2027 GMT\nsha256 Fingerprint=AA:BB:CC\n'
-                if any(word in subject for word in ['mismatch','untrusted','expired']):level,detail='critical','verify error:num=62: controlled verification failure\n'+subject
-                elif 'soon' in subject:level='warning'
-                elif any(word in subject for word in ['timeout','missing','network']):level,detail='unknown','Controlled TLS connection failure\n'+subject
-            elif key.startswith('resolve:'):
-                value,detail='2','Resolved addresses:\n192.0.2.1\n2001:db8::1\n'+subject
-                if 'drift' in subject:level,detail='warning',detail+'\nMissing expected addresses:\n192.0.2.2'
-                elif any(word in subject for word in ['timeout','missing']):level,value,detail='unknown','-','Controlled name lookup failure\n'+subject
-            elif version==1 and key=='certificate':level,value,detail='warning','-', 'notAfter=Nov 16 2026 GMT\n'
-            elif version==1 and key=='configuration':level,value,detail='unknown','-',subject+' invalid configuration'
-            elif 'missing' in subject:level,detail='unknown',subject+' unavailable'
-            elif 'expired' in subject:level,detail='critical','notAfter=Nov 14 2026 GMT\n'
-            elif 'soon' in subject:level,detail='warning','notAfter=Nov 16 2026 GMT\n'
-            elif 'bad' in subject:level,detail='unknown',subject+' invalid configuration'
-            if (self.fixture_root/'diagnostic-detail-secret').exists():detail+=' fixture-admin-secret detail-only marker'
-            fields.append([key,level,value,base64.b64encode(detail.encode()).decode()])
-        if (self.fixture_root/'diagnostic-wrong-selection').exists():selection='0'*64
-        if (self.fixture_root/'diagnostic-duplicate-item').exists() and len(fields)>1:fields[-1][0]=fields[0][0]
-        if (self.fixture_root/'diagnostic-reordered-items').exists():fields.reverse()
-        binding=f'\t{selection}' if version==2 else ''
-        output=f'ARCNIX_DIAG_START_V{version}\t1794640000\t{len(items)}{binding}\n'+''.join(f'ARCNIX_DIAG_V{version}\t'+'\t'.join(row)+'\n' for row in fields)
-        if not record.get('incomplete'):output+=f'ARCNIX_DIAG_END_V{version}\t{len(items)}\n'
-        return output
 
     def drill_definition(self,script):
         runner=shlex.split(script)[-1];tokens=shlex.split(runner)
@@ -969,13 +874,6 @@ class Authentication(paramiko.ServerInterface):
                     output = "Server-owned fixture job finished · 中文\n" if finished else "Server-owned fixture job started\n"
                     if record.get("backup"):
                         output=json.dumps(dict(message_type="summary" if finished else "status",percent_done=1.0 if finished else .5,bytes_done=1024 if finished else 512,total_bytes=1024,files_done=2 if finished else 1,total_files=2,snapshot_id="a"*64))+"\n"
-                    if record.get('diagnostic') and finished:
-                        findings=[('disk','warning','92%','/dev/test 100 92 8 92% /srv/中文\n'),('inodes','critical','98%','/dev/test 100 98 2 98% /srv\n'),('services','warning','1','nginx.service loaded failed failed\n'),('ports','warning','1','Missing expected TCP port: 443\n'),('certificate','warning','-','notAfter=Nov 15 2026 GMT\n'),('configuration','unknown','-','nginx: permission denied\n')]
-                        output='ARCNIX_DIAG_START_V1\t1794640000\t6\n'+''.join('ARCNIX_DIAG_V1\t'+kind+'\t'+level+'\t'+value+'\t'+base64.b64encode(detail.encode()).decode()+'\n' for kind,level,value,detail in findings)+'ARCNIX_DIAG_END_V1\t6\n'
-                        if record.get('incomplete'):output=output.replace('ARCNIX_DIAG_END_V1\t6\n','')
-                        if record.get('diagnostic_definition'):output=self.diagnostic_output(record)
-                    if record.get('diagnostic') and finished and record.get('environment'):
-                        first,rest=output.split('\n',1);output=first+'\n'+self.diagnostic_environment_packet(match.group(1),record)+rest
                     if record.get('configuration'):
                         phase=record['configuration'] if finished else 'publishing'
                         output='ARCNIX_CONFIG_V1\t'+phase+'\t'+match.group(1)+'\n'
@@ -1059,73 +957,9 @@ class Authentication(paramiko.ServerInterface):
                     payload=dict(version=1,path=values.get('wrong_path',request['path']),sampled=1794759400,snapshot=snapshot,issue=issue)
                     if values.get('warning'):channel.sendall_stderr(values['warning'].encode())
                     channel.sendall(json.dumps(payload).encode());channel.send_exit_status(0);channel.close();return
-                if '# arcnix:diagnostic-logs:read' in script:
-                    journal_command=shlex.split(script.split('\n',1)[1])[-1]
-                    parts=shlex.split(journal_command.split('\n',1)[1]);unit=next(s.split('=',1)[1] for s in parts if s.startswith('--unit='))
-                    query=dict(unit=unit,period=[s for s in parts if s.startswith(('--since=','--until=','--boot='))],limit=int([parts[n+1] for n,s in enumerate(parts) if s=='-n'][-1]),administrator='sudo' in args)
-                    with (self.fixture_root/'diagnostic-log-queries.jsonl').open('a') as audit:audit.write(json.dumps(query)+'\n')
-                    time.sleep(2 if (self.fixture_root/'diagnostic-log-slow').exists() else .2)
-                    if (self.fixture_root/'diagnostic-log-denied').exists():
-                        channel.sendall_stderr(b'Journal access denied fixture-admin-secret arcnix-test\n');channel.send_exit_status(1)
-                    elif (self.fixture_root/'diagnostic-log-missing').exists():
-                        channel.sendall_stderr(b'journalctl: not found\n');channel.send_exit_status(127)
-                    elif (self.fixture_root/'diagnostic-log-invalid').exists():
-                        channel.sendall(b'not valid JSON\n');channel.send_exit_status(0)
-                    elif (self.fixture_root/'diagnostic-log-oversize').exists():
-                        channel.sendall(b'x'*(2*1024*1024+1));channel.send_exit_status(0)
-                    else:
-                        channel.sendall_stderr(('Journal fixture warning arcnix-test'+(' fixture-admin-secret' if query['administrator'] else '')+'\n').encode())
-                        if not (self.fixture_root/'diagnostic-log-empty').exists():
-                            channel.sendall((json.dumps(dict(__REALTIME_TIMESTAMP='1794640000000000',_SYSTEMD_UNIT=unit,PRIORITY='3',MESSAGE='Saved service failure '+unit+' arcnix-test 中文'+(' fixture-admin-secret' if query['administrator'] else '')))+'\n').encode())
-                        channel.send_exit_status(0)
-                    channel.close();return
                 if '# arcnix:resource-ports:read' in script or '# arcnix:resource-ports:terminate' in script:
                     self.resource_ports_reply(channel, script, 'sudo' in args)
                     return
-                if '# arcnix:tcp-listeners:read' in script:
-                    assert 'timeout --kill-after=2 15 python3 -I' in script and 'start_ticks' in script
-                    ports=json.loads(shlex.split(script)[-1]);assert ports==sorted(set(ports))
-                    administrator='sudo' in args
-                    with (self.fixture_root/'tcp-listeners-queries.jsonl').open('a') as audit:audit.write(json.dumps(dict(ports=ports,administrator=administrator))+'\n')
-                    fixture=self.fixture_root/'tcp-listeners-fixture.json'
-                    options=json.loads(fixture.read_text(encoding='utf-8')) if fixture.exists() else {}
-                    until=time.monotonic()+options.get('delay',.2)
-                    while time.monotonic()<until:
-                        if channel.closed:
-                            with (self.fixture_root/'tcp-listeners-cancelled.jsonl').open('a') as audit:audit.write(json.dumps(dict(at=time.time()))+'\n')
-                            return
-                        time.sleep(.02)
-                    secret='-fixture-admin-secret' if administrator else ''
-                    unit='worker-arcnix-test'+secret+'.service'
-                    holder=dict(pid=120,start_ticks=500,uid=1000,fd=4,command='worker arcnix-test'+secret,cgroup='/system.slice/'+unit,unit=unit)
-                    rows=[dict(family=4,address='127.0.0.1',port=ports[0] if ports else 443,uid=1000,inode=42,holders=[holder],holders_limited=False),dict(family=6,address='::',port=ports[-1] if ports else 443,uid=1000,inode=43,holders=[],holders_limited=False)]
-                    rows.sort(key=lambda r:(r['port'],r['family'],r['address'],r['inode']))
-                    snapshot=dict(version=1,sampled=1794773000,uid=0 if administrator else 1000,namespace=4026531840,ports=ports,families=[4,6],processes=10,descriptors=23,denied=0 if administrator else 2,changed=0,unreadable=0,limits=[],matched=2,rows=rows)
-                    snapshot.update(options.get('snapshot',{}))
-                    if options.get('stderr'):channel.sendall_stderr(options['stderr'].encode())
-                    channel.sendall(options.get('raw',json.dumps(snapshot,ensure_ascii=False)).encode())
-                    channel.send_exit_status(options.get('exit',0));channel.close();return
-                if '# arcnix:deleted-files:read' in script:
-                    assert 'timeout --kill-after=2 15 python3 -I' in script and 'os.O_PATH' in script
-                    administrator='sudo' in args
-                    with (self.fixture_root/'deleted-files-queries.jsonl').open('a') as audit:audit.write(json.dumps(dict(administrator=administrator))+'\n')
-                    fixture=self.fixture_root/'deleted-files-fixture.json'
-                    options=json.loads(fixture.read_text(encoding='utf-8')) if fixture.exists() else {}
-                    until=time.monotonic()+options.get('delay',.2)
-                    while time.monotonic()<until:
-                        if channel.closed:
-                            with (self.fixture_root/'deleted-files-cancelled.jsonl').open('a') as audit:audit.write(json.dumps(dict(at=time.time()))+'\n')
-                            return
-                        time.sleep(.02)
-                    code=options.get('exit',0)
-                    if options.get('stderr'):channel.sendall_stderr(options['stderr'].encode())
-                    secret=' fixture-admin-secret' if administrator else ''
-                    row=dict(device='8:1',inode=45,path='/var/log/worker arcnix-test'+secret+' 中文.log (deleted)',allocated_bytes=4096,logical_bytes=8192,references=2,
-                        holders=[dict(pid=120,start_ticks=500,uid=1000,fd=4,command='worker arcnix-test'+secret),dict(pid=120,start_ticks=500,uid=1000,fd=5,command='worker arcnix-test'+secret)])
-                    snapshot=dict(version=1,sampled=1794773000,uid=0 if administrator else 1000,processes=10,descriptors=23,denied=0 if administrator else 2,changed=1,unreadable=0,limit=None,files=1,allocated_bytes=4096,logical_bytes=8192,rows=[row])
-                    snapshot.update(options.get('snapshot',{}))
-                    payload=options.get('raw',json.dumps(snapshot,ensure_ascii=True)).encode()
-                    channel.sendall(payload);channel.send_exit_status(code);channel.close();return
                 if '# arcnix:installers:transaction' in script:
                     self.installation_snapshot_reply(channel,script);return
                 if '# arcnix:configuration-records:' in script:
@@ -1233,11 +1067,9 @@ class Authentication(paramiko.ServerInterface):
                         blocked = exclusive and self.operation_busy()
                         held = 'fixture-hold-operation' in script
                         service = re.search(r'systemctl --no-pager --no-ask-password (start|stop|restart|enable|disable) -- .*?(nginx\.service|worker\.service|broken\.service)', script)
-                        self.hosted_tasks[task_id] = dict(finish=time.monotonic()+(0 if blocked else 120 if held else 4), code=75 if blocked else 7 if "fixture-command-fail" in script else 0, exclusive=exclusive, held=held, blocked=blocked, service=(service.group(2), service.group(1)) if service else None, install_nginx='# arcnix:packages:install' in script and 'nginx' in script, backup="# arcnix:backups:execute" in script, diagnostic=any(marker in script for marker in ['# arcnix:diagnostics:v1','# arcnix:diagnostics:v2']), incomplete="fixture-diagnostic-incomplete" in script)
+                        self.hosted_tasks[task_id] = dict(finish=time.monotonic()+(0 if blocked else 120 if held else 4), code=75 if blocked else 7 if "fixture-command-fail" in script else 0, exclusive=exclusive, held=held, blocked=blocked, service=(service.group(2), service.group(1)) if service else None, install_nginx='# arcnix:packages:install' in script and 'nginx' in script, backup="# arcnix:backups:execute" in script)
                         if any(marker in script for marker in ['# arcnix:compose:','# arcnix:software:mutate','# arcnix:startup:install']):
                             self.hosted_tasks[task_id].update(application_script=script,application_user=self.username)
-                        if self.hosted_tasks[task_id]['diagnostic']:self.hosted_tasks[task_id]['diagnostic_definition']=self.diagnostic_definition(script)
-                        if '# arcnix:diagnostics:environment:v1' in script:self.hosted_tasks[task_id]['environment']=self.diagnostic_environment(script)
                         if '# arcnix:installers:v1' in script and not blocked:
                             installation=self.installation_definition(script);self.hosted_tasks[task_id]['installation']=installation
                             if installation['mode'] in ['environment-change','state-change','plan-change','protocol-v2','apt-fail','check-fail','service-fail']:self.hosted_tasks[task_id]['code']=1
@@ -1408,7 +1240,8 @@ ARCNIX_METRICS_END
                     os_id='alpine' if (self.fixture_root/'installer-unsupported').exists() else 'fedora' if (self.fixture_root/'software-manager').exists() else 'ubuntu'
                     manager=(self.fixture_root/'software-manager').read_text().strip() if (self.fixture_root/'software-manager').exists() else 'apt'
                     pretty='Fedora test' if os_id=='fedora' else 'Alpine test' if os_id=='alpine' else 'Ubuntu 24.04 LTS'
-                    channel.sendall(f'ARCNIX_OS_BEGIN\nPRETTY_NAME="{pretty}"\nID={os_id}\nVERSION_ID="24.04"\nARCNIX_OS_END\nARCNIX_MANAGER\t{manager}\nARCNIX_UID\t1000\nARCNIX_SUDO\t1\nARCNIX_ARCH\tamd64\n'.encode())
+                    sudo = int(not (self.fixture_root/'software-no-sudo').exists())
+                    channel.sendall(f'ARCNIX_OS_BEGIN\nPRETTY_NAME="{pretty}"\nID={os_id}\nVERSION_ID="24.04"\nARCNIX_OS_END\nARCNIX_MANAGER\t{manager}\nARCNIX_UID\t1000\nARCNIX_SUDO\t{sudo}\nARCNIX_ARCH\tamd64\n'.encode())
                 elif marker.endswith(":search"):
                     channel.sendall(b"nginx - web server\ncurl - transfer tool\n")
                 elif marker.endswith(":installed"):

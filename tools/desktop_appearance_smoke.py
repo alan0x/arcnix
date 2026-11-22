@@ -5,6 +5,23 @@ from desktop_fixture import Desktop, Peer, ROOT, close_dialog, eventually, expec
 from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 
 
+def check_symbol_centers(page, selector):
+    cdp = page.context.new_cdp_session(page)
+    try:
+        root = cdp.send('DOM.getDocument')['root']['nodeId']
+        nodes = cdp.send('DOM.querySelectorAll', dict(nodeId=root, selector=selector))['nodeIds']
+        assert nodes, selector
+        for node in nodes:
+            tile = cdp.send('DOM.describeNode', dict(nodeId=node, depth=1))['node']
+            symbol = next(p for p in tile['pseudoElements'] if p['pseudoType'] == 'before')
+            def center(element):
+                quad = cdp.send('DOM.getBoxModel', dict(backendNodeId=element['backendNodeId']))['model']['border']
+                return ((quad[0] + quad[4]) / 2, (quad[1] + quad[5]) / 2)
+            assert all(abs(a - b) < 1 for a, b in zip(center(tile), center(symbol))), selector
+    finally:
+        cdp.detach()
+
+
 def check_appearance_choices(panel):
     def button(name):
         return panel.get_by_role('button', name=name, exact=True)
@@ -12,14 +29,18 @@ def check_appearance_choices(panel):
     scheme = panel.get_by_role('radiogroup', name='Color scheme')
     icons = panel.get_by_role('radiogroup', name='Icon family')
     segment = scheme.locator('.sapid-segment').first
+    track = scheme.locator('.sapid-radio-group-items')
+    anchored = panel.page.evaluate("CSS.supports('(anchor-scope: --sp-selected) and (width: anchor-size(--sp-selected width))')")
+    indicator = track if anchored else segment
+    pseudo = '::after' if anchored else None
     panel.page.emulate_media(reduced_motion='no-preference')
-    assert segment.evaluate("""el => {
-        const style = getComputedStyle(el);
-        return style.transitionProperty.includes('background-color') &&
+    assert indicator.evaluate("""(el, pseudo) => {
+        const style = getComputedStyle(el, pseudo);
+        return style.transitionProperty.includes(pseudo ? 'left' : 'background-color') &&
             style.transitionDuration.split(',').some(duration => parseFloat(duration) > 0);
-    }""")
+    }""", pseudo)
     panel.page.emulate_media(reduced_motion='reduce')
-    expect(segment).to_have_css('transition-duration', '0s')
+    assert indicator.evaluate('(el, pseudo) => getComputedStyle(el, pseudo).transitionDuration', pseudo) == '0s'
     panel.page.emulate_media(reduced_motion=None)
     gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
     expect(gallery.locator('.wallpaper-choice')).to_have_text(['Fjord', 'Aurora', 'Seaside'])
@@ -38,9 +59,10 @@ def check_appearance_choices(panel):
             )
             accent = card.evaluate("el => getComputedStyle(el).getPropertyValue('--accent-fill').trim()")
             red, green, blue = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
-            expect(scheme.locator('.sapid-segment:has(input:checked)')).to_have_css(
-                'background-color', f'rgb({red}, {green}, {blue})',
-            )
+            selected = scheme.locator('.sapid-segment:has(input:checked)')
+            fill = track if anchored else selected
+            expected_color = f'rgb({red}, {green}, {blue})'
+            eventually(lambda: fill.evaluate('(el, pseudo) => getComputedStyle(el, pseudo).backgroundColor', pseudo) == expected_color)
             expect(panel.get_by_role('textbox', name='Accent color', exact=True)).to_have_value(accent)
             if preset == 'Fjord': assert accent == {'Light': '#87ceeb', 'Dark': '#79b9d5'}[mode]
             readable = card.evaluate("el => getComputedStyle(el).getPropertyValue('--accent').trim()")
@@ -371,7 +393,8 @@ def main():
             active_indicator = page.locator('.desktop-dock-app.active')
             assert active_indicator.evaluate('''icon => {
                 const indicator = getComputedStyle(icon, '::after');
-                return parseFloat(indicator.height) >= 3 && indicator.boxShadow !== 'none';
+                return parseFloat(indicator.height) >= 3 && indicator.boxShadow === 'none'
+                    && indicator.backgroundColor === 'rgb(255, 255, 255)';
             }''')
             panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Dark', exact=True).check()
             expect(desktop).to_have_class('server-desktop theme-dark desktop-dark')
@@ -389,6 +412,7 @@ def main():
             files_symbol = grid.locator('.app-files .desktop-app-icon').first
             symbol_mask = lambda: files_symbol.evaluate("icon => getComputedStyle(icon, '::before').maskImage")
             line_mask = symbol_mask()
+            check_symbol_centers(page, '.desktop-dock-app .desktop-app-icon')
             panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             expect(desktop).to_have_attribute('data-desktop-icon-family', 'color')
             expect(icon_options).to_have_count(0)
@@ -402,14 +426,11 @@ def main():
                 assert icons.evaluate_all('''icons => icons.every(icon => {
                     const tile = getComputedStyle(icon);
                     const symbol = getComputedStyle(icon, '::before');
-                    const {m41, m42} = new DOMMatrix(symbol.transform);
-                    const near = (a, b) => Math.abs(a - b) < 1;
                     return tile.backgroundColor === 'rgba(0, 0, 0, 0)' && tile.backgroundImage === 'none'
                         && tile.boxShadow === 'none' && symbol.maskImage === 'none'
-                        && symbol.backgroundImage.startsWith('url("data:image/svg+xml;base64,')
-                        && near(parseFloat(symbol.left) + m41 + parseFloat(symbol.width) / 2, icon.clientWidth / 2)
-                        && near(parseFloat(symbol.top) + m42 + parseFloat(symbol.height) / 2, icon.clientHeight / 2);
+                        && symbol.backgroundImage.startsWith('url("data:image/svg+xml;base64,');
                 })''')
+            check_symbol_centers(page, '.desktop-shortcuts .desktop-app-icon, .desktop-dock-app .desktop-app-icon, .desktop-app-catalog-item .desktop-app-icon')
             catalog.screenshot(path=str(out / 'color-apps.png'))
             close_dialog(catalog)
             panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Line icons', exact=True).check()

@@ -15,9 +15,11 @@ Desktop downloads are available for Windows x64, macOS on Apple Silicon, and Lin
 
 ## Connect to local WSL on Windows
 
-Open **New server → Choose local WSL distribution** to see installed distributions and their running state. Selecting one starts it and fills in its default Linux username. Enter its SSH port, choose password or private key authentication, then save and connect. Commands and file edits affect that distribution directly.
+Open **New server → Choose local WSL distribution**, select an installed distribution, save and connect. Saved WSL profiles also default to a local connection. Arcnix opens an interactive Linux shell through `wsl.exe` and runs file operations as the distribution’s default Linux user. No SSH server, password or keys are required.
 
-Run OpenSSH Server in the distribution on a port reachable from Windows at `127.0.0.1`. On Ubuntu or Debian with systemd, use `systemctl status ssh` to check the service and `ss -ltn` to check listening ports. For local-only access, set the sshd `ListenAddress` to `127.0.0.1`. Give concurrently used distributions distinct ports and host keys. Before sending credentials, Arcnix checks the SSH peer against the selected distribution’s public keys in `/etc/ssh/ssh_host_*_key.pub`.
+Browse directories, create files and folders, preview UTF-8 text, and upload or download individual files. Copies preserve existing destinations. You can also open the current directory in a terminal or Windows File Explorer.
+
+To use the full SSH server desktop, edit the profile, select **SSH**, and enter the port and credentials. This mode requires OpenSSH Server on a port reachable from Windows over loopback. Arcnix verifies the distribution’s SSH host public keys before authentication.
 
 ## Feature demos
 

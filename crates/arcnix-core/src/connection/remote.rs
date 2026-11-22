@@ -332,21 +332,26 @@ impl PendingConnection {
             .trim()
             .trim_start_matches('[')
             .trim_end_matches(']');
-        let (host, wsl_keys): (&str, Option<Vec<Vec<u8>>>) = match &profile.wsl_distribution {
+        #[cfg(not(windows))]
+        ensure!(
+            profile.available_on_this_platform(),
+            "Local WSL connections require Windows"
+        );
+        #[cfg(windows)]
+        let (host, wsl_keys) = match &profile.wsl_distribution {
             Some(distribution) => {
+                ensure!(
+                    profile.wsl_use_ssh,
+                    "Open this local WSL profile in its direct workspace"
+                );
                 ensure!(
                     profile.host == crate::wsl::profile_host(distribution)?,
                     "Invalid WSL profile address"
                 );
-                #[cfg(windows)]
-                {
-                    (
-                        "127.0.0.1",
-                        Some(crate::wsl::host_keys(distribution, deadline)?),
-                    )
-                }
-                #[cfg(not(windows))]
-                bail!("Local WSL connections require Windows");
+                (
+                    "127.0.0.1",
+                    Some(crate::wsl::host_keys(distribution, deadline)?),
+                )
             }
             None => (host, None),
         };
@@ -378,6 +383,7 @@ impl PendingConnection {
             }
         }
         let socket = socket.ok_or_else(|| {
+            #[cfg(windows)]
             if wsl_keys.is_some() {
                 return anyhow::anyhow!("Cannot reach WSL SSH on 127.0.0.1:{port}. Check the SSH service, port and Windows localhost forwarding.");
             }
@@ -416,6 +422,7 @@ impl PendingConnection {
         session.set_timeout(settings.timeout_seconds * 1000);
         session.set_keepalive(true, settings.keepalive_seconds);
         let (key, _) = session.host_key().context("Server supplied no host key")?;
+        #[cfg(windows)]
         if let Some(keys) = wsl_keys {
             ensure!(
                 keys.iter().any(|candidate| candidate == key),

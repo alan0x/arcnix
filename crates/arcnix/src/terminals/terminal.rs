@@ -123,6 +123,16 @@ fn tab_label(tab: &Tab) -> String {
         .or_else(|| tab.directory.clone())
         .unwrap_or_else(|| i18n::translate(&format!("终端 {}", tab.id)))
 }
+pub(crate) fn visible(s: &State) -> bool {
+    #[cfg(windows)]
+    if s.local_wsl_selected() {
+        return !s.background
+            && s.navigation == navigation::Page::Servers
+            && s.wsl.terminal_visible();
+    }
+    navigation::workspace_visible(s) && s.workspace_page.base() == WorkspacePage::Terminal
+}
+
 pub(crate) fn session_status(s: &State, id: u64) -> Option<Status> {
     s.terminal
         .session(id)
@@ -276,7 +286,7 @@ impl Ui {
             self.terminal_start(100, 30);
         }
     }
-    fn terminal_start(&self, columns: u32, rows: u32) {
+    pub(crate) fn terminal_start(&self, columns: u32, rows: u32) {
         if self.state.with(|s| s.terminal.id == 0) {
             self.state.revise(|s| {
                 let saved = server_apps_ui::desired(s).terminal;
@@ -295,7 +305,7 @@ impl Ui {
         self.terminal_open(columns, rows, directory, false);
     }
     pub(crate) fn terminal_here(&self, directory: String) {
-        if !directory_supported(&directory) || !self.state.with(|s| s.connected) {
+        if !directory_supported(&directory) || !self.state.with(State::terminal_available) {
             return;
         }
         if self
@@ -313,8 +323,47 @@ impl Ui {
         });
         self.terminal_open(100, 30, Some(directory), true);
     }
-    fn terminal_open(&self, columns: u32, rows: u32, directory: Option<String>, keep_active: bool) {
-        if !self.state.with(|s| s.connected) {
+    /// Stage one reviewed line in a fresh shell. Only the user submits it.
+    pub(crate) fn terminal_with_command(&self, command: String) {
+        if command.is_empty()
+            || command.chars().any(char::is_control)
+            || !self.state.with(State::terminal_available)
+        {
+            return;
+        }
+        if self.state.with(|s| s.terminal.id == 0) {
+            self.state.revise(|s| {
+                let saved = server_apps_ui::desired(s).terminal;
+                restore(s, &saved);
+            });
+        }
+        if self
+            .state
+            .with(|s| s.terminal.session_count() >= terminal_worker::SESSION_LIMIT)
+        {
+            self.state.revise(|s| {
+                s.dialog_error =
+                    i18n::translate("Close a terminal tab before opening another (8 maximum)")
+            });
+            return;
+        }
+        self.close_dialog();
+        self.state.revise(|s| {
+            let page = window_tabs::current(s, WorkspacePage::Terminal);
+            server_desktop::select_app(s, page);
+        });
+        self.terminal_open(100, 30, None, true);
+        self.state.revise(|s| s.terminal.paste = command);
+    }
+
+    pub(crate) fn terminal_open(
+        &self,
+        columns: u32,
+        rows: u32,
+        directory: Option<String>,
+        keep_active: bool,
+    ) {
+        if !self.state.with(State::terminal_available) {
             return;
         }
         if keep_active
@@ -613,7 +662,10 @@ pub(crate) fn update(ui: &Ui, event: TerminalEvent) {
         };
         match event {
             TerminalEvent::Started { .. } if session.status == Status::Starting => {
-                session.status = Status::Running
+                session.status = Status::Running;
+                if !session.paste.is_empty() {
+                    session.paste_revision += 1;
+                }
             }
             TerminalEvent::Output { bytes, .. } => {
                 session.sequence += 1;
@@ -653,7 +705,7 @@ fn consume(ui: &Ui, id: u64, packet: u64) {
 }
 
 fn handle_input(ui: &Ui, json: String) {
-    if json.len() > 400_000 || !ui.state.with(|s| s.connected) {
+    if json.len() > 400_000 || !ui.state.with(State::terminal_available) {
         return;
     }
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&json) else {
@@ -687,11 +739,7 @@ fn handle_input(ui: &Ui, json: String) {
             tab,
             too_large,
         } => ui.state.revise(|s| {
-            if navigation::workspace_visible(s)
-                && s.workspace_page.base() == WorkspacePage::Terminal
-                && s.dialog.is_none()
-                && (id == 0 || session_status(s, id).is_some())
-            {
+            if visible(s) && s.dialog.is_none() && (id == 0 || session_status(s, id).is_some()) {
                 s.terminal.menu = Some(terminal_menu::Context {
                     epoch: s.epoch,
                     id,
@@ -703,12 +751,7 @@ fn handle_input(ui: &Ui, json: String) {
             }
         }),
         Input::Shortcut { id, action }
-            if id == current
-                && ui.state.with(|s| {
-                    navigation::workspace_visible(s)
-                        && s.workspace_page.base() == WorkspacePage::Terminal
-                        && s.dialog.is_none()
-                }) =>
+            if id == current && ui.state.with(|s| visible(s) && s.dialog.is_none()) =>
         {
             match action.as_str() {
                 "new_tab" => ui.terminal_new_tab(id),
@@ -788,7 +831,7 @@ fn tabs(ui: Ui, window: u32) -> impl Widget {
     let new_tab = ui.clone();
     row()
         .class(state.map(|s| {
-            if s.connected {
+            if s.terminal_available() {
                 "terminal-tabs"
             } else {
                 "hidden"
@@ -832,7 +875,8 @@ fn tabs(ui: Ui, window: u32) -> impl Widget {
             icon_action("新建终端标签", Icon::Plus)
                 .class("icon-button terminal-new-tab")
                 .enabled(state.map(|s| {
-                    s.connected && s.terminal.session_count() < terminal_worker::SESSION_LIMIT
+                    s.terminal_available()
+                        && s.terminal.session_count() < terminal_worker::SESSION_LIMIT
                 }))
                 .on_press(move || {
                     let id = new_tab.state.with(|s| s.terminal.id);
@@ -863,6 +907,8 @@ pub(crate) fn header(ui: Ui, window: u32) -> impl Widget {
             }))
             .content(i18n::bind(state.map(move |s| {
                 match status(s) {
+                    #[cfg(windows)]
+                    Status::Running if s.local_wsl_selected() => "WSL",
                     Status::Running => "交互式 SSH",
                     Status::Starting => "正在启动终端…",
                     Status::Exited => "终端已关闭",
@@ -877,7 +923,9 @@ pub(crate) fn header(ui: Ui, window: u32) -> impl Widget {
                 let reconnect = reconnect.clone();
                 icon_action("Reconnect terminal", Icon::Refresh)
                     .class("icon-button terminal-restart")
-                    .enabled(state.map(move |s| s.connected && status(s) != Status::Starting))
+                    .enabled(
+                        state.map(move |s| s.terminal_available() && status(s) != Status::Starting),
+                    )
                     .on_press(move || reconnect.terminal_start(100, 30))
             },
         ),
@@ -951,9 +999,10 @@ fn page(ui: Ui, window: u32) -> impl Widget {
     let menu_ui = ui.clone();
     col()
         .class(state.map(|s| {
-            if server_desktop::visible(s)
-                && s.workbench
-                    .window_visible(window_tabs::current(s, WorkspacePage::Terminal))
+            if s.local_wsl_selected()
+                || server_desktop::visible(s)
+                    && s.workbench
+                        .window_visible(window_tabs::current(s, WorkspacePage::Terminal))
             {
                 "terminal-module"
             } else {
@@ -998,6 +1047,12 @@ fn page(ui: Ui, window: u32) -> impl Widget {
             packets(state, window),
             view()
                 .class("terminal-surface")
-                .name(i18n::bind("交互式 SSH 终端")),
+                .name(i18n::bind(state.map(|s| {
+                    #[cfg(windows)]
+                    if s.local_wsl_selected() {
+                        return "WSL 终端".to_owned();
+                    }
+                    "交互式 SSH 终端".to_owned()
+                }))),
         ))
 }

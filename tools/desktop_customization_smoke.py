@@ -1,7 +1,11 @@
 """Desktop layout, wallpaper and Dock backed by the connected user's SSH home."""
+import base64
+import io
 import json
 import re
 import time
+
+from PIL import Image
 
 from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, close_dialog, expect, eventually
@@ -17,6 +21,37 @@ def check_wallpaper(surface, name):
         return [new URL(url).pathname, image.naturalWidth, image.naturalHeight];
     }""")
     assert (path, width, height) == (f'/wallpapers/{name}.webp', 3840, 2160)
+
+
+def check_terminal_ink(page, button):
+    # The layout boxes can be centered even when the rasterized mint frame is not.
+    cdp = page.context.new_cdp_session(page)
+    colors = page.add_style_tag(content="""
+        .desktop-dock { background: black !important; }
+        .desktop-dock-app.app-terminal .desktop-app-icon {
+            background: red !important; border-color: red !important;
+            box-shadow: none !important; color: white !important;
+        }
+    """)
+    try:
+        cdp.send('Emulation.setDeviceMetricsOverride',
+                 dict(**page.viewport_size, deviceScaleFactor=1.02, mobile=False))
+        for offset in ('0px', '.33px', '.66px'):
+            button.evaluate('(el, offset) => el.style.left = offset', offset)
+            box = button.bounding_box()
+            # Use the full compositor frame. A cropped WebView screenshot can
+            # resample fractional edge pixels before the test sees them.
+            frame = Image.open(io.BytesIO(base64.b64decode(cdp.send('Page.captureScreenshot')['data']))).convert('RGB')
+            scale = page.evaluate('devicePixelRatio')
+            y = round((box['y'] + box['height'] / 2) * scale)
+            row = [frame.getpixel((x, y)) for x in range(round(box['x'] * scale), round((box['x'] + box['width']) * scale))]
+            tile = [x for x, (red, _, _) in enumerate(row) if red > 128]
+            ink = [x for x, rgb in enumerate(row) if min(rgb) > 128]
+            assert min(ink) - min(tile) == max(tile) - max(ink), (offset, tile, ink)
+    finally:
+        button.evaluate("el => el.style.removeProperty('left')")
+        colors.evaluate('el => el.remove()')
+        cdp.detach()
 
 
 def main():
@@ -40,7 +75,7 @@ def main():
         settings_file.parent.mkdir(exist_ok=True)
         settings_file.write_text(json.dumps({
             'version': 1, 'theme': 'System',
-            'appearance': {'wallpaper': 'dunes', 'dock': {'magnify': True}},
+            'appearance': {'wallpaper': 'dunes', 'dock': {'magnify': True, 'floating_status': False}},
             'files': {'folder_icons': {'/home/arcnix/Desktop/Projects': 'projects'}},
         }), encoding='utf-8')
 
@@ -141,7 +176,10 @@ def main():
                         : (dock.bottom + icon.bottom) / 2;
                     const [width, height] = [parseFloat(indicator.width), parseFloat(indicator.height)];
                     const dots = zone.querySelectorAll('.desktop-dock-app.running:not(.active)');
-                    return margins.every(margin => Math.abs(margin / icon.width - .12) < .03)
+                    const alongDock = left || right ? [margins[0], margins[2]] : margins;
+                    return alongDock.every(margin => Math.abs(margin / icon.width - .12) < .03)
+                        && Math.abs(margins[1] - margins[3]) <= 1
+                        && indicator.backgroundColor === 'rgb(255, 255, 255)' && indicator.boxShadow === 'none'
                         && [...dots].every(other => {
                             const dot = getComputedStyle(other, '::after');
                             return dot.backgroundColor === indicator.backgroundColor
@@ -209,12 +247,15 @@ def main():
             assert project_icon.evaluate("icon => getComputedStyle(icon, '::before').maskImage.includes('data:image/svg+xml;base64,')")
             expect(desktop_button('outside-home.txt')).to_have_count(0)
             expect(p.locator('.desktop-wallpaper-address')).to_contain_text('127.0.0.1:')
+            # Measure shortcut layout margins without sampling a transient hover scale.
+            p.emulate_media(reduced_motion='reduce')
             check_hover(desktop_button('Monitor'))
             check_hover(desktop_button(long_name), clipped=True)
             app.screenshot('shortcut-hover.png')
             p.set_viewport_size(dict(width=900, height=650))
             check_hover(desktop_button(long_name), clipped=True)
             p.set_viewport_size(dict(width=1440, height=980))
+            p.emulate_media(reduced_motion=None)
             desktop_button('App Center').click()
             expect(p.locator('.desktop-window:not(.hidden)')).to_be_visible()
             title = p.locator('.desktop-window.active .desktop-window-titlebar')
@@ -343,7 +384,7 @@ def main():
             expect(settings().get_by_role('button', name='Dock', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings().locator('.desktop-setting-row').filter(has_text='Dock icon size').locator('.setting-dock-icon-size:visible').get_by_role('radio', name='Large', exact=True).check()
             saved()
-            expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-large')
+            expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-size-64')
             expect(settings().get_by_role('button', name='Magnify Dock icons', exact=True)).to_have_count(0)
             settings().get_by_role('switch', name='Automatically hide the dock', exact=True).click()
             saved()
@@ -369,7 +410,7 @@ def main():
             expect(desktop_button('Projects')).to_be_visible()
             expect(p.locator('.desktop-shortcut').first).to_have_attribute('aria-label', 'Projects')
             expect(p.locator('.desktop-dock-app').first).to_have_attribute('aria-label', 'Terminal')
-            expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-large dock-auto-hide')
+            expect(p.locator('.desktop-dock')).to_have_class('desktop-dock dock-size-64 dock-auto-hide')
             expect(dock_button('Monitor')).to_have_count(0)
             canvas = p.locator('.desktop-canvas').bounding_box()
             p.mouse.move(canvas['x'] + canvas['width'] / 2, canvas['y'] + canvas['height'] - 4)
@@ -424,28 +465,23 @@ def main():
 
             slider = settings().get_by_role('slider', name='Dock icon size', exact=True)
             dock_size = settings().locator('.desktop-setting-row').filter(has_text='Dock icon size')
-            for label, pixels in [('Small', 32), ('Medium', 48), ('Large', 56)]:
+            for label, pixels in [('Small', 32), ('Medium', 48), ('Large', 64)]:
                 dock_size.get_by_role('radio', name=label, exact=True).check()
                 saved()
                 expect(slider).to_have_value(str(pixels))
+                expect(panel).to_have_css('--dock-ideal', f'{pixels}px')
                 check_dock_selection()
             track = slider.bounding_box()
-            for value, x, progress in [(32, 1, '0%'), (64, track['width'] - 1, '100%')]:
+            for label, value, x, progress in [('Small', 32, 1, '0%'), ('Large', 64, track['width'] - 1, '100%')]:
                 slider.click(position={'x': x, 'y': track['height'] / 2})
                 expect(slider).to_have_value(str(value))
                 assert slider.evaluate("el => el.style.getPropertyValue('--icon-size-progress')") == progress
-                if value == 32:
-                    eventually(lambda: preferences()['dock']['size'] == 'small' and 'icon_size' not in preferences()['dock'])
-                else:
-                    eventually(lambda: preferences()['dock'].get('icon_size') == value)
-                    expect(dock_size.get_by_role('radio', checked=True)).to_have_count(0)
+                eventually(lambda: preferences()['dock']['size'] == label.lower() and 'icon_size' not in preferences()['dock'])
+                expect(dock_size.get_by_role('radio', checked=True)).to_have_accessible_name(label)
                 check_dock_corners()
-            dock_size.locator('.setting-dock-icon-size:visible').get_by_role('radio', name='Large', exact=True).check()
-            eventually(lambda: preferences()['dock']['size'] == 'large' and 'icon_size' not in preferences()['dock'])
-            expect(slider).to_have_value('56')
             track = slider.bounding_box()
             y = track['y'] + track['height'] / 2
-            p.mouse.move(track['x'] + track['width'] * .75, y)
+            p.mouse.move(track['x'] + track['width'] - 2, y)
             p.mouse.down()
             p.mouse.move(track['x'] + track['width'] * .9, y, steps=6)
             custom_pixels = eventually(lambda: slider.evaluate('''slider => {
@@ -535,7 +571,12 @@ def main():
                     const startInset = home[before] - frame[before];
                     const endInset = frame[after] - clock[after];
                     const corner = parseFloat(getComputedStyle(dock).borderTopLeftRadius);
+                    const gap = parseFloat(getComputedStyle(dock).gap);
+                    const homeButton = rect(dock.querySelector('.desktop-dock-home'));
                     return Math.min(startInset, endInset) >= 6
+                        && same(start[before] - homeButton[after], gap)
+                        && same(clock[before] - end[after], gap)
+                        && icons.every(icon => same(icon[cross] + icon[span] / 2, frame[cross] + frame[span] / 2))
                         && corner < Math.min(frame.width, frame.height) / 3
                         && same(startInset, endInset)
                         && same(start[span], end[span]) && same(start[cross], end[cross])
@@ -545,13 +586,10 @@ def main():
             expect(status.locator('.desktop-dock-divider')).to_be_visible()
             check_clock_inset()
             radii = []
-            for key, pixels in [('Home', 32), ('End', 64)]:
+            for key, pixels, preset in [('Home', 32, 'small'), ('End', 64, 'large')]:
                 slider.press(key)
                 expect(slider).to_have_value(str(pixels))
-                if pixels == 32:
-                    eventually(lambda: preferences()['dock']['size'] == 'small' and 'icon_size' not in preferences()['dock'])
-                else:
-                    eventually(lambda: preferences()['dock'].get('icon_size') == pixels)
+                eventually(lambda: preferences()['dock']['size'] == preset and 'icon_size' not in preferences()['dock'])
                 check_clock_inset()
                 radii.append(status.evaluate(
                     'el => parseFloat(getComputedStyle(el.closest(".desktop-dock")).borderTopLeftRadius)'
@@ -626,6 +664,7 @@ def main():
 
             eventually(lambda: maximized_fits_dock('bottom'))
             bubble = p.locator('.desktop-context-menu')
+            side_gaps = {}
             for edge, menu_side in [('left', 'right'), ('right', 'left')]:
                 settings().locator('.setting-dock-position:visible').get_by_role('radio', name=edge.title() + ' side', exact=True).check()
                 p.mouse.move(25, 100)
@@ -634,6 +673,33 @@ def main():
                 eventually(lambda: preferences()['dock'].get('position') == edge)
                 dock = zone.locator('.desktop-dock')
                 expect(dock).to_have_css('flex-direction', 'column')
+                def launcher_gap():
+                    return dock.evaluate('''dock => {
+                        const leading = dock.querySelector('.desktop-dock-leading');
+                        const button = leading.querySelector('button').getBoundingClientRect();
+                        const divider = leading.querySelector('.desktop-dock-divider').getBoundingClientRect();
+                        return divider.top - button.bottom;
+                    }''')
+
+                weekday = settings().get_by_role('switch', name='Weekday', exact=True)
+                weekday_text = dock.locator('.desktop-panel-weekday')
+                for key, pixels in [('Home', 32), ('End', 64)]:
+                    slider.press(key)
+                    expect(slider).to_have_value(str(pixels))
+                    status_toggle.click()
+                    expect(status).to_have_count(0)
+                    without_clock = launcher_gap()
+                    status_toggle.click()
+                    expect(status).to_be_visible()
+                    expect(weekday_text).to_be_empty()
+                    with_date = launcher_gap()
+                    weekday.check()
+                    expect(weekday_text).not_to_be_empty()
+                    side_gaps[edge, pixels] = (without_clock, with_date, launcher_gap())
+                    weekday.uncheck()
+                    expect(weekday_text).to_be_empty()
+                slider.press('Home' if edge == 'left' else 'End')
+                expect(slider).to_have_value('32' if edge == 'left' else '64')
                 assert dock.evaluate('''dock => {
                     const canvas = dock.closest('.desktop-canvas').getBoundingClientRect();
                     const box = dock.getBoundingClientRect();
@@ -642,13 +708,16 @@ def main():
                 check_dock_selection()
                 side_clock = dock.locator('.desktop-panel-clock')
                 check_clock_inset()
+                if edge == 'left':
+                    check_terminal_ink(p, dock_button('Terminal'))
                 expect(side_clock.locator('.desktop-panel-time')).to_have_text(re.compile(r'^\d{2}:\d{2}$'))
                 expect(side_clock.locator('.desktop-panel-date')).to_have_text(re.compile(r'^\d{2}/\d{2}$'))
                 tooltip = side_clock.locator('.desktop-clock-tooltip')
                 expect(tooltip).to_be_hidden()
                 side_clock.hover()
                 expect(tooltip).to_be_visible()
-                expect(tooltip).to_contain_text(re.compile(r'\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+UTC'))
+                detail_time = r'\d{1,2}:\d{2}' if edge == 'left' else r'\d{1,2}:\d{2}:\d{2}'
+                expect(tooltip).to_contain_text(re.compile(r'\d{4}\s+' + detail_time + r'\s+UTC'))
                 app.screenshot(f'{edge}-dock-clock.png')
                 dock_button('Settings').click(button='right')
                 expect(bubble).to_have_attribute('data-dock-menu-side', menu_side)
@@ -658,6 +727,7 @@ def main():
                 if edge == 'left':
                     dock_button('Settings').drag_to(dock_button('Terminal'), target_position={'x': 12, 'y': 4})
                     eventually(lambda: preferences()['dock']['order'][0] == 'settings')
+            assert all(max(gaps) - min(gaps) <= 1 for gaps in side_gaps.values()), side_gaps
             settings().locator('.setting-dock-style:visible').get_by_role('radio', name='Panel mode', exact=True).check()
             align_top = settings().locator('.setting-app-icon-alignment:visible')
             center_icons = settings().locator('.setting-app-icon-alignment:visible')
@@ -724,8 +794,9 @@ def main():
             expect(dock_icons.locator('.setting-dock-icon-size:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Medium')
             expect(floating_status).to_be_checked()
             expect(status_format.get_by_role('radio', checked=True)).to_have_accessible_name('24-hour')
+            floating_status.uncheck()
             dock_status.locator('.settings-card-heading').get_by_role('button', name='Reset', exact=True).click()
-            expect(floating_status).not_to_be_checked()
+            expect(floating_status).to_be_checked()
             expect(dock_icons.locator('.setting-dock-icon-size:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Medium')
             expect(p.locator('.dock-side-zone')).to_have_count(0)
             expect(settings().locator('.setting-dock-position:visible').get_by_role('radio', checked=True)).to_have_accessible_name('Bottom')

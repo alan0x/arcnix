@@ -1,13 +1,7 @@
-pub mod diagnostic_exports;
-pub mod diagnostic_logs;
-pub mod diagnostics;
 pub mod disks;
 pub mod metric_history;
 pub mod metrics;
-pub(crate) mod name_resolution;
 pub mod network;
 pub mod processes;
 pub mod resource_ports;
 pub mod system_logs;
-pub mod tcp_listeners;
-pub(crate) mod tls_diagnostics;

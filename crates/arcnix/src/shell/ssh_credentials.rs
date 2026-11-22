@@ -39,6 +39,9 @@ impl Key {
     }
 
     pub fn for_profile(config: &AppConfig, profile: &ServerProfile) -> Option<Self> {
+        if !profile.available_on_this_platform() || profile.direct_wsl().is_some() {
+            return None;
+        }
         config
             .trusted_fingerprint(&profile.host, profile.port)
             .map(|fingerprint| Self::new(profile, fingerprint))

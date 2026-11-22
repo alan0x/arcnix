@@ -1,4 +1,4 @@
-"""Cross-client changing-operation exclusion and read-only diagnostics in WebView."""
+"""Cross-client changing-operation exclusion in WebView."""
 import json, time
 from desktop_fixture import Peer, Desktop, expect, ROOT
 
@@ -56,16 +56,7 @@ with Peer(out/'peer') as peer:
         expect(second.page.locator('.task-target')).to_contain_text('Exit code: 75')
         expect(second.page.locator('.task-output')).to_contain_text('Another Arcnix server operation is running')
         second.screenshot('prepared-race-rejected.png')
-        p.locator('.rail-diagnostics').click()
-        p.get_by_role('textbox', name='PEM certificate path (optional)', exact=True).fill('/etc/fixture.pem')
-        p.get_by_role('button', name='Nginx', exact=True).click()
-        p.get_by_role('button', name='Choose servers and review checks…', exact=True).click()
-        dialog = p.get_by_role('dialog', name='Run script on servers', exact=True)
-        dialog.locator('.target-choice').first.click()
-        dialog.get_by_role('button', name='Check targets', exact=True).click()
-        expect(p.locator('.task-status')).to_have_text(['Ready'], timeout=20000)
-        p.get_by_role('button', name='Execute ready targets', exact=True).click()
-        expect(p.locator('.task-status')).to_have_text(['Succeeded'], timeout=20000)
+        p.locator('.rail-tasks').click()
         p.locator('.task-heading').filter(has_text='Hold operation').click()
         query_selected(first)
         expect(p.locator('.task-status')).to_have_text(['Running'], timeout=20000)
@@ -87,7 +78,7 @@ with Peer(out/'peer') as peer:
         first.screenshot('coordination-chinese.png')
         saved = first.config.read_text()+first.config.with_suffix('.tasks.json').read_text()
         assert 'fixture-admin-secret' not in saved
-        assert len(json.loads(first.config.with_suffix('.tasks.json').read_text())) == 4
+        assert len(json.loads(first.config.with_suffix('.tasks.json').read_text())) == 3
 
-(out/'results.json').write_text(json.dumps(dict(passed=True, checks=['server lock hint', 'old result queried after restart', 'fresh preflight rejects running old task', 'second client prepared-plan race rejected', 'conflict has a confirmed nonzero result', 'diagnostics run alongside changing task', 'read-only task leaves original operation running', 'lock release permits a fresh reviewed operation', 'Chinese narrow layout and credential privacy']), indent=2))
-print('9 task coordination UI checks passed')
+(out/'results.json').write_text(json.dumps(dict(passed=True, checks=['server lock hint', 'old result queried after restart', 'fresh preflight rejects running old task', 'second client prepared-plan race rejected', 'conflict has a confirmed nonzero result', 'lock release permits a fresh reviewed operation', 'Chinese narrow layout and credential privacy']), indent=2))
+print('7 task coordination UI checks passed')

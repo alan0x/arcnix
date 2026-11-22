@@ -16,10 +16,7 @@ pub(crate) struct Context {
 }
 
 fn current(s: &State, context: &Context) -> bool {
-    context.epoch == s.epoch
-        && navigation::workspace_visible(s)
-        && s.workspace_page.base() == WorkspacePage::Terminal
-        && s.dialog.is_none()
+    context.epoch == s.epoch && terminal::visible(s) && s.dialog.is_none()
 }
 
 fn enabled(s: &State, context: &Context, action: &str) -> bool {
@@ -33,7 +30,9 @@ fn enabled(s: &State, context: &Context, action: &str) -> bool {
         }
         "paste" => !context.tab && status == Some(terminal::Status::Running),
         "select_all" | "clear" => !context.tab && context.id > 0 && status.is_some(),
-        "new_tab" => s.connected && s.terminal.session_count() < terminal_worker::SESSION_LIMIT,
+        "new_tab" => {
+            s.terminal_available() && s.terminal.session_count() < terminal_worker::SESSION_LIMIT
+        }
         "rename" | "close" => context.id > 0 && status.is_some(),
         _ => false,
     }

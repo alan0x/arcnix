@@ -10,7 +10,7 @@ pub(crate) fn select<T, L, O, R, W>(
     write: W,
 ) -> impl Widget + use<T, L, O, R, W>
 where
-    T: Copy + PartialEq + 'static,
+    T: Clone + PartialEq + 'static,
     L: Into<String>,
     O: IntoIterator<Item = (T, L)>,
     R: Fn(&State) -> T + 'static,
@@ -37,7 +37,7 @@ where
             && let Some((value, _)) = values.get(index)
             && state.with(enabled)
         {
-            write(&ui, *value);
+            write(&ui, value.clone());
         }
     };
 
@@ -53,6 +53,7 @@ where
         return row().class("settings-segment-field").fill(
             sapid::segmented_control(key)
                 .class(format!("settings-segmented setting-{slug}"))
+                .with_item_borders(false)
                 .label(label)
                 .segments(options.iter().enumerate().map(|(index, (_, label))| {
                     sapid::segment(index.to_string()).label(i18n::bind_in(desktop, label.clone()))

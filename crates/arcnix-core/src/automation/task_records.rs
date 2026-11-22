@@ -55,7 +55,8 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stops: Option<crate::task_stops::Description>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diagnostic: Option<Box<crate::diagnostics::Plan>>,
+    // Older server records can carry a diagnostic request. It is never executed.
+    pub diagnostic: Option<serde_json::Value>,
 }
 impl Metadata {
     fn validate(&self, id: &str) -> Result<()> {
@@ -81,12 +82,11 @@ impl Metadata {
         if let Some(stops) = &self.stops {
             stops.validate()?;
         }
-        if let Some(plan) = &self.diagnostic {
+        if self.diagnostic.is_some() {
             ensure!(
                 self.kind == Kind::Diagnostic,
                 "Unexpected diagnostic check selection"
             );
-            plan.validate()?;
         }
         if let Some(request) = &self.drill {
             ensure!(
@@ -480,16 +480,6 @@ mod tests {
     use super::*;
     #[test]
     fn full_pages_accept_large_valid_metadata_within_the_worker_limit() -> Result<()> {
-        let mut plan = crate::diagnostics::Plan {
-            configuration_file: format!(
-                "/etc/{}",
-                (0..10)
-                    .map(|_| "\"".repeat(195))
-                    .collect::<Vec<_>>()
-                    .join("/")
-            ),
-            ..Default::default()
-        };
         let mut metadata = Metadata {
             version: 1,
             id: "large-job-000".into(),
@@ -499,17 +489,9 @@ mod tests {
             created: 1700000000,
             drill: None,
             stops: None,
-            diagnostic: None,
+            diagnostic: Some(serde_json::json!({"certificate": "x".repeat(7900)})),
         };
-        for size in 1500..2040 {
-            plan.certificate = format!("/etc/{}", "\"".repeat(size));
-            metadata.diagnostic = Some(Box::new(plan.clone()));
-            if serde_json::to_vec(&metadata)?.len() >= 8000 {
-                break;
-            }
-        }
         metadata.validate(&metadata.id)?;
-        plan.template()?;
         assert!(serde_json::to_vec(&metadata)?.len() <= METADATA_LIMIT);
         let mut text = format!(
             "ARCNIX_RECORDS_V1\t1700000000\t0\t{}\n",
@@ -532,64 +514,6 @@ mod tests {
             && !r.invalid_metadata
             && r.metadata.as_ref().is_some_and(|m| m.diagnostic.is_some())));
         assert!(parse_page(&"x".repeat(2 * 1024 * 1024 + 1), 0).is_err());
-        Ok(())
-    }
-    #[test]
-    fn diagnostic_metadata_preserves_the_original_bounded_selection() -> Result<()> {
-        let plan = crate::diagnostics::Plan {
-            disk: false,
-            inodes: false,
-            services: false,
-            ports: false,
-            certificate: "/etc/cert/first.pem".into(),
-            certificates: (0..16).map(|n| format!("/etc/cert/{n}.pem")).collect(),
-            validator: crate::diagnostics::Validator::Nginx,
-            configuration_file: "/etc/nginx/full.conf".into(),
-            configurations: vec![
-                crate::diagnostics::ConfigurationCheck {
-                    validator: crate::diagnostics::Validator::OpenSsh,
-                    path: "/etc/ssh/full.conf".into(),
-                },
-                crate::diagnostics::ConfigurationCheck {
-                    validator: crate::diagnostics::Validator::Nginx,
-                    path: "/etc/nginx/second.conf".into(),
-                },
-            ],
-            ..Default::default()
-        };
-        assert_eq!(plan.finding_keys().len(), 20);
-        plan.template()?;
-        let metadata = Metadata {
-            version: 1,
-            id: "diagnostic-job".into(),
-            name: "On-demand diagnostics".into(),
-            revision: "a".repeat(16),
-            kind: Kind::Diagnostic,
-            created: 1700000000,
-            drill: None,
-            stops: None,
-            diagnostic: Some(Box::new(plan.clone())),
-        };
-        let bytes = serde_json::to_vec(&metadata)?;
-        assert!(bytes.len() + 40 <= METADATA_LIMIT);
-        let parsed = row(&format!(
-            "R\tdiagnostic-job\t1700000000\t0\tinactive\t{}\t2\t{}",
-            STANDARD.encode(b"0\n"),
-            STANDARD.encode(&bytes)
-        ))?;
-        assert!(!parsed.invalid_metadata);
-        let saved = parsed.metadata.unwrap().diagnostic.unwrap();
-        assert_eq!(saved.selection(), plan.selection());
-        initialize_metadata_command(
-            "/home/user/.local/state/arcnix/tasks/diagnostic-job",
-            &metadata,
-        )?;
-        let mut wrong = metadata.clone();
-        wrong.kind = Kind::Script;
-        assert!(wrong.validate("diagnostic-job").is_err());
-        let mut wrong = metadata;
-        wrong.diagnostic.as_mut().unwrap().expected_ports = "22; id".into();
-        assert!(wrong.validate("diagnostic-job").is_err());
         Ok(())
     }
     #[test]

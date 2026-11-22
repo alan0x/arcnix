@@ -8,7 +8,6 @@ pub(crate) enum Page {
     Scripts,
     Tasks,
     Backups,
-    Diagnostics,
     Notifications,
     Settings,
 }
@@ -81,9 +80,6 @@ pub(crate) fn change_page(s: &mut State, page: Page, _source: &'static str) {
     }
     if page != Page::Settings {
         configuration_backup_ui::forget(s);
-    }
-    if s.navigation != page {
-        crate::diagnostics_ui::dismiss(s);
     }
     if page != Page::Backups {
         backups_ui::forget(s);
@@ -163,13 +159,6 @@ fn rail(ui: Ui) -> impl Widget {
                     Icon::Download,
                     "rail-backups",
                 ),
-                rail_button(
-                    &ui,
-                    Page::Diagnostics,
-                    "Diagnostics",
-                    Icon::Search,
-                    "rail-diagnostics",
-                ),
             )),
             col().class("rail-bottom").fill(rail_button(
                 &ui,
@@ -206,7 +195,6 @@ fn context_sidebar(ui: Ui) -> impl Widget {
                     Page::Scripts => "Scripts",
                     Page::Tasks => "Tasks",
                     Page::Backups => "Backups",
-                    Page::Diagnostics => "Diagnostics",
                 }
                 .to_owned()
             }))),
@@ -447,16 +435,7 @@ fn global_sidebar(ui: Ui) -> impl Widget {
             })
             .otherwise({
                 let ui = ui.clone();
-                move || {
-                    when(state.map(|s| s.navigation == Page::Diagnostics), {
-                        let ui = ui.clone();
-                        move || diagnostics_ui::sidebar(ui.clone())
-                    })
-                    .otherwise({
-                        let ui = ui.clone();
-                        move || context_sidebar(ui.clone())
-                    })
-                }
+                move || context_sidebar(ui.clone())
             })
         }
     })
@@ -464,7 +443,8 @@ fn global_sidebar(ui: Ui) -> impl Widget {
 
 pub(crate) fn shell(ui: Ui) -> impl Widget {
     let state = ui.state;
-    let workbench = state.map(|s| s.navigation == Page::Servers && s.selected.is_some());
+    let workbench = state
+        .map(|s| s.navigation == Page::Servers && s.selected.is_some() && !s.local_wsl_selected());
     let view_log = ui.clone();
     let dismiss = ui.clone();
     row()
@@ -511,7 +491,6 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                                 Page::Scripts => i18n::translate("Scripts"),
                                 Page::Tasks => i18n::translate("Tasks"),
                                 Page::Backups => i18n::translate("Backups"),
-                                Page::Diagnostics => i18n::translate("Diagnostics"),
                                 Page::Notifications => i18n::translate("所有活动"),
                                 Page::Settings => i18n::translate(s.settings_section.label()),
                             }
@@ -564,10 +543,6 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                         let ui = ui.clone();
                         move || backups_ui::page(ui.clone())
                     }),
-                    when(state.map(|s| s.navigation == Page::Diagnostics), {
-                        let ui = ui.clone();
-                        move || diagnostics_ui::page(ui.clone())
-                    }),
                     when(state.map(|s| s.navigation == Page::Settings), {
                         let ui = ui.clone();
                         move || settings::page(ui.clone())
@@ -576,9 +551,18 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                         let ui = ui.clone();
                         move || notifications(ui.clone())
                     }),
+                    #[cfg(windows)]
+                    when(
+                        state.map(|s| s.navigation == Page::Servers && s.local_wsl_selected()),
+                        {
+                            let ui = ui.clone();
+                            move || wsl_workspace::page(ui.clone())
+                        },
+                    ),
                     when(
                         state.map(|s| {
                             s.navigation == Page::Servers
+                                && !s.local_wsl_selected()
                                 && (s.selected.is_none()
                                     || s.workbench.active == server_desktop::Tab::Home)
                         }),
@@ -591,6 +575,7 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                         when(
                             state.map(|s| {
                                 s.navigation == Page::Servers
+                                    && !s.local_wsl_selected()
                                     && s.workbench.active != server_desktop::Tab::Home
                                     && !s.connected
                             }),
@@ -614,7 +599,9 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                                 }
                             },
                         ),
-                        server_desktop::desktop(ui),
+                        when(state.map(|s| !s.local_wsl_selected()), move || {
+                            server_desktop::desktop(ui.clone())
+                        }),
                     )),
                 )),
             )),

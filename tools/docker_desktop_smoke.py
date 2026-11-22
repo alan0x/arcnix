@@ -76,8 +76,13 @@ def main():
             expect(page.locator('.docker-port-details')).to_contain_text('127.0.0.1:8080 → 80/tcp')
             expect(page.locator('.docker-port-details')).to_contain_text('[::1]:8443 → 443/tcp')
             expect(page.locator('.docker-port-details')).to_contain_text('9000/tcp · Exposed only')
+            page.locator('.docker-detail-tabs').get_by_role('button', name='Mounts', exact=True).click()
             expect(page.locator('.docker-mount-details')).to_contain_text('/usr/share/nginx/html')
+            page.locator('.docker-detail-tabs').get_by_role('button', name='Stats', exact=True).click()
+            expect(page.locator('.docker-container-stats')).to_contain_text('0.12%')
             app.screenshot('docker-light.png')
+            page.locator('.docker-tabs').get_by_role('button', name='Container images', exact=True).click()
+            expect(page.locator('.docker-image-row').filter(has_text='nginx')).to_contain_text('alpine')
             checks.append('Docker is discovered automatically; one icon per launcher opens container state, IPv4/IPv6 mappings, exposed ports and volume mounts')
 
             page.locator('.docker-tabs').get_by_role('button', name='Volumes', exact=True).click()
@@ -100,7 +105,7 @@ def main():
             expect(page.locator('.docker-container-row')).to_have_count(1)
             page.locator('.docker-filter').fill('')
             select('web')
-            page.locator('.docker-container-actions').get_by_role('button', name='Logs', exact=True).click()
+            page.locator('.docker-detail-tabs').get_by_role('button', name='Logs', exact=True).click()
             expect(page.locator('.docker-log-output')).to_contain_text(re.compile(r'fixture web ready.*fixture stderr included.*fixture web after stderr', re.S))
             log_panel = page.locator('.docker-log-panel')
             trace = peer.root / 'server-app-queries.jsonl'
@@ -114,7 +119,7 @@ def main():
             log_panel.locator('.logs-filter').fill('no such text')
             expect(page.locator('.docker-log-output')).to_have_text('No entries match this filter.')
             log_panel.locator('.logs-filter').fill('')
-            log_panel.get_by_role('button', name='Details', exact=True).click()
+            page.locator('.docker-detail-tabs').get_by_role('button', name='Inspect', exact=True).click()
             checks.append('Volumes show their paths and consumers; ports link back to containers; filters and bounded, time-ordered stdout/stderr log snapshots work, with a line count and a text filter')
 
             def action(name, title, state):
@@ -126,6 +131,8 @@ def main():
                 eventually(lambda: json.loads(docker_file.read_text())['containers'][0]['state'] == state)
                 expect(page.locator('.docker-container-actions').get_by_role('button', name='Configure', exact=True)).to_be_enabled()
 
+            action('Pause', 'Pause container', 'paused')
+            action('Resume', 'Resume container', 'running')
             action('Stop', 'Stop container', 'exited')
             action('Start', 'Start container', 'running')
             action('Restart', 'Restart container', 'running')
@@ -290,7 +297,7 @@ def main():
             # A late log response from the previous connection must not populate another server.
             select('web')
             (peer.root / 'docker-slow').touch()
-            page.locator('.docker-container-actions').get_by_role('button', name='Logs', exact=True).click()
+            page.locator('.docker-detail-tabs').get_by_role('button', name='Logs', exact=True).click()
             page.locator('.host-select').nth(3).click()
             page.locator('.overview-connect').click()
             expect(page.locator('.connection-state')).to_have_text('SSH connected')

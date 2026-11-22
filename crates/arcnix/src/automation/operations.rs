@@ -10,6 +10,7 @@ pub(crate) struct OperationsState {
     loaded: bool,
     services: Vec<Service>,
     selected: String,
+    inspect_after_list: bool,
     filter: String,
     pending: Option<(u64, Kind)>,
     output: String,
@@ -21,6 +22,17 @@ fn ready(s: &State) -> bool {
     s.connected && !s.system_task_running && s.operations.pending.is_none()
 }
 impl Ui {
+    pub(crate) fn open_system_service(&self, unit: &str) {
+        self.state.revise(|s| {
+            monitor_ui::set_section(s, monitor_ui::Section::Services);
+            s.operations.service_view = 0;
+            s.operations.filter.clear();
+            s.operations.selected = unit.to_owned();
+            s.operations.inspect_after_list = true;
+        });
+        self.open_desktop_app(WorkspacePage::Monitor);
+        self.operations_list();
+    }
     pub(crate) fn operations_enter(&self) {
         if self.state.with(|s| {
             monitor_ui::active(s) == Some(monitor_ui::Section::Services)
@@ -173,7 +185,7 @@ pub(crate) fn event(ui: &Ui, serial: u64, event: OpEvent) {
     if expected != serial {
         return;
     }
-    ui.state.revise(|s| {
+    let inspect = ui.state.revise(|s| {
         let op = &mut s.operations;
         op.pending = None;
         match event {
@@ -183,15 +195,27 @@ pub(crate) fn event(ui: &Ui, serial: u64, event: OpEvent) {
                 }
                 op.services = items;
                 op.loaded = true;
+                return std::mem::take(&mut op.inspect_after_list) && !op.selected.is_empty();
             }
             OpEvent::Details(text) if kind == Kind::Inspect => {
                 op.output = text;
                 op.status = "Service details".into();
             }
-            OpEvent::Failed(failed, error) if failed == kind => op.error = error,
+            OpEvent::Failed(failed, error) if failed == kind => {
+                if kind == Kind::List {
+                    op.inspect_after_list = false;
+                }
+                op.error = error;
+            }
             _ => {}
         }
+        false
     });
+    if inspect {
+        ui.inspect_service();
+    } else if kind != Kind::List && ui.state.with(|s| s.operations.inspect_after_list) {
+        ui.operations_list();
+    }
 }
 pub(crate) fn connection_lost(ui: &Ui) {
     ui.state

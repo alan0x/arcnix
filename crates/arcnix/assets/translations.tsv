@@ -913,7 +913,6 @@ MySQL 需要对该数据库或全局直接授予 SELECT，避免仅能看到部�
 安装 MySQL/MariaDB 客户端	Install MySQL/MariaDB client
 安装发行版提供的 PostgreSQL 客户端。pg_dump 主版本应与源数据库匹配；仅支持 Debian / Ubuntu APT。	Install distribution PostgreSQL clients. Match the pg_dump major version to the source database. Debian / Ubuntu APT.
 安装发行版提供的 MySQL 兼容客户端，仅支持 Debian / Ubuntu APT。	Install distribution MySQL-compatible clients. Debian / Ubuntu APT.
-诊断	Diagnostics
 配置目标文件	Configuration destination
 完整 Nginx 配置	Full Nginx configuration
 自定义应用配置	Custom application configuration
@@ -958,66 +957,20 @@ Nginx 使用完整配置，重载指定服务并检查 HTTP 健康状态。恢�
 发布失败，之前的配置与服务已恢复	Publication failed; previous configuration and service recovered
 任务失败，服务恢复状态需要检查	Task failed; service recovery requires inspection
 发布已拒绝，生效文件未被修改	Publication refused before changing the live file
-配置检查项…	Configure checks…
-安装诊断工具…	Install check tools…
 安装 curl、lsof、dnsutils、coreutils、iproute2、openssl 和 findutils，仅支持 Debian / Ubuntu APT。	Install curl, lsof, dnsutils, coreutils, iproute2, openssl and findutils. Debian / Ubuntu APT.
-检查详情与建议	Findings and suggestions
-按需服务器诊断	On-demand server diagnostics
 磁盘空间	Filesystem space
-文件系统 inode	Filesystem inodes
-失败的 systemd 服务	Failed systemd services
-TCP 监听端口	Listening TCP ports
-本地证书到期检查	Local certificate expiry
-配置校验	Configuration validation
-配置文件（可选，留空使用默认）	Configuration file (optional; default if empty)
-用量警告阈值 (%)	Warning usage (%)
-用量严重阈值 (%)	Critical usage (%)
-预期 TCP 端口（可选，逗号分隔）	Expected TCP ports (optional, comma-separated)
-PEM 证书路径（可选）	PEM certificate path (optional)
-证书到期预警天数	Certificate warning days
-跳过配置校验	Skip configuration validation
-以管理员身份检查	Run checks as administrator
-选择服务器并检查计划…	Choose servers and review checks…
-最近的诊断	Recent diagnostic runs
-查看任务及原始输出	View task and raw output
-打开服务器工作区	Open server workspace
-统计目录大小…	Measure a directory…
 检查通过	Check passed
 警告	Warning
 严重	Critical
 信息	Information
-不可用或无法判断	Unavailable or inconclusive
-用量阈值必须满足 1 <= 警告 < 严重 <= 100	Usage thresholds must satisfy 1 <= warning < critical <= 100
-请输入数字用量阈值	Enter numeric usage thresholds
-请输入数字证书预警天数	Enter numeric certificate warning days
-证书预警天数须为 1 至 3650	Certificate warning days must be between 1 and 3650
-至少选择一项诊断检查	Select at least one diagnostic check
-最多填写 16 个 TCP 端口	Enter at most 16 TCP ports
-TCP 端口须为 1 至 65535 的数字，用逗号分隔	Expected TCP ports must be comma-separated numbers from 1 to 65535
-TCP 端口不能为零	TCP port must be nonzero
 采样时间 {time} · {count} 项问题 · {unknown} 项无法判断	Sampled {time} · {count} findings · {unknown} inconclusive
 用量警告 ≥{warning}%，严重 ≥{critical}%	Usage warning ≥{warning}%, critical ≥{critical}%
 预期 TCP：{ports}	Expected TCP: {ports}
 PEM：{path} · {days} 天	PEM: {path} · {days} days
 配置：{validator} · {path}	Configuration: {validator} · {path}
-仅显示清单	Inventory only
-默认配置	Default configuration
 {label} · {count} 个失败服务	{label} · {count} failed services
 {label} · {count} 个预期端口未监听	{label} · {count} missing TCP ports
-诊断结果不完整。重复检查前请核验服务器任务。	Diagnostic results are not complete. Inspect the server task before repeating checks.
-按需跨服务器执行所选检查。结果仅反映采样时刻，不进行持续监控。	Run selected checks across servers on demand. Results describe one point in time, not continuous monitoring.
-检查由服务器任务执行。处理前请审核结果；不会自动清理、重启或重载服务。	Checks run in server-owned tasks. Review findings before taking action; no automatic cleanup, restart or reload is performed.
-磁盘检查排除 tmpfs、devtmpfs 和 squashfs。端口检查仅检查本机监听，不测试网络可达性。	Space checks exclude tmpfs, devtmpfs and squashfs. TCP checks inspect local listeners; they do not test network reachability.
-受保护的配置检查可能需要管理员权限。缺少工具、权限不足和超时均标记为无法判断。	Protected configuration checks may require administrator access. Missing tools, denied permissions and timed-out checks remain inconclusive.
-诊断与其他任务共用最近 10 个批次的历史。采集成功仍可能包含警告、严重问题或不可用的检查。	Diagnostic runs share the recent 10-task history. A successful collection can still contain warnings, critical findings or unavailable checks.
-尚无诊断结果。选择检查项和目标服务器以开始。	No diagnostic results yet. Choose checks and target servers to begin.
-删除数据前先检查大目录及已删除但仍被进程占用的文件，并确认备份。	Inspect large directories and deleted files still held open before removing data. Confirm backups first.
-检查包含大量小文件的目录。仅释放磁盘空间不能解决 inode 耗尽。	Inspect directories with many small files. Free space alone does not resolve inode exhaustion.
-先在服务器运维页查看失败服务及其日志，再决定是否重启。	Inspect the failed service and its journal in server Operations before deciding whether to restart it.
-将监听端口与预期端口对照。正在监听不代表防火墙可达或应用健康。	Compare listeners with the expected TCP ports. A listener does not prove firewall reachability or application health.
-使用服务器现有工具续期、校验证书后，再审核服务重载。本项仅检查每个所选本地 PEM 文件中第一张证书的到期时间。	Renew the certificate through its existing server-side tooling, validate it, then review the service reload. This check covers the first certificate in each selected local PEM file only.
-查看校验输出、权限及引用文件，修正配置后再审核重载。本次没有重载服务。	Read the validator output, check permissions and referenced files, and correct the configuration before reviewing a reload. No service was reloaded.
-每台服务器同时只运行一项 Arcnix 全局变更操作，按需诊断可并行运行。客户端关闭后服务器锁仍有效。	Each server runs one global Arcnix operation at a time; diagnostics may run alongside it. Server locks survive client closure.
+每台服务器同时只运行一项 Arcnix 全局变更操作。客户端关闭后服务器锁仍有效。	Each server runs one global Arcnix operation at a time. Server locks survive client closure.
 查看服务器任务	View server tasks
 安装和索引更新由服务器任务执行。请在任务中心审核计划、查看结果；关闭 Arcnix 不会停止已提交的操作。	Installations and index updates run as server-owned tasks. Review their plans and results in Tasks; closing Arcnix does not stop submitted work.
 服务变更和保存命令由服务器任务执行。请在任务中心审核计划、查看结果；交互程序请使用终端。	Service changes and saved commands run as server-owned tasks. Review their plans and results in Tasks; use Terminal for interactive programs.
@@ -1477,22 +1430,7 @@ APT 降级或版本比较无效，请重新核对计划	APT downgrade or invalid
 读取时间未记录	Read time unavailable
 结果快照	Result snapshot
 客户端按本机时钟记录当前快照的接收时间，这不是任务完成时间，也不代表持续确认服务器状态。查询失败保留上次读取时间，旧历史可能未记录时间。	Time this client received the displayed server snapshot, using this computer's clock. This is not the task completion time or continuous confirmation of its state. Failed queries retain the previous read time. Older history may have no recorded time.
-添加证书	Add certificate
-移除证书	Remove certificate
-额外 PEM 证书路径	Additional PEM certificate path
-添加配置检查	Add configuration check
-移除配置检查	Remove configuration check
-额外配置	Additional configuration
-额外配置文件（可选，空值使用默认配置）	Additional configuration file (optional; default if empty)
-多项巡检	Multiple diagnostic items
 额外证书：{certificates} · 配置：{configurations}	Additional certificates: {certificates} · configurations: {configurations}
-总计最多选择 20 项检查。每个 PEM 只检查第一张证书的到期时间，不验证证书链或网络实际返回的证书。配置文件须为完整 Nginx 或 OpenSSH 配置，空路径使用校验器默认配置，重复项会被拒绝。	Select up to 20 checks in total. Each PEM checks its first certificate's expiry; it does not validate the chain or the certificate served over the network. Configuration files must be full Nginx or OpenSSH configurations. Empty configuration paths use the validator default. Duplicate items are rejected.
-总计最多选择 20 项巡检	Select at most 20 diagnostic checks in total
-请选择 1 到 20 项巡检	Select between 1 and 20 diagnostic checks
-证书路径重复	Duplicate diagnostic certificate path
-配置检查重复	Duplicate diagnostic configuration check
-请选择配置校验器	Choose a configuration validator
-巡检请求超过 8192 字节，请缩短路径或拆分执行	Diagnostic request exceeds 8192 bytes; shorten paths or split the checks into separate runs
 清理审计存储	Cleanup audit storage
 残留导出存储	Residual export storage
 审计与导出存储…	Audit and export storage…
@@ -1624,82 +1562,20 @@ sudo 密码（可选）	sudo password (optional)
 清除选中任务	Clear selected tasks
 每个停止批次中，同一服务器只能选择一个 SSH 账户	Choose one SSH account per server for each stop batch
 停止任务的核查依据必须保留	Task stop evidence must be retained
-导出诊断报告	Export diagnostic report
-导出诊断报告…	Export diagnostic report…
-导出报告…	Export report…
-已捕获的诊断快照	Captured diagnostic snapshot
-诊断报告导出	Diagnostic report export
-包含检查明细	Include finding details
-报告保存目录	Report folder
-选择报告目录	Choose report folder
-HTML 文件名	HTML file name
-预览报告	Review report
-保存 HTML 报告	Save HTML report
-服务器诊断报告	Server diagnostics report
-报告捕获时间	Report captured
 来源	Source
 最近批次	Recent batch
 服务器记录	Server record
 批次编号	Batch ID
-采集器版本	Collector revision
-批次创建时间	Batch created
-Arcnix 版本	Arcnix version
-检查明细	Finding details
 已包含	Included
 未包含	Excluded
 服务器地址	Server address
 主机指纹	Host fingerprint
-服务器任务目录	Server task directory
-快照接收时间	Snapshot received
-执行状态	Execution status
 已保存的退出码	Saved exit code
-服务器采样时间	Server sampled
-采集环境	Collection environment
-操作系统	Operating system
-内核与架构	Kernel and architecture
 检查范围	Check scope
 检查编号	Check key
-观察值	Observed value
 建议	Suggestion
-仅包含已保存的观察结果，不代表当前健康状态，也不会执行命令。	Saved observations only. This report does not describe current health or run commands.
-诊断报告缺失或不完整，未确认任何检查结论。	Diagnostic report is missing or incomplete; no findings are confirmed.
-已保存的结果与检查范围不符，未导出这些检查结论。	Saved findings do not match the recorded check selection; findings are omitted.
-已确认采集完成，检查结论仍需审核。	Collection confirmed; findings still require review.
-已保存的检查结论，执行结果尚未确认。	Saved findings; execution is not confirmed.
-原检查范围未记录，这些已保存的检查结论尚未核验。	Requested check selection was not recorded; these saved findings are unverified.
-该采集器未记录环境版本。	Environment versions were not recorded by this collector.
-导出当前捕获的已保存结果，不连接服务器。之后的任务更新不会改变这份快照；未知或不完整结果仍保持未确认。	Export the captured saved observations without contacting servers. Later task updates do not change this snapshot. Unknown or incomplete results remain unconfirmed.
-报告包含服务器地址、指纹和选中的路径。检查明细可选，可能含敏感服务器数据，请在分享前审核。脚本及执行预览不会导出。	Server addresses, fingerprints and selected paths are included. Details are optional and may contain sensitive server data; review the report before sharing. Scripts and execution previews are excluded.
-HTML 文件可离线查看，不含脚本或外部资源，不覆盖已有文件。	The HTML file works offline without scripts or external resources. Existing files are never overwritten.
-请输入普通的 HTML 文件名	Enter a plain HTML file name
-请选择已存在的报告目录	Choose an existing report folder
-报告文件已存在，请更换文件名	Report destination already exists; choose another file name
-采集环境尚未确认	Collection environment is not confirmed
-故障服务日志…	Failed service logs…
-诊断服务日志	Diagnostic service logs
-已保存的故障服务	Saved failed services
-已保存的发现，采集结果尚未确认	Saved finding; collection is unconfirmed
-诊断采样前后	Around diagnostic sampling
-以管理员读取日志	Read journal as administrator
-最多条数	Maximum entries
-正在读取服务日志…	Reading service logs…
-显示上次日志快照	Showing the previous log snapshot
-尚未读取日志快照	No log snapshot yet
-当前选择未返回 journal 条目	No journal entries returned for this selection
-读取服务日志	Read service logs
-原诊断服务器已不在配置中	Original diagnostic server is no longer configured
-诊断服务器身份已变化，请重新连接并核验原主机	Diagnostic server identity changed; reconnect and verify the original host
-请先选择诊断服务	Choose a diagnostic service first
-请等待日志查询完成	Wait for the log query
-日志响应超过读取上限	Service log response exceeded the read limit
-服务日志需要已选择的 journal 服务名	Service logs require the selected journal unit
-请选择已保存诊断中的服务	Choose a service from the saved diagnostic finding
-已保存的发现中没有可核验的服务名称	No verified service names are available in this saved finding
 journal 服务名无效，请使用有效十六进制转义的完整名称	Invalid journal unit name; use a literal unit with valid hexadecimal escapes
 journal 查询时间范围无效	Invalid bounded journal time window
-通过独立 SSH 连接，读取原服务器上已保存服务名的日志。当前工作区及传输保持连接，不重启服务，也不重新执行诊断。	Read one saved service name on the original server using an independent SSH connection. The current workspace and transfers stay connected. This does not restart the service or repeat diagnostics.
-诊断时段为采集开始前后各 15 分钟，可能包含同名服务的后续运行。日志可能已轮转或受账户权限限制，空结果不代表未发生故障。	The diagnostic window covers 15 minutes before and after the recorded collection start. It may include a later invocation of the same service. Logs may have rotated or be restricted by account permissions; empty results do not prove that no failure occurred.
-每次查询只读取有限快照，不自动刷新。凭据仅在弹窗打开期间保留于内存。管理员权限可选，仅用于此次日志读取。	Queries are bounded snapshots with no automatic refresh. Credentials remain in memory only while this dialog is open. Administrator access is optional and applies only to the journal read.
 旧退出结果未绑定运行实例，请核查原服务器任务	Legacy exit result has no runtime binding; inspect the original server task
 已保存的退出回执属于另一任务	Saved exit receipt belongs to a different task
 已保存的退出回执属于另一运行实例	Saved exit receipt belongs to a different service invocation
@@ -1822,24 +1698,6 @@ journal 查询时间范围无效	Invalid bounded journal time window
 重启条件	Restart readiness
 重启须等待 SSH 断开、操作结束、对话框关闭，并先处理内存中的配置草稿。可返回继续编辑或明确丢弃，不会自动保存或清除。	Restart waits for disconnected SSH, completed work, closed dialogs and no in-memory configuration draft. Return to the draft to keep editing or explicitly discard it; nothing is saved or discarded automatically.
 草稿正文和默认值保存在编辑器内存中。成功开始预检查后按服务器冻结候选并清除运行表单值，校验未通过时保留输入。取消表单会清除运行值，取消选择会移除该服务器覆盖值，筛选保留已选值。	Draft text and defaults stay in editor memory. Starting preflight freezes per-server candidates and clears run-form values; invalid forms stay editable. Cancelling discards run values, deselection removes that server's overrides, and filtering preserves selected values.
-排查已删除文件占用…	Inspect deleted open files…
-已删除文件占用	Deleted open files
-通过独立 SSH 连接读取可见进程仍持有的已删除普通文件元数据，不读取文件正文、不截断文件、不停止进程。需要 Linux 和 Python 3.8+，无需 SFTP 或 systemd。	Read metadata for unlinked regular files still held by visible processes through an independent SSH connection. No file contents are read, files truncated, or processes stopped. Requires Linux and Python 3.8+; SFTP and systemd are not needed.
-每个设备上的同一 inode 只计一次，最多展示八个已观察到的持有者。已分配大小来自文件系统块数，不代表一定能释放的空间；共享块、内存文件和持续写入都会影响估算。不包含已关闭描述符、仅靠内存映射保留的文件。	Each inode is counted once per device, with up to eight observed holders. Allocated bytes use filesystem blocks and are not guaranteed reclaimable space; shared blocks, memory-backed files and active writes can affect the estimate. Memory mappings without an open descriptor are outside this scan.
-只扫描所选账户和 PID 命名空间可见的进程。权限、隐藏进程、并发退出和扫描上限均可能导致遗漏，不能视为全服务器完整清单。可明确选择管理员读取。查询有时限且不自动刷新；关闭后清除凭据并丢弃迟到结果。	Only processes visible to the chosen account and PID namespace are scanned. Permissions, hidden processes, concurrent exits and scan limits prevent a whole-server completeness claim. Administrator access is optional. Queries stop after a bounded scan and do not refresh automatically; closing clears credentials and ignores late results.
-以管理员身份读取进程元数据	Read process metadata as administrator
-正在读取已删除文件占用…	Reading deleted open files…
-显示上次文件占用快照	Showing the previous open file snapshot
-尚未读取文件占用	No open file snapshot yet
-已观察文件：{} · 已分配：{}	Observed files: {} · Allocated: {}
-扫描范围	Scan coverage
-UID {} · 采样 {} · 进程 {} · 描述符 {} · 无权限 {} · 已变化 {} · 无法读取 {} · 显示 {} / {}	UID {} · Sampled {} · Processes {} · Descriptors {} · Inaccessible {} · Changed {} · Unreadable {} · Showing {} of {}
-已达到扫描上限，仅显示观察结果	Scan limit reached; showing observed files
-部分进程或描述符无法读取	Some processes or descriptors were unavailable
-仅包含可见进程	Visible processes only
-未观察到已删除但仍被打开的普通文件	No deleted open regular files observed
-已分配 {} · 逻辑大小 {} · 引用数 {}	Allocated {} · Logical {} · References {}
-读取文件占用	Read open files
 分类标签	Labels
 服务器分类	Server labels
 环境（可选）	Environment (optional)
@@ -1857,7 +1715,6 @@ UID {} · 采样 {} · 进程 {} · 描述符 {} · 无权限 {} · 已变化 {}
 服务器标签输入过长	Server tag input is too long
 原服务器已不存在	Original server no longer exists
 请等待当前操作完成	Wait for the current operation to finish
-请选择要诊断的服务器	Select servers to review diagnostics
 无匹配的本地确认记录	No matching local confirmation
 最近备份尝试	Latest backup attempt
 未保存主机指纹	Host fingerprint not saved
@@ -1873,14 +1730,11 @@ UID {} · 采样 {} · 进程 {} · 描述符 {} · 无权限 {} · 已变化 {}
 最近备份有失败	A latest backup attempt failed
 最近备份有待确认项	A latest backup attempt is unconfirmed
 打开工作区	Open workspace
-查看诊断任务	View diagnostic task
 打开备份策略	Open backup policies
-读取本地最近十批任务和已保存的备份确认记录。刷新仅更新本地汇总；可打开任务查询服务器结果，或审核新诊断。	Uses the ten most recent local task batches and saved backup confirmations. Refreshing reads local records only. Open a task to query its server result, or review a new diagnostic run.
 记录需匹配当前 SSH 身份和已保存的检查范围。缺失、不完整、过期或时间异常的记录需要核验。问题对应采样时刻，不能证明服务器当前健康。	Records must match the current SSH identity and saved check selection. Missing, incomplete, old or clock-mismatched records need verification. Recorded findings describe the sample time; they do not prove current health.
 备份覆盖率按所有已分配策略的当前版本和仓库计算。备份、完整性检查和恢复演练分别展示；日期使用成功任务的开始时间。记录时限仅用于本地核验，不代表备份计划。	Backup coverage includes every assigned policy at its current revision and repository. Backup, integrity check and recovery drill results are separate. Dates use successful task start times. Record age is a local review threshold, not a backup schedule.
 搜索和标签筛选保留跨页选择。连接前可审核最多 32 台可信服务器，每个地址只选一个账户。原工作区保留连接和终端；此页暂停资源采样。	Search and label filters preserve selections across pages. Review up to 32 trusted servers, one account per endpoint, before SSH work. The current workspace keeps its connection and terminal; resource sampling pauses here.
 刷新本地总览	Refresh local overview
-审核诊断…	Review diagnostics…
 当前工作区	Current workspace
 本地记录 · 汇总于 {}	Local records · Overview computed {}
 全部匹配	All matches
@@ -1897,29 +1751,8 @@ UID {} · 采样 {} · 进程 {} · 描述符 {} · 无权限 {} · 已变化 {}
 没有符合总览筛选的服务器	No servers match the overview filters
 上一页服务器	Previous servers
 下一页服务器	More servers
-无匹配的诊断记录	No matching diagnostic record
-诊断结果待确认	Diagnostic result unconfirmed
-诊断报告不完整或不匹配	Diagnostic report incomplete or mismatched
-诊断记录时间待核验	Diagnostic record time needs review
-已记录诊断	Recorded diagnostics
-TLS 端点核验	TLS endpoint verification
-检查所选服务器的网络、时钟和 CA 信任库，再核对端点证书链、验证名称及到期时间。通过现有服务器工具修正或续期后重新检查。此项仅从该服务器检查直接 TLS，不包含 HTTP 健康、STARTTLS 或吊销检查。	Check the selected server's route, clock and CA store, then the endpoint's certificate chain, verification name and expiry. Correct or renew through the server's existing tooling and run this check again. This is direct TLS from this server, without HTTP health, STARTTLS or revocation checks.
-请输入 ASCII 域名或不带方括号的 IP 地址；TLS 主机字段不包含网址、路径或端口	Enter a DNS name in ASCII or an unbracketed IP address; URLs, paths and ports do not belong in a TLS host
-无效的 TLS IP 地址	Invalid TLS IP address
-TLS 端口须为 1 至 65535	TLS port must be between 1 and 65535
-TLS 端点及验证名称重复	Duplicate TLS endpoint and verification name
-TLS 端点：{} · {} 天	TLS endpoints: {} · {} days
-添加 TLS 端点	Add TLS endpoint
-TLS 端点	TLS endpoints
 TLS 端点	TLS endpoint
-移除 TLS 端点	Remove TLS endpoint
-TLS 连接主机	TLS connect host
 TLS 端口	TLS port
-TLS 验证名称（可选）	TLS verification name (optional)
-从每台所选 SSH 服务器连接指定域名或不带方括号的 IP 和端口。验证名称默认为连接主机；域名同时作为 SNI，IP 身份不发送 SNI。域名须为 ASCII，国际化域名使用 punycode。	Connect from each selected SSH server to a DNS name or unbracketed IP and port. The optional verification name defaults to the connect host. DNS names also set SNI; IP identities do not send SNI. Use ASCII DNS names, including punycode for international domains.
-使用该服务器的 OpenSSL CA 信任库核验实际叶证书、域名或 IP、证书链和有效期，再检查到期阈值。仅支持直接 TLS，不含 HTTP 健康、STARTTLS、客户端证书或吊销检查。单次通过不代表其他网络路径或所有负载均衡节点。	Verify the served leaf, hostname or IP, chain and validity with that server's OpenSSL CA store, then check its expiry warning threshold. Direct TLS only: no HTTP health, STARTTLS, client certificates or revocation check. A passing sample does not prove other network paths or all load-balancer nodes.
-每次连接限时 15 秒，私有输出大小有界。工具缺失、网络错误和超时保留无法判断。TLS 与其他检查共用总计 20 项和请求大小上限；结果保存精确端点及身份，续期或服务变更仍需单独操作。	Each connection is limited to 15 seconds, with bounded private output. Missing tools, network errors and timeouts remain inconclusive. TLS endpoints share the 20-check and request-size limits with other checks. Results keep the exact endpoint and identity; renewing or changing a service remains a separate operation.
-诊断权限	Diagnostic access
 配置备份	Configuration backup
 备份配置…	Back up configuration…
 恢复配置…	Restore configuration…
@@ -1998,63 +1831,11 @@ TLS 验证名称（可选）	TLS verification name (optional)
 收藏脚本标识无效	Invalid favorite script identifier
 脚本收藏重复	Duplicate script favorite
 收藏引用当前脚本，不固定旧版本；运行前仍需审核目标与变更。	Favorites reference the current script, without pinning an older version. Review targets and changes before running.
-名称解析	Name resolution
-添加名称解析检查	Add name resolution check
-移除名称解析检查	Remove name resolution check
-待解析主机名	Hostname to resolve
-预期 IP 地址（可选，逗号分隔）	Expected IP addresses (optional, comma-separated)
-名称查询：{}	Name queries: {}
-{} · 解析地址数 {}	{} · {} resolved addresses
-请输入 ASCII 域名，不能使用 IP、URL、路径或端口	Enter an ASCII DNS hostname, without an IP literal, URL, path or port
-最多填写 8 个预期 IP 地址	Enter at most 8 expected IP addresses
-预期地址应为逗号分隔的 IPv4 或不带方括号的 IPv6	Expected addresses must be comma-separated IPv4 or unbracketed IPv6 literals
-预期 IP 地址重复	Duplicate expected IP address
-名称解析主机名重复	Duplicate name resolution hostname
-名称解析需要保存的 v2 检查范围	Name resolution checks require a saved v2 selection
-诊断报告已保存至 {path}	Saved diagnostic report to {path}
-使用 Python 3 在每台所选服务器上通过系统解析器查询 ASCII 主机名，国际域名使用 punycode。DNS、hosts 和缓存均可能提供结果，本检查不判断来源；末尾点号禁用 DNS 搜索扩展。	Resolve an ASCII hostname, including punycode, through each selected server's system resolver using Python 3. DNS, hosts entries and caches may contribute; this check does not identify the source. A final dot disables DNS search expansion.
-可选预期地址支持 IPv4 和不带方括号的 IPv6，必须全部包含，允许其他地址。每个名称最多 8 个预期地址、16 个实际地址。解析成功不证明网络或应用健康、DNSSEC 或 TTL。	Optional expected IPv4 or unbracketed IPv6 addresses must all be present; additional addresses are allowed. At most 8 expected and 16 observed addresses per name. Resolution alone does not prove network or application health, DNSSEC or TTLs.
-每次查询限时 15 秒并限制输出。缺少工具、解析错误、超时或结果超限保留无法判断。名称查询与其他检查共用 20 项及请求大小上限，不修改解析配置。	Each lookup has a 15-second limit and bounded output. Missing tools, lookup errors, timeouts and oversized results remain inconclusive. Name queries share the 20-check and request-size limits; no resolver configuration is changed.
-对照必需地址检查此服务器的系统解析设置、hosts 和缓存后重新查询。单次结果不能判断地址来自何处，也不证明可达性、DNSSEC、TTL 或所有 DNS 应答。	Compare this server's system resolver settings, hosts entries and caches with the required addresses, then check again. This sample does not identify which source supplied an address or prove reachability, DNSSEC, TTLs or every DNS answer.
 TCP 监听	TCP listeners
-排查 TCP 监听…	Inspect TCP listeners…
-读取 TCP 监听	Read TCP listeners
-正在读取 TCP 监听…	Reading TCP listeners…
-TCP 端口筛选（可选，逗号分隔）	TCP port filter (optional, comma-separated)
-暂无 TCP 监听快照	No TCP listener snapshot yet
-正在显示上次 TCP 监听快照	Showing the previous TCP listener snapshot
-已观察 TCP 监听：{} · 显示 {}	Observed TCP listeners: {} · Showing {}
-未观察到匹配的 TCP 监听	No matching TCP listeners observed
 进程信息不可用	Process information unavailable
-未记录 cgroup 单元	Cgroup unit not recorded
-监听元数据	Listener metadata
-读取达到上限，显示已观察的 TCP 监听	Scan limit reached; showing observed TCP listeners
-部分套接字或进程元数据不可用	Some socket or process metadata was unavailable
-仅包含可见进程及当前网络命名空间	Visible processes and current network namespace only
-观察到的持有者超过显示上限	More socket holders were observed than can be displayed
-请等待 TCP 监听查询	Wait for the TCP listener query
-TCP 端口筛选无效	Invalid TCP port filter
-TCP 监听响应大小或筛选范围无效	Invalid TCP listener response size or filter
-TCP 监听快照或查询范围无效	Invalid TCP listener snapshot or query scope
-TCP 监听身份无效	Invalid TCP listener identity
-TCP 监听进程元数据无效	Invalid TCP listener process metadata
-TCP 监听行未正确排序	TCP listener rows are not ordered
-TCP 监听响应超过读取上限	TCP listener response exceeded the read limit
-无法排查 TCP 监听（退出 {}）：{}	Cannot inspect TCP listeners (exit {}): {}
-TCP 监听读取器报告：{}	TCP listener reader reported: {}
-通过独立 SSH 连接读取 TCP 监听及可见进程元数据。需要 Linux /proc 和 Python 3.8+，无需 SFTP 或 systemd。当前工作区保持连接，不读取套接字正文、进程命令行或环境变量。	Read TCP listener and visible-process metadata through an independent SSH connection. Requires Linux /proc and Python 3.8+, without SFTP or systemd. The active workspace stays connected; no socket payload, command line or environment is read.
-结果范围为查询所在网络命名空间及可见 PID 命名空间，可按端口筛选。缺少进程明细不等于端口空闲；权限、其他命名空间及并发变化会限制覆盖。管理员读取为可选项。	Results cover the query's network namespace and visible PID namespace. Optional ports limit the sample. Missing process details do not mean a port is free; permissions, other namespaces and concurrent changes limit coverage. Administrator access is optional.
-读取后重新核对 PID 起始时间和套接字描述符。cgroup 服务名称只是观察到的关联，不代表已验证服务管理器状态或应用健康；快照不是原子采样。不停止进程、重启服务或修改防火墙。	PID start times and socket descriptors are rechecked. Cgroup service names are observed associations, not verified service-manager state or proof of application health. A snapshot is not atomic. No process is stopped, service restarted or firewall changed.
-查询有时限，最多显示 20 个监听及每个监听的八个持有者，不自动刷新。关闭会取消读取并清除凭据；刷新失败保留带时间的旧快照。	Queries are time bounded, show at most 20 listeners and eight holders per listener, and do not refresh automatically. Closing cancels the read and clears credentials. A failed refresh retains the previous dated snapshot.
-UID {} · 网络命名空间 {} · IP 地址族 {}	UID {} · Network namespace {} · IP families {}
 采样于 {}	Sampled {}
-进程 {} · 描述符 {} · 无权限 {} · 已变化 {} · 不可读 {}	Processes {} · Descriptors {} · Inaccessible {} · Changed {} · Unreadable {}
 限制：{}	Limits: {}
 时间上限	Time limit
-进程扫描上限	Process scan limit
-描述符扫描上限	Descriptor scan limit
-套接字表读取上限	Socket table read limit
-持有者显示上限	Holder display limit
 松开以上传到当前远程目录	Release to upload to the current remote folder
 松开以下载到当前本地目录	Release to download to the current local folder
 并发传输	Concurrent transfers
@@ -2311,6 +2092,33 @@ Web 与网络	Web & networking
 刷新已安装应用	Refresh installed applications
 没有匹配的已安装应用	No matching installed applications
 管理项目	Manage project
+管理服务	Manage service
+打开 Docker	Open Docker
+容器镜像	Container images
+镜像仓库	Image repository
+标签	Tag
+检查	Inspect
+统计	Stats
+刷新容器统计	Refresh container stats
+暂停容器	Pause container
+恢复容器	Resume container
+暂停	Pause
+恢复	Resume
+网络 I/O	Network I/O
+块设备 I/O	Block I/O
+移除项目…	Remove project…
+正在检查可用的安装方式…	Checking available installation sources…
+暂无可用安装来源	No available source
+要更改系统软件，请使用可执行 sudo 的账号或 root 账号连接。	To change system software, connect with an account that can use sudo or log in as root.
+通过应用中心部署 Compose 项目需要服务器支持后台任务。	Compose installation requires background tasks
+服务器无法运行后台任务。请在新终端中打开下方命令，核对后按回车执行。完成后请刷新应用中心。	Background tasks are unavailable. Open this command in a new terminal, review it and press Enter to run it. Refresh App Center when finished.
+在终端中打开	Open in terminal
+已启用的软件仓库未提供此包	Unavailable in enabled repositories
+Snap 商店未提供此软件	Unavailable in the Snap Store
+需要能访问 Docker 守护进程	Requires access to the Docker daemon
+打开容器	Open container
+移除容器	Remove container
+移除容器会丢弃容器的可写层，并保留数据卷。	Removing this container discards its writable layer and keeps its volumes.
 搜索应用	Search applications
 按名称安装…	Install by name…
 搜索软件仓库	Search package repositories
@@ -2360,6 +2168,7 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 系统软件包使用已启用的发行版仓库，包名与版本会有差异。Snap 和 Compose 属于独立安装，更新、服务和数据继续按原来源管理。	System packages use enabled distribution repositories; package names and versions differ. Snap and Compose are separate installations. Updates, services and data remain with their original source.
 主目录	Home
 后退	Back
+返回	Back
 前进	Forward
 搜索文件	Search files
 搜索当前文件夹	Search current folder
@@ -2836,14 +2645,17 @@ Dock 时钟	Dock clock
 该文件已在其他标签页中打开。	This file is open in another tab.
 请选择普通文件名。	Choose a regular file name.
 请使用粘贴快捷键粘贴剪贴板内容。	Use the paste keyboard shortcut to paste from the clipboard.
-选择本机 WSL 发行版	Choose local WSL distribution
-本机 WSL 发行版	Local WSL distribution
-选择发行版会启动它。连接使用发行版的 SSH 服务，文件和命令会作用于该 Linux 环境。	Selecting a distribution starts it. Arcnix connects through its SSH service. Files and commands operate on that Linux environment.
-正在读取 WSL…	Reading WSL…
-没有找到可管理的 WSL 发行版。请在 PowerShell 中运行 wsl --list --verbose 查看。	No available WSL distributions. Run wsl --list --verbose in PowerShell to check.
-此 WSL 发行版没有可读的 SSH 主机公钥。请配置 OpenSSH Server，并检查 /etc/ssh/ssh_host_*_key.pub。	No readable SSH host public keys in this WSL distribution. Configure OpenSSH Server and check /etc/ssh/ssh_host_*_key.pub.
-SSH 主机公钥与所选 WSL 发行版不匹配。请检查本机端口。	SSH host key does not belong to the selected WSL distribution. Check the localhost port.
-无法访问 127.0.0.1:{port} 上的 WSL SSH。请检查 SSH 服务、端口及 Windows 本机端口转发。	Cannot reach WSL SSH on 127.0.0.1:{port}. Check the SSH service, port and Windows localhost forwarding.
-WSL 命令失败。请运行 wsl --list --verbose 并检查所选发行版。	WSL command failed. Check wsl --list --verbose and the selected distribution.
-WSL 命令超时	WSL command timed out
-无法启动 WSL。请在 PowerShell 中运行 wsl --status 检查。	Cannot start WSL. Check wsl --status in PowerShell.
+Linux 目录	Linux directory
+上一级	Up one folder
+上传文件	Upload file
+下载文件	Download file
+新条目名称	New entry name
+预览文本	Preview text
+关闭预览	Close preview
+部分目录条目未显示。	Some directory entries could not be displayed.
+在文件资源管理器中打开	Open in File Explorer
+此 Linux 路径无法在文件资源管理器中打开	This Linux path cannot be opened in File Explorer
+复制失败。请检查文件权限以及目标文件是否已存在。	Copy failed. Check file permissions and whether the destination already exists.
+预览支持不超过 64 KiB 的 UTF-8 文本文件	Preview supports UTF-8 text files up to 64 KiB
+请选择新的目标文件名	Choose a new destination file name
+无法新建此条目。请检查名称及目录权限。	Could not create this entry. Check its name and the directory permissions.

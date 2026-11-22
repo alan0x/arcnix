@@ -79,7 +79,7 @@ fn native_desktop_storage_bootstrap_and_persistent_terminal() -> anyhow::Result<
         continuous: false,
     }
     .template()?;
-    let request = serde_json::json!({"compose_install":definition.install()?.snippet.command,"compose_apply":compose_apps::action(&project,compose_apps::Action::Apply)?.snippet.command,"startup":startup.snippet.command,"native":native,"snap":snap.snippet.command,"resume":arcnix_core::terminal::resume_command(&session,None)?,"session":format!("terminal-{session}")});
+    let request = serde_json::json!({"compose_install":definition.install()?.snippet.command,"compose_apply":compose_apps::action(&project,compose_apps::Action::Apply)?.snippet.command,"compose_remove":compose_apps::action(&project,compose_apps::Action::Remove)?.snippet.command,"startup":startup.snippet.command,"native":native,"snap":snap.snippet.command,"resume":arcnix_core::terminal::resume_command(&session,None)?,"session":format!("terminal-{session}")});
     run(&format!(
         "umask 077\nmkdir -- {}\nprintf '%s' {} > {}/request.json\nprintf '%s' {} > {}/runner.py",
         q(&root),

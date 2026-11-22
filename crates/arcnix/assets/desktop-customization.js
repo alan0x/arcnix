@@ -8,6 +8,17 @@
     const sizeControls = new Map();
     const themed = new WeakMap();
 
+    // Only a focus change can mark a launcher. A modifier pressed after a
+    // pointer click must not turn the already-focused launcher into a tab stop cue.
+    document.addEventListener('focusin', event => {
+        const button = event.target.closest?.('.desktop-dock button');
+        if (button) button.toggleAttribute('data-keyboard-focus',
+            document.documentElement.classList.contains('keyboard-navigation'));
+    });
+    document.addEventListener('pointerdown', event => {
+        event.target.closest?.('.desktop-dock button')?.removeAttribute('data-keyboard-focus');
+    }, true);
+
     function updateTheme() {
         const data = document.querySelector('.server-desktop:not(.hidden) .desktop-theme-data');
         if (!data?.textContent) return;
@@ -208,10 +219,14 @@
     function updateClock() {
         const views = document.hidden ? [] : [...document.querySelectorAll('.desktop-panel-clock')]
             .filter(canvasFor)
-            .map(node => ({
-                node, compact: !!node.closest('.dock-side-zone'), label: node.getAttribute('aria-label'),
-                preview: node.classList.contains('desktop-time-preview'),
-            }));
+            .map(node => {
+                const dock = node.closest('.desktop-dock');
+                const compact = !!dock?.closest('.dock-side-zone');
+                const smallDock = !!dock && parseFloat(getComputedStyle(dock).getPropertyValue('--dock-preferred-icon')) < 40;
+                dock?.toggleAttribute('data-small-clock', smallDock);
+                return {node, compact, smallDock, label: node.getAttribute('aria-label'),
+                    preview: node.classList.contains('desktop-time-preview')};
+            });
         const options = document.querySelector('.desktop-clock-options')?.textContent;
         const sample = document.querySelector('.desktop-clock-sample')?.textContent;
         const changed = sample !== clockSample;
@@ -225,7 +240,8 @@
         }
         if (!changed && options === clockOptions && views.length === clockViews.length
             && views.every((view, i) => view.node === clockViews[i].node
-                && view.compact === clockViews[i].compact && view.label === clockViews[i].label)) return;
+                && view.compact === clockViews[i].compact && view.smallDock === clockViews[i].smallDock
+                && view.label === clockViews[i].label)) return;
 
         clockOptions = options;
         clockViews = views;
@@ -260,7 +276,10 @@
             second: showSeconds === 'true' ? '2-digit' : undefined});
         const compactDate = formatter({month: '2-digit', day: '2-digit'});
         const weekday = formatter({weekday: 'short'});
-        const displays = views.map(({node, compact, label, preview}) => {
+        const compactMinutes = formatter({...timeFields, hour: '2-digit'});
+        const displays = views.map(({node, compact, smallDock, label, preview}) => {
+            const minuteOnly = compact && smallDock;
+            node.lang = locale;
             if (preview) node.title = `${label} (${zone})`;
             else node.removeAttribute('title');
             return {
@@ -268,9 +287,10 @@
                 weekday: node.querySelector('.desktop-panel-weekday'),
                 date: node.querySelector('.desktop-panel-date'),
                 tooltip: preview ? null : node.querySelector('.desktop-clock-tooltip'),
-                timeFormatter: preview ? fullTime : compact ? compactTime : dockTime,
+                timeFormatter: preview ? fullTime : minuteOnly ? compactMinutes : compact ? compactTime : dockTime,
+                detailTime: minuteOnly ? compactMinutes : fullTime,
                 dateFormatter: preview || showDate === 'true' ? (compact ? compactDate : fullDate) : null,
-                showWeekday: !preview && showWeekday === 'true',
+                showWeekday: !preview && (compact || !smallDock) && showWeekday === 'true',
             };
         });
         function tick() {
@@ -280,7 +300,7 @@
                 setClockText(display.weekday, display.showWeekday ? weekday.format(now) : '');
                 setClockText(display.date, display.dateFormatter?.format(now) ?? '');
                 if (display.tooltip) {
-                    setClockText(display.tooltip, `${detailDate.format(now)}\n${fullTime.format(now)}\n${detailZone}`);
+                    setClockText(display.tooltip, `${detailDate.format(now)}\n${display.detailTime.format(now)}\n${detailZone}`);
                 }
             }
             clockTimer = setTimeout(tick, 1000 - now.getUTCMilliseconds());
@@ -406,6 +426,7 @@
         const control = {host, target, bridge, slider, value};
         slider.addEventListener('input', () => {
             target.style.setProperty(preview, `${slider.value}px`);
+            if (target.matches('.desktop-dock')) updateClock();
             showSizeValue(control);
         });
         slider.addEventListener('change', () => {
@@ -420,6 +441,7 @@
             slider.value = control.saved;
             showSizeValue(control);
             target.style.removeProperty(preview);
+            if (target.matches('.desktop-dock')) updateClock();
         });
         return control;
     }
@@ -487,10 +509,10 @@
 
     function update() {
         updateTheme();
-        updateClock();
         updateTimeZonePicker();
         const settings = document.querySelector('.desktop-window.app-settings.active');
         updateSizeControl(settings, '.dock-size-control', '.desktop-dock', '--dock-preview');
+        updateClock();
         updateSizeControl(settings, '.desktop-size-control', '.desktop-shortcuts', '--desktop-icon-preview');
         for (const pixels of document.querySelectorAll('.server-desktop:not(.hidden) .files-icon-pixels')) {
             const pane = pixels.closest('.files-pane,.files-inactive-preview');

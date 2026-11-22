@@ -1,0 +1,18 @@
+.wsl-distribution { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: start; }
+.wsl-distribution > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.wsl-distribution > .subtle { flex: none; }
+.wsl-workspace, .wsl-connected, .wsl-files, .wsl-terminal {
+    display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; gap: 10px;
+}
+.wsl-workspace .empty-state { margin: auto; gap: 16px; align-items: center; }
+.wsl-connected > .wsl-tools { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.wsl-path, .wsl-tools { align-items: center; gap: 8px; flex-wrap: wrap; }
+.wsl-path input { flex: 1; min-width: 140px; }
+.wsl-tools input { max-width: 200px; }
+.wsl-entries { flex: 1; min-height: 0; overflow: auto; gap: 2px; }
+.wsl-entry { display: flex; flex: none; align-items: center; gap: 8px; padding: 6px 10px; text-align: left; color: var(--text); }
+.wsl-entry:hover, .wsl-entry[aria-pressed=true] { background: var(--raised); }
+.wsl-preview { max-height: 45%; min-height: 60px; overflow: auto; gap: 8px; }
+.wsl-preview > :last-child { white-space: pre-wrap; font-family: monospace; }
+.wsl-terminal .terminal-module { flex: 1; min-height: 0; }
+.wsl-workspace .hidden { display: none !important; }

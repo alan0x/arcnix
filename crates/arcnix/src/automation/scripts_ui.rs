@@ -192,7 +192,13 @@ impl Ui {
         Ok(())
     }
     pub(crate) fn prepare_script(&self, submission: Submission) {
-        let software = submission != Submission::ReviewBatch;
+        let software = submission != Submission::ReviewBatch
+            || self.state.with(|s| {
+                s.scripts
+                    .template
+                    .as_ref()
+                    .is_some_and(|template| template.snippet.id == "builtin:compose-application")
+            });
         let result = (|| -> anyhow::Result<_> {
             anyhow::ensure!(
                 self.writable.get() && self.state.with(|s| s.scripts.history_writable),
@@ -215,7 +221,7 @@ impl Ui {
                 let mut endpoints = HashSet::new();
                 let mut targets = Vec::new();
                 let mut records = Vec::new();
-                for profile in s.config.servers.iter().filter(|p| s.scripts.targets.contains(&p.id)) {
+                for profile in s.config.available_servers().filter(|p| s.scripts.targets.contains(&p.id)) {
                     anyhow::ensure!(endpoints.insert((profile.host.to_lowercase(), profile.port)), "Select each server endpoint only once");
                     let fingerprint = s.config.trusted_fingerprint(&profile.host, profile.port).ok_or_else(|| anyhow::anyhow!("Connect and save the host fingerprint first: {}", profile.name))?.to_owned();
                     if let Some(job)=&template.cleanup {job.target(profile,&fingerprint)?;}
@@ -228,7 +234,7 @@ impl Ui {
                     targets.push(batch_worker::Target { profile, fingerprint, secret: Zeroizing::new(secret), sudo: Zeroizing::new(sudo) });
                 }
                 anyhow::ensure!(!targets.is_empty() && targets.len() <= 32, "Select between 1 and 32 servers");
-                let task = Task { configuration_targets:template.configuration_records(),stops:None, drill: template.drill.as_ref().map(arcnix_core::recovery_drills::Job::description).transpose()?, installation: template.installation.clone(), configuration:template.configuration.as_ref().map(|j|j.record.clone()), diagnostic: template.diagnostic.clone(), backup: if let Some(job)=&template.drill {Some(arcnix_core::backup_evidence::TaskInfo::from_drill(job)?)}else{template.backup.as_ref().and_then(arcnix_core::backup_evidence::TaskInfo::from_job)}, id: new_id(), name: template.snippet.name.clone(), script_id: template.snippet.id.clone(), revision: template.revision.clone(), created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(), targets: records };
+                let task = Task { configuration_targets:template.configuration_records(),stops:None, drill: template.drill.as_ref().map(arcnix_core::recovery_drills::Job::description).transpose()?, installation: template.installation.clone(), configuration:template.configuration.as_ref().map(|j|j.record.clone()), diagnostic: None, backup: if let Some(job)=&template.drill {Some(arcnix_core::backup_evidence::TaskInfo::from_drill(job)?)}else{template.backup.as_ref().and_then(arcnix_core::backup_evidence::TaskInfo::from_job)}, id: new_id(), name: template.snippet.name.clone(), script_id: template.snippet.id.clone(), revision: template.revision.clone(), created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(), targets: records };
                 Ok((task, template, targets, s.scripts.concurrency.clamp(1,8)))
             })
         })();
@@ -329,18 +335,6 @@ impl Ui {
 }
 pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
     let event = match event {
-        batch_worker::Event::DiagnosticLogs { serial, result } => {
-            diagnostics_ui::log_event(ui, serial, result);
-            return;
-        }
-        batch_worker::Event::TcpListeners { serial, result } => {
-            tcp_listeners_ui::event(ui, serial, result);
-            return;
-        }
-        batch_worker::Event::DeletedFiles { serial, result } => {
-            deleted_files_ui::event(ui, serial, result);
-            return;
-        }
         event @ (batch_worker::Event::CleanupRecords { .. }
         | batch_worker::Event::ExportDownload { .. }) => {
             cleanup_records_ui::event(ui, event);
@@ -407,9 +401,6 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
         batch_worker::Event::CleanupRecords { .. } => unreachable!(),
         batch_worker::Event::ExportDownload { .. } => unreachable!(),
         batch_worker::Event::TaskStop { .. } => unreachable!(),
-        batch_worker::Event::DiagnosticLogs { .. } => unreachable!(),
-        batch_worker::Event::DeletedFiles { .. } => unreachable!(),
-        batch_worker::Event::TcpListeners { .. } => unreachable!(),
         batch_worker::Event::Refreshed { task, id, result } => {
             s.scripts.refreshing.remove(&(task.clone(), id.clone()));
             if let Some(record) = s.scripts.tasks.iter_mut().find(|record| record.id == task) {
@@ -1047,7 +1038,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.is_cross_server_recovery())),||text().class("hint cross-server-recovery-scope").content(i18n::bind("Cross-server recovery: trusted restore targets may be outside the original backup policy. Each target must access the same repository and prepared credential files. The source server is not contacted; backup and retention target scopes are unchanged."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.cleanup.is_some()||t.audit_cleanup.is_some()||t.recovery.as_ref().is_some_and(|j|j.targets.iter().any(|target|target.plan.action==arcnix_core::record_recovery::Action::Release)))),||text().class("hint").content(i18n::bind("Deletion cannot be undone. Review the exact file plan before execution."))),
             col().class("form-stack").fill(crate::script_parameters_ui::run_form(ui.clone())),
-            row().class("script-actions").fill((text().class("field-label").content(i18n::bind("Parallel submissions")),row().class("script-actions").fill(each(state.map(|s|if s.scripts.template.as_ref().and_then(|t|t.backup.as_ref()).is_some_and(|j|!matches!(j.action,arcnix_core::backups::Action::Backup)){vec![1usize]}else{vec![1usize,3,5,8]})).key(|n|*n).children(move|item|{let n=item.value.get();btn(format!("{n}"),move||state.revise(|s|s.scripts.concurrency=n)).class(state.map(move|s|if s.scripts.concurrency==n {"choice active"}else{"choice"}.to_owned()))})),crate::help_ui::group("Parallel submissions",&["Maximum parallel submissions; accepted jobs run independently on all servers","Each server runs one global Arcnix operation at a time; diagnostics may run alongside it. Server locks survive client closure."]))),
+            row().class("script-actions").fill((text().class("field-label").content(i18n::bind("Parallel submissions")),row().class("script-actions").fill(each(state.map(|s|if s.scripts.template.as_ref().and_then(|t|t.backup.as_ref()).is_some_and(|j|!matches!(j.action,arcnix_core::backups::Action::Backup)){vec![1usize]}else{vec![1usize,3,5,8]})).key(|n|*n).children(move|item|{let n=item.value.get();btn(format!("{n}"),move||state.revise(|s|s.scripts.concurrency=n)).class(state.map(move|s|if s.scripts.concurrency==n {"choice active"}else{"choice"}.to_owned()))})),crate::help_ui::group("Parallel submissions",&["Maximum parallel submissions; accepted jobs run independently on all servers","Each server runs one global Arcnix operation at a time. Server locks survive client closure."]))),
             task_target_picker::picker(ui.clone()),
             text().class("hint").content(i18n::bind("Parameters and script text must not contain passwords or tokens. Credentials are used only for this submission.")),
         )),(btn("Cancel",move||cancel.close_dialog()),btn("Check targets",move||prepare.prepare_script(Submission::ReviewBatch)).class("button primary").enabled(state.map(|s|task_target_picker::hidden(s)==0))))

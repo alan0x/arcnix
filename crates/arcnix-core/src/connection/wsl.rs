@@ -24,7 +24,24 @@ pub fn profile_host(name: &str) -> Result<String> {
 }
 
 #[cfg(windows)]
-pub use windows::{distributions, username};
+pub use windows::{
+    copy_file, create_entry, distributions, files_in, launcher_path, preview, username,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub directory: bool,
+    pub regular: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Directory {
+    pub path: String,
+    pub user: String,
+    pub entries: Vec<Entry>,
+    pub truncated: bool,
+}
 #[cfg(windows)]
 pub(crate) use windows::{host_keys, keep_running};
 
@@ -42,12 +59,15 @@ mod windows {
     use super::*;
 
     // Use the system launcher even when the current directory contains a wsl.exe.
-    fn launcher() -> Result<Command> {
-        let launcher =
+    pub fn launcher_path() -> Result<std::path::PathBuf> {
+        Ok(
             std::path::PathBuf::from(std::env::var_os("SystemRoot").context("Missing SystemRoot")?)
                 .join("System32")
-                .join("wsl.exe");
-        let mut command = Command::new(launcher);
+                .join("wsl.exe"),
+        )
+    }
+    fn launcher() -> Result<Command> {
+        let mut command = Command::new(launcher_path()?);
         command.creation_flags(0x08000000);
         Ok(command)
     }
@@ -177,6 +197,176 @@ mod windows {
                 (name, active)
             })
             .collect())
+    }
+
+    fn file_command(name: &str, directory: &str, script: &str, args: &[&str]) -> Result<Vec<u8>> {
+        profile_host(name)?;
+        ensure!(
+            directory == "~" || directory.starts_with('/'),
+            "Expected a Linux directory"
+        );
+        let body = format!(
+            "set -eu\nif [ \"$1\" = '~' ]; then cd -P -- \"$HOME\"; else cd -P -- \"$1\"; fi\nshift\n{script}"
+        );
+        let mut command = vec![
+            "--distribution",
+            name,
+            "--cd",
+            "/",
+            "--exec",
+            "/bin/sh",
+            "-c",
+            &body,
+            "arcnix",
+            directory,
+        ];
+        command.extend_from_slice(args);
+        output(&command, Instant::now() + Duration::from_secs(30))
+    }
+
+    pub fn files_in(name: &str, directory: &str) -> Result<Directory> {
+        let bytes = file_command(name, directory, include_str!("wsl_list.sh"), &[])?;
+        let mut fields = bytes
+            .strip_suffix(&[0])
+            .context("Incomplete WSL directory listing")?
+            .split(|&b| b == 0);
+        let path = fields.next().context("Missing WSL directory")?;
+        let user = fields.next().context("Missing WSL account")?;
+        ensure!(path.starts_with(b"/"), "Invalid WSL directory");
+        let mut entries = Vec::new();
+        let mut truncated = false;
+        for field in fields {
+            if field == b"!" {
+                truncated = true;
+                break;
+            }
+            let Some((&kind, value)) = field.split_first() else {
+                bail!("Invalid WSL file entry")
+            };
+            let Ok(value) = std::str::from_utf8(value) else {
+                truncated = true;
+                continue;
+            };
+            entries.push(Entry {
+                name: value.into(),
+                directory: kind == b'd',
+                regular: kind == b'f',
+            });
+        }
+        entries.sort_by(|a, b| {
+            b.directory
+                .cmp(&a.directory)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(Directory {
+            path: std::str::from_utf8(path)?.into(),
+            user: std::str::from_utf8(user)?.into(),
+            entries,
+            truncated,
+        })
+    }
+
+    fn filename(value: &str) -> Result<()> {
+        ensure!(
+            !value.is_empty()
+                && value.len() <= 255
+                && !matches!(value, "." | "..")
+                && !value.contains(['/', '\0']),
+            "Invalid Linux file name"
+        );
+        Ok(())
+    }
+
+    pub fn create_entry(name: &str, directory: &str, value: &str, folder: bool) -> Result<()> {
+        filename(value)?;
+        let script = if folder {
+            r#"mkdir -- "./$1""#
+        } else {
+            // Publish the empty file with a hard link, which cannot replace an existing entry.
+            r#"set -eu; t=$(mktemp ./.arcnix-new-XXXXXXXX); trap 'rm -f -- "$t"' EXIT; ln -T -- "$t" "./$1""#
+        };
+        file_command(name, directory, script, &[value]).context(
+            "Could not create this entry. Check its name and the directory permissions.",
+        )?;
+        Ok(())
+    }
+
+    /// Stream a single file through the launcher's standard handles. A completed
+    /// upload is published with link(2) semantics, so collisions preserve the destination.
+    pub fn copy_file(
+        name: &str,
+        directory: &str,
+        value: &str,
+        file: std::fs::File,
+        upload: bool,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<()> {
+        profile_host(name)?;
+        filename(value)?;
+        ensure!(directory.starts_with('/'), "Expected a Linux directory");
+        let size = file.metadata()?.len().to_string();
+        let mut command = launcher()?;
+        let script = if upload {
+            command.stdin(Stdio::from(file)).stdout(Stdio::null());
+            r#"set -eu
+cd -P -- "$1"
+tmp=$(mktemp ./.arcnix-upload-XXXXXXXX)
+trap 'rm -f -- "$tmp"' EXIT
+cat > "$tmp"
+test "$(wc -c < "$tmp")" -eq "$3"
+ln -T -- "$tmp" "./$2""#
+        } else {
+            command.stdin(Stdio::null()).stdout(Stdio::from(file));
+            r#"set -eu; cd -P -- "$1"; test -f "./$2"; exec cat -- "./$2""#
+        };
+        let mut child = command
+            .args([
+                "--distribution",
+                name,
+                "--cd",
+                "/",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                script,
+                "arcnix",
+                directory,
+                value,
+                &size,
+            ])
+            .stderr(Stdio::null())
+            .spawn()?;
+        let end = Instant::now() + Duration::from_secs(600);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                ensure!(
+                    status.success(),
+                    "Copy failed. Check file permissions and whether the destination already exists."
+                );
+                return Ok(());
+            }
+            if cancel.load(std::sync::atomic::Ordering::Acquire) || Instant::now() >= end {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("WSL file copy stopped");
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    }
+
+    pub fn preview(name: &str, directory: &str, value: &str) -> Result<String> {
+        filename(value)?;
+        let bytes = file_command(
+            name,
+            directory,
+            r#"test -f "./$1" && head -c 65537 -- "./$1""#,
+            &[value],
+        )?;
+        ensure!(
+            bytes.len() <= 65536 && !bytes.contains(&0),
+            "Preview supports UTF-8 text files up to 64 KiB"
+        );
+        String::from_utf8(bytes).context("Preview supports UTF-8 text files up to 64 KiB")
     }
 
     pub fn username(name: &str) -> Result<String> {

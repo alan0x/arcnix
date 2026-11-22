@@ -68,8 +68,7 @@ fn target(s: &State, id: &str) -> anyhow::Result<batch_worker::Target> {
         .ok_or_else(|| anyhow::anyhow!("Reconnect to cleanup reports"))?;
     let profile = s
         .config
-        .servers
-        .iter()
+        .available_servers()
         .find(|p| p.id == id)
         .ok_or_else(|| anyhow::anyhow!("Server inventory changed; reconnect to cleanup reports"))?;
     anyhow::ensure!(
@@ -202,8 +201,7 @@ impl Ui {
             let mut peers = HashSet::new();
             for profile in s
                 .config
-                .servers
-                .iter()
+                .available_servers()
                 .filter(|p| s.cleanup_reports.selected.contains(&p.id))
             {
                 anyhow::ensure!(
@@ -582,7 +580,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
             let connect = ui.clone();
             modal(ui.clone(),"Connect to cleanup reports",col().class("form-stack").fill((
             text().class("hint").content(i18n::bind("Select servers independently of the workspace. Reading cleanup reports requires Python 3.8+ and root or sudo, without SFTP. Credentials remain only in page memory.")),
-            each(state.map(|s|s.config.servers.clone())).key(|p|p.id.clone()).children(move|item|{
+            each(state.map(|s|s.config.available_servers().cloned().collect::<Vec<_>>())).key(|p|p.id.clone()).children(move|item|{
                 let profile=item.value.get();let id=profile.id.clone();let selected=id.clone();let visible=id.clone();let secret=id.clone();let sudo=id.clone();
                 let trusted=state.with(|s|s.config.trusted_fingerprint(&profile.host,profile.port).is_some());
                 col().class("cleanup-report-target-picker").fill((

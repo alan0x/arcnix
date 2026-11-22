@@ -22,6 +22,7 @@ if name=='docker':
   assert args[2]=='compose'
   assert Path('compose.yaml').is_file()
   if 'up' in args:assert '--no-build' in args and '--detach' in args
+  if 'down' in args:assert '--volumes' not in args and '--rmi' not in args
 ''')
 shim.chmod(0o700)
 for name in ['docker','systemctl','getent']:(bin_dir/name).symlink_to(shim)
@@ -42,7 +43,13 @@ assert (project/'compose.yaml').read_bytes()==original
 run(request['compose_apply'])
 (project/'compose.yaml').write_bytes(original+b'\n# changed\n')
 run(request['compose_apply'],ok=False)
-print('Compose configuration, permissions, no-build deploy and changed-file guard passed')
+run(request['compose_remove'],ok=False)
+(project/'compose.yaml').write_bytes(original)
+run(request['compose_remove'])
+assert not project.exists()
+archived, = project.parent.glob('.removed-native-nginx.*/project')
+assert (archived/'compose.yaml').read_bytes()==original and (archived/'html/index.html').is_file()
+print('Compose deployment, changed-file guards and data-preserving removal passed')
 
 for item in request['native']+[dict(manager='Snap',script=request['snap'])]:
     directory=root/('native-'+item['manager']);directory.mkdir()

@@ -122,10 +122,11 @@
             }
         };
         const deliver=()=>{if(!delivered){delivered=true;if(pendingDeliver===deliver)pendingDeliver=null;forward(button);}};
-        const launchRect=button.querySelector('.desktop-app-icon')?.getBoundingClientRect();
+        const launcher=button.matches('.desktop-dock-app') ? button : button.querySelector('.desktop-app-icon');
+        const launchRect=launcher?.getBoundingClientRect();
         if(motion==='minimize') {
             const family=[...button.closest('.desktop-window').classList].find(name=>name.startsWith('app-'));
-            const dock=document.querySelector(`.desktop-dock-app.${family} .desktop-app-icon`);
+            const dock=document.querySelector(`.desktop-dock-app.${family}`);
             windowOffset(app,dock?.getBoundingClientRect());
         }
         const clear=()=>{
@@ -172,7 +173,7 @@
         if(!before?.shown || document.visibilityState!=='visible')return;
         const motion=kind(button,before);
         if(!motion || reduced.matches)return;
-        if(button.matches('.desktop-shortcut,.desktop-dock-app')){
+        if(button.matches('.desktop-shortcut')){
             animate(button.querySelector('.desktop-app-icon'),
                 [{transform:'scale(.88)'},{transform:'translateY(-6px) scale(1.08)',offset:.55},{transform:'none'}],245);
         }

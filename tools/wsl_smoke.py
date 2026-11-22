@@ -23,10 +23,11 @@ def main():
         page.locator('.tree-new-server').click()
         page.get_by_role('button', name='Choose local WSL distribution', exact=True).click()
         page.get_by_role('button').filter(has=page.get_by_text(args.distribution, exact=True)).click()
+        page.get_by_role('radio', name='SSH', exact=True).check()
         user = page.get_by_role('textbox', name='Username', exact=True).input_value()
         assert user
         page.get_by_role('textbox', name='Port', exact=True).fill(str(args.port))
-        page.get_by_role('button', name='Private key', exact=True).click()
+        page.get_by_role('radio', name='Private key', exact=True).check()
         page.get_by_role('textbox', name='Private key file').fill(str(args.key.resolve(strict=True)))
         page.get_by_role('button', name='Save server').click()
         app.workspace('Home')

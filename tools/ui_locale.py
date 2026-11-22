@@ -2,7 +2,14 @@
 from pathlib import Path
 import re
 
-CATALOG = [line.split("\t", 1) for line in (Path(__file__).resolve().parents[1] / "crates/arcnix/assets/translations.tsv").read_text(encoding="utf-8").splitlines() if "\t" in line]
+import sys
+
+ASSETS = Path(__file__).resolve().parents[1] / "crates/arcnix/assets"
+catalogs = [ASSETS / "translations.tsv"]
+if sys.platform == "win32":
+    catalogs.append(ASSETS / "translations-wsl.tsv")
+CATALOG = [line.split("\t", 1) for path in catalogs
+           for line in path.read_text(encoding="utf-8").splitlines() if "\t" in line]
 EXACT = dict(CATALOG)
 
 

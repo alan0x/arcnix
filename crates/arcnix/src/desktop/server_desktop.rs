@@ -1040,12 +1040,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     )),
                 )),
             col().class("desktop-window-content").fill(content),
-            fragment(
-                ["n", "s", "e", "w", "ne", "nw", "se", "sw"]
-                    .into_iter()
-                    .map(|edge| view().class(format!("desktop-resize-handle edge-{edge}")))
-                    .collect::<Vec<_>>(),
-            ),
+            resize_handles(),
         ))
 }
 
@@ -1258,7 +1253,12 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                                                 state
                                                     .map(|s| s.dialog == Some(Dialog::DesktopApps)),
                                             )
-                                            .fill(icons::glyph(Icon::Grid))
+                                            .fill((
+                                                icons::glyph(Icon::Grid),
+                                                text()
+                                                    .class("desktop-app-label")
+                                                    .content(i18n::desktop::bind("Apps")),
+                                            ))
                                             .on_press(move || {
                                                 apps.open_dialog(Dialog::DesktopApps)
                                             }),

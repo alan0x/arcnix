@@ -9,21 +9,12 @@ use arcnix_core::scripts::Template;
 use arcnix_core::tasks::Status;
 use arcnix_core::{ServerProfile, operations, packages};
 use zeroize::Zeroizing;
-#[path = "deleted_files_worker.rs"]
-mod deleted_files;
-#[path = "diagnostic_log_worker.rs"]
-mod diagnostic_logs;
 #[path = "export_download_worker.rs"]
 mod export_download;
 #[path = "task_stop_worker.rs"]
 mod task_stops;
-#[path = "tcp_listeners_worker.rs"]
-mod tcp_listeners;
-pub use deleted_files::{DeletedFileObservation, read_deleted_files};
-pub use diagnostic_logs::{LogObservation, read_diagnostic_logs};
 pub use export_download::{Update as DownloadUpdate, download_export, inspect_export};
 pub use task_stops::{Update as StopUpdate, execute_stops, inspect_stops};
-pub use tcp_listeners::{TcpListenerObservation, read_tcp_listeners};
 
 #[derive(Clone)]
 pub struct Target {
@@ -48,18 +39,6 @@ impl Snapshot {
     }
 }
 pub enum Event {
-    DiagnosticLogs {
-        serial: u64,
-        result: Result<Box<LogObservation>, String>,
-    },
-    DeletedFiles {
-        serial: u64,
-        result: Result<Box<DeletedFileObservation>, String>,
-    },
-    TcpListeners {
-        serial: u64,
-        result: Result<Box<TcpListenerObservation>, String>,
-    },
     TaskStop {
         serial: u64,
         task: String,
@@ -159,7 +138,7 @@ pub fn cleanup_records(
                 records::Query::AuditDetail(id) => {
                     let mut detail = arcnix_core::audit_details::parse(&text, &id)?;
                     if let Some(error) = &mut detail.error {
-                        *error = arcnix_core::diagnostics::redact_log(
+                        *error = arcnix_core::tasks::redact_log(
                             error,
                             &[target.secret.as_str(), target.sudo.as_str()],
                         );
@@ -175,7 +154,7 @@ pub fn cleanup_records(
                 records::Query::Detail(id) => {
                     let mut detail = records::parse_detail(&text, &id)?;
                     if let Some(error) = &mut detail.error {
-                        *error = arcnix_core::diagnostics::redact_log(
+                        *error = arcnix_core::tasks::redact_log(
                             error,
                             &[target.secret.as_str(), target.sudo.as_str()],
                         );
@@ -234,7 +213,7 @@ pub fn record_storage(
             let redact = |rows: &mut Vec<storage::Record>| {
                 if request.scope == storage::Scope::Task {
                     for row in rows {
-                        row.title = arcnix_core::diagnostics::redact_log(
+                        row.title = arcnix_core::tasks::redact_log(
                             &row.title,
                             &[target.secret.as_str(), target.sudo.as_str()],
                         );
@@ -313,7 +292,7 @@ fn record_response(
     Ok(String::from_utf8_lossy(&output).into_owned())
 }
 fn configuration_record_error(error: anyhow::Error, target: &Target) -> String {
-    arcnix_core::diagnostics::redact_log(
+    arcnix_core::tasks::redact_log(
         &format!("{error:#}"),
         &[target.secret.as_str(), target.sudo.as_str()],
     )
@@ -400,7 +379,7 @@ pub fn record_detail(
             let mut detail = arcnix_core::task_records::parse_detail(&text, &id, &root)?;
             redact_record(&mut detail.record, &target);
             detail.output =
-                arcnix_core::diagnostics::redact_log(&detail.output, &[target.secret.as_str()]);
+                arcnix_core::tasks::redact_log(&detail.output, &[target.secret.as_str()]);
             Ok(detail)
         })()
         .map_err(|error| record_error(error, &target));
@@ -453,10 +432,8 @@ fn refresh_one(task: &str, request: Refresh, events: &async_channel::Sender<Even
         let remote = pending.authenticate(&target.secret, &target.fingerprint)?;
         let mut snapshot =
             Snapshot::received(arcnix_core::remote_tasks::query(&remote, task, &directory)?);
-        snapshot.observation.output = arcnix_core::diagnostics::redact_log(
-            &snapshot.observation.output,
-            &[target.secret.as_str()],
-        );
+        snapshot.observation.output =
+            arcnix_core::tasks::redact_log(&snapshot.observation.output, &[target.secret.as_str()]);
         Ok(snapshot)
     })()
     .map_err(|e| configuration_record_error(e, &target));
@@ -615,7 +592,6 @@ struct Prepared {
     uid: u32,
     root: bool,
     sudo_available: bool,
-    access: arcnix_core::remote_tasks::Access,
 }
 struct SubmitState {
     slots: usize,
@@ -679,14 +655,7 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
     let remote = pending.authenticate(&target.secret, &target.fingerprint)?;
     let home = arcnix_core::remote_tasks::preflight(&remote)?;
     let directory = arcnix_core::remote_tasks::directory(&home, task)?;
-    let access = if template.diagnostic.is_some() {
-        arcnix_core::remote_tasks::Access::ReadOnly
-    } else {
-        arcnix_core::remote_tasks::Access::Exclusive
-    };
-    if access == arcnix_core::remote_tasks::Access::Exclusive {
-        arcnix_core::remote_tasks::operation_preflight(&remote)?;
-    }
+    arcnix_core::remote_tasks::operation_preflight(&remote)?;
     let (root, sudo_available) = operations::identity(&remote)?;
     anyhow::ensure!(
         root || sudo_available,
@@ -968,7 +937,7 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
     };
     let prepared = Prepared {
         metadata: arcnix_core::task_records::Metadata {
-            diagnostic: template.diagnostic.clone().map(Box::new),
+            diagnostic: None,
             stops: None,
             version: 1,
             id: task.into(),
@@ -995,8 +964,6 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
                 arcnix_core::task_records::Kind::Configuration
             } else if template.backup.is_some() {
                 arcnix_core::task_records::Kind::Backup
-            } else if template.diagnostic.is_some() {
-                arcnix_core::task_records::Kind::Diagnostic
             } else if template.service.is_some() {
                 arcnix_core::task_records::Kind::Service
             } else if template.package_action.is_some() {
@@ -1012,7 +979,6 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
         uid,
         root,
         sudo_available,
-        access,
     };
     if matches!(
         prepared.plan,
@@ -1076,12 +1042,11 @@ fn execution(prepared: &Prepared, task: &str) -> Result<packages::Execution> {
         | Plan::Recovery(p, _) => p.administrator,
         Plan::Packages(..) | Plan::Installation { .. } => true,
     };
-    let script = arcnix_core::remote_tasks::launch_with_access(
+    let script = arcnix_core::remote_tasks::launch(
         task,
         &prepared.directory,
         &payload(prepared)?,
         (!administrator).then_some(prepared.uid),
-        prepared.access,
     )?;
     let plan = operations::Plan {
         label: "Launch server task".into(),
@@ -1245,7 +1210,7 @@ fn execute(
                 task,
                 &prepared.directory,
             )?);
-            snapshot.observation.output = arcnix_core::diagnostics::redact_log(
+            snapshot.observation.output = arcnix_core::tasks::redact_log(
                 &snapshot.observation.output,
                 &[
                     prepared.target.secret.as_str(),

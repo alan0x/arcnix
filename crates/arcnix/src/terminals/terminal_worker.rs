@@ -54,9 +54,7 @@ pub enum Action {
 pub enum Command {
     Attach {
         epoch: u64,
-        profile: Box<ServerProfile>,
-        fingerprint: String,
-        secret: Zeroizing<String>,
+        target: Target,
     },
     Request {
         epoch: u64,
@@ -71,11 +69,35 @@ pub enum Event {
     Exited { id: u64, code: Option<i32> },
     Failed { id: u64, message: String },
 }
+pub enum Target {
+    Ssh {
+        profile: Box<ServerProfile>,
+        fingerprint: String,
+        secret: Zeroizing<String>,
+    },
+    #[cfg(windows)]
+    Wsl(String),
+}
 struct Credentials {
     epoch: u64,
-    profile: Box<ServerProfile>,
-    fingerprint: String,
-    secret: Zeroizing<String>,
+    target: Target,
+}
+
+pub(super) trait TerminalIo {
+    fn input(&mut self, bytes: Vec<u8>) -> anyhow::Result<()>;
+    fn resize(&mut self, columns: u32, rows: u32) -> anyhow::Result<()>;
+    fn poll(&mut self, budget: usize) -> anyhow::Result<arcnix_core::terminal::Output>;
+}
+impl TerminalIo for Pty {
+    fn input(&mut self, bytes: Vec<u8>) -> anyhow::Result<()> {
+        Pty::input(self, bytes)
+    }
+    fn resize(&mut self, columns: u32, rows: u32) -> anyhow::Result<()> {
+        Pty::resize(self, columns, rows)
+    }
+    fn poll(&mut self, budget: usize) -> anyhow::Result<arcnix_core::terminal::Output> {
+        Pty::poll(self, budget)
+    }
 }
 struct SessionControl {
     tx: mpsc::SyncSender<Action>,
@@ -142,31 +164,45 @@ fn spawn_session(
     };
     std::thread::spawn(move || {
         let _alive = Alive(alive);
-        let opened: anyhow::Result<Pty> = (|| {
+        let opened = (|| -> anyhow::Result<Box<dyn TerminalIo>> {
             anyhow::ensure!(
                 current(&credentials, &generation, &stop),
                 "Terminal connection was cancelled"
             );
-            let pending = PendingConnection::open_for_known_host(
-                &credentials.profile,
-                &credentials.fingerprint,
-            )?;
+            let (profile, fingerprint, secret) = match &credentials.target {
+                Target::Ssh {
+                    profile,
+                    fingerprint,
+                    secret,
+                } => (profile, fingerprint, secret),
+                #[cfg(windows)]
+                Target::Wsl(name) => {
+                    return Ok(Box::new(super::wsl_terminal::WslTerminal::open(
+                        name,
+                        directory.as_deref(),
+                        columns,
+                        rows,
+                    )?));
+                }
+            };
+            let pending = PendingConnection::open_for_known_host(profile, fingerprint)?;
             anyhow::ensure!(
                 current(&credentials, &generation, &stop),
                 "Terminal connection was cancelled"
             );
-            let remote = pending.authenticate(&credentials.secret, &credentials.fingerprint)?;
+            let remote = pending.authenticate(secret, fingerprint)?;
             anyhow::ensure!(
                 current(&credentials, &generation, &stop),
                 "Terminal connection was cancelled"
             );
-            if let Some(persistent) = persistent {
+            let pty = if let Some(persistent) = persistent {
                 remote.into_terminal_persistent(columns, rows, &persistent, directory.as_deref())
             } else if let Some(directory) = directory {
                 remote.into_terminal_here(columns, rows, &directory)
             } else {
                 remote.into_terminal(columns, rows)
-            }
+            }?;
+            Ok(Box::new(pty))
         })();
         let mut terminal = match opened {
             Ok(terminal) if current(&credentials, &generation, &stop) => terminal,
@@ -292,22 +328,12 @@ pub fn start(
                     close_all(&mut sessions);
                     credentials = None;
                 }
-                Ok(Command::Attach {
-                    epoch,
-                    profile,
-                    fingerprint,
-                    secret,
-                }) => {
+                Ok(Command::Attach { epoch, target }) => {
                     if epoch != generation.load(Ordering::Acquire) {
                         continue;
                     }
                     close_all(&mut sessions);
-                    credentials = Some(Arc::new(Credentials {
-                        epoch,
-                        profile,
-                        fingerprint,
-                        secret,
-                    }));
+                    credentials = Some(Arc::new(Credentials { epoch, target }));
                 }
                 Ok(Command::Request {
                     epoch,

@@ -116,7 +116,7 @@ def main(fixture, output, package_checks):
         expect(page.get_by_role("button", name="编辑服务器", exact=True)).to_have_count(0)
         expect(page.get_by_role("textbox", name="SSH 配置文件路径", exact=True)).to_have_count(0)
         rail_buttons = page.locator(".navigation-rail button")
-        sections = ["Servers", "Scripts", "Tasks", "Backups", "Diagnostics", "Settings"]
+        sections = ["Servers", "Scripts", "Tasks", "Backups", "Settings"]
         expect(rail_buttons).to_have_count(len(sections))
         for index, section in enumerate(sections):
             expect(rail_buttons.nth(index)).to_have_accessible_name(section)
@@ -370,9 +370,9 @@ def main(fixture, output, package_checks):
         dialog = page.get_by_role("dialog", name="新建服务器", exact=True)
         expect(dialog).to_be_visible()
         expect(dialog.get_by_role("textbox", name="私钥文件路径", exact=True)).to_have_count(0)
-        dialog.get_by_role("button", name="私钥", exact=True).click()
+        dialog.get_by_role("radio", name="私钥", exact=True).check()
         expect(dialog.get_by_role("textbox", name="私钥文件路径", exact=True)).to_be_visible()
-        dialog.get_by_role("button", name="密码", exact=True).click()
+        dialog.get_by_role("radio", name="密码", exact=True).check()
         dialog.get_by_role("button", name="保存服务器", exact=True).click()
         expect(dialog.locator(".form-error")).to_be_visible()
         page.screenshot(path=str(output / "new-server-validation.png"))

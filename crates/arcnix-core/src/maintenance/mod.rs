@@ -10,7 +10,6 @@ pub mod configuration_records;
 pub mod configuration_templates;
 pub mod configurations;
 pub mod database_backups;
-pub mod deleted_files;
 pub mod export_download;
 pub mod record_cleanup;
 pub mod record_maintenance;

@@ -16,9 +16,9 @@ pub use automation::{
 };
 pub use config::{model, preferences, server_labels, store};
 use connection::private_program;
-pub use connection::{
-    browser_proxy, private_keys, remote, ssh_config, terminal, transport_error, wsl,
-};
+#[cfg(windows)]
+pub use connection::wsl;
+pub use connection::{browser_proxy, private_keys, remote, ssh_config, terminal, transport_error};
 use desktop::desktop_storage;
 pub use desktop::{
     browser, desktop_customization, desktop_shortcuts, desktop_theme, desktop_time_zone,
@@ -28,15 +28,13 @@ pub use files::{deletion, file_associations, local, permissions, recycle, text_f
 pub use maintenance::{
     audit_cleanup, audit_details, audit_storage, backup_evidence, backups, cleanup_records,
     configuration_backups, configuration_compare, configuration_records, configuration_templates,
-    configurations, database_backups, deleted_files, export_download, record_cleanup,
-    record_maintenance, record_recovery, recovery_drills, snapshot_files,
+    configurations, database_backups, export_download, record_cleanup, record_maintenance,
+    record_recovery, recovery_drills, snapshot_files,
 };
 pub use model::*;
 pub use observability::{
-    diagnostic_exports, diagnostic_logs, diagnostics, disks, metric_history, metrics, network,
-    processes, resource_ports, system_logs, tcp_listeners,
+    disks, metric_history, metrics, network, processes, resource_ports, system_logs,
 };
-use observability::{name_resolution, tls_diagnostics};
 pub use software::{
     compose_apps, docker, installation_plan, installers, packages, server_inventory,
     software_catalog, software_install, updates,

@@ -18,7 +18,6 @@ pub struct Template {
     pub service: Option<ServiceOperation>,
     pub configuration: Option<crate::configurations::Job>,
     configuration_targets: BTreeMap<String, std::sync::Arc<crate::configurations::Job>>,
-    pub diagnostic: Option<crate::diagnostics::Plan>,
     pub backup: Option<crate::backups::Job>,
     pub snippet: Snippet,
     pub revision: String,
@@ -77,7 +76,6 @@ impl Template {
             service: None,
             configuration: None,
             configuration_targets: BTreeMap::new(),
-            diagnostic: None,
             backup: None,
             revision: crate::script_parameters::digest(&snippet)[..16].to_owned(),
             package_action: None,
@@ -134,7 +132,6 @@ impl Template {
         if self.drill.is_some()
             || self.recovery.is_some()
             || self.cleanup.is_some()
-            || self.diagnostic.is_some()
             || self.configuration.is_some()
             || self.package_action.is_some()
             || self.service.is_some()
@@ -287,13 +284,6 @@ impl Template {
                 "Configuration publication has no script parameters"
             );
             return Ok(job.template()?.snippet);
-        }
-        if let Some(plan) = &self.diagnostic {
-            ensure!(
-                values.is_empty(),
-                "Diagnostic checks do not accept script parameters"
-            );
-            return Ok(plan.template()?.snippet);
         }
         self.snippet.validate()?;
         let mut result = self.snippet.clone();
@@ -502,7 +492,6 @@ pub fn catalog() -> Vec<Template> {
             service: None,
             configuration: None,
             configuration_targets: BTreeMap::new(),
-            diagnostic: None,
             backup: None,
             snippet: Snippet {
                 parameters: vec![],
@@ -555,7 +544,6 @@ pub fn catalog() -> Vec<Template> {
             service: None,
             configuration: None,
             configuration_targets: BTreeMap::new(),
-            diagnostic: None,
             backup: None,
             snippet: Snippet {
                 parameters: if id == "directory" {

@@ -860,7 +860,7 @@ mod tests {
     fn decoded_details_are_redacted_without_corrupting_public_protocol_fields() -> Result<()> {
         let definition = Definition::official("nginx", vec!["nginx".into()])?;
         let output = format!("Plain version password\n{}", packet(&definition, "passed"));
-        let safe = crate::diagnostics::redact_log(
+        let safe = crate::tasks::redact_log(
             &output,
             &["passed", "job", "1", "version", "password", "nginx"],
         );

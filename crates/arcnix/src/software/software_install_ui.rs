@@ -36,9 +36,74 @@ impl Default for InstallState {
         }
     }
 }
-fn available(s: &State) -> bool {
+fn needs_terminal(s: &State) -> bool {
+    s.software
+        .app_center
+        .inventory
+        .as_ref()
+        .is_some_and(|inv| !inv.hosted_tasks)
+}
+
+pub(super) fn can_change_software(s: &State) -> bool {
     s.connected
         && !scripts_ui::busy(s)
+        && s.software.app_center.inventory.as_ref().is_some_and(|inv| {
+            (inv.is_root || inv.sudo_available) && (inv.hosted_tasks || s.terminal_available())
+        })
+}
+
+fn package_source(s: &State) -> Source {
+    if s.install.source == 1 {
+        Source::Snap
+    } else {
+        Source::Native(
+            s.software
+                .app_center
+                .inventory
+                .as_ref()
+                .map_or(PackageManager::Unknown, |inv| inv.manager),
+        )
+    }
+}
+
+fn terminal_command(s: &State) -> anyhow::Result<String> {
+    let inv = s
+        .software
+        .app_center
+        .inventory
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Checking available installation sources…"))?;
+    if let Some(Dialog::SoftwareAction(action, _, source, names)) = &s.dialog {
+        return software_install::terminal_command(
+            *source,
+            *action,
+            names,
+            "stable",
+            false,
+            inv.is_root,
+        );
+    }
+    anyhow::ensure!(
+        s.install.source != 2,
+        "Compose installation requires background tasks"
+    );
+    software_install::terminal_command(
+        package_source(s),
+        InstallAction::Install,
+        &s.install
+            .names
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        &s.install.channel,
+        s.install.classic,
+        inv.is_root,
+    )
+}
+
+fn available(s: &State) -> bool {
+    can_change_software(s)
+        && (!needs_terminal(s) || s.install.source != 2 && terminal_command(s).is_ok())
         && source_available(s, s.install.source)
         && !selected_app(s)
             .and_then(|a| a.snap)
@@ -49,18 +114,50 @@ fn selected_app(s: &State) -> Option<arcnix_core::software_catalog::App> {
         .catalog_id
         .and_then(arcnix_core::software_catalog::get)
 }
+fn native_catalog_package(
+    s: &State,
+    app: arcnix_core::software_catalog::App,
+) -> Option<&'static str> {
+    s.software
+        .app_center
+        .inventory
+        .as_ref()?
+        .native_package(app)
+}
+pub(crate) fn catalog_source_available(
+    s: &State,
+    app: arcnix_core::software_catalog::App,
+    source: u8,
+) -> bool {
+    s.software
+        .app_center
+        .inventory
+        .as_ref()
+        .is_some_and(|inv| match source {
+            0 => inv.native_package(app).is_some(),
+            1 => inv.snap_available(app),
+            2 => inv.compose_ready && app.compose.is_some(),
+            _ => false,
+        })
+}
 fn source_available(s: &State, source: u8) -> bool {
+    if let Some(app) = selected_app(s) {
+        return catalog_source_available(s, app, source);
+    }
     match source {
-        0 => s.software.environment.as_ref().is_some_and(|e| {
-            software_install::supported(e.manager)
-                && selected_app(s).is_none_or(|a| a.package(e.manager).is_some())
-        }),
-        1 => s.server_apps.applications.snap && selected_app(s).is_none_or(|a| a.snap.is_some()),
-        2 => {
-            s.server_apps.applications.docker
-                && s.server_apps.applications.compose
-                && selected_app(s).is_none_or(|a| a.compose.is_some())
-        }
+        0 => s
+            .software
+            .app_center
+            .inventory
+            .as_ref()
+            .is_some_and(|inv| software_install::supported(inv.manager)),
+        1 => s.server_apps.applications.snap,
+        2 => s
+            .software
+            .app_center
+            .inventory
+            .as_ref()
+            .is_some_and(|inv| inv.compose_ready),
         _ => false,
     }
 }
@@ -108,6 +205,11 @@ impl Ui {
                 source,
                 names: package.unwrap_or_else(|| "nginx".into()),
                 ..Default::default()
+            };
+            if !source_available(s, source)
+                && let Some(other) = (0..3).find(|n| source_available(s, *n))
+            {
+                set_source(s, other);
             }
         });
         if self
@@ -119,6 +221,15 @@ impl Ui {
         self.open_dialog(Dialog::SoftwareInstall);
     }
     fn install_software(&self) {
+        if self.state.with(needs_terminal) {
+            if self.state.with(available) {
+                match self.state.with(terminal_command) {
+                    Ok(command) => self.terminal_with_command(command),
+                    Err(error) => self.state.revise(|s| s.dialog_error = error.to_string()),
+                }
+            }
+            return;
+        }
         let result = self.state.with(|s| -> anyhow::Result<_> {
             anyhow::ensure!(
                 available(s),
@@ -133,42 +244,14 @@ impl Ui {
                 definition.port = s.install.port.parse()?;
                 definition.install()
             } else {
-                let source = if s.install.source == 1 {
-                    Source::Snap
-                } else {
-                    Source::Native(
-                        s.software
-                            .environment
-                            .as_ref()
-                            .map(|e| e.manager)
-                            .unwrap_or(PackageManager::Unknown),
-                    )
-                };
                 software_install::template(
-                    source,
+                    package_source(s),
                     InstallAction::Install,
-                    selected_app(s)
-                        .and_then(|a| {
-                            if s.install.source == 1 {
-                                a.snap.map(|v| v.name)
-                            } else {
-                                a.package(
-                                    s.software
-                                        .environment
-                                        .as_ref()
-                                        .map(|e| e.manager)
-                                        .unwrap_or(PackageManager::Unknown),
-                                )
-                            }
-                        })
-                        .map(|name| vec![name.to_owned()])
-                        .unwrap_or_else(|| {
-                            s.install
-                                .names
-                                .split_whitespace()
-                                .map(str::to_owned)
-                                .collect()
-                        }),
+                    s.install
+                        .names
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .collect(),
                     &s.install.channel,
                     s.install.classic,
                 )
@@ -210,13 +293,13 @@ impl Ui {
             };
             format!("{} · {provider}", names.join(", "))
         };
-        match software_install::template(source, action, names, "stable", false) {
+        match software_install::template(source, action, names.clone(), "stable", false) {
             Ok(template) => {
                 self.state.revise(|s| s.install.options = false);
                 self.open_script(
                     template,
                     Some(target),
-                    Dialog::SoftwareAction(action, subject),
+                    Dialog::SoftwareAction(action, subject, source, names),
                 );
             }
             Err(e) => self.state.revise(|s| {
@@ -300,8 +383,7 @@ fn credential_input(
     ))
 }
 
-fn access_options(ui: &Ui, install: bool) -> impl Widget {
-    let state = ui.state;
+fn access_options(state: Cage<State>, install: bool) -> impl Widget {
     each(state.map(|s| selected_profile(s).cloned().into_iter().collect::<Vec<_>>()))
         .key(|p| p.id.clone())
         .children(move |item| {
@@ -314,51 +396,73 @@ fn access_options(ui: &Ui, install: bool) -> impl Widget {
                         "{} · {}@{}:{}",
                         profile.name, profile.username, profile.host, profile.port
                     )),
-                    sapid::button()
-                        .class("button")
-                        .label(i18n::bind(if install {
-                            "Installation options"
-                        } else {
-                            "Administrator access"
-                        }))
-                        .pressed(state.map(|s| s.install.options))
-                        .on_press(move || state.revise(|s| s.install.options = !s.install.options)),
+                    when(state.map(move |s| install && apt_install(s)), move || {
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind("Installation options"))
+                            .pressed(state.map(|s| s.install.options))
+                            .on_press(move || {
+                                state.revise(|s| s.install.options = !s.install.options)
+                            })
+                    }),
                 )),
                 when(Vary::Value(show_ssh), move || {
                     credential_input(state, id.clone(), "SSH password or key passphrase", false)
                 }),
-                when(state.map(|s| s.install.options), move || {
-                    col().class("form-stack").fill((
+                when(
+                    state.map(|s| {
+                        s.software
+                            .app_center
+                            .inventory
+                            .as_ref()
+                            .is_some_and(|inv| !inv.is_root && inv.sudo_available)
+                    }),
+                    move || {
                         credential_input(
                             state,
                             profile.id.clone(),
                             "Administrator password (if required by sudo)",
                             true,
-                        ),
-                        when(state.map(move |s| install && apt_install(s)), move || {
-                            sapid::checkbox()
-                                .label(i18n::bind("Review dependency upgrades"))
-                                .checked(state.map(|s| s.install.upgrade_dependencies))
-                                .on_checked_change(move |checked| {
-                                    state.revise(|s| s.install.upgrade_dependencies = checked)
-                                })
-                        }),
-                    ))
-                }),
+                        )
+                    },
+                ),
+                when(
+                    state.map(move |s| install && apt_install(s) && s.install.options),
+                    move || {
+                        sapid::checkbox()
+                            .label(i18n::bind("Review dependency upgrades"))
+                            .checked(state.map(|s| s.install.upgrade_dependencies))
+                            .on_checked_change(move |checked| {
+                                state.revise(|s| s.install.upgrade_dependencies = checked)
+                            })
+                    },
+                ),
             ))
         })
 }
+fn execution_options(ui: &Ui, install: bool) -> impl Widget {
+    let state = ui.state;
+    when(state.map(|s| s.software.app_center.inventory.as_ref().is_some_and(|inv| !inv.is_root && !inv.sudo_available)), || {
+        text().class("hint").content(i18n::bind("To change system software, connect with an account that can use sudo or log in as root."))
+    }).otherwise(move || {
+        when(state.map(needs_terminal), move || {
+            when(state.map(move |s| install && s.install.source == 2), || {
+                text().class("hint").content(i18n::bind("Compose installation requires background tasks"))
+            }).otherwise(move || col().class("form-stack").fill((
+                text().class("hint").content(i18n::bind("Background tasks are unavailable. Open this command in a new terminal, review it and press Enter to run it. Refresh App Center when finished.")),
+                text().class("package-terminal-command").selectable(true).content(state.map(move |s| {
+                    terminal_command(s).unwrap_or_else(|err| i18n::translate(&err.to_string()))
+                })),
+            )))
+        }).otherwise(move || access_options(state, install))
+    })
+}
+
 fn set_source(s: &mut State, source: u8) {
     s.install.source = source;
     if let Some(app) = selected_app(s) {
         s.install.names = match source {
-            0 => app.package(
-                s.software
-                    .environment
-                    .as_ref()
-                    .map(|e| e.manager)
-                    .unwrap_or(PackageManager::Unknown),
-            ),
+            0 => native_catalog_package(s, app),
             1 => app.snap.map(|v| v.name),
             _ => None,
         }
@@ -389,7 +493,15 @@ fn source_note(s: &State, source: u8) -> String {
                 format!(
                     "{} · {}",
                     e.manager.label(),
-                    app.and_then(|a| a.package(e.manager)).unwrap_or("")
+                    app.and_then(|a| native_catalog_package(s, a))
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            if app.is_some() {
+                                i18n::translate("Unavailable in enabled repositories")
+                            } else {
+                                String::new()
+                            }
+                        })
                 )
             })
             .unwrap_or_else(|| i18n::translate("Detecting system…")),
@@ -398,6 +510,8 @@ fn source_note(s: &State, source: u8) -> String {
                 i18n::translate("Not provided for this app")
             } else if !s.server_apps.applications.snap {
                 i18n::translate("Requires Snap")
+            } else if app.is_some_and(|a| !catalog_source_available(s, a, 1)) {
+                i18n::translate("Unavailable in the Snap Store")
             } else {
                 app.and_then(|a| a.snap)
                     .map(|v| format!("{} · {}", v.name, v.publisher))
@@ -409,6 +523,8 @@ fn source_note(s: &State, source: u8) -> String {
                 i18n::translate("No Compose template")
             } else if !s.server_apps.applications.compose {
                 i18n::translate("Requires Docker Compose")
+            } else if app.is_some_and(|a| !catalog_source_available(s, a, 2)) {
+                i18n::translate("Requires access to the Docker daemon")
             } else {
                 app.and_then(|a| a.compose)
                     .map(|kind| kind.image().into())
@@ -435,16 +551,16 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             row().class("install-sources").fill([(0,"System packages",Icon::Server),(1,"Snap",Icon::Grid),(2,"Docker Compose",Icon::Docker)].into_iter().map(move|(source,label,icon)|sapid::button().class("button install-source-card").name(i18n::bind(label)).label("").pressed(state.map(move|s|s.install.source==source)).enabled(state.map(move|s|source_available(s,source))).fill((icons::glyph(icon),text().class("install-source-name").content(i18n::bind(label)),text().class("install-source-note").content(state.map(move|s|source_note(s,source))))).on_press(move||state.revise(|s|set_source(s,source)))).collect::<Vec<_>>()),
             text().class("install-provider subtle").content(i18n::bind(state.map(|s|match s.install.source{0=>s.software.environment.as_ref().map(|e|format!("{} · {}",e.distribution,e.manager.label())).unwrap_or_else(||"Detecting system…".into()),1=>"Snap Store".into(),_=>"Docker Compose v2".into()}))),
             when(state.map(|s|s.install.source==2),{let ui=ui.clone();move||compose_form(ui.clone())}).otherwise(move||col().class("native-install-fields").fill((
-                when(state.map(|s|s.install.catalog_id.is_none()),{let fields=fields.clone();move||field("Package names",&fields,|s|s.install.names.clone(),|s,v|s.install.names=v)}).otherwise(move||text().class("install-package-name").selectable(true).content(state.map(|s|selected_app(s).and_then(|a|if s.install.source==1{a.snap.map(|v|v.name)}else{a.package(s.software.environment.as_ref().map(|e|e.manager).unwrap_or(PackageManager::Unknown))}).unwrap_or_default().to_owned()))),
+                when(state.map(|s|s.install.catalog_id.is_none()),{let fields=fields.clone();move||field("Package names",&fields,|s|s.install.names.clone(),|s,v|s.install.names=v)}).otherwise(move||text().class("install-package-name").selectable(true).content(state.map(|s|selected_app(s).and_then(|a|if s.install.source==1{a.snap.map(|v|v.name)}else{native_catalog_package(s,a)}).unwrap_or_default().to_owned()))),
                 when(state.map(|s|s.install.source==1),{let fields=fields.clone();move||col().fill((field("Snap channel",&fields,|s|s.install.channel.clone(),|s,v|s.install.channel=v),sapid::checkbox().label(i18n::bind("Allow classic confinement")).checked(state.map(|s|s.install.classic)).on_checked_change(move|v|state.revise(|s|s.install.classic=v)),when(state.map(|s|selected_app(s).and_then(|a|a.snap).is_some_and(|v|v.classic)&&!s.install.classic),move||text().class("subtle").content(i18n::bind("This snap requires classic confinement"))),help_ui::tip("Snap confinement","Classic snaps have traditional host access. Enable only when the publisher requires it and you trust the package.")))}),
                 help_ui::tip("Installation source","System packages use enabled distribution repositories; package names and versions differ. Snap and Compose are separate installations. Updates, services and data remain with their original source."),
             ))),
-            access_options(&ui, true),
-        )),sapid::button().class("button primary").label(i18n::bind(state.map(|s| if dependency_review(s) { "Review package changes…" } else { "Install" }.to_owned()))).enabled(state.map(available)).on_press(move||install.install_software()))
+            execution_options(&ui, true),
+        )),sapid::button().class("button primary").label(i18n::bind(state.map(|s| if needs_terminal(s) && s.install.source != 2 { "Open in terminal" } else if dependency_review(s) { "Review package changes…" } else { "Install" }.to_owned()))).enabled(state.map(available)).on_press(move||install.install_software()))
             },
         ),
         each(state.map(|s| match &s.dialog {
-            Some(Dialog::SoftwareAction(action, subject)) => vec![(*action, subject.clone())],
+            Some(Dialog::SoftwareAction(action, subject, ..)) => vec![(*action, subject.clone())],
             _ => vec![],
         }))
         .key(|(_, subject)| subject.clone())
@@ -492,19 +608,37 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                         text().class("section-title").content(subject.clone())
                     }),
                     text().class("hint").content(i18n::bind(description)),
-                    access_options(&ui, false),
+                    execution_options(&ui, false),
                 )),
                 (
                     btn("Cancel", move || cancel.close_dialog()),
-                    btn(label, move || {
-                        submit.prepare_script(Submission::ApplySoftware)
-                    })
-                    .class(if action == InstallAction::Remove {
-                        "button danger"
-                    } else {
-                        "button primary"
-                    })
-                    .enabled(state.map(|s| s.connected && !scripts_ui::busy(s))),
+                    sapid::button()
+                        .label(i18n::bind(state.map(move |s| {
+                            if needs_terminal(s) {
+                                "Open in terminal"
+                            } else {
+                                label
+                            }
+                            .to_owned()
+                        })))
+                        .on_press(move || {
+                            if submit.state.with(needs_terminal) {
+                                match submit.state.with(terminal_command) {
+                                    Ok(cmd) => submit.terminal_with_command(cmd),
+                                    Err(err) => {
+                                        submit.state.revise(|s| s.dialog_error = err.to_string())
+                                    }
+                                }
+                            } else {
+                                submit.prepare_script(Submission::ApplySoftware);
+                            }
+                        })
+                        .class(if action == InstallAction::Remove {
+                            "button danger"
+                        } else {
+                            "button primary"
+                        })
+                        .enabled(state.map(can_change_software)),
                 ),
             )
         }),

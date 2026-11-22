@@ -20,7 +20,7 @@ fn new_group(ui: &Ui) {
 pub(crate) fn edit_server(ui: &Ui, id: &str) {
     let profile = ui
         .state
-        .with(|s| s.config.servers.iter().find(|p| p.id == id).cloned());
+        .with(|s| s.config.available_servers().find(|p| p.id == id).cloned());
     if let Some(profile) = profile {
         ui.state.revise(|s| {
             s.port = profile.port.to_string();
@@ -81,8 +81,7 @@ fn matching_servers(s: &State, group: Option<&str>) -> Vec<ServerProfile> {
         .map(|g| g.name.as_str())
         .unwrap_or_default();
     s.config
-        .servers
-        .iter()
+        .available_servers()
         .filter(|p| {
             p.group_id.as_deref() == group
                 && arcnix_core::server_labels::matches(p, group_name, &query)
@@ -156,7 +155,7 @@ fn group_menu(ui: Ui, id: String) -> impl Widget {
             let id = guarded_id.clone();
             move |s| {
                 !s.system_task_running
-                    || !s.config.servers.iter().any(|p| {
+                    || !s.config.available_servers().any(|p| {
                         s.selected.as_deref() == Some(&p.id) && p.group_id.as_deref() == Some(&id)
                     })
             }
@@ -337,8 +336,7 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
                                             text().class("tree-count").content(state.map(
                                                 move |s| {
                                                     s.config
-                                                        .servers
-                                                        .iter()
+                                                        .available_servers()
                                                         .filter(|p| {
                                                             p.group_id.as_deref()
                                                                 == Some(&g.get().id)
@@ -412,7 +410,7 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
                 when(
                     state.map(|s| {
                         !s.search.trim().is_empty()
-                            && !s.config.servers.iter().any(|p| {
+                            && !s.config.available_servers().any(|p| {
                                 arcnix_core::server_labels::matches(
                                     p,
                                     arcnix_core::target_selection::group_name(&s.config, p)
@@ -433,7 +431,9 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
                     },
                 ),
                 when(
-                    state.map(|s| s.config.servers.is_empty() && s.config.groups.is_empty()),
+                    state.map(|s| {
+                        s.config.available_servers().next().is_none() && s.config.groups.is_empty()
+                    }),
                     || {
                         text()
                             .class("tree-empty-state")
@@ -447,7 +447,7 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
                 format!(
                     "{} 个分组 · {} 台服务器",
                     s.config.groups.len(),
-                    s.config.servers.len()
+                    s.config.available_servers().count()
                 )
             }))),
     ))
@@ -492,6 +492,10 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                     || s.selected.as_deref() == Some(&value.get().id)
                             }))
                             .name(value.map(|p| {
+                                #[cfg(windows)]
+                                if let Some(distro) = p.direct_wsl() {
+                                    return format!("{}，WSL · {distro}", p.name);
+                                }
                                 format!("{}，{}@{}:{}", p.name, p.username, p.host, p.port)
                             }))
                             .fill((
@@ -507,6 +511,10 @@ fn server_rows(ui: Ui, group: Option<String>) -> impl Widget {
                                             _ => "",
                                         };
                                         let status = i18n::translate(status);
+                                        #[cfg(windows)]
+                                        if let Some(distro) = p.direct_wsl() {
+                                            return format!("WSL · {distro}{status}");
+                                        }
                                         format!("{}@{}:{}{status}", p.username, p.host, p.port)
                                     },
                                 ))),
@@ -634,14 +642,12 @@ fn persist(ui: &Ui, config: &AppConfig) -> anyhow::Result<()> {
 fn server_dialog(ui: Ui) -> impl Widget {
     let state = ui.state;
     let title = state.with(|s| {
-        if s.config.servers.iter().any(|p| p.id == s.editor.id) {
+        if s.config.available_servers().any(|p| p.id == s.editor.id) {
             "编辑服务器"
         } else {
             "新建服务器"
         }
     });
-    let password = ui.clone();
-    let key = ui.clone();
     let ungrouped = ui.clone();
     let save = ui.clone();
     let general = col()
@@ -680,6 +686,7 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         )
                     }
                 }),
+                #[cfg(windows)]
                 when(
                     state.map(|s| s.editor.wsl_distribution.is_some()),
                     move || {
@@ -694,51 +701,62 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         ))
                     },
                 ),
-                field("端口", &ui, |s| s.port.clone(), |s, v| s.port = v),
+                when(state.map(|s| s.editor.direct_wsl().is_none()), {
+                    let ui = ui.clone();
+                    move || field("端口", &ui, |s| s.port.clone(), |s, v| s.port = v)
+                }),
             )),
-            field(
-                "用户名",
-                &ui,
-                |s| s.editor.username.clone(),
-                |s, v| s.editor.username = v,
-            ),
-            col().class("field").fill((
-                text().class("field-label").content(i18n::bind("认证方式")),
-                row().class("segmented").fill((
-                    sapid::button()
-                        .class(state.map(|s| {
-                            if s.editor.auth == AuthMethod::Password {
-                                "segment active"
-                            } else {
-                                "segment"
-                            }
-                            .to_owned()
-                        }))
-                        .label(i18n::bind("密码"))
-                        .on_press(move || {
-                            password
-                                .state
-                                .revise(|s| s.editor.auth = AuthMethod::Password)
-                        }),
-                    sapid::button()
-                        .class(state.map(|s| {
-                            if s.editor.auth == AuthMethod::PrivateKey {
-                                "segment active"
-                            } else {
-                                "segment"
-                            }
-                            .to_owned()
-                        }))
-                        .label(i18n::bind("私钥"))
-                        .on_press(move || {
-                            key.state.revise(|s| s.editor.auth = AuthMethod::PrivateKey)
-                        }),
-                )),
-            )),
-            when(state.map(|s| s.editor.auth == AuthMethod::PrivateKey), {
+            #[cfg(windows)]
+            when(state.map(|s| s.editor.wsl_distribution.is_some()), {
                 let ui = ui.clone();
-                move || file_picker::field(ui.clone())
+                move || {
+                    settings::select(
+                        &ui,
+                        false,
+                        "WSL connection method",
+                        [(false, "本机直连"), (true, "SSH")],
+                        |s| s.editor.wsl_use_ssh,
+                        |_| true,
+                        |ui, ssh| ui.state.revise(|s| s.editor.wsl_use_ssh = ssh),
+                    )
+                }
             }),
+            col()
+                .class(state.map(|s| {
+                    if s.editor.direct_wsl().is_some() {
+                        "hidden"
+                    } else {
+                        "form-stack"
+                    }
+                    .to_owned()
+                }))
+                .fill((
+                    field(
+                        "用户名",
+                        &ui,
+                        |s| s.editor.username.clone(),
+                        |s, v| s.editor.username = v,
+                    ),
+                    col().class("field").fill((
+                        text().class("field-label").content(i18n::bind("认证方式")),
+                        settings::select(
+                            &ui,
+                            false,
+                            "Authentication",
+                            [
+                                (AuthMethod::Password, "密码"),
+                                (AuthMethod::PrivateKey, "私钥"),
+                            ],
+                            |s| s.editor.auth.clone(),
+                            |_| true,
+                            |ui, auth| ui.state.revise(|s| s.editor.auth = auth),
+                        ),
+                    )),
+                    when(state.map(|s| s.editor.auth == AuthMethod::PrivateKey), {
+                        let ui = ui.clone();
+                        move || file_picker::field(ui.clone())
+                    }),
+                )),
             col().class("field").fill((
                 text().class("field-label").content(i18n::bind("分组")),
                 row().class("choice-list").fill((
@@ -778,9 +796,13 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         }),
                 )),
             )),
-            text()
-                .class("subtle")
-                .content(i18n::bind("密码与私钥口令将在连接时输入。")),
+            text().class("subtle").content(i18n::bind(state.map(|s| {
+                #[cfg(windows)]
+                if s.editor.direct_wsl().is_some() {
+                    return "本机直连使用发行版的默认 Linux 账号。".to_owned();
+                }
+                "密码与私钥口令将在连接时输入。".to_owned()
+            }))),
         ));
     let body = fragment((
         preferences_ui::server_tabs(ui.clone()),
@@ -825,8 +847,7 @@ fn server_dialog(ui: Ui) -> impl Widget {
                             if labels_only {
                                 let mut current = s
                                     .config
-                                    .servers
-                                    .iter()
+                                    .available_servers()
                                     .find(|p| p.id == profile.id)
                                     .cloned()
                                     .ok_or_else(|| {
@@ -1003,8 +1024,7 @@ fn connect_dialog(ui: Ui) -> impl Widget {
                 .class("dialog-description")
                 .content(i18n::bind(state.map(|s| {
                     s.config
-                        .servers
-                        .iter()
+                        .available_servers()
                         .find(|p| Some(&p.id) == s.selected.as_ref())
                         .map(|p| format!("{}\n{}@{}:{}", p.name, p.username, p.host, p.port))
                         .unwrap_or_else(|| "请选择服务器".into())
@@ -1014,8 +1034,7 @@ fn connect_dialog(ui: Ui) -> impl Widget {
                     .class("field-label")
                     .content(i18n::bind(state.map(|s| {
                         if s.config
-                            .servers
-                            .iter()
+                            .available_servers()
                             .find(|p| Some(&p.id) == s.selected.as_ref())
                             .is_some_and(|p| p.auth == AuthMethod::PrivateKey)
                         {
@@ -1104,8 +1123,7 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
                     .map(|g| g.name.clone())
             } else {
                 s.config
-                    .servers
-                    .iter()
+                    .available_servers()
                     .find(|p| p.id == target)
                     .map(|p| p.name.clone())
             }
@@ -1113,8 +1131,7 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
         .unwrap_or_default();
     let members = state.with(|s| {
         s.config
-            .servers
-            .iter()
+            .available_servers()
             .filter(|p| p.group_id.as_deref() == Some(&target))
             .map(|p| p.name.clone())
             .collect::<Vec<_>>()
@@ -1161,7 +1178,7 @@ fn delete_dialog(ui: Ui, kind: DeleteKind) -> impl Widget {
             btn(title, move || {
                 let result = state.with(|s| -> anyhow::Result<AppConfig> {
                     let affects_active = kind != DeleteKind::DissolveGroup
-                        && s.config.servers.iter().any(|p| {
+                        && s.config.available_servers().any(|p| {
                             s.selected.as_deref() == Some(&p.id)
                                 && if group {
                                     p.group_id.as_deref() == Some(&target)

@@ -463,14 +463,9 @@ pub(crate) fn wallpaper_preview_class(wallpaper: &Wallpaper, dark: bool) -> &'st
 
 pub(crate) fn dock_class(s: &State) -> String {
     let dock = &appearance(s).dock;
-    let size = match dock.icon_pixels() {
-        pixels if pixels == DockSize::Small.pixels() => "dock-small".to_owned(),
-        pixels if pixels == DockSize::Medium.pixels() => "dock-medium".to_owned(),
-        pixels if pixels == DockSize::Large.pixels() => "dock-large".to_owned(),
-        pixels => format!("dock-size-{pixels}"),
-    };
+    let pixels = dock.icon_pixels();
     format!(
-        "desktop-dock {size}{}{}{}",
+        "desktop-dock dock-size-{pixels}{}{}{}",
         if dock.auto_hide {
             " dock-auto-hide"
         } else {

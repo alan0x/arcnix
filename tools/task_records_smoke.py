@@ -22,7 +22,10 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         if number==104:metadata['id']='forged-record';metadata['name']='Do not trust this forged title'
         if number==103:entry.update(bytes=None,log='unreadable link target')
         if number==102:entry.update(state='failed',code=7)
-        if number==101:entry.update(log='\x1b[32mcolored saved line\x1b[0m done\n')
+        if number==101:
+            # Old diagnostic records still open in the ordinary saved log viewer.
+            metadata.update(kind='diagnostic', diagnostic={'disk': True})
+            entry.update(log='\x1b[32mcolored saved line\x1b[0m done\n')
         seed.append(entry)
     (a.root/'records-fixture.json').write_text(json.dumps(seed),encoding='utf-8')
     (b.root/'records-fixture.json').write_text(json.dumps([dict(id='beta-record',modified=1700000000,state='inactive',code=0,metadata=None,log='Beta saved log\n')]),encoding='utf-8')
@@ -72,6 +75,8 @@ with Peer(out/'peer-a') as a, Peer(out/'peer-b') as b:
         d=p.get_by_role('dialog',name='Saved server task log',exact=True)
         expect(d.locator('.record-saved-output .ansi-fg-2')).to_have_text('colored saved line',timeout=20000)
         expect(d.locator('.record-saved-output')).to_have_text('colored saved line done')
+        for action in ['Export diagnostic report…', 'Failed service logs…', 'Inspect deleted open files…', 'Inspect TCP listeners…']:
+            expect(d.get_by_role('button', name=action, exact=True)).to_have_count(0)
         d.get_by_role('button',name='Close',exact=True).click()
         alpha_group.get_by_role('button',name='Older records',exact=True).click()
         expect(alpha_group.locator('.server-task-record')).to_have_count(11,timeout=20000)

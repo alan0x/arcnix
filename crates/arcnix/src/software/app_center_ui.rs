@@ -21,15 +21,20 @@ pub(crate) struct AppCenterState {
 enum Item {
     Package(Source, arcnix_core::packages::Package),
     Project(arcnix_core::compose_apps::Project),
+    Container(arcnix_core::docker::Container),
 }
 impl Item {
     fn key(&self) -> String {
+        if let Self::Container(container) = self {
+            return format!("container:{}", container.id);
+        }
         format!("{}:{}", self.source(), self.name())
     }
     fn name(&self) -> String {
         match self {
             Self::Package(_, p) => p.name.clone(),
             Self::Project(p) => p.definition.name.clone(),
+            Self::Container(c) => c.name.clone(),
         }
     }
     fn app(&self) -> Option<App> {
@@ -39,6 +44,7 @@ impl Item {
                 .iter()
                 .find(|a| a.compose == Some(p.definition.kind))
                 .copied(),
+            Self::Container(c) => catalog::for_container(c),
         }
     }
     fn source(&self) -> String {
@@ -46,12 +52,15 @@ impl Item {
             Self::Package(Source::Native(m), _) => m.label().into(),
             Self::Package(Source::Snap, _) => "Snap".into(),
             Self::Project(_) => "Compose".into(),
+            Self::Container(c) if !c.compose_project.is_empty() => "Docker Compose".into(),
+            Self::Container(_) => "Docker".into(),
         }
     }
     fn version(&self) -> String {
         match self {
             Self::Package(_, p) => p.version.clone(),
             Self::Project(p) => p.definition.image.clone(),
+            Self::Container(c) => format!("{} · {}", c.image, c.status),
         }
     }
 }
@@ -74,6 +83,7 @@ fn items(s: &State) -> Vec<Item> {
                 .map(|p| Item::Package(Source::Snap, p)),
         )
         .chain(inv.projects.iter().cloned().map(Item::Project))
+        .chain(inv.containers.iter().cloned().map(Item::Container))
         .filter(|i| {
             format!(
                 "{} {} {}",
@@ -88,8 +98,9 @@ fn items(s: &State) -> Vec<Item> {
 }
 fn apps(s: &State) -> Vec<App> {
     let app_center = &s.software.app_center;
-    catalog::APPS
+    catalog::DISCOVERABLE
         .iter()
+        .filter_map(|id| catalog::get(id))
         .filter(|a| {
             app_center.category.is_none_or(|c| a.category == c)
                 && (!app_center.compose_only || a.compose.is_some())
@@ -104,20 +115,23 @@ fn apps(s: &State) -> Vec<App> {
                 .to_lowercase()
                 .contains(&app_center.query.to_lowercase())
         })
-        .copied()
         .collect()
 }
 fn installed(s: &State, app: App) -> bool {
     s.software.app_center.inventory.as_ref().is_some_and(|i| {
         i.native
             .iter()
-            .any(|p| app.package(i.manager) == Some(p.name.as_str()))
+            .any(|p| app.matches_package(i.manager, &p.name))
+            || app.id == "docker" && i.docker_cli
             || i.snap
                 .iter()
                 .any(|p| app.snap.is_some_and(|v| v.name == p.name))
             || i.projects
                 .iter()
                 .any(|p| app.compose == Some(p.definition.kind))
+            || i.containers
+                .iter()
+                .any(|c| catalog::for_container(c).is_some_and(|a| a.id == app.id))
     })
 }
 fn badge(app: App) -> impl Widget {
@@ -179,8 +193,15 @@ impl Ui {
         self.open_software_action(source, action, vec![p.name]);
     }
     pub(crate) fn refresh_software_inventory(&self) {
-        self.state.revise(|s| s.software.app_center.pending = None);
+        self.state.revise(|s| {
+            s.server_apps.discover_pending = None;
+            s.software.app_center.pending = None;
+        });
+        self.discover_server_apps();
         self.app_center_refresh();
+        if self.state.with(|s| s.docker.view == 3) {
+            self.compose_refresh();
+        }
         if self.state.with(|s| s.software.app_center.view == 3) {
             if self.state.with(|s| s.software.installed_view) {
                 self.software_installed();
@@ -238,13 +259,28 @@ fn card(ui: Ui, app: App) -> impl Widget {
             text()
                 .class("app-center-installed-badge")
                 .content(i18n::bind(state.map(move |s| {
-                    if installed(s, app) { "Installed" } else { "" }.to_owned()
+                    if installed(s, app) {
+                        "Installed"
+                    } else if s.software.app_center.inventory.is_some()
+                        && !(0..3).any(|source| {
+                            software_install_ui::catalog_source_available(s, app, source)
+                        })
+                    {
+                        "No available source"
+                    } else {
+                        ""
+                    }
+                    .to_owned()
                 }))),
             btn("Install…", move || install.install_catalog_app(app.id))
                 .class("button app-center-install-button")
-                .enabled(state.map(|s| s.connected && !scripts_ui::busy(s))),
+                .enabled(state.map(move |s| can_install(s, app))),
         )),
     ))
+}
+fn can_install(s: &State, app: App) -> bool {
+    software_install_ui::can_change_software(s)
+        && (0..3).any(|source| software_install_ui::catalog_source_available(s, app, source))
 }
 fn categories(state: Cage<State>) -> impl Widget {
     col()
@@ -298,12 +334,20 @@ fn discover(ui: Ui) -> impl Widget {
                 .class("subtle")
                 .content(state.map(|s| apps(s).len().to_string())),
         )),
+        when(
+            state.map(|s| s.software.app_center.pending.is_some()),
+            || {
+                text()
+                    .class("subtle")
+                    .content(i18n::bind("Checking available installation sources…"))
+            },
+        ),
         col().class("app-center-app-grid").fill(
             each(state.map(apps))
                 .key(|a| a.id)
                 .children(move |item| card(ui.clone(), item.value.get())),
         ),
-        when(state.map(|s| apps(s).is_empty()), move || {
+        when(state.map(|s| apps(s).is_empty()), || {
             text()
                 .class("app-center-empty")
                 .content(i18n::bind("No matching applications"))
@@ -316,7 +360,7 @@ fn detail(ui: Ui) -> impl Widget {
         let app=item.value.get();let install=ui.clone();
         col().class("app-center-detail").fill((
             text_action("Back",Icon::ChevronRight).class("button with-icon app-center-back").on_press(move||state.revise(|s|s.software.app_center.view=0)),
-            row().class("app-center-detail-header").fill((badge(app),col().class("app-center-detail-identity").fill((text().class("app-center-detail-name").content(app.name),text().class("subtle").content(i18n::bind(app.category.label())),text().class("app-center-detail-summary").content(i18n::bind(app.summary)))),btn("Install…",move||install.install_catalog_app(app.id)).class("button primary app-center-install-button").enabled(state.map(|s|s.connected&&!scripts_ui::busy(s))))),
+            row().class("app-center-detail-header").fill((badge(app),col().class("app-center-detail-identity").fill((text().class("app-center-detail-name").content(app.name),text().class("subtle").content(i18n::bind(app.category.label())),text().class("app-center-detail-summary").content(i18n::bind(app.summary)))),btn("Install…",move||install.install_catalog_app(app.id)).class("button primary app-center-install-button").enabled(state.map(move |s|can_install(s, app))))),
             col().class("app-center-detail-section").fill((text().class("section-title").content(i18n::bind("Common uses")),text().class("app-center-detail-uses").content(i18n::bind(app.uses)))),
             col().class("app-center-detail-section").fill((text().class("section-title").content(i18n::bind("Project website")),text().class("app-center-website").selectable(true).content(app.website))),
             help_ui::tip("Application catalog","Built-in application descriptions are available offline. Installation uses the server's enabled repositories or the selected publisher's snap/image. Versions and package availability vary; package installation may require additional service initialization. No third-party repository is added automatically."),
@@ -351,6 +395,9 @@ fn installed_page(ui: Ui) -> impl Widget {
                 let install = ui.clone();
                 let remove = ui.clone();
                 let manage = ui.clone();
+                let container_ui = ui.clone();
+                let service = ui.clone();
+                let docker = ui.clone();
                 let initial = value.get();
                 row().class("app-center-installed-row").fill((
                     text()
@@ -376,6 +423,36 @@ fn installed_page(ui: Ui) -> impl Widget {
                         .content(value.map(Item::version)),
                     when(value.map(|i| matches!(i, Item::Package(..))), move || {
                         row().class("app-center-installed-actions").fill((
+                            when(
+                                value.map(|i| {
+                                    matches!(i, Item::Package(Source::Native(_), _))
+                                        && i.app().is_some_and(|app| app.id == "nginx")
+                                }),
+                                {
+                                    let service = service.clone();
+                                    move || {
+                                        let service = service.clone();
+                                        btn("Manage service", move || {
+                                            service.open_system_service("nginx.service")
+                                        })
+                                    }
+                                },
+                            ),
+                            when(
+                                state.map(move |s| {
+                                    s.server_apps.applications.docker
+                                        && value.get().app().is_some_and(|app| app.id == "docker")
+                                }),
+                                {
+                                    let docker = docker.clone();
+                                    move || {
+                                        let docker = docker.clone();
+                                        btn("Open Docker", move || {
+                                            docker.open_desktop_app(WorkspacePage::Docker)
+                                        })
+                                    }
+                                },
+                            ),
                             btn("Upgrade…", {
                                 let install = install.clone();
                                 move || {
@@ -385,7 +462,7 @@ fn installed_page(ui: Ui) -> impl Widget {
                                     )
                                 }
                             })
-                            .enabled(state.map(|s| !scripts_ui::busy(s))),
+                            .enabled(state.map(software_install_ui::can_change_software)),
                             btn("Remove…", {
                                 let remove = remove.clone();
                                 move || {
@@ -395,18 +472,27 @@ fn installed_page(ui: Ui) -> impl Widget {
                                     )
                                 }
                             })
-                            .enabled(state.map(|s| !scripts_ui::busy(s))),
+                            .enabled(state.map(software_install_ui::can_change_software)),
                         ))
-                    })
-                    .otherwise(move || {
+                    }),
+                    when(value.map(|i| matches!(i, Item::Project(..))), move || {
                         btn("Manage project", {
                             let manage = manage.clone();
                             move || {
-                                state.revise(|s| s.docker.view = 3);
-                                manage.open_desktop_app(WorkspacePage::Docker);
-                                manage.compose_enter();
+                                if let Item::Project(project) = value.get() {
+                                    manage.open_compose_project(project.definition.name);
+                                }
                             }
                         })
+                    }),
+                    when(value.map(|i| matches!(i, Item::Container(..))), move || {
+                        let container_ui = container_ui.clone();
+                        btn("Open container", move || {
+                            if let Item::Container(container) = value.get() {
+                                container_ui.open_docker_container(container.id);
+                            }
+                        })
+                        .enabled(state.map(docker_ui::ready))
                     }),
                 ))
             }),
@@ -472,7 +558,14 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 }),
             text_action("Install by name…", Icon::Plus)
                 .class("button with-icon app-center-custom-install")
-                .enabled(state.map(|s| s.connected && !scripts_ui::busy(s)))
+                .enabled(state.map(|s| {
+                    software_install_ui::can_change_software(s)
+                        && s.software
+                            .app_center
+                            .inventory
+                            .as_ref()
+                            .is_some_and(|inv| software_install::supported(inv.manager) || s.server_apps.applications.snap || inv.compose_ready)
+                }))
                 .on_press(move || custom.open_software_install(0, Some(String::new()))),
             icon_action("Search package repositories", Icon::Search)
                 .class("icon-button app-center-repository-search")
@@ -491,6 +584,9 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
         text()
             .class("error app-center-error")
             .content(state.map(|s| s.software.app_center.error.clone())),
+        when(state.map(|s| s.software.app_center.inventory.as_ref().is_some_and(|inv| !inv.is_root && !inv.sudo_available)), || {
+            text().class("subtle").content(i18n::bind("To change system software, connect with an account that can use sudo or log in as root."))
+        }),
         when(
             state.map(|s| matches!(s.software.app_center.view, 0 | 2)),
             move || {

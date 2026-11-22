@@ -51,10 +51,12 @@ impl Filter {
         scope: impl Fn(&ServerProfile) -> bool,
     ) -> Vec<&'a ServerProfile> {
         config
-            .servers
-            .iter()
+            .available_servers()
             .filter(|p| {
-                if !scope(p) || self.selected_only && !selected.contains(&p.id) {
+                if p.direct_wsl().is_some()
+                    || !scope(p)
+                    || self.selected_only && !selected.contains(&p.id)
+                {
                     return false;
                 }
                 let group = group_name(config, p);
@@ -117,11 +119,14 @@ fn validate_scoped(
     );
     let mut endpoints = HashSet::new();
     for id in selected {
-        let profile = config.servers.iter().find(|p| &p.id == id).ok_or_else(|| {
-            anyhow::anyhow!("A selected server no longer exists; clear and select again")
-        })?;
+        let profile = config
+            .available_servers()
+            .find(|p| &p.id == id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("A selected server no longer exists; clear and select again")
+            })?;
         ensure!(
-            scope(id),
+            profile.direct_wsl().is_none() && scope(id),
             "A selected server is outside this operation's scope"
         );
         ensure!(

@@ -43,6 +43,8 @@ pub struct ServerProfile {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl_distribution: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wsl_use_ssh: bool,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -59,6 +61,27 @@ pub struct ServerProfile {
     pub connection: Option<crate::preferences::ConnectionSettings>,
 }
 
+impl ServerProfile {
+    /// A saved Windows profile stays in portable configuration on other hosts.
+    pub fn available_on_this_platform(&self) -> bool {
+        cfg!(windows) || self.wsl_distribution.is_none()
+    }
+
+    pub fn direct_wsl(&self) -> Option<&str> {
+        self.wsl_distribution
+            .as_deref()
+            .filter(|_| !self.wsl_use_ssh)
+    }
+}
+
+impl AppConfig {
+    pub fn available_servers(&self) -> impl Iterator<Item = &ServerProfile> {
+        self.servers
+            .iter()
+            .filter(|p| p.available_on_this_platform())
+    }
+}
+
 impl Default for ServerProfile {
     fn default() -> Self {
         Self {
@@ -68,6 +91,7 @@ impl Default for ServerProfile {
             environment: String::new(),
             tags: vec![],
             wsl_distribution: None,
+            wsl_use_ssh: false,
             host: String::new(),
             port: 22,
             username: String::new(),

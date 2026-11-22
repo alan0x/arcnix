@@ -46,8 +46,36 @@ def main():
         app.application('Terminal')
         terminal_input = page.locator('.terminal-surface .xterm-helper-textarea')
         expect(terminal_input).to_be_visible()
-        app.application('Monitor')
+        monitor = page.locator('.desktop-dock-app.app-monitor')
+        monitor.hover()
+        monitor.evaluate("""button => button.addEventListener('pointerdown', () => {
+            button.centerError = new Promise(resolve => {
+                const start = performance.now(), icon = button.querySelector('.desktop-app-icon');
+                let worst = 0;
+                function sample() {
+                    const a = button.getBoundingClientRect(), b = icon.getBoundingClientRect();
+                    worst = Math.max(worst, Math.abs((a.left+a.right-b.left-b.right)/2),
+                        Math.abs((a.top+a.bottom-b.top-b.bottom)/2));
+                    if (performance.now() - start < 400) requestAnimationFrame(sample);
+                    else resolve(worst);
+                }
+                sample();
+            });
+        }, {once: true})""")
+        page.mouse.down()
+        expect(monitor).to_have_css('outline-style', 'none')
+        page.mouse.up()
         title('Monitor')
+        assert monitor.evaluate("button => button.centerError") < 1
+        page.keyboard.press('Shift')
+        expect(monitor).to_have_css('outline-style', 'none')
+        page.mouse.move(25, 100)
+        expect(monitor.locator('.desktop-app-label')).to_be_hidden()
+        monitor.press('Shift+Tab')
+        keyboard_launcher = page.locator('.desktop-dock button:focus-visible')
+        expect(keyboard_launcher).to_be_focused()
+        expect(keyboard_launcher).to_have_css('outline-style', 'none')
+        expect(keyboard_launcher.locator('.desktop-app-label')).to_be_visible()
         page.locator('.host-select').focus()
         page.keyboard.press('Control+Shift+Tab')
         title('Terminal')

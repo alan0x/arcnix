@@ -72,9 +72,9 @@ pub enum DockSize {
 impl DockSize {
     pub const fn pixels(self) -> u8 {
         match self {
-            Self::Small => 32,
+            Self::Small => Dock::MIN_ICON_SIZE,
             Self::Medium => 48,
-            Self::Large => 56,
+            Self::Large => Dock::MAX_ICON_SIZE,
         }
     }
 }
@@ -121,7 +121,6 @@ pub struct Dock {
     pub panel_mode: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub panel_centered: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub floating_status: bool,
     #[serde(
         rename = "magnify",
@@ -142,7 +141,7 @@ impl Default for Dock {
             position: DockPosition::Bottom,
             panel_mode: false,
             panel_centered: false,
-            floating_status: false,
+            floating_status: true,
             legacy_magnify: (),
             auto_hide: false,
         }

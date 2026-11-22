@@ -77,7 +77,7 @@ pub(crate) fn picker(ui: Ui) -> impl Widget {
         row().class("script-actions target-group-filters").fill((
             btn("All groups",move||state.revise(|s|{s.scripts.target_filter.group=Group::All;s.dialog_error.clear();})).class(state.map(|s|if s.scripts.target_filter.group==Group::All{"choice target-group-filter active"}else{"choice target-group-filter"}.to_owned())),
             btn("Ungrouped",move||state.revise(|s|{s.scripts.target_filter.group=Group::Ungrouped;s.dialog_error.clear();})).class(state.map(|s|if s.scripts.target_filter.group==Group::Ungrouped{"choice target-group-filter active"}else{"choice target-group-filter"}.to_owned())),
-            each(state.map(|s|s.config.groups.iter().filter(|g|s.config.servers.iter().any(|p|p.group_id.as_ref()==Some(&g.id)&&s.scripts.template.as_ref().is_some_and(|t|t.allows_target(&p.id)))).cloned().collect::<Vec<_>>())).key(|g|g.id.clone()).children(move|item|{
+            each(state.map(|s|s.config.groups.iter().filter(|g|s.config.available_servers().any(|p|p.group_id.as_ref()==Some(&g.id)&&s.scripts.template.as_ref().is_some_and(|t|t.allows_target(&p.id)))).cloned().collect::<Vec<_>>())).key(|g|g.id.clone()).children(move|item|{
                 let group=item.value.get();let id=group.id.clone();let selected=id.clone();btn(group.name,move||state.revise(|s|{s.scripts.target_filter.group=Group::Named(id.clone());s.dialog_error.clear();})).class(state.map(move|s|if s.scripts.target_filter.group==Group::Named(selected.clone()){"choice target-group-filter active"}else{"choice target-group-filter"}.to_owned()))
             }),
         )),
