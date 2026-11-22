@@ -789,13 +789,15 @@ fn server_dialog(ui: Ui) -> impl Widget {
                         }),
                 )),
             )),
-            text().class("subtle").content(i18n::bind(state.map(|_state| {
-                #[cfg(windows)]
-                if _state.editor.direct_wsl().is_some() {
-                    return "本机直连使用发行版的默认 Linux 账号。".to_owned();
-                }
-                "密码与私钥口令将在连接时输入。".to_owned()
-            }))),
+            text()
+                .class("subtle")
+                .content(i18n::bind(state.map(|_state| {
+                    #[cfg(windows)]
+                    if _state.editor.direct_wsl().is_some() {
+                        return "本机直连使用发行版的默认 Linux 账号。".to_owned();
+                    }
+                    "密码与私钥口令将在连接时输入。".to_owned()
+                }))),
         ));
     let body = fragment((
         preferences_ui::server_tabs(ui.clone()),
