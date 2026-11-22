@@ -690,7 +690,7 @@ pub(crate) fn start_with_limiter(
                 active_epoch = epoch;
                 let result = target
                     .home()
-                    .map(|home| {
+                    .inspect(|home| {
                         let _ = terminal.send(crate::terminal_worker::Command::Attach {
                             epoch,
                             target: crate::terminal_worker::Target::Local(target.clone()),
@@ -700,7 +700,6 @@ pub(crate) fn start_with_limiter(
                             home: home.clone(),
                             prefs,
                         });
-                        home
                     })
                     .map_err(|e| format!("{e:#}"));
                 send(Update::LocalDesktop(result));

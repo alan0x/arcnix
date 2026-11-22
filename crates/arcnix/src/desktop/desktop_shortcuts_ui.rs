@@ -365,7 +365,7 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                                 .on_checked_change(move |on| change(&enable, |keys, preset| {
                                     keys.set_enabled(preset, action, on)
                                 })),
-                            when(modified.clone(), || {
+                            when(modified, || {
                                 text().class("desktop-shortcut-modified").content(i18n::bind("Customized"))
                             }),
                         )),

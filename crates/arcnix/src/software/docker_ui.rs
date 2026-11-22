@@ -426,7 +426,7 @@ fn container_button(ui: &Ui, label: &'static str, operation: Operation) -> impl 
 #[derive(Clone)]
 enum ContainerRow {
     Project(String),
-    Container(Container),
+    Container(Box<Container>),
 }
 impl ContainerRow {
     fn container(&self) -> &Container {
@@ -458,7 +458,7 @@ fn container_rows(s: &State) -> Vec<ContainerRow> {
             .any(|value| value.to_lowercase().contains(&filter))
     }) {
         if container.compose_project.is_empty() {
-            rows.push(ContainerRow::Container(container.clone()));
+            rows.push(ContainerRow::Container(Box::new(container.clone())));
         } else {
             projects
                 .entry(&container.compose_project)
@@ -469,7 +469,13 @@ fn container_rows(s: &State) -> Vec<ContainerRow> {
     for (name, containers) in projects {
         rows.push(ContainerRow::Project(name.to_owned()));
         if !s.docker.collapsed_projects.contains(name) {
-            rows.extend(containers.into_iter().cloned().map(ContainerRow::Container));
+            rows.extend(
+                containers
+                    .into_iter()
+                    .cloned()
+                    .map(Box::new)
+                    .map(ContainerRow::Container),
+            );
         }
     }
     rows
