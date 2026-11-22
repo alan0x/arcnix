@@ -546,10 +546,12 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let idle = ui.clone();
     col().class("remote-player").fill((
-        text().class("player-preferences hidden").content(state.map(|s| {
-            let prefs = &server_apps_ui::current(s).app_settings;
-            serde_json::json!([prefs.player.volume, prefs.player.speed]).to_string()
-        })),
+        text()
+            .class("player-preferences hidden")
+            .content(state.map(|s| {
+                let prefs = &server_apps_ui::current(s).app_settings;
+                serde_json::json!([prefs.player.volume, prefs.player.speed]).to_string()
+            })),
         #[cfg(windows)]
         crate::mpv_native::bridge(ui.clone()),
         col()
@@ -579,7 +581,27 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
             empty_player(idle.clone())
         }),
         #[cfg(windows)]
-        crate::mpv_native::controls(ui.clone()),
+        crate::mpv_native::transport_bridge(ui.clone()),
+        each(state.map(|s| s.video.iter().map(|video| video.serial).collect::<Vec<_>>()))
+            .key(|serial| *serial)
+            .children(move |_| {
+                fragment((
+                    text().class("player-labels hidden").content(state.map(|s| {
+                        let language = desktop_system_settings::language(s);
+                        let labels = [
+                            "Play",
+                            "Pause playback",
+                            "Playback position",
+                            "Volume",
+                            "Mute",
+                            "Unmute",
+                        ]
+                        .map(|label| crate::i18n::translate_for(label, language));
+                        serde_json::json!(labels).to_string()
+                    })),
+                    view().class("player-control-bar"),
+                ))
+            }),
         text().class("remote-player-status").content(state.map(|s| {
             s.video
                 .as_ref()

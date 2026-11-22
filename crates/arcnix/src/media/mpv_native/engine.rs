@@ -307,6 +307,8 @@ pub(super) fn run(
         ("config", "no"),
         ("load-scripts", "no"),
         ("osc", "no"),
+        ("background", "color"),
+        ("background-color", "#000000"),
         ("input-default-bindings", "no"),
         ("input-vo-keyboard", "yes"),
         ("window-dragging", "no"),
@@ -347,7 +349,7 @@ pub(super) fn run(
             open,
         )
     })?;
-    client.command(&["define-section","arcnix","MBTN_LEFT script-message arcnix-play\nMBTN_LEFT_DBL script-message arcnix-maximize\nf script-message arcnix-maximize","force"])?;
+    client.command(&["define-section","arcnix","SPACE script-message arcnix-play\nk script-message arcnix-play\nMBTN_LEFT script-message arcnix-play\nMBTN_LEFT_DBL script-message arcnix-maximize\nf script-message arcnix-maximize","force"])?;
     client.command(&["enable-section", "arcnix"])?;
     client.command(&["loadfile", URI.to_str()?])?;
     let mut previous: Option<Transport> = None;
@@ -392,7 +394,8 @@ pub(super) fn run(
                 loaded,
                 position: client.number(c"time-pos").unwrap_or_default(),
                 duration: client.number(c"duration").unwrap_or_default(),
-                paused: client.flag(c"pause"),
+                paused: client.flag(c"pause") || client.flag(c"eof-reached"),
+                muted: client.flag(c"mute"),
                 volume: client.number(c"volume").unwrap_or(100.),
             };
             let now = Instant::now();
@@ -413,6 +416,9 @@ pub(super) fn run(
         }
         match commands.recv_timeout(Duration::from_millis(150)) {
             Ok(Command::Toggle) => client.toggle_playback()?,
+            Ok(Command::Mute(muted)) => {
+                client.command(&["set", "mute", if muted { "yes" } else { "no" }])?
+            }
             Ok(Command::Seek(seconds)) => {
                 client.command(&["seek", &seconds.to_string(), "absolute+exact"])?
             }

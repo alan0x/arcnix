@@ -1251,12 +1251,11 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                 move || group_dialog(ui.clone())
             },
         ),
-        #[cfg(windows)]
         when(
-            state.map(|s| matches!(s.dialog, Some(Dialog::LocalWsl(_)))),
+            state.map(|s| matches!(s.dialog, Some(Dialog::LocalDemo))),
             {
                 let ui = ui.clone();
-                move || wsl_ui::dialog(ui.clone())
+                move || local_demo::dialog(ui.clone())
             },
         ),
         when(state.map(|s| s.dialog == Some(Dialog::Import)), {

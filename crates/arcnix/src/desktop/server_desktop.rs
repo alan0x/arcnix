@@ -220,7 +220,13 @@ pub(crate) const APP_LAUNCHERS: [WorkspacePage; 10] = [
     WorkspacePage::Editor,
 ];
 
-fn local_app(page: WorkspacePage) -> bool {
+fn local_app(s: &State, page: WorkspacePage) -> bool {
+    if page.base() == WorkspacePage::Terminal && s.demo_read_only() {
+        return false;
+    }
+    if cfg!(any(windows, target_os = "linux")) && page.base() == WorkspacePage::Monitor {
+        return true;
+    }
     matches!(
         page.base(),
         WorkspacePage::Files(_)
@@ -235,7 +241,7 @@ fn local_app(page: WorkspacePage) -> bool {
 pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
     APP_LAUNCHERS
         .into_iter()
-        .filter(|page| s.local_desktop.is_none() || local_app(*page))
+        .filter(|page| s.local_desktop.is_none() || local_app(s, *page))
         .filter(|page| match page {
             WorkspacePage::Browser => cfg!(windows),
             WorkspacePage::Docker => s.server_apps.applications.docker,
@@ -588,7 +594,10 @@ impl Ui {
     }
 
     pub(crate) fn focus_desktop_app(&self, page: WorkspacePage) {
-        if self.state.with(|s| s.local_desktop.is_some()) && !local_app(page) {
+        if self
+            .state
+            .with(|s| s.local_desktop.is_some() && !local_app(s, page))
+        {
             return;
         }
         if page.is_files()

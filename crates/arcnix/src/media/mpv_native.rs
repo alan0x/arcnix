@@ -28,12 +28,14 @@ struct Transport {
     position: f64,
     duration: f64,
     paused: bool,
+    muted: bool,
     volume: f64,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Command {
     Toggle,
+    Mute(bool),
     Seek(f64),
     Volume(f64),
     Speed(f64),
@@ -73,10 +75,10 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
     })
 }
 
-pub(crate) fn controls(ui: Ui) -> impl Widget {
+pub(crate) fn transport_bridge(ui: Ui) -> impl Widget {
     let state = ui.state;
     when(state.map(|s| native(s).is_some()), move || {
-        row().class("mpv-controls").fill((
+        fragment((
             input()
                 .class("mpv-command hidden")
                 .on(value_changed, move |event| {
@@ -91,7 +93,7 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                                 Command::Seek(t) => (0.0..=player.transport.duration).contains(&t),
                                 Command::Volume(v) => (0.0..=100.0).contains(&v),
                                 Command::Speed(v) => (0.5..=2.0).contains(&v),
-                                Command::Toggle => true,
+                                Command::Toggle | Command::Mute(_) => true,
                             };
                             if valid {
                                 let _ = player.commands.as_ref()?.send(cmd);
@@ -101,16 +103,14 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                     }
                 }),
             text().class("mpv-state hidden").content(state.map(|s| {
-                match s.video.as_ref().and_then(|v| Some((v.serial, v.native.as_ref()?))) {
-                Some((serial, player)) => serde_json::json!({
-                    "serial":serial, "media":player.transport,
-                    "play":i18n::translate("Play"), "pause":i18n::translate("Pause playback"),
-                    "seek":i18n::translate("Playback position"), "volume":i18n::translate("Volume")
-                }).to_string(),
-                None => String::new(),
-            }
+                let Some(video) = &s.video else {
+                    return String::new();
+                };
+                let Some(player) = &video.native else {
+                    return String::new();
+                };
+                serde_json::json!({"serial": video.serial, "media": player.transport}).to_string()
             })),
-            view().class("mpv-control-bar"),
         ))
     })
 }

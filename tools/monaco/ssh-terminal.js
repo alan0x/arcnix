@@ -1,7 +1,7 @@
 import terminal, { SimpleTerminalBackend, SimpleTerminalProcess } from '@codingame/monaco-vscode-terminal-service-override';
 import { Emitter } from '@codingame/monaco-vscode-api/vscode/vs/base/common/event';
 
-export function sshTerminalServices(root, send) {
+export function sshTerminalServices(root, send, shellLabel) {
   const sessions = new Map();
   let next = 0;
   class SshProcess extends SimpleTerminalProcess {
@@ -60,8 +60,8 @@ export function sshTerminalServices(root, send) {
     }
   }
   class SshBackend extends SimpleTerminalBackend {
-    getProfiles = async () => [{ profileName: 'SSH', path: 'SSH', isDefault: true }];
-    async getDefaultSystemShell() { return 'SSH'; }
+    getProfiles = async () => [{ profileName: shellLabel, path: shellLabel, isDefault: true }];
+    async getDefaultSystemShell() { return shellLabel; }
     async createProcess(_config, _cwd, cols, rows) { return new SshProcess(cols, rows); }
   }
   window.arcnixTerminalEvents = events => {

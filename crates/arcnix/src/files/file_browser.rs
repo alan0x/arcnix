@@ -917,7 +917,8 @@ fn toggle_tree(ui: &Ui, remote: bool, target: &str, force: Option<bool>) {
     }
 }
 pub(crate) fn can_create(s: &State, remote: bool) -> bool {
-    workspace::ready(s, remote)
+    !s.demo_read_only()
+        && workspace::ready(s, remote)
         && s.file_pending.is_none()
         && (!remote || !s.system_task_running)
         && s.file_browser.pane(remote).mutation.is_none()
@@ -1182,6 +1183,16 @@ pub(crate) fn entry_name_class<T: 'static>(
     })
 }
 
+pub(crate) fn entry_icon_class(s: &State, file: &FileEntry, files: bool) -> String {
+    if files && file.is_dir && !file.is_symlink
+        && let Some(class) = files_ui::folder_icon_class(s, &file.path)
+    {
+        return format!("action-glyph file-entry-icon file-folder-symbol folder-custom-mark {class}");
+    }
+    let icon = files_search::file_icon(&file.name, file.is_dir);
+    format!("action-glyph file-entry-icon glyph-{}", icon.name())
+}
+
 pub(crate) fn entry_name<T: 'static>(
     state: Cage<State>,
     entry: Cage<T>,
@@ -1191,20 +1202,7 @@ pub(crate) fn entry_name<T: 'static>(
     (
         text()
             .class(state.map(move |s| {
-                entry.with(|entry| {
-                    let file = file(entry);
-                    if files && file.is_dir && !file.is_symlink
-                        && let Some(class) = files_ui::folder_icon_class(s, &file.path)
-                    {
-                        return format!("action-glyph file-entry-icon file-folder-symbol folder-custom-mark {class}");
-                    }
-                    if file.is_dir {
-                        "action-glyph file-entry-icon glyph-folder"
-                    } else {
-                        "action-glyph file-entry-icon glyph-file"
-                    }
-                    .to_owned()
-                })
+                entry.with(|entry| entry_icon_class(s, file(entry), files))
             }))
             .content(""),
         text()

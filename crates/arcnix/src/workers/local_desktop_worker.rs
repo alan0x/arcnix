@@ -53,11 +53,12 @@ impl Session {
                 Reply::PickerEntries(entries)
             }
             AppAction::DesktopItems => {
-                let path = join(&self.home, "Desktop");
-                let exists = target
+                let location = target
                     .locations(&self.home)?
-                    .iter()
-                    .any(|loc| loc.path == path);
+                    .into_iter()
+                    .find(|loc| loc.name == "Desktop");
+                let exists = location.is_some();
+                let path = location.map_or_else(|| join(&self.home, "Desktop"), |loc| loc.path);
                 let mut entries = if exists {
                     target.list(&path)?.1
                 } else {
@@ -99,6 +100,12 @@ impl Session {
             Action::CodeFile(request) => Update::CodeFile(message(
                 request.execute(crate::code_workbench::Files::Local(target), || Ok(())),
             )),
+            #[cfg(windows)]
+            Action::MetricsSample if !matches!(target, Target::Wsl(_)) => {
+                Update::Metrics(message(arcnix_core::local_desktop::windows_host::sample()))
+            }
+            #[cfg(target_os = "linux")]
+            Action::MetricsSample => Update::Metrics(message(target.metrics())),
             Action::Keepalive => Update::Alive,
             Action::Remote(path) => match target.list(&path) {
                 Ok((path, entries)) => Update::Remote(path, entries),

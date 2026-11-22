@@ -286,28 +286,32 @@ fn empty_state(
 }
 
 pub(crate) fn local_desktop_label(target: &local_desktop::Target) -> String {
-    match target {
+    let name = match target {
         #[cfg(windows)]
         local_desktop::Target::Wsl(name) => format!("WSL · {name}"),
-        #[cfg(unix)]
-        local_desktop::Target::Native => i18n::translate(if cfg!(target_os = "macos") {
-            "本机 Mac"
-        } else {
-            "本机 Linux"
-        }),
-    }
+        local_desktop::Target::Native | local_desktop::Target::ReadOnlyHost => {
+            i18n::translate(if cfg!(windows) {
+                "Local Windows"
+            } else if cfg!(target_os = "macos") {
+                "本机 Mac"
+            } else {
+                "本机 Linux"
+            })
+        }
+    };
+    let mode = if target.read_only() {
+        "Read-only mode"
+    } else {
+        "Read-write mode"
+    };
+    format!("{name} · {}", i18n::translate(mode))
 }
 
 pub(crate) fn local_desktop_entry(ui: Ui) -> impl Widget {
     text_action("体验本机桌面", Icon::Grid)
         .class("button with-icon local-desktop-entry")
         .enabled(ui.state.map(|s| !s.system_task_running))
-        .on_press(move || {
-            #[cfg(windows)]
-            wsl_ui::open_desktop(&ui);
-            #[cfg(unix)]
-            ui.enter_local_desktop(local_desktop::Target::Native);
-        })
+        .on_press(move || ui.open_dialog(Dialog::LocalDemo))
 }
 
 fn server_landing(ui: Ui) -> impl Widget {

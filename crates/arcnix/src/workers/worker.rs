@@ -444,9 +444,36 @@ pub(crate) fn start_with_limiter(
     let router_generation = generation.clone();
     let terminal = crate::terminal_worker::start(events.clone(), generation.clone());
     let routed_terminal = terminal.clone();
+    let router_events = events.clone();
     // Local filesystem work must stay available during a large SFTP transfer.
     thread::spawn(move || {
+        let mut read_only_demo = false;
         for request in rx {
+            match &request.action {
+                Action::LocalDesktop(target, _) => read_only_demo = target.read_only(),
+                Action::Probe(..) | Action::ProbeSaved(..) | Action::Disconnect => {
+                    read_only_demo = false
+                }
+                _ => {}
+            }
+            // The transfer pane has a separate local-files worker; it must honor
+            // the same access choice even if a queued UI action reaches it.
+            if read_only_demo
+                && matches!(
+                    request.action,
+                    Action::CreateEntry { remote: false, .. }
+                        | Action::LocalRename(..)
+                        | Action::Trash { remote: false, .. }
+                        | Action::Delete { remote: false, .. }
+                )
+            {
+                let _ = router_events.send_blocking(Response {
+                    epoch: request.epoch,
+                    serial: request.serial,
+                    update: Update::Error("This local desktop is read-only".into()),
+                });
+                continue;
+            }
             match request.action {
                 #[cfg(windows)]
                 Action::WslTerminal(name) => {

@@ -121,7 +121,7 @@ fn terminal_action(ui: Ui) -> impl Widget {
         &ui,
         true,
         "在此处打开终端",
-        |s, _| terminal_directory(s).is_some(),
+        |s, _| s.terminal_available() && terminal_directory(s).is_some(),
         {
             let ui = ui.clone();
             move || {
@@ -244,7 +244,8 @@ pub(crate) fn can_delete(s: &State, remote: bool) -> bool {
         && any(s, remote)
 }
 pub(crate) fn can_change_files(s: &State, remote: bool) -> bool {
-    (!remote || (s.connected && s.sftp_available && !s.system_task_running))
+    !s.demo_read_only()
+        && (!remote || (s.connected && s.sftp_available && !s.system_task_running))
         && s.file_pending.is_none()
         && !s.trash[remote as usize].busy()
         && s.cancels.is_empty()

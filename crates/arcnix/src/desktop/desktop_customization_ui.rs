@@ -376,12 +376,10 @@ pub(crate) fn launchers(ui: Ui, dock: bool) -> impl Widget {
                 fragment(
                     sapid::button()
                         .class(state.map(move |s| {
-                            if find_file(s, &current).is_some_and(|entry| entry.is_dir) {
-                                "desktop-shortcut desktop-file app-files"
-                            } else {
-                                "desktop-shortcut desktop-file app-document"
-                            }
-                            .to_owned()
+                            let icon = find_file(s, &current)
+                                .map_or(Icon::File, |file| files_search::file_icon(&file.name, file.is_dir));
+                            let art = icon.color().map_or("document", |(name, _)| name);
+                            format!("desktop-shortcut desktop-file app-{art}")
                         }))
                         .name(name.clone())
                         .fill((

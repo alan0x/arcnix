@@ -22,6 +22,7 @@ impl LocalTerminal {
         columns: u32,
         rows: u32,
     ) -> Result<Self> {
+        target.require_write()?;
         if let Some(path) = directory {
             arcnix_core::terminal::validate_directory(path)?;
         }
@@ -35,8 +36,19 @@ impl LocalTerminal {
                 cmd.args(["--distribution", name, "--cd", directory.unwrap_or("~")]);
                 cmd
             }
+            #[cfg(windows)]
+            Target::Native | Target::ReadOnlyHost => {
+                use arcnix_core::local_desktop::windows_host;
+                let mut cmd = CommandBuilder::new(windows_host::powershell()?);
+                cmd.args(["-NoLogo", "-NoProfile"]);
+                let home = target.home()?;
+                cmd.cwd(windows_host::physical(
+                    directory.filter(|p| *p != "/").unwrap_or(&home),
+                )?);
+                cmd
+            }
             #[cfg(unix)]
-            Target::Native => {
+            Target::Native | Target::ReadOnlyHost => {
                 let mut cmd = CommandBuilder::new_default_prog();
                 let cwd = directory
                     .map(std::path::PathBuf::from)

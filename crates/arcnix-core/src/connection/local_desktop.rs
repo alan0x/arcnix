@@ -1,4 +1,4 @@
-//! Desktop file operations run as the selected Unix account, including inside WSL.
+//! Local desktop operations run under the current account.
 use std::io::{Read, Seek, SeekFrom, Write};
 
 #[cfg(windows)]
@@ -18,17 +18,31 @@ use crate::text_files::{Document, TextRange, TextSnapshot, Version};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
-    #[cfg(unix)]
     Native,
+    ReadOnlyHost,
     #[cfg(windows)]
     Wsl(String),
 }
 
+#[cfg(windows)]
+#[path = "windows_desktop.rs"]
+pub mod windows_host;
+
+pub trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
 impl Target {
+    pub fn read_only(&self) -> bool {
+        matches!(self, Self::ReadOnlyHost)
+    }
+
+    pub fn require_write(&self) -> Result<()> {
+        ensure!(!self.read_only(), "This local desktop is read-only");
+        Ok(())
+    }
     pub fn scope(&self) -> String {
         match self {
-            #[cfg(unix)]
-            Self::Native => format!("local-{}", std::env::consts::OS),
+            Self::Native | Self::ReadOnlyHost => format!("local-{}", std::env::consts::OS),
             #[cfg(windows)]
             Self::Wsl(name) => format!("local-wsl-{:x}", Sha256::digest(name.as_bytes())),
         }
@@ -37,7 +51,11 @@ impl Target {
     fn shell(&self) -> Result<Command> {
         match self {
             #[cfg(unix)]
-            Self::Native => Ok(Command::new("/bin/sh")),
+            Self::Native | Self::ReadOnlyHost => Ok(Command::new("/bin/sh")),
+            #[cfg(windows)]
+            Self::Native | Self::ReadOnlyHost => {
+                anyhow::bail!("Windows desktop operations use the native filesystem")
+            }
             #[cfg(windows)]
             Self::Wsl(name) => {
                 use std::os::windows::process::CommandExt;
@@ -51,9 +69,19 @@ impl Target {
     }
 
     fn run(&self, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
+        self.run_script(include_str!("local_desktop.sh"), args, input)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn metrics(&self) -> Result<crate::metrics::ResourceSnapshot> {
+        let bytes = self.run_script(crate::metrics::SAMPLE_COMMAND, &["metrics"], &[])?;
+        crate::metrics::parse_snapshot(std::str::from_utf8(&bytes)?)
+    }
+
+    fn run_script(&self, script: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
         let mut command = self.shell()?;
         let mut child = command
-            .args(["-c", include_str!("local_desktop.sh"), "arcnix"])
+            .args(["-c", script, "arcnix"])
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -105,12 +133,20 @@ impl Target {
     }
 
     pub fn home(&self) -> Result<String> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::home();
+        }
         let path = String::from_utf8(self.run(&["home"], &[])?)?;
         crate::terminal::validate_directory(&path)?;
         Ok(path)
     }
 
     pub fn list(&self, path: &str) -> Result<(String, Vec<FileEntry>)> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::list(path);
+        }
         let path = if matches!(path, "" | "." | "~") {
             self.home()?
         } else {
@@ -168,6 +204,10 @@ impl Target {
     }
 
     pub fn file_properties(&self, path: &str) -> Result<Metadata> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::metadata(path);
+        }
         crate::terminal::validate_directory(path)?;
         let output = self.run(&["properties", path], &[])?;
         let output = String::from_utf8_lossy(&output);
@@ -181,10 +221,20 @@ impl Target {
     }
 
     pub fn metadata(&self, path: &str) -> Result<Metadata> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::metadata(path);
+        }
         crate::terminal::validate_directory(path)?;
         metadata(std::str::from_utf8(&self.run(&["stat", path], &[])?)?)
     }
     pub fn resolve_alias(&self, path: &str) -> Result<(String, bool)> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return Err(anyhow::anyhow!(
+                "Linked items cannot be opened in the Windows demo"
+            ));
+        }
         validate_file(path)?;
         let output = String::from_utf8(self.run(&["alias", path], &[])?)?;
         let resolved = output.strip_suffix('\n').context("Invalid alias")?;
@@ -192,6 +242,10 @@ impl Target {
         Ok((resolved.into(), metadata.directory))
     }
     pub fn locations(&self, home: &str) -> Result<Vec<crate::remote::FileLocation>> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::locations(home);
+        }
         use crate::remote::FileLocation;
         let mut entries = vec![FileLocation {
             name: "Home",
@@ -216,6 +270,11 @@ impl Target {
         Ok(entries)
     }
     pub fn try_create(&self, parent: &str, name: &str, directory: bool) -> Result<bool> {
+        self.require_write()?;
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::create(parent, name, directory);
+        }
         crate::terminal::validate_directory(parent)?;
         ensure!(
             !name.is_empty() && !matches!(name, "." | "..") && !name.contains('/'),
@@ -233,6 +292,11 @@ impl Target {
             .is_empty())
     }
     pub fn rename(&self, from: &str, to: &str) -> Result<()> {
+        self.require_write()?;
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::rename(from, to);
+        }
         for path in [from, to] {
             validate_file(path)?;
         }
@@ -240,6 +304,10 @@ impl Target {
         Ok(())
     }
     pub fn read(&self, path: &str) -> Result<Document> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::read(path);
+        }
         validate_file(path)?;
         let bytes = self.run(&["read", path], &[])?;
         let end = bytes
@@ -259,6 +327,11 @@ impl Target {
         Ok(doc)
     }
     pub fn write(&self, path: &str, base: Option<&Version>, bytes: &[u8]) -> Result<Document> {
+        self.require_write()?;
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::write(path, base, bytes);
+        }
         validate_file(path)?;
         ensure!(
             bytes.len() <= crate::text_files::LIMIT,
@@ -283,11 +356,17 @@ impl Target {
         self.read(path)
     }
     /// Read from the selected account's filesystem and keep the open file across seeks.
-    pub fn open_binary(&self, path: &str) -> Result<(impl Read + Seek + use<>, TextSnapshot)> {
+    pub fn open_binary(&self, path: &str) -> Result<(Box<dyn ReadSeek + Send>, TextSnapshot)> {
         validate_file(path)?;
         #[cfg(windows)]
         {
-            wsl_reader::open(self.shell()?, path)
+            if matches!(self, Self::Wsl(_)) {
+                let (file, snap) = wsl_reader::open(self.shell()?, path)?;
+                Ok((Box::new(file), snap))
+            } else {
+                let (file, snap) = windows_host::open_binary(path)?;
+                Ok((Box::new(file), snap))
+            }
         }
         #[cfg(unix)]
         {
@@ -303,7 +382,7 @@ impl Target {
             let metadata = file.metadata()?;
             ensure!(metadata.is_file(), "Choose a regular file");
             Ok((
-                file,
+                Box::new(file),
                 TextSnapshot {
                     size: metadata.len(),
                     modified: metadata.mtime().try_into().ok(),
@@ -372,6 +451,10 @@ impl Target {
     }
 
     pub fn clock(&self) -> Result<crate::server_apps::ClockSample> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            return windows_host::clock();
+        }
         crate::server_apps::parse_clock(&String::from_utf8(self.run(&["clock"], &[])?)?)
     }
 }

@@ -187,26 +187,42 @@ fn sidebar(ui: Ui) -> impl Widget {
                 .into_iter()
                 .map(|section| {
                     let open = ui.clone();
-                    sapid::button()
-                        .class(format!("monitor-section-link {}", section.class()))
-                        .name(i18n::bind(section.label()))
-                        .pressed(state.map(move |s| s.metrics.section == section))
-                        .fill((
-                            icons::glyph(section.icon()),
-                            text()
-                                .class("monitor-section-label")
-                                .content(i18n::bind(section.label())),
-                            text()
-                                .class("monitor-section-summary")
-                                .content(state.map(move |s| {
-                                    s.metrics
-                                        .usage
-                                        .as_ref()
-                                        .and_then(|usage| section.summary(usage))
-                                        .unwrap_or_default()
-                                })),
-                        ))
-                        .on_press(move || open.monitor_select(section))
+                    when(
+                        state.map(move |s| {
+                            s.local_desktop.is_none()
+                                || matches!(
+                                    section,
+                                    Section::Overview
+                                        | Section::Cpu
+                                        | Section::Memory
+                                        | Section::Disks
+                                        | Section::Network
+                                )
+                        }),
+                        move || {
+                            let open = open.clone();
+                            sapid::button()
+                                .class(format!("monitor-section-link {}", section.class()))
+                                .name(i18n::bind(section.label()))
+                                .pressed(state.map(move |s| s.metrics.section == section))
+                                .fill((
+                                    icons::glyph(section.icon()),
+                                    text()
+                                        .class("monitor-section-label")
+                                        .content(i18n::bind(section.label())),
+                                    text().class("monitor-section-summary").content(state.map(
+                                        move |s| {
+                                            s.metrics
+                                                .usage
+                                                .as_ref()
+                                                .and_then(|usage| section.summary(usage))
+                                                .unwrap_or_default()
+                                        },
+                                    )),
+                                ))
+                                .on_press(move || open.monitor_select(section))
+                        },
+                    )
                 })
                 .collect::<Vec<_>>(),
         ))
@@ -341,14 +357,25 @@ fn cpu_cards(state: Cage<State>) -> impl Widget {
                     .map(|cpu| format!("{} logical processors", cpu.logical_cpus))
             },
         ),
-        col().class("metric-card monitor-load-card").fill((
-            text().class("subtle").content(i18n::bind("系统负载")),
-            row().class("monitor-load-periods").fill((
-                load_period(state, 0, "1 分钟"),
-                load_period(state, 1, "5 分钟"),
-                load_period(state, 2, "15 分钟"),
-            )),
-        )),
+        when(
+            state.map(|s| {
+                s.local_desktop.is_none()
+                    || s.metrics
+                        .usage
+                        .as_ref()
+                        .is_some_and(|u| u.snapshot.load_average.is_some())
+            }),
+            move || {
+                col().class("metric-card monitor-load-card").fill((
+                    text().class("subtle").content(i18n::bind("系统负载")),
+                    row().class("monitor-load-periods").fill((
+                        load_period(state, 0, "1 分钟"),
+                        load_period(state, 1, "5 分钟"),
+                        load_period(state, 2, "15 分钟"),
+                    )),
+                ))
+            },
+        ),
     ))
 }
 
@@ -369,24 +396,35 @@ fn memory_cards(state: Cage<State>) -> impl Widget {
                 })
             },
         ),
-        card(
-            state,
-            "交换空间",
-            |u| {
-                u.snapshot.swap.as_ref().map(|m| {
-                    m.used_percent
-                        .map(percent)
-                        .unwrap_or_else(|| "未启用".into())
-                })
-            },
-            |u| {
-                u.snapshot.swap.as_ref().map(|m| {
-                    format!(
-                        "{} / {}",
-                        formatting::bytes(m.used_bytes),
-                        formatting::bytes(m.total_bytes)
-                    )
-                })
+        when(
+            state.map(|s| {
+                s.local_desktop.is_none()
+                    || s.metrics
+                        .usage
+                        .as_ref()
+                        .is_some_and(|u| u.snapshot.swap.is_some())
+            }),
+            move || {
+                card(
+                    state,
+                    "交换空间",
+                    |u| {
+                        u.snapshot.swap.as_ref().map(|m| {
+                            m.used_percent
+                                .map(percent)
+                                .unwrap_or_else(|| "未启用".into())
+                        })
+                    },
+                    |u| {
+                        u.snapshot.swap.as_ref().map(|m| {
+                            format!(
+                                "{} / {}",
+                                formatting::bytes(m.used_bytes),
+                                formatting::bytes(m.total_bytes)
+                            )
+                        })
+                    },
+                )
             },
         ),
     ))

@@ -103,7 +103,7 @@ def run(preview=False, binary=None, read_delay=.003):
             first = sum(length for _, length in reads())
             assert 0 < first < size/4
             if preview:
-                player.locator('.mpv-play').click()
+                player.locator('.player-play').click()
             else:
                 click_picture(hwnd)
             eventually(lambda: media()['paused'])
@@ -129,7 +129,7 @@ def run(preview=False, binary=None, read_delay=.003):
                 page.mouse.down()
                 page.mouse.move(box['x'] + box['width']*fraction, box['y'] + box['height']/2, steps=5)
                 page.mouse.up()
-            slide('.mpv-seek', .80)
+            slide('.player-seek', .80)
             eventually(lambda: media()['position'] > media()['duration'] * .75, timeout=15)
             eventually(lambda: any(size*.70 < offset < size*.90 for offset,_ in reads()[previous:]))
             player.get_by_role('button', name='Settings', exact=True).click()
@@ -138,9 +138,13 @@ def run(preview=False, binary=None, read_delay=.003):
             settings.get_by_role('combobox', name='Playback speed').select_option(label='2×')
             settings.get_by_role('button', name='Close dialog', exact=True).click()
             eventually(lambda: media()['volume'] == 60)
-            slide('.mpv-volume', .36)
+            player.locator('.player-mute').click()
+            eventually(lambda: media()['muted'])
+            player.locator('.player-mute').click()
+            eventually(lambda: not media()['muted'] and media()['volume'] == 60)
+            slide('.player-volume', .36)
             eventually(lambda: 25 < media()['volume'] < 50)
-            player.locator('.mpv-play').click()
+            player.locator('.player-play').click()
             eventually(lambda: not media()['paused'])
             seek = media()['position']
             eventually(lambda: media()['position'] > seek + .3)

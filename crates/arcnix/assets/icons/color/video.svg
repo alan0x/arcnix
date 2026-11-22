@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="film" x2=".35" y2="1"><stop stop-color="#ab86ec"/><stop offset="1" stop-color="#7051b2"/></linearGradient>
+  </defs>
+  <rect x="4" y="10" width="56" height="44" rx="9" fill="#493a75"/>
+  <rect x="6" y="12" width="52" height="39" rx="7" fill="url(#film)"/>
+  <path d="M26 21.5a1.5 1.5 0 0 1 2.3-1.3l16 10.5a1.5 1.5 0 0 1 0 2.6l-16 10.5a1.5 1.5 0 0 1-2.3-1.3Z" fill="#fff8ff"/>
+</svg>

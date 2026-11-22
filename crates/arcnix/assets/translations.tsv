@@ -2698,3 +2698,14 @@ Linux 目录	Linux directory
 服务器上没有可用的 sudo。	sudo is unavailable on this server
 管理员文件操作需要服务器安装 Python 3。	Administrator file operations require Python 3 on this server
 没有权限保存此文件。	You do not have permission to save this file.
+本机 Windows	Local Windows
+在 Arcnix 中体验你的电脑	Your computer, in Arcnix
+本次体验使用当前账号，直接运行在这台电脑上，无需 SSH 连接。连接服务器后可使用更多功能。	Explore a limited desktop on this computer using your current account. No SSH connection is needed.
+建议使用只读模式	Read-only is recommended
+只读模式适合浏览文件，可避免误改。读写模式可以修改本机真实文件，也可以运行终端命令。	Browse files without changing them. Read-write mode also lets you edit real files and run terminal commands.
+只读模式	Read-only mode
+读写模式	Read-write mode
+本机桌面当前为只读模式	This local desktop is read-only
+未找到 PowerShell。文件和监控仍可使用。请恢复 Windows PowerShell 或安装 PowerShell 7 后再使用终端。	PowerShell was not found. Files and Monitor are available. Restore Windows PowerShell or install PowerShell 7 to use Terminal.
+静音	Mute
+取消静音	Unmute

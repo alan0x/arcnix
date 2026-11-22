@@ -210,6 +210,9 @@ impl Host {
                 .to_owned();
             json!({
                 "root": root,
+                "readOnly": s.demo_read_only(),
+                "terminalLabel": if s.local_desktop.is_none() {"SSH"} else if cfg!(windows) {"PowerShell"} else {"Terminal"},
+                "windowsHost": cfg!(windows) && s.local_desktop.is_some(),
                 "pageBytes": arcnix_core::text_files::PAGE_BYTES,
                 "zh": desktop_system_settings::language(s) == arcnix_core::Language::SimplifiedChinese,
                 "dark": server_apps_ui::desktop_dark(s),

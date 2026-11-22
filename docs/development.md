@@ -210,7 +210,7 @@ cargo test --workspace --locked -- --include-ignored
 
 测试服务仅监听 `127.0.0.1`，使用隔离临时目录、每次生成的密钥和固定测试账户 `arcnix / arcnix-test`。它只提供固定测试命令结果，不会执行传入的本机 shell 命令。验证包括真实握手、指纹拒绝、密码／私钥认证、中文路径、上传下载字节一致性、空文件、覆盖保护和取消清理。不要把这个测试服务用于生产。
 
-Windows 本机直连的桌面回归测试使用 `python tools/wsl_direct_smoke.py --distribution Ubuntu`，覆盖旧配置、真实 PTY、目录和文本预览。SSH 模式的回归测试入口为 `python tools/wsl_smoke.py --help`。使用独立测试发行版及其默认账号的未加密测试私钥、SSH 端口和已核对的主机指纹。脚本检查已保存 WSL 配置的编辑、SFTP、重开客户端后连接、空闲后的交互终端，以及错误端口上的另一台 SSH 服务器被拒绝。
+Windows 宿主机演示使用 `python tools/local_desktop_smoke.py` 验证只读和读写模式、PowerShell、编辑器、播放器和偏好目录。已有 WSL 配置的直连回归测试使用 `python tools/wsl_direct_smoke.py --distribution Ubuntu`，覆盖旧配置、真实 PTY、目录和文本预览。SSH 模式的回归测试入口为 `python tools/wsl_smoke.py --help`。使用独立测试发行版及其默认账号的未加密测试私钥、SSH 端口和已核对的主机指纹。脚本检查已保存 WSL 配置的编辑、SFTP、重开客户端后连接、空闲后的交互终端，以及错误端口上的另一台 SSH 服务器被拒绝。
 
 功能规划见 [docs/v0.1-plan.md](v0.1-plan.md)。
 改进记录见 [CHANGELOG.md](CHANGELOG.md)，OpenSSH 导入边界见 [docs/ssh-config-import.md](ssh-config-import.md)。

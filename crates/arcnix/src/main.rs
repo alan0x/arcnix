@@ -84,8 +84,7 @@ enum Dialog {
         entries: Vec<FileEntry>,
     },
     Server,
-    #[cfg(windows)]
-    LocalWsl(wsl_ui::Picker),
+    LocalDemo,
     Group {
         id: Option<String>,
     },
@@ -334,6 +333,13 @@ define_state! {
 }
 impl ServerSession {
     fn terminal_available(&self) -> bool {
+        if self
+            .local_desktop
+            .as_ref()
+            .is_some_and(local_desktop::Target::read_only)
+        {
+            return false;
+        }
         #[cfg(windows)]
         if self.wsl.directory.is_some() {
             return true;
@@ -343,6 +349,11 @@ impl ServerSession {
 }
 
 impl State {
+    fn demo_read_only(&self) -> bool {
+        self.local_desktop
+            .as_ref()
+            .is_some_and(local_desktop::Target::read_only)
+    }
     fn advance_epoch(&mut self) {
         file_elevation::reset(self);
         self.next_epoch += 1;
@@ -387,6 +398,13 @@ impl State {
                 .is_some()
     }
     fn terminal_available(&self) -> bool {
+        if self
+            .local_desktop
+            .as_ref()
+            .is_some_and(local_desktop::Target::read_only)
+        {
+            return false;
+        }
         #[cfg(windows)]
         if self.wsl.directory.is_some() {
             return true;
@@ -508,7 +526,19 @@ impl Ui {
             return;
         }
         let scope = target.scope();
-        let mut id = format!("@{scope}");
+        let prefs = match self.store.demo_preferences(&scope) {
+            Ok(path) => path,
+            Err(error) => {
+                self.error(format!("{error:#}"));
+                return;
+            }
+        };
+        let session_scope = if target.read_only() {
+            format!("{scope}-readonly")
+        } else {
+            scope.clone()
+        };
+        let mut id = format!("@{session_scope}");
         while self
             .state
             .with(|s| s.config.servers.iter().any(|p| p.id == id))
@@ -528,18 +558,12 @@ impl Ui {
                 return false;
             }
             s.advance_epoch();
-            s.sync_scope = Some(scope.clone());
+            s.sync_scope = Some(session_scope.clone());
             s.connecting = true;
             s.notice.clear();
             true
         });
         if connect {
-            let prefs = self
-                .store
-                .path()
-                .with_file_name("local-desktops")
-                .join(scope)
-                .join("desktop.json");
             self.send(Action::LocalDesktop(target, prefs));
         } else {
             self.desktop_enter();
@@ -1081,8 +1105,8 @@ impl Ui {
         }
     }
     fn request_connect(&self) {
-        if let Some(target) = self.state.with(|s| s.local_desktop.clone()) {
-            self.enter_local_desktop(target);
+        if self.state.with(|s| s.local_desktop.is_some()) {
+            self.open_dialog(Dialog::LocalDemo);
             return;
         }
         #[cfg(windows)]

@@ -34,6 +34,7 @@ import {
 import {
   createFileSystemProviderError,
   FileSystemProviderErrorCode,
+  FileSystemProviderCapabilities,
 } from '@codingame/monaco-vscode-api/vscode/vs/platform/files/common/files';
 import {
   registerAction2,
@@ -182,6 +183,8 @@ class RemoteFiles extends EmptyFileSystemProvider {
   }
 }
 const remoteFiles = new RemoteFiles();
+if (window.arcnixWorkspace.readOnly) remoteFiles.capabilities |= FileSystemProviderCapabilities.Readonly;
+if (window.arcnixWorkspace.windowsHost) remoteFiles.capabilities &= ~FileSystemProviderCapabilities.PathCaseSensitive;
 registerCustomProvider('sftp', remoteFiles);
 window.MonacoEnvironment = {
   getWorker: (_, label) =>
@@ -310,7 +313,7 @@ await initialize(
     ...explorer(),
     ...search(),
     ...codeMenuServices(),
-    ...sshTerminalServices(root, send),
+    ...(window.arcnixWorkspace.readOnly ? {} : sshTerminalServices(root, send, window.arcnixWorkspace.terminalLabel)),
     ...configuration(),
     ...model(),
     ...languages(),
@@ -342,7 +345,7 @@ await initialize(
       'window.commandCenter': false,
       'window.menuBarVisibility': 'visible',
       'terminal.integrated.enablePersistentSessions': false,
-      'terminal.integrated.tabs.title': 'SSH',
+      'terminal.integrated.tabs.title': window.arcnixWorkspace.terminalLabel,
       'terminal.integrated.shellIntegration.enabled': false,
       'terminal.integrated.gpuAcceleration': 'off',
       'workbench.layoutControl.enabled': false,

@@ -307,7 +307,10 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             let mode_ui = ui.clone();
             modal(ui.clone(), "属性", col().class("properties-layout").fill((
             row().class("property-identity").fill((
-                when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.entries.len() == 1 && p.entries[0].is_dir)), || icons::glyph(Icon::Folder)).otherwise(|| icons::glyph(Icon::File)),
+                text().class(state.map(|s| match s.properties.as_ref() {
+                    Some(properties) if properties.entries.len() == 1 => file_browser::entry_icon_class(s, &properties.entries[0], properties.remote),
+                    _ => "action-glyph file-entry-icon glyph-file".to_owned(),
+                })).content(""),
                 col().fill((
                     text().class("property-name").content(state.map(|s| s.properties.as_ref().map(|p| if p.entries.len() == 1 { p.entries[0].name.clone() } else { i18n::translate_for(&format!("已选 {} 项", p.entries.len()), i18n::workspace_language(s)) }).unwrap_or_default())),
                     text().class("subtle").content(state.map(|s| s.properties.as_ref().map(|p| if p.entries.len() == 1 { file_browser::file_kind(&p.entries[0], i18n::workspace_language(s)) } else { i18n::translate_for("多个项目", i18n::workspace_language(s)) }).unwrap_or_default())),

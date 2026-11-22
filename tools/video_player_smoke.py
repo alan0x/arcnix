@@ -1,4 +1,4 @@
-"""Exercise WebView2's actual media controls over a latency-injected SFTP peer."""
+"""Exercise Arcnix's WebView2 player controls over a latency-injected SFTP peer."""
 import argparse
 import json
 from pathlib import Path
@@ -20,31 +20,6 @@ def make_video(out, target):
     ], check=True)
     # Default MP4 muxing puts the index at EOF. A seek must skip the middle.
     subprocess.run(ffmpeg + ['-stream_loop', '15', '-i', str(segment), '-c', 'copy', str(target)], check=True)
-
-
-def media_control(page, session, control):
-    video = page.locator('.remote-player video')
-    video.hover()
-    # WebView2 puts its native controls inside a user-agent shadow root.
-    root = session.send('DOM.getDocument', {'depth': 0})['root']['nodeId']
-    node = session.send('DOM.querySelector', {'nodeId': root, 'selector': '.remote-player video'})['nodeId']
-    tree = session.send('DOM.describeNode', {'nodeId': node, 'depth': -1, 'pierce': True})['node']
-    def walk(item):
-        attrs = item.get('attributes', [])
-        if '-webkit-media-controls-' + control in attrs:
-            return item['backendNodeId']
-        for child in item.get('children', []) + item.get('shadowRoots', []):
-            result = walk(child)
-            if result:
-                return result
-    node = walk(tree)
-    assert node, f'WebView2 {control} control missing'
-    box = session.send('DOM.getBoxModel', {'backendNodeId': node})['model']['border']
-    return box[0], (box[1] + box[5]) / 2, box[2] - box[0]
-
-def click_play_pause(page, session):
-    left, y, width = media_control(page, session, 'play-button')
-    page.mouse.click(left + width / 2, y)
 
 
 def check_geometry(page, window, native_surface_matches=None):
@@ -88,7 +63,7 @@ def check_geometry(page, window, native_surface_matches=None):
     window.locator('.window-maximize').click()
     eventually(lambda: near(window.bounding_box(), positioned))
     video = window.locator('video')
-    assert video.evaluate("v => v.controlsList.contains('nofullscreen') && v.disablePictureInPicture")
+    assert video.evaluate("v => !v.controls && v.disablePictureInPicture")
     video.dblclick(position={'x': 120, 'y': 70})
     eventually(maximized_inside_desktop)
     video.press('f')
@@ -161,7 +136,6 @@ def run(preview, binary=None, read_delay=.003):
             config['config']['settings']['language'] = 'SimplifiedChinese'
         with Desktop(out / 'app', config, binary=binary, viewport=None) as app:
             page = app.page
-            session = page.context.new_cdp_session(page)
             if preview:
                 app.connect_media_preview()
             else:
@@ -180,13 +154,13 @@ def run(preview, binary=None, read_delay=.003):
             expect(window.locator('.desktop-window-title')).to_have_text(media.name)
             if preview:
                 eventually(lambda: video.evaluate('v => v.currentTime > 2'))
-                click_play_pause(page, session)
+                window.locator('.player-play').click()
                 eventually(lambda: video.evaluate('v => v.paused'))
                 app.screenshot('player.png')
                 print(f'Preview ready: {app.process.pid} {out}', flush=True)
                 return app.process.wait()
             open_video = window.locator('.desktop-window-actions').get_by_role('button', name='Open video', exact=True)
-            assert open_video.evaluate("button => button.nextElementSibling.matches('.window-minimize')")
+            expect(window.locator('.desktop-window-actions').get_by_role('button', name='Settings', exact=True)).to_be_visible()
             open_video.click()
             picker = page.get_by_role('dialog', name='Open video', exact=True)
             def picker_button(name):
@@ -314,7 +288,7 @@ def run(preview, binary=None, read_delay=.003):
             app.application('Player')
             expect(window).to_be_visible()
             assert video.evaluate('(v, previous) => v === previous', media_element)
-            click_play_pause(page, session)
+            window.locator('.player-play').click()
             eventually(lambda: video.evaluate('v => v.paused'))
             stopped = video.evaluate('v => v.currentTime')
             positioned = check_geometry(page, window)
@@ -323,8 +297,13 @@ def run(preview, binary=None, read_delay=.003):
             app.application('Player')
             page.wait_for_timeout(800)
             assert video.evaluate('v => v.currentTime') == stopped
+            window.locator('.player-mute').click()
+            eventually(lambda: video.evaluate('v => v.muted'))
+            window.locator('.player-mute').click()
+            eventually(lambda: video.evaluate('v => !v.muted'))
             before = len(reads())
-            left, y, width = media_control(page, session, 'timeline')
+            box = window.locator('.player-seek').bounding_box()
+            left, y, width = box['x'], box['y'] + box['height'] / 2, box['width']
             assert width > 80
             page.mouse.move(left + 5, y)
             page.mouse.down()
@@ -333,7 +312,7 @@ def run(preview, binary=None, read_delay=.003):
             eventually(lambda: video.evaluate('v => v.currentTime > v.duration * .7 && !v.seeking && v.readyState >= 2'), timeout=20)
             at = video.evaluate('v => v.currentTime')
             assert any(size * .65 < offset < size * .9 for offset, _ in reads()[before:])
-            click_play_pause(page, session)
+            window.locator('.player-play').click()
             eventually(lambda: video.evaluate('(v, at) => v.currentTime > at + .5', at))
             total = sum(n for _, n in reads())
             assert total < size / 2 and not list(local.iterdir())

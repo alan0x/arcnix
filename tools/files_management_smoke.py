@@ -20,6 +20,10 @@ def main():
             (root / name).write_text(name, encoding='utf-8')
         home = root / 'home/arcnix'
         home.mkdir(parents=True, exist_ok=True)
+        media = [('Pictures', 'picture.PNG', 'image'), ('Music', 'song.flac', 'audio'), ('Videos', 'clip.mp4', 'video')]
+        for location, filename, _ in media:
+            (home / location).mkdir(exist_ok=True)
+            (root / filename).touch()
         prefs_file = home / '.arcnix/desktop.json'
         prefs_file.parent.mkdir(exist_ok=True)
         prefs_file.write_text(json.dumps({
@@ -33,6 +37,19 @@ def main():
             page = app.page
             app.connect()
             app.application('Files')
+
+            def check_media_icons(family):
+                sidebar = page.locator('.app-files.active .files-sidebar')
+                for location, filename, glyph in media:
+                    for item in (sidebar.get_by_role('button', name=location, exact=True), app.file(filename)):
+                        icon = item.locator(f'.glyph-{glyph}')
+                        expect(icon).to_be_visible()
+                        mask, artwork = icon.evaluate('(el) => [getComputedStyle(el).maskImage, getComputedStyle(el).backgroundImage]')
+                        assert (mask if family == 'line' else artwork).startswith('url("data:image/svg+xml;')
+                        assert (artwork if family == 'line' else mask) == 'none'
+                sidebar.screenshot(path=str(out / f'locations-{family}.png'))
+
+            check_media_icons('line')
 
             def action(name, command):
                 app.file(name).click(button='right')
@@ -67,6 +84,7 @@ def main():
             panel.locator('.setting-icon-family:visible').get_by_role('radio', name='Color icons', exact=True).check()
             expect(page.locator('.server-desktop')).to_have_attribute('data-desktop-icon-family', 'color')
             app.application('Files')
+            check_media_icons('color')
             folder_mark = app.file('Inbox').locator('.folder-icon-cloud')
             expect(folder_mark).to_be_visible()
             expect(folder_mark).to_have_css('background-image', 'linear-gradient(145deg, rgb(135, 231, 255), rgb(66, 159, 213) 48%, rgb(49, 101, 186))')

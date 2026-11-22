@@ -425,7 +425,8 @@ fn discard_desktop(ui: &Ui) {
 }
 
 fn can_save(s: &State, surface: Surface) -> bool {
-    s.connected
+    !s.demo_read_only()
+        && s.connected
         && s.file_pending.is_none()
         && surface.editor(s).is_some_and(|e| {
             e.dirty
@@ -754,6 +755,14 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                 let contents = input()
                     .multiline(true)
                     .class("remote-editor-content")
+                    .semantics(state.map(|s| {
+                        s.demo_read_only().then(|| {
+                            Box::new(glory::render::Semantics {
+                                readonly: true,
+                                ..Default::default()
+                            })
+                        })
+                    }))
                     .name(i18n::bind("File contents"))
                     .value(state.map(move |s| {
                         surface
@@ -769,6 +778,9 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                     .on(value_changed, move |event| {
                         if let Event::ValueChanged { value, .. } = event {
                             state.revise(|s| {
+                                if s.demo_read_only() {
+                                    return;
+                                }
                                 if let Some(editor) = surface
                                     .editor_mut(s)
                                     .filter(|e| e.pending.is_none() && !e.preview)
@@ -909,6 +921,9 @@ fn browse(ui: &Ui) {
 }
 
 fn can_save_as(s: &State, surface: Surface) -> bool {
+    if s.demo_read_only() {
+        return false;
+    }
     s.connected
         && s.sftp_available
         && s.file_pending.is_none()
@@ -933,7 +948,7 @@ fn choose_destination(ui: &Ui, id: u64) {
 
 fn new_document(ui: &Ui) {
     ui.state.revise(|s| {
-        if available(s) {
+        if available(s) && !s.demo_read_only() {
             s.desktop_editor.insert(new_editor(s.epoch, "", false));
         }
     });
@@ -967,7 +982,7 @@ pub(crate) fn menubar(ui: Ui) -> impl Widget {
             (
                 btn("New document", move || new_document(&new))
                     .class("editor-new")
-                    .enabled(state.map(available)),
+                    .enabled(state.map(|s| available(s) && !s.demo_read_only())),
                 btn("Open file…", move || browse(&open))
                     .class("editor-open")
                     .enabled(state.map(can_browse)),

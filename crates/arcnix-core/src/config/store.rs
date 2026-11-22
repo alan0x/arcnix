@@ -35,6 +35,46 @@ impl ConfigStore {
         Ok(Self::at(dirs.config_dir().join("config.json")))
     }
 
+    /// A real SSH session writes its Linux user data under ~/.arcnix. Keep
+    /// this host's simulated server state in its own namespace. Portable
+    /// configurations and test runs keep their demo data beside the config.
+    pub fn demo_preferences(&self, scope: &str) -> Result<PathBuf> {
+        anyhow::ensure!(
+            matches!(scope, "local-windows" | "local-linux" | "local-macos")
+                || scope
+                    .strip_prefix("local-wsl-")
+                    .is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())),
+            "Invalid demo identity"
+        );
+        let parent = if self.path == Self::default_location()?.path {
+            std::env::home_dir()
+                .context("Home directory is unavailable")?
+                .join(".arcnix")
+        } else {
+            self.path
+                .parent()
+                .context("Configuration directory is unavailable")?
+                .to_owned()
+        };
+        let path = parent
+            .join("self-demo-server")
+            .join(scope)
+            .join("desktop.json");
+        let legacy = self
+            .path
+            .with_file_name("local-desktops")
+            .join(scope)
+            .join("desktop.json");
+        if legacy.is_file() && !path.try_exists()? {
+            let _lock = crate::sync::lock_local_desktop(&path)?;
+            if !path.try_exists()? {
+                let prefs = crate::sync::read_local_desktop(&legacy)?;
+                replace_document(&path, &serde_json::to_vec(&prefs)?)?;
+            }
+        }
+        Ok(path)
+    }
+
     pub fn at(path: PathBuf) -> Self {
         Self { path }
     }
@@ -534,6 +574,33 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    #[test]
+    fn demo_state_is_isolated_and_imported_only_once() {
+        let dir = TestDir::new();
+        let store = dir.store();
+        let parent = store.path().parent().unwrap();
+        let path = store.demo_preferences("local-linux").unwrap();
+        assert_eq!(
+            path,
+            parent.join("self-demo-server/local-linux/desktop.json")
+        );
+        assert!(!path.exists());
+        assert!(store.demo_preferences("../desktop").is_err());
+        let legacy = parent.join("local-desktops/local-linux/desktop.json");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            serde_json::to_vec(&crate::server_apps::DesktopPreferences::default()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(store.demo_preferences("local-linux").unwrap(), path);
+        assert!(crate::sync::read_local_desktop(&path).is_ok());
+        assert!(path.is_file());
+        fs::write(legacy, b"invalid legacy config").unwrap();
+        assert_eq!(store.demo_preferences("local-linux").unwrap(), path);
+        assert!(!parent.join("desktop").exists());
+    }
+
     fn server() -> ServerProfile {
         ServerProfile {
             name: "测试服务器".into(),

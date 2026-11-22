@@ -567,17 +567,7 @@ pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
                 .fill((
                     text()
                         .class(state.map(move |s| {
-                            let file = value.get();
-                            if file.is_dir {
-                                if !file.is_symlink
-                                    && let Some(class) = files_ui::folder_icon_class(s, &file.path)
-                                {
-                                    return format!("action-glyph file-entry-icon folder-custom-mark {class}");
-                                }
-                                "action-glyph file-entry-icon glyph-folder".to_owned()
-                            } else {
-                                "action-glyph file-entry-icon glyph-file".to_owned()
-                            }
+                            value.with(|file| file_browser::entry_icon_class(s, file, true))
                         }))
                         .content(""),
                     text().class("file-label").content(value.map(|file| file.name.clone())),

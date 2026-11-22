@@ -6,160 +6,88 @@ use glory::prelude::*;
 
 use crate::i18n;
 
-#[derive(Clone, Copy)]
-pub enum Icon {
-    Search,
-    Browser,
-    ChevronRight,
-    Server,
-    Bell,
-    Paste,
-    Home,
-    Folder,
-    File,
-    Grid,
-    List,
-    Sidebar,
-    Copy,
-    Edit,
-    Code,
-    Settings,
-    Info,
-    Close,
-    More,
-    Up,
-    Go,
-    Refresh,
-    Save,
-    Filter,
-    Collapse,
-    Expand,
-    Pause,
-    Play,
-    OpenVideo,
-    Clear,
-    Plus,
-    Upload,
-    Download,
-    Star,
-    StarFilled,
-    Fullscreen,
-    ExitFullscreen,
-    Docker,
-    Disks,
-    Monitor,
-    AppCenter,
-    Terminal,
-    Services,
-    Logs,
-    WindowMinimize,
-    WindowMaximize,
-    WindowRestore,
+// Keep the CSS name, bundled SVG and optional color artwork in one registry.
+macro_rules! icons {
+    ($($variant:ident => $line:literal $(as $class:literal)? $(, $color:literal)?;)+) => {
+        #[derive(Clone, Copy)]
+        pub enum Icon { $($variant),+ }
+
+        impl Icon {
+            const ALL: &[Self] = &[$(Self::$variant),+];
+
+            pub(crate) fn name(self) -> &'static str {
+                match self { $(Self::$variant => icons!(@name $line $(as $class)?)),+ }
+            }
+
+            fn svg(self) -> &'static str {
+                match self { $(Self::$variant => include_str!(concat!("../../assets/icons/", $line, ".svg"))),+ }
+            }
+
+            pub(crate) fn color(self) -> Option<(&'static str, &'static str)> {
+                match self { $(Self::$variant => icons!(@color $($color)?)),+ }
+            }
+        }
+    };
+    (@name $line:literal as $class:literal) => { $class };
+    (@name $line:literal) => { $line };
+    (@color $name:literal) => { Some(($name, include_str!(concat!("../../assets/icons/color/", $name, ".svg")))) };
+    (@color) => { None };
 }
 
-impl Icon {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Search => "search",
-            Self::Browser => "browser",
-            Self::ChevronRight => "chevron-right",
-            Self::Server => "server",
-            Self::Bell => "bell",
-            Self::Paste => "paste",
-            Self::Home => "home",
-            Self::Folder => "folder",
-            Self::File => "file",
-            Self::Grid => "grid",
-            Self::List => "list",
-            Self::Sidebar => "sidebar",
-            Self::Copy => "copy",
-            Self::Edit => "edit",
-            Self::Code => "code",
-            Self::Settings => "settings",
-            Self::Info => "info",
-            Self::Close => "close",
-            Self::More => "more",
-            Self::Up => "up",
-            Self::Go => "go",
-            Self::Refresh => "refresh",
-            Self::Save => "save",
-            Self::Filter => "filter",
-            Self::Collapse => "collapse",
-            Self::Expand => "expand",
-            Self::Pause => "pause",
-            Self::Play => "play",
-            Self::OpenVideo => "open-video",
-            Self::Clear => "clear",
-            Self::Plus => "plus",
-            Self::Upload => "upload",
-            Self::Download => "download",
-            Self::Star => "star",
-            Self::StarFilled => "star-filled",
-            Self::Fullscreen => "fullscreen",
-            Self::ExitFullscreen => "exit-fullscreen",
-            Self::Docker => "docker",
-            Self::Disks => "disks",
-            Self::Monitor => "monitor",
-            Self::AppCenter => "app-center",
-            Self::Terminal => "terminal",
-            Self::Services => "services",
-            Self::Logs => "logs",
-            Self::WindowMinimize => "window-minimize",
-            Self::WindowMaximize => "window-maximize",
-            Self::WindowRestore => "window-restore",
-        }
-    }
-    fn svg(self) -> &'static str {
-        match self {
-            Self::Search => include_str!("../../assets/icons/search.svg"),
-            Self::Browser => include_str!("../../assets/icons/browser.svg"),
-            Self::ChevronRight => include_str!("../../assets/icons/chevron-right.svg"),
-            Self::Server => include_str!("../../assets/icons/server.svg"),
-            Self::Bell => include_str!("../../assets/icons/bell.svg"),
-            Self::Paste => include_str!("../../assets/icons/paste.svg"),
-            Self::Home => include_str!("../../assets/icons/home.svg"),
-            Self::Folder => include_str!("../../assets/icons/folder.svg"),
-            Self::File => include_str!("../../assets/icons/file.svg"),
-            Self::Grid => include_str!("../../assets/icons/grid.svg"),
-            Self::List => include_str!("../../assets/icons/list.svg"),
-            Self::Sidebar => include_str!("../../assets/icons/sidebar.svg"),
-            Self::Copy => include_str!("../../assets/icons/copy.svg"),
-            Self::Edit => include_str!("../../assets/icons/edit.svg"),
-            Self::Code => include_str!("../../assets/icons/code.svg"),
-            Self::Settings => include_str!("../../assets/icons/settings.svg"),
-            Self::Info => include_str!("../../assets/icons/info.svg"),
-            Self::Close => include_str!("../../assets/icons/close.svg"),
-            Self::More => include_str!("../../assets/icons/more.svg"),
-            Self::Up => include_str!("../../assets/icons/arrow-up.svg"),
-            Self::Go => include_str!("../../assets/icons/arrow-right.svg"),
-            Self::Refresh => include_str!("../../assets/icons/refresh.svg"),
-            Self::Save => include_str!("../../assets/icons/save.svg"),
-            Self::Filter => include_str!("../../assets/icons/filter.svg"),
-            Self::Collapse => include_str!("../../assets/icons/chevron-down.svg"),
-            Self::Expand => include_str!("../../assets/icons/chevron-up.svg"),
-            Self::Pause => include_str!("../../assets/icons/pause.svg"),
-            Self::Play => include_str!("../../assets/icons/play.svg"),
-            Self::OpenVideo => include_str!("../../assets/icons/open-video.svg"),
-            Self::Clear => include_str!("../../assets/icons/trash.svg"),
-            Self::Plus => include_str!("../../assets/icons/plus.svg"),
-            Self::Upload => include_str!("../../assets/icons/upload.svg"),
-            Self::Download => include_str!("../../assets/icons/download.svg"),
-            Self::Star => include_str!("../../assets/icons/star.svg"),
-            Self::StarFilled => include_str!("../../assets/icons/star-filled.svg"),
-            Self::Fullscreen => include_str!("../../assets/icons/fullscreen.svg"),
-            Self::ExitFullscreen => include_str!("../../assets/icons/exit-fullscreen.svg"),
-            Self::Docker => include_str!("../../assets/icons/docker.svg"),
-            Self::Disks => include_str!("../../assets/icons/disks.svg"),
-            Self::Monitor => include_str!("../../assets/icons/monitor.svg"),
-            Self::AppCenter => include_str!("../../assets/icons/app-center.svg"),
-            Self::Terminal => include_str!("../../assets/icons/terminal.svg"),
-            Self::Services => include_str!("../../assets/icons/services.svg"),
-            Self::Logs => include_str!("../../assets/icons/logs.svg"),
-            Self::WindowMinimize => include_str!("../../assets/icons/window-minimize.svg"),
-            Self::WindowMaximize => include_str!("../../assets/icons/window-maximize.svg"),
-            Self::WindowRestore => include_str!("../../assets/icons/window-restore.svg"),
-        }
-    }
+icons! {
+    Search => "search";
+    Browser => "browser", "browser";
+    ChevronRight => "chevron-right";
+    Server => "server";
+    Bell => "bell";
+    Paste => "paste";
+    Home => "home", "home";
+    Folder => "folder", "files";
+    File => "file", "document";
+    Grid => "grid", "grid";
+    List => "list";
+    Sidebar => "sidebar";
+    Copy => "copy";
+    Edit => "edit", "editor";
+    Code => "code", "code";
+    Settings => "settings", "settings";
+    Info => "info";
+    Close => "close";
+    More => "more";
+    Up => "arrow-up" as "up";
+    Go => "arrow-right" as "go";
+    Refresh => "refresh";
+    Save => "save";
+    Filter => "filter";
+    Collapse => "chevron-down" as "collapse";
+    Expand => "chevron-up" as "expand";
+    Pause => "pause";
+    Volume => "volume";
+    VolumeOff => "volume-off";
+    Play => "play", "player";
+    OpenVideo => "open-video";
+    Clear => "trash" as "clear", "trash";
+    Plus => "plus";
+    Upload => "upload";
+    Download => "download", "download";
+    Star => "star", "star";
+    StarFilled => "star-filled";
+    Fullscreen => "fullscreen";
+    ExitFullscreen => "exit-fullscreen";
+    Docker => "docker", "docker";
+    Disks => "disks", "disks";
+    Monitor => "monitor", "monitor";
+    AppCenter => "app-center", "center";
+    Terminal => "terminal", "terminal";
+    Services => "services";
+    Logs => "logs";
+    WindowMinimize => "window-minimize";
+    WindowMaximize => "window-maximize";
+    WindowRestore => "window-restore";
+    Desktop => "desktop", "desktop";
+    Image => "image", "image";
+    Video => "video", "video";
+    Audio => "audio", "audio";
 }
 
 pub(crate) fn glyph(icon: Icon) -> impl Widget {
@@ -255,94 +183,19 @@ pub fn css() -> String {
             "{selector}{{background-image:url(\"data:image/svg+xml,{encoded}\")}}\n"
         ));
     }
-    for icon in [
-        Icon::Search,
-        Icon::Browser,
-        Icon::ChevronRight,
-        Icon::Server,
-        Icon::Bell,
-        Icon::Paste,
-        Icon::Home,
-        Icon::Folder,
-        Icon::File,
-        Icon::Grid,
-        Icon::List,
-        Icon::Sidebar,
-        Icon::Copy,
-        Icon::Edit,
-        Icon::Code,
-        Icon::Settings,
-        Icon::Info,
-        Icon::Close,
-        Icon::More,
-        Icon::Save,
-        Icon::Up,
-        Icon::Go,
-        Icon::Refresh,
-        Icon::Filter,
-        Icon::Collapse,
-        Icon::Expand,
-        Icon::Pause,
-        Icon::Play,
-        Icon::OpenVideo,
-        Icon::Clear,
-        Icon::Plus,
-        Icon::Upload,
-        Icon::Download,
-        Icon::Star,
-        Icon::StarFilled,
-        Icon::Fullscreen,
-        Icon::ExitFullscreen,
-        Icon::Docker,
-        Icon::Disks,
-        Icon::Monitor,
-        Icon::AppCenter,
-        Icon::Terminal,
-        Icon::Services,
-        Icon::Logs,
-        Icon::WindowMinimize,
-        Icon::WindowMaximize,
-        Icon::WindowRestore,
-    ] {
-        let encoded = STANDARD.encode(icon.svg());
-        css.push_str(&format!(
-            ".glyph-{}{{mask-image:url(\"data:image/svg+xml;base64,{encoded}\")}}\n",
-            icon.name()
-        ));
-    }
-    macro_rules! app_icons {
-        ($($icon:ident => $app:literal),+ $(,)?) => {
-            [$((
-                Icon::$icon,
-                $app,
-                include_str!(concat!("../../assets/icons/color/", $app, ".svg")),
-            )),+]
-        };
-    }
-    for (icon, app, color) in app_icons! {
-        Home => "home",
-        Folder => "files",
-        File => "document",
-        Edit => "editor",
-        Code => "code",
-        Play => "player",
-        Clear => "trash",
-        Browser => "browser",
-        Docker => "docker",
-        Monitor => "monitor",
-        AppCenter => "center",
-        Terminal => "terminal",
-        Settings => "settings",
-    } {
+    for &icon in Icon::ALL {
+        let name = icon.name();
         let line = STANDARD.encode(icon.svg());
-        let color = STANDARD.encode(color);
         css.push_str(&format!(
-            ".app-{app} .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n"
+            ".glyph-{name}{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n"
         ));
-        let folder = if app == "files" { ",.glyph-folder" } else { "" };
-        css.push_str(&format!(
-            ".app-{app}{folder}{{--color-app-icon:url(\"data:image/svg+xml;base64,{color}\")}}\n"
-        ));
+        if let Some((art, svg)) = icon.color() {
+            let color = STANDARD.encode(svg);
+            css.push_str(&format!(
+                ".app-{art} .desktop-app-icon::before{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n\
+                 .app-{art},.glyph-{name}{{--color-app-icon:url(\"data:image/svg+xml;base64,{color}\")}}\n"
+            ));
+        }
     }
     for (name, icon) in [
         ("right", sapid::Icon::ChevronRight),

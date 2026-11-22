@@ -499,7 +499,10 @@ fn place(
         .fill((
             icons::glyph(match label {
                 "Home" => Icon::Home,
-                "Desktop" => Icon::Monitor,
+                "Desktop" => Icon::Desktop,
+                "Pictures" => Icon::Image,
+                "Music" => Icon::Audio,
+                "Videos" => Icon::Video,
                 "Documents" => Icon::File,
                 "Download directory" => Icon::Download,
                 "Filesystem" => Icon::Disks,

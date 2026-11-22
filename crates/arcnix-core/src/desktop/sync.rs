@@ -319,11 +319,15 @@ pub fn read_local_desktop(path: &Path) -> Result<DesktopPreferences> {
     parse_preferences(std::str::from_utf8(&bytes)?)
 }
 
-pub fn save_local_desktop(
-    path: &Path,
-    pending: &Pending<DesktopPreferences>,
-) -> Result<DesktopResult> {
-    std::fs::create_dir_all(path.parent().context("Missing local desktop directory")?)?;
+pub(crate) fn lock_local_desktop(path: &Path) -> Result<File> {
+    let mut dirs = std::fs::DirBuilder::new();
+    dirs.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        dirs.mode(0o700);
+    }
+    dirs.create(path.parent().context("Missing local desktop directory")?)?;
     let lock = File::options()
         .read(true)
         .write(true)
@@ -331,6 +335,14 @@ pub fn save_local_desktop(
         .truncate(false)
         .open(path.with_extension("lock"))?;
     lock.lock()?;
+    Ok(lock)
+}
+
+pub fn save_local_desktop(
+    path: &Path,
+    pending: &Pending<DesktopPreferences>,
+) -> Result<DesktopResult> {
+    let _lock = lock_local_desktop(path)?;
     let remote = read_local_desktop(path)?;
     let (merged, paths) = resolve_desktop(pending, &remote, true)?;
     if !paths.is_empty() {

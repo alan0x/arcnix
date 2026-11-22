@@ -15,9 +15,11 @@ Desktop downloads are available for Windows x64, macOS on Apple Silicon, and Lin
 
 ## Try the local desktop
 
-Choose **Try the local desktop** above the search field in the Servers sidebar. Linux and macOS use your current account. Windows opens an installed WSL distribution using its default account and offers a choice when several are installed. No SSH service or credentials are required.
+Choose **Try the local desktop** above the server search field. Each visit lets you choose **Read-only mode** (recommended) or **Read-write mode**. The demo uses your current account on Windows, macOS or Linux and requires no SSH service. Read-only mode lets you browse real files, view code and play supported media. Choose read-write mode to create, rename and save files or run terminal commands on your computer.
 
-Open Files to browse your home directory and create a file. Double-click a text file to edit and save it, or choose **View → Edit source** in a Markdown preview. Source files open in Code Editor and supported videos open in Player. Both apps also appear in Apps and Open with. Right-click a folder and choose **Open in → New Terminal tab** to start a shell there in your last active Terminal window, or **New Terminal window** for a separate window. On a file, **Terminal here** opens its containing folder. Changes affect real files. Desktop preferences are saved on the client separately for each local target. The standalone File Transfer workspace is disabled for local desktops.
+On Windows, Terminal uses the built-in Windows PowerShell first and can use PowerShell 7 in its standard location or on PATH if needed. If neither is available, Files and Monitor still work. Monitor reads CPU, memory and disk usage directly from Windows.
+
+Demo desktop preferences are stored in `~/.arcnix/self-demo-server/local-<os>/desktop.json`. A custom configuration keeps the demo directory beside the configuration file. Existing local desktop preferences are imported on first use.
 
 ## Previously saved WSL servers on Windows
 

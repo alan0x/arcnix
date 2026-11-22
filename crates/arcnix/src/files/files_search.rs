@@ -85,10 +85,10 @@ impl Kind {
         if entry.is_dir || self == Self::Folders {
             return entry.is_dir && self == Self::Folders;
         }
-        let extension = entry
-            .name
-            .rsplit_once('.')
-            .map_or("", |(_, extension)| extension);
+        self.has_extension(extension(&entry.name))
+    }
+
+    fn has_extension(self, extension: &str) -> bool {
         let extensions: &[&str] = match self {
             Self::Folders => &[],
             Self::Text => &[
@@ -114,6 +114,23 @@ impl Kind {
             .iter()
             .any(|option| option.eq_ignore_ascii_case(extension))
     }
+}
+
+fn extension(name: &str) -> &str {
+    name.rsplit_once('.').map_or("", |(_, suffix)| suffix)
+}
+
+pub(crate) fn file_icon(name: &str, directory: bool) -> Icon {
+    if directory {
+        return Icon::Folder;
+    }
+    let ext = extension(name);
+    for (kind, icon) in [(Kind::Images, Icon::Image), (Kind::Audio, Icon::Audio), (Kind::Videos, Icon::Video)] {
+        if kind.has_extension(ext) {
+            return icon;
+        }
+    }
+    Icon::File
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

@@ -63,6 +63,19 @@ pub(crate) fn request(ui: &Ui, msg: Value) {
         if !s.connected {
             return None;
         }
+        if s.demo_read_only() {
+            if matches!(action, Command::Open { .. }) {
+                let error = crate::i18n::translate_for(
+                    "This local desktop is read-only",
+                    crate::i18n::workspace_language(s),
+                );
+                s.code
+                    .terminals
+                    .events
+                    .push(json!({"token":token,"error":error}));
+            }
+            return None;
+        }
         let sessions = &mut s.code.terminals;
         if let Command::Open { cols, rows } = action {
             if sessions.ids.contains_key(&token) {
