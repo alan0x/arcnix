@@ -654,6 +654,14 @@ fn server_dialog(ui: Ui) -> impl Widget {
             .to_owned()
         }))
         .fill((
+            #[cfg(windows)]
+            when(state.map(|s| s.server_editor_original.is_none()), {
+                let ui = ui.clone();
+                move || {
+                    let ui = ui.clone();
+                    btn("选择本机 WSL 发行版", move || wsl_ui::open(&ui))
+                }
+            }),
             field(
                 "名称",
                 &ui,
@@ -661,11 +669,30 @@ fn server_dialog(ui: Ui) -> impl Widget {
                 |s, v| s.editor.name = v,
             ),
             row().class("form-row host-port").fill((
-                field(
-                    "主机地址",
-                    &ui,
-                    |s| s.editor.host.clone(),
-                    |s, v| s.editor.host = v,
+                when(state.map(|s| s.editor.wsl_distribution.is_none()), {
+                    let ui = ui.clone();
+                    move || {
+                        field(
+                            "主机地址",
+                            &ui,
+                            |s| s.editor.host.clone(),
+                            |s, v| s.editor.host = v,
+                        )
+                    }
+                }),
+                when(
+                    state.map(|s| s.editor.wsl_distribution.is_some()),
+                    move || {
+                        col().class("field").fill((
+                            text()
+                                .class("field-label")
+                                .content(i18n::bind("本机 WSL 发行版")),
+                            text()
+                                .content(state.map(|s| {
+                                    s.editor.wsl_distribution.clone().unwrap_or_default()
+                                })),
+                        ))
+                    },
                 ),
                 field("端口", &ui, |s| s.port.clone(), |s, v| s.port = v),
             )),
@@ -1212,6 +1239,14 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             {
                 let ui = ui.clone();
                 move || group_dialog(ui.clone())
+            },
+        ),
+        #[cfg(windows)]
+        when(
+            state.map(|s| matches!(s.dialog, Some(Dialog::LocalWsl(_)))),
+            {
+                let ui = ui.clone();
+                move || wsl_ui::dialog(ui.clone())
             },
         ),
         when(state.map(|s| s.dialog == Some(Dialog::Import)), {

@@ -332,6 +332,24 @@ impl PendingConnection {
             .trim()
             .trim_start_matches('[')
             .trim_end_matches(']');
+        let (host, wsl_keys): (&str, Option<Vec<Vec<u8>>>) = match &profile.wsl_distribution {
+            Some(distribution) => {
+                ensure!(
+                    profile.host == crate::wsl::profile_host(distribution)?,
+                    "Invalid WSL profile address"
+                );
+                #[cfg(windows)]
+                {
+                    (
+                        "127.0.0.1",
+                        Some(crate::wsl::host_keys(distribution, deadline)?),
+                    )
+                }
+                #[cfg(not(windows))]
+                bail!("Local WSL connections require Windows");
+            }
+            None => (host, None),
+        };
         let (resolved, receiver) = std::sync::mpsc::sync_channel(1);
         let hostname = host.to_owned();
         let port = profile.port;
@@ -360,6 +378,9 @@ impl PendingConnection {
             }
         }
         let socket = socket.ok_or_else(|| {
+            if wsl_keys.is_some() {
+                return anyhow::anyhow!("Cannot reach WSL SSH on 127.0.0.1:{port}. Check the SSH service, port and Windows localhost forwarding.");
+            }
             anyhow::anyhow!(
                 "Cannot connect to SSH server: {}",
                 last_error
@@ -377,6 +398,13 @@ impl PendingConnection {
         if let Some(preference) = preference {
             session.method_pref(MethodType::HostKey, preference)?;
         }
+        #[cfg(windows)]
+        if let Some(name) = &profile.wsl_distribution {
+            session.set_tcp_stream(crate::wsl::keep_running(name, socket.try_clone()?)?);
+        } else {
+            session.set_tcp_stream(socket.try_clone()?);
+        }
+        #[cfg(not(windows))]
         session.set_tcp_stream(socket.try_clone()?);
         session.handshake().context("SSH handshake failed")?;
         // The shared deadline bounds key discovery, not later authentication or
@@ -388,6 +416,12 @@ impl PendingConnection {
         session.set_timeout(settings.timeout_seconds * 1000);
         session.set_keepalive(true, settings.keepalive_seconds);
         let (key, _) = session.host_key().context("Server supplied no host key")?;
+        if let Some(keys) = wsl_keys {
+            ensure!(
+                keys.iter().any(|candidate| candidate == key),
+                "SSH host key does not belong to the selected WSL distribution. Check the localhost port."
+            );
+        }
         let fingerprint = format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(key)));
         Ok(Self {
             session,

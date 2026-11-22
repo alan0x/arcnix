@@ -186,6 +186,12 @@ impl ServerProfile {
         nonempty(&self.id, "服务器标识", 256)?;
         nonempty(&self.name, "服务器名称", 256)?;
         validate_host(&self.host)?;
+        if let Some(name) = &self.wsl_distribution {
+            ensure!(
+                self.host == crate::wsl::profile_host(name)?,
+                "Invalid WSL profile address"
+            );
+        }
         ensure!(self.port != 0, "SSH 端口必须介于 1 和 65535 之间");
         if let Some(connection) = self.connection {
             connection.validate()?;

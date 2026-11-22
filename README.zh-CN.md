@@ -13,6 +13,12 @@ Arcnix 是一个通过 SSH 管理 Linux 服务器的桌面应用。界面运行�
 
 客户端提供 Windows x64、macOS Apple Silicon，以及 Linux x64 和 ARM64 下载包。
 
+## 连接本机 WSL（Windows）
+
+在「新建服务器」中点击「选择本机 WSL 发行版」。列表显示运行状态，选中后会启动该发行版并填入默认 Linux 用户名。填写发行版的 SSH 端口，选择密码或私钥，保存后连接。终端命令和文件修改会直接作用于这个发行版。
+
+发行版需要运行 OpenSSH Server，且 Windows 能通过 `127.0.0.1` 访问该端口。在使用 systemd 的 Ubuntu 或 Debian 中，可以用 `systemctl status ssh` 查看服务状态，并用 `ss -ltn` 检查监听端口。只供本机使用时，可将 sshd 的 `ListenAddress` 设为 `127.0.0.1`。多个发行版同时使用时，请分别配置端口和主机密钥。Arcnix 在发送凭据前会与所选发行版的 `/etc/ssh/ssh_host_*_key.pub` 核对公钥。
+
 ## 功能演示
 
 ### SFTP 文件传输

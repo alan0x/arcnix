@@ -2836,3 +2836,14 @@ Dock 时钟	Dock clock
 该文件已在其他标签页中打开。	This file is open in another tab.
 请选择普通文件名。	Choose a regular file name.
 请使用粘贴快捷键粘贴剪贴板内容。	Use the paste keyboard shortcut to paste from the clipboard.
+选择本机 WSL 发行版	Choose local WSL distribution
+本机 WSL 发行版	Local WSL distribution
+选择发行版会启动它。连接使用发行版的 SSH 服务，文件和命令会作用于该 Linux 环境。	Selecting a distribution starts it. Arcnix connects through its SSH service. Files and commands operate on that Linux environment.
+正在读取 WSL…	Reading WSL…
+没有找到可管理的 WSL 发行版。请在 PowerShell 中运行 wsl --list --verbose 查看。	No available WSL distributions. Run wsl --list --verbose in PowerShell to check.
+此 WSL 发行版没有可读的 SSH 主机公钥。请配置 OpenSSH Server，并检查 /etc/ssh/ssh_host_*_key.pub。	No readable SSH host public keys in this WSL distribution. Configure OpenSSH Server and check /etc/ssh/ssh_host_*_key.pub.
+SSH 主机公钥与所选 WSL 发行版不匹配。请检查本机端口。	SSH host key does not belong to the selected WSL distribution. Check the localhost port.
+无法访问 127.0.0.1:{port} 上的 WSL SSH。请检查 SSH 服务、端口及 Windows 本机端口转发。	Cannot reach WSL SSH on 127.0.0.1:{port}. Check the SSH service, port and Windows localhost forwarding.
+WSL 命令失败。请运行 wsl --list --verbose 并检查所选发行版。	WSL command failed. Check wsl --list --verbose and the selected distribution.
+WSL 命令超时	WSL command timed out
+无法启动 WSL。请在 PowerShell 中运行 wsl --status 检查。	Cannot start WSL. Check wsl --status in PowerShell.

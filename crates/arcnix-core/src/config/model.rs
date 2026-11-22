@@ -41,6 +41,8 @@ pub struct ServerProfile {
     pub environment: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl_distribution: Option<String>,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -65,6 +67,7 @@ impl Default for ServerProfile {
             group_id: None,
             environment: String::new(),
             tags: vec![],
+            wsl_distribution: None,
             host: String::new(),
             port: 22,
             username: String::new(),

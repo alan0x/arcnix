@@ -9,3 +9,5 @@ pub(crate) mod ssh_credentials;
 pub(crate) mod update_install;
 pub(crate) mod updates_ui;
 pub(crate) mod workspace;
+#[cfg(windows)]
+pub(crate) mod wsl_ui;

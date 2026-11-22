@@ -13,6 +13,12 @@ Arcnix is a desktop app for managing Linux servers over SSH. The interface runs 
 
 Desktop downloads are available for Windows x64, macOS on Apple Silicon, and Linux x64 and ARM64.
 
+## Connect to local WSL on Windows
+
+Open **New server → Choose local WSL distribution** to see installed distributions and their running state. Selecting one starts it and fills in its default Linux username. Enter its SSH port, choose password or private key authentication, then save and connect. Commands and file edits affect that distribution directly.
+
+Run OpenSSH Server in the distribution on a port reachable from Windows at `127.0.0.1`. On Ubuntu or Debian with systemd, use `systemctl status ssh` to check the service and `ss -ltn` to check listening ports. For local-only access, set the sshd `ListenAddress` to `127.0.0.1`. Give concurrently used distributions distinct ports and host keys. Before sending credentials, Arcnix checks the SSH peer against the selected distribution’s public keys in `/etc/ssh/ssh_host_*_key.pub`.
+
 ## Feature demos
 
 ### SFTP file transfer

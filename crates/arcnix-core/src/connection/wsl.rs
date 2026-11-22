@@ -1,0 +1,274 @@
+//! Local WSL profiles use a distribution-specific trust identity and a loopback SSH port.
+use anyhow::{Result, ensure};
+
+pub fn profile_host(name: &str) -> Result<String> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= 200
+            && name.trim() == name
+            && !name.starts_with('-')
+            && !matches!(name, "." | "..")
+            && !name
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '/' | '\\' | '"' | ':'))
+            && !["docker-desktop", "docker-desktop-data"]
+                .iter()
+                .any(|x| name.eq_ignore_ascii_case(x)),
+        "Invalid WSL distribution name"
+    );
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    const ENCODE: &percent_encoding::AsciiSet =
+        &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.');
+    let label = utf8_percent_encode(name, ENCODE);
+    Ok(format!("{label}.wsl.localhost"))
+}
+
+#[cfg(windows)]
+pub use windows::{distributions, username};
+#[cfg(windows)]
+pub(crate) use windows::{host_keys, keep_running};
+
+#[cfg(windows)]
+mod windows {
+    use std::io::Read;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use anyhow::{Context, bail};
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    use super::*;
+
+    // Use the system launcher even when the current directory contains a wsl.exe.
+    fn launcher() -> Result<Command> {
+        let launcher =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot").context("Missing SystemRoot")?)
+                .join("System32")
+                .join("wsl.exe");
+        let mut command = Command::new(launcher);
+        command.creation_flags(0x08000000);
+        Ok(command)
+    }
+
+    struct WslSocket {
+        socket: std::net::TcpStream,
+        _input: std::process::ChildStdin,
+    }
+
+    impl std::os::windows::io::AsRawSocket for WslSocket {
+        fn as_raw_socket(&self) -> std::os::windows::io::RawSocket {
+            self.socket.as_raw_socket()
+        }
+    }
+
+    /// A background sshd alone cannot keep WSL running. Tie a foreground WSL
+    /// command to libssh2's socket lifetime, including independent PTY sessions.
+    /// Dropping the socket (or exiting Arcnix) closes the pipe and ends the read.
+    pub(crate) fn keep_running(
+        name: &str,
+        socket: std::net::TcpStream,
+    ) -> Result<impl std::os::windows::io::AsRawSocket + use<>> {
+        let mut process = launcher()?
+            .args([
+                "--distribution",
+                name,
+                "--cd",
+                "/",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                "read -r line",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Cannot keep the selected WSL distribution running")?;
+        Ok(WslSocket {
+            socket,
+            _input: process.stdin.take().context("Missing WSL input")?,
+        })
+    }
+
+    fn output(args: &[&str], deadline: Instant) -> Result<Vec<u8>> {
+        let mut child = launcher()?
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Cannot start WSL. Check wsl --status in PowerShell.")?;
+        let stdout = child.stdout.take().context("Missing WSL output")?;
+        const LIMIT: u64 = 128 * 1024;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = stdout
+                .take(LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map(|_| bytes);
+            let _ = tx.send(result);
+        });
+        let result = (|| {
+            let bytes = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .context("WSL command timed out")??;
+            ensure!(
+                bytes.len() as u64 <= LIMIT,
+                "WSL output exceeds the size limit"
+            );
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    ensure!(
+                        status.success(),
+                        "WSL command failed. Check wsl --list --verbose and the selected distribution."
+                    );
+                    return Ok(bytes);
+                }
+                if Instant::now() >= deadline {
+                    bail!("WSL command timed out");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })();
+        if result.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        result
+    }
+
+    fn names(bytes: &[u8]) -> Result<Vec<String>> {
+        let value = if bytes.starts_with(&[0xff, 0xfe]) || bytes.contains(&0) {
+            ensure!(bytes.len().is_multiple_of(2), "Invalid WSL list encoding");
+            String::from_utf16(
+                &bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(u16::from_le_bytes)
+                    .collect::<Vec<_>>(),
+            )?
+        } else {
+            std::str::from_utf8(bytes)?.to_owned()
+        };
+        Ok(value
+            .trim_start_matches('\u{feff}')
+            .lines()
+            .filter(|name| profile_host(name).is_ok())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    pub fn distributions() -> Result<Vec<(String, bool)>> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let all = names(&output(&["--list", "--quiet"], deadline)?)?;
+        if all.is_empty() {
+            return Ok(Vec::new());
+        }
+        let running = names(&output(&["--list", "--running", "--quiet"], deadline)?)?;
+        Ok(all
+            .into_iter()
+            .map(|name| {
+                let active = running.contains(&name);
+                (name, active)
+            })
+            .collect())
+    }
+
+    pub fn username(name: &str) -> Result<String> {
+        profile_host(name)?;
+        let bytes = output(
+            &["--distribution", name, "--cd", "/", "--exec", "id", "-un"],
+            Instant::now() + Duration::from_secs(30),
+        )?;
+        let value = std::str::from_utf8(&bytes)?.trim_end_matches(['\r', '\n']);
+        ensure!(
+            !value.is_empty()
+                && value.len() <= 256
+                && !value.chars().any(|c| c.is_whitespace() || c.is_control()),
+            "Invalid WSL username"
+        );
+        Ok(value.into())
+    }
+
+    pub(crate) fn host_keys(name: &str, deadline: Instant) -> Result<Vec<Vec<u8>>> {
+        profile_host(name)?;
+        // Read only the public half of the distribution's system host keys.
+        let bytes = output(
+            &[
+                "--distribution",
+                name,
+                "--cd",
+                "/",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                "for key in /etc/ssh/ssh_host_*_key.pub; do if [ -f \"$key\" ] && [ -r \"$key\" ]; then cat \"$key\"; printf '\\n'; fi; done",
+            ],
+            deadline,
+        )?;
+        let keys: Vec<_> = std::str::from_utf8(&bytes)?
+            .lines()
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .filter_map(|key| STANDARD.decode(key).ok())
+            .filter(|key| !key.is_empty())
+            .collect();
+        ensure!(
+            !keys.is_empty(),
+            "No readable SSH host public keys in this WSL distribution. Configure OpenSSH Server and check /etc/ssh/ssh_host_*_key.pub."
+        );
+        Ok(keys)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn reads_localized_names_and_excludes_engine_distributions() {
+            let list = "\u{feff}Ubuntu\r\n工作 Linux\r\ndocker-desktop\r\n";
+            let wide = list
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            for bytes in [wide.as_slice(), list.as_bytes()] {
+                assert_eq!(names(bytes).unwrap(), ["Ubuntu", "工作 Linux"]);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn distinct_distribution_identities_round_trip_in_profiles() {
+        let host = profile_host("Dev Box").unwrap();
+        assert_ne!(host, profile_host("Dev%20Box").unwrap());
+        for invalid in [
+            "--help",
+            "..",
+            "bad/name",
+            "x\ny",
+            " docker",
+            "Docker-Desktop",
+        ] {
+            assert!(profile_host(invalid).is_err());
+        }
+        let mut profile = crate::ServerProfile {
+            name: "Local".into(),
+            username: "user".into(),
+            host,
+            wsl_distribution: Some("Dev Box".into()),
+            ..Default::default()
+        };
+        profile.validate().unwrap();
+        let json = serde_json::to_string(&profile).unwrap();
+        assert_eq!(profile, serde_json::from_str(&json).unwrap());
+        profile.host = "127.0.0.1".into();
+        assert!(profile.validate().is_err());
+    }
+}

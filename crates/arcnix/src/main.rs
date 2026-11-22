@@ -79,6 +79,8 @@ enum Dialog {
         entries: Vec<FileEntry>,
     },
     Server,
+    #[cfg(windows)]
+    LocalWsl(wsl_ui::Picker),
     Group {
         id: Option<String>,
     },

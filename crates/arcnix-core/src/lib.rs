@@ -16,7 +16,9 @@ pub use automation::{
 };
 pub use config::{model, preferences, server_labels, store};
 use connection::private_program;
-pub use connection::{browser_proxy, private_keys, remote, ssh_config, terminal, transport_error};
+pub use connection::{
+    browser_proxy, private_keys, remote, ssh_config, terminal, transport_error, wsl,
+};
 use desktop::desktop_storage;
 pub use desktop::{
     browser, desktop_customization, desktop_shortcuts, desktop_theme, desktop_time_zone,
