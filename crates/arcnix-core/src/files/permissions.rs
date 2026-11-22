@@ -10,6 +10,24 @@ pub struct Metadata {
     pub mode: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
+    pub owner_name: Option<String>,
+    pub group_name: Option<String>,
+}
+
+impl Metadata {
+    pub(crate) fn set_account_names(&mut self, owner: &str, group: &str) {
+        fn name(value: &str, id: Option<u32>) -> Option<String> {
+            let id = id?;
+            (!value.is_empty()
+                && value.len() <= 256
+                && value != "UNKNOWN"
+                && value.parse::<u32>().ok() != Some(id)
+                && !value.chars().any(char::is_control))
+            .then(|| value.to_owned())
+        }
+        self.owner_name = name(owner, self.uid);
+        self.group_name = name(group, self.gid);
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Target {

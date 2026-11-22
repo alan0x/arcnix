@@ -256,6 +256,10 @@ fn new_editor(epoch: u64, path: &str, preview: bool) -> Editor {
     }
 }
 fn read(ui: &Ui, surface: Surface) {
+    read_with(ui, surface, None);
+}
+
+pub(crate) fn read_with(ui: &Ui, surface: Surface, sudo: Option<worker::TextAuthorization>) {
     let task = ui.state.revise(|s| {
         if !s.connected || s.file_pending.is_some() {
             return None;
@@ -263,6 +267,9 @@ fn read(ui: &Ui, surface: Surface) {
         let epoch = s.epoch;
         let editor = surface.editor_mut(s)?;
         if editor.path.is_empty()
+            || sudo
+                .as_ref()
+                .is_some_and(|(retry, _)| retry.path != editor.path)
             || editor.dirty
             || editor.pending.is_some()
             || editor.epoch != epoch
@@ -274,7 +281,7 @@ fn read(ui: &Ui, surface: Surface) {
         Some((editor.path.clone(), editor.cancel.clone()))
     });
     if let Some((path, cancel)) = task {
-        let serial = ui.send(Action::TextRead { path, cancel });
+        let serial = ui.send(Action::TextRead { path, cancel, sudo });
         ui.state.revise(|s| {
             s.file_pending = Some(serial);
             if let Some(e) = surface.editor_mut(s) {
@@ -430,7 +437,7 @@ fn can_save(s: &State, surface: Surface) -> bool {
         })
 }
 
-pub(crate) fn save(ui: &Ui, surface: Surface, sudo: Option<zeroize::Zeroizing<String>>) {
+pub(crate) fn save(ui: &Ui, surface: Surface, sudo: Option<worker::TextAuthorization>) {
     let action = ui.state.with(|s| {
         if !can_save(s, surface) {
             return None;
@@ -517,17 +524,14 @@ pub(crate) fn event(
             )
         };
         let epoch = s.epoch;
+        let language = i18n::workspace_language(s);
         s.file_pending = None;
         let editor = surface.editor_mut(s)?;
         let current = editor.epoch == epoch;
         let operation = editor.pending.take()?.operation;
         let saved = operation != Operation::Read;
         let success = result.is_ok();
-        let retry = (current
-            && operation == Operation::Save
-            && !editor.cancel.load(Ordering::Relaxed)
-            && result.as_ref().is_err_and(|error| error.permission_denied))
-        .then(|| file_elevation::Retry::Save(surface, editor.path.clone()));
+        let mut retry = None;
         let opened = result
             .as_ref()
             .ok()
@@ -545,7 +549,19 @@ pub(crate) fn event(
                 editor.error.clear();
                 editor.render_preview();
             }
-            Err(error) => editor.error = error.message,
+            Err(error) => {
+                let reading = operation == Operation::Read;
+                editor.error = error.text_message(reading, language);
+                if current && !editor.cancel.load(Ordering::Relaxed) {
+                    retry = error.text_retry.map(|r| {
+                        if reading {
+                            file_elevation::Retry::Read(surface, r)
+                        } else {
+                            file_elevation::Retry::Save(surface, r)
+                        }
+                    });
+                }
+            }
         }
         if surface == Surface::Transfer && s.dialog != Some(Dialog::TextEditor) {
             s.remote_editor = None;
@@ -637,9 +653,13 @@ fn mode_controls(ui: Ui, surface: Surface) -> impl Widget {
 }
 
 fn editor_status(state: Cage<State>, surface: Surface) -> impl Widget {
-    let feedback = text()
-        .class("editor-feedback")
-        .content(state.map(move |s| surface.editor(s).map(feedback).unwrap_or_default()));
+    let feedback = text().class("editor-feedback").content(state.map(move |s| {
+        surface
+            .editor(s)
+            .filter(|e| e.error.is_empty() || e.document.is_some())
+            .map(feedback)
+            .unwrap_or_default()
+    }));
     if surface == Surface::Transfer {
         return fragment(feedback);
     }
@@ -691,6 +711,12 @@ fn editor_status(state: Cage<State>, surface: Surface) -> impl Widget {
 fn body(ui: Ui, surface: Surface) -> impl Widget {
     let state = ui.state;
     let discard_ui = ui.clone();
+    let retry_ui = ui.clone();
+    let failed = move |s: &State| {
+        surface
+            .editor(s)
+            .is_some_and(|e| e.document.is_none() && !e.error.is_empty())
+    };
     col().class("remote-editor").fill((
         when(surface == Surface::Transfer, move || {
             row().class("editor-toolbar").fill((
@@ -707,8 +733,23 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
                 mode_controls(ui.clone(), surface),
             ))
         }),
+        when(state.map(failed), move || {
+            let retry = retry_ui.clone();
+            col().class("editor-read-error").fill((
+                text().selectable(true).content(state.map(move |s| {
+                    surface
+                        .editor(s)
+                        .map(|e| e.error.clone())
+                        .unwrap_or_default()
+                })),
+                sapid::button()
+                    .class("button")
+                    .label(i18n::workspace_label(state, "Retry"))
+                    .on_press(move || read(&retry, surface)),
+            ))
+        }),
         when(
-            state.map(move |s| surface.editor(s).is_some_and(|e| !e.preview)),
+            state.map(move |s| !failed(s) && surface.editor(s).is_some_and(|e| !e.preview)),
             move || {
                 let contents = input()
                     .multiline(true)
@@ -754,7 +795,7 @@ fn body(ui: Ui, surface: Surface) -> impl Widget {
             },
         ),
         when(
-            state.map(move |s| surface.editor(s).is_some_and(|e| e.preview)),
+            state.map(move |s| !failed(s) && surface.editor(s).is_some_and(|e| e.preview)),
             move || {
                 col().class("editor-preview-host").fill((
                     text()
@@ -1130,6 +1171,12 @@ pub(crate) fn page(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let open = ui.clone();
     col().class("desktop-editor editor-file-drop").fill((
+        text()
+            .class("editor-preferences hidden")
+            .content(state.map(|s| {
+                let p = &server_apps_ui::current(s).app_settings;
+                serde_json::json!([p.editor.font_size, p.editor.line_numbers]).to_string()
+            })),
         text()
             .class("editor-window-id hidden")
             .content(window.to_string()),

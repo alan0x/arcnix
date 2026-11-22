@@ -271,9 +271,9 @@ fn launcher_page(s: &State, page: WorkspacePage) -> WorkspacePage {
 }
 
 pub(crate) fn can_close_app(s: &State, page: WorkspacePage) -> bool {
-    !s.system_task_running
-        && (page != WorkspacePage::Code || s.code.pending.is_empty())
-        && (page.base() != WorkspacePage::Editor || !text_editor::desktop_busy(s))
+    page == WorkspacePage::Code
+        || (!s.system_task_running
+            && (page.base() != WorkspacePage::Editor || !text_editor::desktop_busy(s)))
 }
 
 pub(crate) fn show_desktop_label(s: &State) -> &'static str {
@@ -398,6 +398,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess
                     | Dialog::CustomizeFolder { .. }
+                    | Dialog::AppSettings(_)
                     | Dialog::FilesSettings
                     | Dialog::FileProperties
                     | Dialog::Trash { remote: true }
@@ -909,7 +910,10 @@ pub(crate) fn launcher(ui: Ui, page: WorkspacePage, dock: bool) -> impl Widget {
 
 pub(crate) fn tab_overflow() -> impl Widget {
     row().class("window-tabs-overflow").fill((
-        i18n::desktop::icon_action("More tabs", Icon::More).class("icon-button window-tabs-more"),
+        sapid::button()
+            .name(i18n::desktop::bind("All tabs"))
+            .class("icon-button window-tabs-more")
+            .fill(icons::glyph(Icon::ChevronRight)),
         col().class("window-tabs-menu"),
     ))
 }
@@ -1037,12 +1041,33 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                                     }
                                 })
                         }),
-                        when(files.is_some(), move || {
-                            let ui = files_settings.clone();
-                            i18n::desktop::icon_action("Files settings", Icon::Settings)
-                                .class("icon-button files-settings")
-                                .on_press(move || ui.open_dialog(Dialog::FilesSettings))
-                        }),
+                        when(
+                            files.is_some()
+                                || matches!(
+                                    page.base(),
+                                    WorkspacePage::Terminal
+                                        | WorkspacePage::Player
+                                        | WorkspacePage::Editor
+                                ),
+                            move || {
+                                let ui = files_settings.clone();
+                                sapid::button()
+                                    .name(i18n::desktop::bind("Settings"))
+                                    .fill(icons::glyph(Icon::Settings))
+                                    .class(if files.is_some() {
+                                        "icon-button files-settings"
+                                    } else {
+                                        "icon-button app-settings-button"
+                                    })
+                                    .on_press(move || {
+                                        ui.open_dialog(if files.is_some() {
+                                            Dialog::FilesSettings
+                                        } else {
+                                            Dialog::AppSettings(page.base())
+                                        })
+                                    })
+                            },
+                        ),
                         i18n::desktop::icon_action("Minimize window", Icon::WindowMinimize)
                             .class("icon-button window-minimize")
                             .on_press(move || minimize.minimize_window(page)),

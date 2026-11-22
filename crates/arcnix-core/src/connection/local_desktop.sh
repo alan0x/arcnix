@@ -34,6 +34,12 @@ list)
     else
         find . -mindepth 1 -maxdepth 1 -printf '%y %s %T@ %m %U %G\t%f\0'
     fi;;
+properties)
+    printf '%s ' "$(kind "$1")"
+    if [ "$os" = Darwin ]; then stat -f '%z %m %Lp %u %g%n%Su%n%Sg' "$1"
+    else stat -c '%s %Y %a %u %g
+%U
+%G' "$1"; fi;;
 stat) info=$(meta "$1"); printf '%s %s' "$(kind "$1")" "$info";;
 alias) realpath "$1";;
 read)

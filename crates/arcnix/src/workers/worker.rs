@@ -34,16 +34,40 @@ pub enum Login {
 pub struct FileFailure {
     pub message: String,
     pub permission_denied: bool,
+    pub text_retry: Option<remote::AdminTextRetry>,
 }
 
 impl FileFailure {
+    pub(crate) fn text_message(&self, reading: bool, language: arcnix_core::Language) -> String {
+        let detail = crate::i18n::translate_for(&self.message, language);
+        if !self.permission_denied {
+            return detail;
+        }
+        let denied = crate::i18n::translate_for(
+            if reading {
+                "You do not have permission to read this file."
+            } else {
+                "You do not have permission to save this file."
+            },
+            language,
+        );
+        if detail.is_empty() {
+            denied
+        } else {
+            format!("{denied} {detail}")
+        }
+    }
+
     pub(super) fn ordinary(message: String) -> Self {
         Self {
             message,
             permission_denied: false,
+            text_retry: None,
         }
     }
 }
+
+pub(crate) type TextAuthorization = (remote::AdminTextRetry, zeroize::Zeroizing<String>);
 
 pub enum Action {
     LocalDesktop(local_desktop::Target, PathBuf),
@@ -55,15 +79,21 @@ pub enum Action {
     #[cfg(windows)]
     ReadHtml(String),
     CodeFile(crate::code_workbench::FileRequest),
+    AttachCodePage {
+        path: String,
+        snapshot: arcnix_core::text_files::TextSnapshot,
+        sudo: Option<TextAuthorization>,
+    },
     TextRead {
         path: String,
+        sudo: Option<TextAuthorization>,
         cancel: Arc<AtomicBool>,
     },
     TextSave {
         document: arcnix_core::text_files::Document,
         content: String,
         cancel: Arc<AtomicBool>,
-        sudo: Option<zeroize::Zeroizing<String>>,
+        sudo: Option<TextAuthorization>,
     },
     TextSaveAs {
         path: String,
@@ -113,6 +143,7 @@ pub enum Action {
     WslFiles(String, crate::wsl_workspace::Operation),
     RemoteRename(String, String),
     ManageRemoteFiles(arcnix_core::remote::FileAction, Vec<String>),
+    ManageFilesAsAdmin(remote::ManagedFileRetry, zeroize::Zeroizing<String>),
     ResolveFileAlias(String),
     FileMetadata(String),
     Permissions {
@@ -245,6 +276,7 @@ pub enum Update {
         name: String,
     },
     ManagedRemoteFiles(Result<(), String>),
+    FileAdminRequired(remote::ManagedFileRetry),
     FileAlias(Result<(String, bool), String>),
     Trash {
         remote: bool,
@@ -301,6 +333,39 @@ fn publish_file_result<T>(
         }
     }
 }
+fn publish_text_result<T>(
+    result: anyhow::Result<T>,
+    sudo: Option<TextAuthorization>,
+    active: bool,
+    prepare: impl FnOnce() -> anyhow::Result<remote::AdminTextRetry>,
+    send: impl FnOnce(Result<T, FileFailure>),
+) -> anyhow::Result<()> {
+    let prepared = match &result {
+        Err(error) if active && sudo.is_none() && remote::file_permission_denied(error) => {
+            prepare()
+        }
+        Err(error)
+            if active
+                && error.is::<remote::SudoPasswordRequired>()
+                && let Some((mut retry, _)) = sudo =>
+        {
+            retry.needs_password = true;
+            Ok(retry)
+        }
+        _ => return publish_elevatable_result(result, false, send),
+    };
+    let (text_retry, message) = match prepared {
+        Ok(retry) => (Some(retry), String::new()),
+        Err(reason) => (None, format!("{reason:#}")),
+    };
+    send(Err(FileFailure {
+        permission_denied: true,
+        message,
+        text_retry,
+    }));
+    Ok(())
+}
+
 fn publish_elevatable_result<T>(
     result: anyhow::Result<T>,
     allow_elevation: bool,
@@ -312,6 +377,7 @@ fn publish_elevatable_result<T>(
             let lost = arcnix_core::transport_error::is_connection_error(&error);
             send(Err(FileFailure {
                 message: format!("{error:#}"),
+                text_retry: None,
                 permission_denied: allow_elevation
                     && !lost
                     && remote::file_permission_denied(&error),
@@ -1040,11 +1106,11 @@ pub(crate) fn start_with_limiter(
                 Action::Delete { .. } => Some(0),
                 Action::Permissions { .. } => Some(1),
                 Action::FileMetadata(_) => Some(2),
-                Action::CodeFile(_) => Some(3),
+                Action::CodeFile(_) | Action::AttachCodePage { .. } => Some(3),
                 Action::TextRead { .. } | Action::TextSave { .. } | Action::TextSaveAs { .. } => {
                     Some(7)
                 }
-                Action::ManageRemoteFiles(..) => Some(5),
+                Action::ManageRemoteFiles(..) | Action::ManageFilesAsAdmin(..) => Some(5),
                 Action::ResolveFileAlias(_) => Some(6),
                 _ => None,
             };
@@ -1231,19 +1297,28 @@ pub(crate) fn start_with_limiter(
                             .as_mut()
                             .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                         match action {
-                            Action::TextRead { path, cancel } => {
+                            Action::TextRead { path, cancel, sudo } => {
                                 file_completed = true;
-                                publish_elevatable_result(
-                                    remote.read_text(&path, || {
-                                        anyhow::ensure!(
-                                            generation.load(Ordering::Acquire) == epoch
-                                                && !cancel.load(Ordering::Relaxed),
-                                            "File read canceled or connection changed"
-                                        );
-                                        Ok(())
-                                    }),
-                                    false,
-                                    |result| send(Update::TextFile(result)),
+                                let check = || {
+                                    anyhow::ensure!(
+                                        generation.load(Ordering::Acquire) == epoch
+                                            && !cancel.load(Ordering::Relaxed),
+                                        "File read canceled or connection changed"
+                                    );
+                                    Ok(())
+                                };
+                                let result = match &sudo {
+                                    Some((retry, password)) => {
+                                        remote.read_text_as_admin(retry, password, &cancel, check)
+                                    }
+                                    None => remote.read_text(&path, check),
+                                };
+                                publish_text_result(
+                                    result,
+                                    sudo,
+                                    check().is_ok(),
+                                    || remote.prepare_admin_read(&path),
+                                    |r| send(Update::TextFile(r)),
                                 )?;
                             }
                             Action::TextSaveAs {
@@ -1282,16 +1357,44 @@ pub(crate) fn start_with_limiter(
                                     );
                                     Ok(())
                                 };
-                                let result = match sudo.as_deref() {
-                                    Some(password) => remote.save_text_as_admin(
-                                        &document, &content, password, &cancel, check,
+                                let result = match &sudo {
+                                    Some((retry, password)) => remote.save_text_as_admin(
+                                        retry, &document, &content, password, &cancel, check,
                                     ),
                                     None => remote.save_text(&document, &content, check),
                                 };
-                                publish_elevatable_result(
+                                publish_text_result(
                                     result,
-                                    sudo.is_none() && check().is_ok(),
-                                    |result| send(Update::TextFile(result)),
+                                    sudo,
+                                    check().is_ok(),
+                                    || remote.prepare_admin_save(&document, &content),
+                                    |r| send(Update::TextFile(r)),
+                                )?;
+                            }
+                            Action::AttachCodePage {
+                                path,
+                                snapshot,
+                                sudo,
+                            } => {
+                                file_completed = true;
+                                let handle = sudo.as_ref().map(|_| serial);
+                                let result = match &sudo {
+                                    Some((retry, password)) => {
+                                        remote.open_admin_page(serial, retry, password, snapshot)
+                                    }
+                                    None => remote.poll_text_tail(&path, snapshot, None),
+                                };
+                                publish_text_result(
+                                    result,
+                                    sudo,
+                                    generation.load(Ordering::Acquire) == epoch,
+                                    || remote.prepare_admin_page(&path),
+                                    |result| match result {
+                                        Ok((snapshot, stamp)) => send(Update::CodeFile(Ok(
+                                            serde_json::json!({ "snapshot":snapshot, "stamp":stamp, "handle":handle }),
+                                        ))),
+                                        Err(error) => send(Update::TextFile(Err(error))),
+                                    },
                                 )?;
                             }
                             Action::CodeFile(request) => {
@@ -1395,16 +1498,52 @@ pub(crate) fn start_with_limiter(
                             }
                             Action::ManageRemoteFiles(action, paths) => {
                                 file_completed = true;
-                                publish_file_result(
-                                    remote.manage_files(action, &paths, || {
+                                let check = || {
+                                    anyhow::ensure!(
+                                        generation.load(Ordering::Acquire) == epoch,
+                                        "Connection changed"
+                                    );
+                                    Ok(())
+                                };
+                                let result = remote.manage_files(action.clone(), &paths, check);
+                                if let Err(error) = &result
+                                    && let Some(remaining) = action.retry_sources(&paths, error)
+                                    && check().is_ok()
+                                {
+                                    match remote.prepare_managed_retry(action, remaining.to_vec()) {
+                                        Ok(retry) => send(Update::FileAdminRequired(retry)),
+                                        Err(reason) => send(Update::ManagedRemoteFiles(Err(
+                                            format!("{error:#}. {reason:#}"),
+                                        ))),
+                                    }
+                                } else {
+                                    publish_file_result(result, |result| {
+                                        send(Update::ManagedRemoteFiles(result))
+                                    })?;
+                                }
+                            }
+                            Action::ManageFilesAsAdmin(mut retry, password) => {
+                                file_completed = true;
+                                let result =
+                                    remote.manage_files_as_admin(&retry, &password, || {
                                         anyhow::ensure!(
                                             generation.load(Ordering::Acquire) == epoch,
                                             "Connection changed"
                                         );
                                         Ok(())
-                                    }),
-                                    |result| send(Update::ManagedRemoteFiles(result)),
-                                )?;
+                                    });
+                                if password.is_empty()
+                                    && result
+                                        .as_ref()
+                                        .is_err_and(|e| e.is::<remote::SudoPasswordRequired>())
+                                {
+                                    retry.needs_password = true;
+                                    send(Update::FileAdminRequired(retry));
+                                } else {
+                                    publish_file_result(result, |result| {
+                                        send(Update::ManagedRemoteFiles(result))
+                                    })?;
+                                }
                             }
                             Action::ResolveFileAlias(path) => {
                                 file_completed = true;
@@ -1414,7 +1553,7 @@ pub(crate) fn start_with_limiter(
                             }
                             Action::FileMetadata(path) => {
                                 file_completed = true;
-                                publish_file_result(remote.file_metadata(&path), |result| {
+                                publish_file_result(remote.file_properties(&path), |result| {
                                     send(Update::FileMetadata(result))
                                 })?;
                             }

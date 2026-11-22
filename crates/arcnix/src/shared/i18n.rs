@@ -28,6 +28,22 @@ pub fn translate(value: &str) -> String {
     translate_for(value, language)
 }
 
+/// Shared file controls follow the language of their active workspace.
+pub(crate) fn workspace_language(s: &crate::State) -> Language {
+    if crate::server_desktop::visible(s) {
+        crate::desktop_system_settings::language(s)
+    } else {
+        s.config.settings.language
+    }
+}
+
+pub(crate) fn workspace_label(state: Cage<crate::State>, label: &'static str) -> Vary<String> {
+    state
+        .map(move |s| translate_for(label, workspace_language(s)))
+        .with_partial_eq()
+        .into()
+}
+
 pub fn bind_in(desktop: bool, value: impl Into<Vary<String>>) -> Vary<String> {
     if desktop {
         self::desktop::bind(value)

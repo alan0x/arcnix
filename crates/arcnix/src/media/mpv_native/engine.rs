@@ -416,6 +416,7 @@ pub(super) fn run(
             Ok(Command::Seek(seconds)) => {
                 client.command(&["seek", &seconds.to_string(), "absolute+exact"])?
             }
+            Ok(Command::Speed(speed)) => client.command(&["set", "speed", &speed.to_string()])?,
             Ok(Command::Volume(volume)) => {
                 client.command(&["set", "volume", &volume.to_string()])?
             }

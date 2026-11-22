@@ -83,6 +83,38 @@ fn start(ui: &Ui, action: FileAction, paths: Vec<String>) {
     ui.state.revise(|s| s.file_pending = Some(serial));
 }
 
+pub(crate) fn offer_retry(ui: &Ui, serial: u64, retry: arcnix_core::remote::ManagedFileRetry) {
+    if !release(ui, serial) {
+        return;
+    }
+    let busy = ui.state.revise(|s| {
+        if !s.connected || s.local_desktop.is_some() {
+            return false;
+        }
+        if s.dialog.is_some() {
+            return true;
+        }
+        file_elevation::show(s, file_elevation::Retry::Manage(retry));
+        false
+    });
+    if busy {
+        ui.error("Administrator permission required. Close the dialog and retry the remaining items.");
+    }
+    ui.refresh(true);
+    files_tabs::refresh_windows(ui);
+    ui.refresh_desktop_items(true);
+    ui.schedule();
+}
+
+pub(crate) fn retry_as_admin(
+    ui: &Ui,
+    retry: arcnix_core::remote::ManagedFileRetry,
+    password: zeroize::Zeroizing<String>,
+) {
+    let serial = ui.send(Action::ManageFilesAsAdmin(retry, password));
+    ui.state.revise(|s| s.file_pending = Some(serial));
+}
+
 pub(crate) fn completed(ui: &Ui, serial: u64, result: Result<(), String>) {
     if !release(ui, serial) {
         return;

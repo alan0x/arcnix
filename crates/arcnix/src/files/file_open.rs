@@ -216,8 +216,6 @@ pub(crate) fn menu(
             move |s| path(s).is_some()
         }),
         move || {
-            let open_ui = ui.clone();
-            let open_path = path.clone();
             let choose_ui = ui.clone();
             let choose_path = path.clone();
             let menu_path = path.clone();
@@ -236,65 +234,68 @@ pub(crate) fn menu(
                 }
             });
             let launch_ui = ui.clone();
-            fragment((
-                sapid::button()
-                    .class("menu-item")
-                    .label(i18n::bind("Open"))
-                    .enabled(available)
-                    .on_press(move || {
-                        if let Some(path) = state.with(&open_path) {
-                            close(&open_ui);
-                            open(&open_ui, &path);
-                        }
+            submenu(
+                state,
+                "Open with",
+                available,
+                (
+                    each(apps).key(|app| *app).children(move |item| {
+                        let app = item.value.get();
+                        let ui = launch_ui.clone();
+                        let path = menu_path.clone();
+                        sapid::button()
+                            .class("menu-item file-open-app")
+                            .name(i18n::workspace_label(state, label(app)))
+                            .enabled(available)
+                            .fill((
+                                icons::glyph(icon(app)),
+                                text().content(i18n::workspace_label(state, label(app))),
+                            ))
+                            .on_press(move || {
+                                if let Some(path) = state.with(&path) {
+                                    close(&ui);
+                                    launch(&ui, &path, app);
+                                }
+                            })
                     }),
-                col().class("file-open-branch").fill((
+                    text().class("menu-divider").content(""),
                     sapid::button()
-                        .class("menu-item file-open-trigger")
-                        .name(i18n::bind("Open with"))
+                        .class("menu-item")
+                        .label(i18n::workspace_label(state, "Choose another app"))
                         .enabled(available)
-                        .fill((
-                            text().content(i18n::bind("Open with")),
-                            icons::glyph(Icon::ChevronRight),
-                        )),
-                    col()
-                        .class("pane-menu file-open-submenu")
-                        .name(i18n::bind("Open with"))
-                        .fill((
-                            each(apps).key(|app| *app).children(move |item| {
-                                let app = item.value.get();
-                                let ui = launch_ui.clone();
-                                let path = menu_path.clone();
-                                sapid::button()
-                                    .class("menu-item file-open-app")
-                                    .name(i18n::bind(label(app)))
-                                    .enabled(available)
-                                    .fill((
-                                        icons::glyph(icon(app)),
-                                        text().content(i18n::bind(label(app))),
-                                    ))
-                                    .on_press(move || {
-                                        if let Some(path) = state.with(&path) {
-                                            close(&ui);
-                                            launch(&ui, &path, app);
-                                        }
-                                    })
-                            }),
-                            text().class("menu-divider").content(""),
-                            sapid::button()
-                                .class("menu-item")
-                                .label(i18n::bind("Choose another app"))
-                                .enabled(available)
-                                .on_press(move || {
-                                    if let Some(path) = state.with(&choose_path) {
-                                        close(&choose_ui);
-                                        choose(&choose_ui, &path);
-                                    }
-                                }),
-                        )),
-                )),
-            ))
+                        .on_press(move || {
+                            if let Some(path) = state.with(&choose_path) {
+                                close(&choose_ui);
+                                choose(&choose_ui, &path);
+                            }
+                        }),
+                ),
+            )
         },
     )
+}
+
+pub(crate) fn submenu(
+    state: Cage<State>,
+    label: &'static str,
+    enabled: Bond<bool>,
+    entries: impl IntoChildren,
+) -> impl Widget {
+    let title = i18n::workspace_label(state, label);
+    col().class("file-open-branch").fill((
+        sapid::button()
+            .class("menu-item file-open-trigger")
+            .name(title.clone())
+            .enabled(enabled)
+            .fill((
+                text().content(title.clone()),
+                icons::glyph(Icon::ChevronRight),
+            )),
+        col()
+            .class("pane-menu file-open-submenu")
+            .name(title)
+            .fill(entries),
+    ))
 }
 
 fn direct_action(s: &State, path: &str, app: FileApp) -> bool {

@@ -292,6 +292,10 @@ impl Host {
             {
                 crate::code_terminal::close_all(&self.ui);
                 self.ui
+                    .send(Action::CodeFile(code_workbench::FileRequest::ClosePage {
+                        handle: None,
+                    }));
+                self.ui
                     .send(Action::CodeFile(code_workbench::FileRequest::CloseRange {
                         cursor: None,
                     }));
@@ -372,6 +376,20 @@ impl Host {
                             path,
                             arcnix_core::file_associations::FileApp::Code,
                         );
+                    }
+                }
+                Some("attachPage") => {
+                    if let (Some(id), Some(path), Ok(snapshot)) = (
+                        msg["id"].as_u64(),
+                        msg["path"].as_str(),
+                        serde_json::from_value(msg["snapshot"].clone()),
+                    ) {
+                        code_workbench::attach_page(&self.ui, id, path.into(), snapshot, None);
+                    }
+                }
+                Some("openText") => {
+                    if let (Some(id), Some(path)) = (msg["id"].as_u64(), msg["path"].as_str()) {
+                        code_workbench::read(&self.ui, id, path.to_owned(), None);
                     }
                 }
                 Some("write") => {

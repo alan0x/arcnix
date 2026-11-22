@@ -52,7 +52,7 @@ def main():
             location('/Start')
 
             app.file('Nested').click(button='right')
-            app.action('Open in new window')
+            app.open_in('New window')
             expect(app.file('marker.txt')).to_be_visible()
             expect(windows).to_have_count(2)
             location('/Start/Nested')

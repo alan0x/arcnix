@@ -2,28 +2,24 @@ use crate::*;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Picker {
-    desktop: bool,
     request: String,
     loading: bool,
     entries: Vec<(String, bool)>,
 }
 
-fn request<T: Send + 'static>(
-    ui: &Ui,
-    work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
-    apply: impl FnOnce(&Ui, T) + 'static,
-) {
+pub(crate) fn open_desktop(ui: &Ui) {
     let token = new_id();
-    ui.state.revise(|s| {
-        if let Some(Dialog::LocalWsl(picker)) = &mut s.dialog {
-            picker.request = token.clone();
-            picker.loading = true;
-            s.dialog_error.clear();
-        }
-    });
+    ui.open_dialog(Dialog::LocalWsl(Picker {
+        request: token.clone(),
+        loading: true,
+        entries: Vec::new(),
+    }));
+    if !ui.state.with(|s| matches!(&s.dialog, Some(Dialog::LocalWsl(p)) if p.request == token)) {
+        return;
+    }
     let (tx, rx) = async_channel::bounded(1);
     std::thread::spawn(move || {
-        let _ = tx.send_blocking(work().map_err(|e| format!("{e:#}")));
+        let _ = tx.send_blocking(wsl::distributions().map_err(|e| format!("{e:#}")));
     });
     let state = ui.state;
     let receiver = ui.clone();
@@ -44,7 +40,17 @@ fn request<T: Send + 'static>(
                 }
             });
             match result {
-                Ok(value) => apply(&receiver, value),
+                Ok(entries) => match entries.as_slice() {
+                    [(name, _)] => choose(&receiver, name.clone()),
+                    [] => state.revise(|s| {
+                        s.dialog_error = "没有找到可管理的 WSL 发行版。请在 PowerShell 中运行 wsl --list --verbose 查看。".into();
+                    }),
+                    _ => state.revise(|s| {
+                        if let Some(Dialog::LocalWsl(p)) = &mut s.dialog {
+                            p.entries = entries;
+                        }
+                    }),
+                },
                 Err(error) => state.revise(|s| s.dialog_error = error),
             }
         })
@@ -59,63 +65,9 @@ fn request<T: Send + 'static>(
     }
 }
 
-pub(crate) fn open(ui: &Ui) {
-    open_picker(ui, false)
-}
-
-pub(crate) fn open_desktop(ui: &Ui) {
-    open_picker(ui, true)
-}
-
-fn open_picker(ui: &Ui, desktop: bool) {
-    ui.open_dialog(Dialog::LocalWsl(Picker {
-        desktop,
-        request: String::new(),
-        loading: false,
-        entries: Vec::new(),
-    }));
-    if ui
-        .state
-        .with(|s| matches!(s.dialog, Some(Dialog::LocalWsl(_))))
-    {
-        request(ui, wsl::distributions, move |ui, entries| {
-            if desktop && let [(name, _)] = entries.as_slice() {
-                choose(ui, name.clone());
-                return;
-            }
-            ui.state.revise(|s| if let Some(Dialog::LocalWsl(picker)) = &mut s.dialog {
-                picker.entries = entries;
-                if picker.entries.is_empty() {
-                    s.dialog_error = "没有找到可管理的 WSL 发行版。请在 PowerShell 中运行 wsl --list --verbose 查看。".into();
-                }
-            });
-        });
-    }
-}
-
 fn choose(ui: &Ui, name: String) {
-    if ui
-        .state
-        .with(|s| matches!(&s.dialog,Some(Dialog::LocalWsl(p)) if p.desktop))
-    {
-        ui.close_dialog();
-        ui.enter_local_desktop(local_desktop::Target::Wsl(name));
-        return;
-    }
-    request(
-        ui,
-        move || Ok((wsl::profile_host(&name)?, wsl::username(&name)?, name)),
-        |ui, (host, username, name)| {
-            ui.state.revise(|s| {
-                s.editor.name = format!("WSL · {name}");
-                s.editor.host = host;
-                s.editor.username = username;
-                s.editor.wsl_use_ssh = false;
-                s.editor.wsl_distribution = Some(name);
-                show_dialog(s, Dialog::Server);
-            })
-        },
-    );
+    ui.close_dialog();
+    ui.enter_local_desktop(local_desktop::Target::Wsl(name));
 }
 
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
@@ -160,20 +112,9 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
             }),
         )),
         (
-            btn("返回", move || {
-                if state.with(|s| matches!(&s.dialog,Some(Dialog::LocalWsl(p)) if p.desktop)) {
-                    back.close_dialog()
-                } else {
-                    back.open_dialog(Dialog::Server)
-                }
-            }),
-            btn("刷新", move || {
-                open_picker(
-                    &refresh,
-                    state.with(|s| matches!(&s.dialog,Some(Dialog::LocalWsl(p)) if p.desktop)),
-                )
-            })
-            .enabled(state.map(|s| matches!(&s.dialog, Some(Dialog::LocalWsl(p)) if !p.loading))),
+            btn("返回", move || back.close_dialog()),
+            btn("刷新", move || open_desktop(&refresh))
+                .enabled(state.map(|s| matches!(&s.dialog, Some(Dialog::LocalWsl(p)) if !p.loading))),
         ),
     )
 }

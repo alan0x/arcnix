@@ -18,7 +18,9 @@ def main():
 
     def enter(app):
         page = app.page
-        page.get_by_role('button', name='Try the local desktop', exact=True).click()
+        entry = page.locator('.server-explorer').get_by_role('button', name='Try the local desktop', exact=True)
+        expect(page.locator('.local-desktop-entry + .server-search')).to_be_visible()
+        entry.click()
         choice = page.locator('.wsl-distribution').filter(has=page.get_by_text(distro, exact=True))
         expect(choice.or_(page.locator('.desktop-dock:visible'))).to_be_visible(timeout=30000)
         if choice.is_visible():
@@ -26,6 +28,10 @@ def main():
         expect(page.locator('.connection-state')).to_have_text('Connected locally', timeout=30000)
         expect(page.locator('.desktop-dock')).to_be_visible()
         expect(page.locator('.desktop-wallpaper-copy')).to_contain_text('Connect to a server for more.')
+        expect(entry).to_be_visible()
+        for app_class in ('app-code', 'app-player'):
+            expect(page.locator(f'.desktop-shortcuts .{app_class}')).to_be_visible()
+            expect(page.locator(f'.desktop-dock .{app_class}')).to_be_visible()
         catalog = app.apps()
         for label in ('Code Editor', 'Player'):
             expect(catalog.get_by_role('button', name=label, exact=True)).to_be_visible()
@@ -43,6 +49,28 @@ def main():
     try:
         with Desktop(out, cfg) as app:
             enter(app)
+            # Keep the shell in English and change just this desktop while Files is mounted.
+            folder = directory.rsplit('/', 1)[1]
+            owner = linux('stat', '-c', '%U (%u) / %G (%g)', directory).decode().strip()
+            app.application('Files')
+            for language, region, open_folder, properties, owner_label, close in (
+                ('简体中文', 'Region & language', '打开位置', '属性', '所有者 / 组', '关闭对话框'),
+                ('English', '区域与语言', 'Open in', 'Properties', 'Owner / Group', 'Close dialog'),
+            ):
+                page = app.page
+                page.locator('.desktop-dock-app.app-settings').click()
+                panel = page.locator('.app-settings.active')
+                panel.get_by_role('button', name=region, exact=True).click()
+                panel.locator('.setting-desktop-language').get_by_role('radio', name=language, exact=True).check()
+                page.locator('.desktop-dock-app.app-files').click()
+                app.file(folder).click(button='right')
+                menu = page.locator('.file-context-menu:visible')
+                expect(menu.get_by_role('button', name=open_folder, exact=True)).to_be_visible()
+                menu.get_by_role('button', name=properties, exact=True).click()
+                dialog = page.get_by_role('dialog', name=properties, exact=True)
+                expect(dialog.locator('.property-detail').filter(has_text=owner_label)).to_contain_text(owner)
+                expect(dialog.locator('.permission-matrix')).to_contain_text(owner.split(' (', 1)[0])
+                dialog.get_by_role('button', name=close, exact=True).click()
             app.application('Files')
             app.file(directory.rsplit('/', 1)[1]).dblclick()
             expect(app.page.get_by_text('This folder is empty', exact=True)).to_be_visible()

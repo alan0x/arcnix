@@ -2,6 +2,8 @@
 //! their destination, then published by a no-overwrite rename.
 use super::*;
 
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind", content = "destination", rename_all = "snake_case")]
 pub enum FileAction {
     Copy(Option<String>),
     Move(String),
@@ -11,7 +13,7 @@ pub enum FileAction {
     Compress(String),
 }
 
-#[derive(Clone, Copy, serde::Deserialize)]
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DesktopDrop {
     Move,
@@ -63,6 +65,42 @@ fn copy_name(name: &str, directory: bool) -> (&str, &str) {
         return name.split_at(index);
     }
     (name, "")
+}
+
+#[derive(Debug)]
+struct StoppedAt {
+    path: String,
+    completed: usize,
+}
+
+impl std::fmt::Display for StoppedAt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "File operation stopped at {} after {} items",
+            self.path, self.completed
+        )
+    }
+}
+
+impl FileAction {
+    pub fn retry_sources<'a>(
+        &self,
+        paths: &'a [String],
+        error: &anyhow::Error,
+    ) -> Option<&'a [String]> {
+        if !matches!(
+            self,
+            Self::Copy(_) | Self::Alias | Self::AliasIn(_) | Self::Compress(_)
+        ) || !super::file_permission_denied(error)
+        {
+            return None;
+        }
+        let completed = error.downcast_ref::<StoppedAt>().map_or(0, |s| s.completed);
+        paths
+            .get(completed..)
+            .filter(|remaining| !remaining.is_empty())
+    }
 }
 
 impl RemoteSession {
@@ -212,8 +250,9 @@ impl RemoteSession {
                     FileAction::Desktop(_) | FileAction::Compress(_) => unreachable!(),
                 }
             })();
-            result.with_context(|| {
-                format!("File operation stopped at {source} after {index} items")
+            result.with_context(|| StoppedAt {
+                path: source.into(),
+                completed: index,
             })?;
         }
         Ok(())

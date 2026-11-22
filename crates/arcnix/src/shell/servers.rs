@@ -240,18 +240,7 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
                     move || root_menu(ui.clone())
                 }),
             )),
-        when(
-            state.map(|s| {
-                s.selected.is_some()
-                    && (s.workbench.active != server_desktop::Tab::Home
-                        || s.local_desktop.is_some()
-                        || s.local_wsl_selected())
-            }),
-            {
-                let ui = ui.clone();
-                move || navigation::local_desktop_entry(ui.clone())
-            },
-        ),
+        navigation::local_desktop_entry(ui.clone()),
         row().class("server-search").fill((
             input()
                 .name(i18n::bind("搜索"))
@@ -672,14 +661,6 @@ fn server_dialog(ui: Ui) -> impl Widget {
             .to_owned()
         }))
         .fill((
-            #[cfg(windows)]
-            when(state.map(|s| s.server_editor_original.is_none()), {
-                let ui = ui.clone();
-                move || {
-                    let ui = ui.clone();
-                    btn("选择本机 WSL 发行版", move || wsl_ui::open(&ui))
-                }
-            }),
             field(
                 "名称",
                 &ui,

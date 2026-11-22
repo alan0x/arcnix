@@ -1,7 +1,7 @@
 //! Files exposed to the embedded workbench from the active desktop.
 use anyhow::Context;
 use arcnix_core::remote::RemoteSession;
-use arcnix_core::text_files::{Document, Version};
+use arcnix_core::text_files::{Document, TextSnapshot, Version};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::result::Result;
@@ -49,21 +49,27 @@ pub enum FileRequest {
         path: String,
     },
     ReadRange {
+        handle: Option<u64>,
         path: String,
         offset: u64,
         snapshot: arcnix_core::text_files::TextSnapshot,
         cursor: Option<u64>,
     },
     PollTail {
+        handle: Option<u64>,
         path: String,
         snapshot: arcnix_core::text_files::TextSnapshot,
         stamp: Option<[u8; 32]>,
     },
     CountLines {
+        handle: Option<u64>,
         path: String,
         offset: u64,
         snapshot: arcnix_core::text_files::TextSnapshot,
         cursor: u64,
+    },
+    ClosePage {
+        handle: Option<u64>,
     },
     CloseRange {
         cursor: Option<u64>,
@@ -93,6 +99,8 @@ impl Drop for Write {
 #[derive(Clone)]
 pub(crate) enum Pending {
     File(u64),
+    Read { id: u64, elevated: bool },
+    Page { id: u64, snapshot: TextSnapshot },
     Save { id: u64, write: Arc<Write> },
 }
 
@@ -141,6 +149,7 @@ impl Files<'_> {
 
     fn range(
         &mut self,
+        handle: Option<u64>,
         path: &str,
         offset: u64,
         snapshot: arcnix_core::text_files::TextSnapshot,
@@ -148,6 +157,9 @@ impl Files<'_> {
         check: impl Fn() -> anyhow::Result<()>,
     ) -> anyhow::Result<arcnix_core::text_files::TextRange> {
         match self {
+            Self::Remote(remote) if let Some(handle) = handle => {
+                remote.admin_text_range(handle, path, offset, snapshot)
+            }
             Self::Remote(remote) => remote.read_text_range(path, offset, snapshot, cursor, check),
             Self::Local(target) => target.read_text_range(path, offset, snapshot),
         }
@@ -257,32 +269,44 @@ impl FileRequest {
                 Ok(json!({"content":d.content,"version":d.version,"bom":d.bom,"crlf":d.crlf}))
             }
             Self::ReadRange {
+                handle,
                 path,
                 offset,
                 snapshot,
                 cursor,
             } => Ok(serde_json::to_value(
-                files.range(&path, offset, snapshot, cursor, check)?,
+                files.range(handle, &path, offset, snapshot, cursor, check)?,
             )?),
             Self::PollTail {
+                handle,
                 path,
                 snapshot,
                 stamp,
             } => {
                 let (snapshot, stamp) = match files {
+                    Files::Remote(remote) if let Some(handle) = handle => {
+                        remote.poll_admin_page(handle, &path, snapshot, stamp)?
+                    }
                     Files::Remote(remote) => remote.poll_text_tail(&path, snapshot, stamp)?,
                     Files::Local(target) => target.poll_text_tail(&path, snapshot, stamp)?,
                 };
                 Ok(json!({ "snapshot": snapshot, "stamp": stamp }))
             }
             Self::CountLines {
+                handle,
                 path,
                 offset,
                 snapshot,
                 cursor,
             } => {
-                let page = files.range(&path, offset, snapshot, Some(cursor), check)?;
+                let page = files.range(handle, &path, offset, snapshot, Some(cursor), check)?;
                 Ok(json!({"next":page.next, "breaks":page.breaks}))
+            }
+            Self::ClosePage { handle } => {
+                if let Files::Remote(remote) = files {
+                    remote.close_admin_pages(handle);
+                }
+                Ok(Value::Null)
             }
             Self::CloseRange { cursor } => {
                 if let Files::Remote(remote) = files {
@@ -294,7 +318,7 @@ impl FileRequest {
     }
 }
 
-pub(crate) fn save(ui: &Ui, id: u64, write: Arc<Write>, sudo: Option<zeroize::Zeroizing<String>>) {
+pub(crate) fn save(ui: &Ui, id: u64, write: Arc<Write>, sudo: Option<worker::TextAuthorization>) {
     let serial = ui.send(Action::TextSave {
         document: Document {
             path: write.path.clone(),
@@ -311,33 +335,106 @@ pub(crate) fn save(ui: &Ui, id: u64, write: Arc<Write>, sudo: Option<zeroize::Ze
         .revise(|s| s.code.pending.insert(serial, Pending::Save { id, write }));
 }
 
-pub(crate) fn retry_save(ui: &Ui, serial: u64, password: zeroize::Zeroizing<String>) {
+pub(crate) fn retry_save(ui: &Ui, serial: u64, authorization: worker::TextAuthorization) {
     if let Some(Pending::Save { id, write }) = ui.state.revise(|s| s.code.pending.remove(&serial)) {
-        save(ui, id, write, Some(password));
+        save(ui, id, write, Some(authorization));
     }
 }
 
-pub(crate) fn saved(s: &mut State, serial: u64, result: Result<Document, worker::FileFailure>) {
-    if result.as_ref().is_err_and(|error| error.permission_denied)
-        && available(s)
-        && let Some(Pending::Save { write, .. }) = s.code.pending.get(&serial)
-    {
-        file_elevation::show(
-            s,
-            file_elevation::Retry::CodeSave(serial, write.path.clone()),
-        );
-    } else {
-        reply(
-            s,
-            serial,
-            result.map(|d| json!(d.version)).map_err(|e| e.message),
-        );
+pub(crate) fn read(ui: &Ui, id: u64, path: String, sudo: Option<worker::TextAuthorization>) {
+    let elevated = sudo.is_some();
+    let serial = ui.send(Action::TextRead {
+        path,
+        cancel: Arc::new(AtomicBool::new(false)),
+        sudo,
+    });
+    ui.state.revise(|s| {
+        s.code
+            .pending
+            .insert(serial, Pending::Read { id, elevated })
+    });
+}
+
+pub(crate) fn attach_page(
+    ui: &Ui,
+    id: u64,
+    path: String,
+    snapshot: TextSnapshot,
+    sudo: Option<worker::TextAuthorization>,
+) {
+    let serial = ui.send(Action::AttachCodePage {
+        path,
+        snapshot,
+        sudo,
+    });
+    ui.state.revise(|s| {
+        s.code
+            .pending
+            .insert(serial, Pending::Page { id, snapshot })
+    });
+}
+
+pub(crate) fn retry_read(
+    ui: &Ui,
+    serial: u64,
+    retry: arcnix_core::remote::AdminTextRetry,
+    password: zeroize::Zeroizing<String>,
+) {
+    match ui.state.revise(|s| s.code.pending.remove(&serial)) {
+        Some(Pending::Read { id, .. }) => read(ui, id, retry.path.clone(), Some((retry, password))),
+        Some(Pending::Page { id, snapshot }) => attach_page(
+            ui,
+            id,
+            retry.path.clone(),
+            snapshot,
+            Some((retry, password)),
+        ),
+        _ => {}
     }
+}
+
+pub(crate) fn document_reply(
+    s: &mut State,
+    serial: u64,
+    result: Result<Document, worker::FileFailure>,
+) {
+    let request = s.code.pending.get(&serial);
+    let reading = matches!(request, Some(Pending::Read { .. } | Pending::Page { .. }));
+    let elevated = matches!(request, Some(Pending::Read { elevated: true, .. }));
+    let value = match result {
+        Ok(d) if reading => Ok(
+            json!({"content":d.content,"version":d.version,"bom":d.bom,"crlf":d.crlf,"elevated":elevated}),
+        ),
+        Ok(d) => Ok(json!(d.version)),
+        Err(error) => {
+            let message = error.text_message(reading, crate::i18n::workspace_language(s));
+            if available(s)
+                && let Some(retry) = error.text_retry
+            {
+                file_elevation::show(
+                    s,
+                    if reading {
+                        file_elevation::Retry::CodeRead(serial, retry)
+                    } else {
+                        file_elevation::Retry::CodeSave(serial, retry)
+                    },
+                );
+                return;
+            }
+            Err(message)
+        }
+    };
+    reply(s, serial, value);
 }
 
 pub(crate) fn reply(s: &mut State, serial: u64, result: Result<Value, String>) {
     let id = match s.code.pending.remove(&serial) {
-        Some(Pending::File(id) | Pending::Save { id, .. }) => Some(id),
+        Some(
+            Pending::File(id)
+            | Pending::Read { id, .. }
+            | Pending::Page { id, .. }
+            | Pending::Save { id, .. },
+        ) => Some(id),
         None => s.code.background.remove(&serial),
     };
     if let Some(id) = id {
@@ -359,10 +456,12 @@ pub(crate) fn open(ui: &Ui, path: &str) {
 }
 pub(crate) fn close(ui: &Ui) -> bool {
     ui.state.revise(|s| {
-        if !s.code.pending.is_empty() {
-            return false;
-        }
-        if s.code.dirty {
+        if s.code.dirty
+            || s.code
+                .pending
+                .values()
+                .any(|op| matches!(op, Pending::Save { .. }))
+        {
             s.code.confirm = true;
             return false;
         }

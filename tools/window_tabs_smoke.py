@@ -68,6 +68,28 @@ def main():
                 expect(original.locator('.xterm-accessibility-tree')).to_contain_text('Arcnix terminal fixture')
             round_trip(p, 'terminal', check_terminal)
             expect(reader).to_contain_text('tab-move-check')
+            # Open beyond the old eight-session cap. Jump directly to both ends of the strip.
+            for count in range(3, 13):
+                active.locator('.terminal-new-tab').click()
+                expect(active.locator('.terminal-tab')).to_have_count(count)
+            strip = active.locator('.terminal-tab-list')
+            picker = active.get_by_role('button', name='All tabs', exact=True)
+            expect(picker).to_have_attribute('data-tab-count', '12')
+            eventually(lambda: strip.evaluate('el => el.scrollLeft > 0'))
+            for key, index in [('Home', 0), ('End', 11)]:
+                picker.click()
+                menu = active.get_by_role('group', name='All tabs')
+                expect(menu.get_by_role('button')).to_have_count(12)
+                p.keyboard.press(key)
+                p.keyboard.press('Enter')
+                tab = active.locator('.terminal-tab').nth(index)
+                expect(tab).to_have_attribute('aria-pressed', 'true')
+                eventually(lambda: tab.evaluate('''el => {
+                    const bounds = el.closest('.window-tab-strip').getBoundingClientRect();
+                    const tab = el.closest('.window-tab-item').getBoundingClientRect();
+                    return tab.left >= bounds.left - 1 && tab.right <= bounds.right + 1;
+                }'''))
+            expect(reader).to_contain_text('Arcnix terminal fixture')
             active.locator('.window-close').click()
 
             desktop.application('Browser')

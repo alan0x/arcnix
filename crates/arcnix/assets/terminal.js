@@ -80,7 +80,7 @@
         const wrapper = document.createElement("div");
         wrapper.className="terminal-owned-surface";
         surface.appendChild(wrapper);
-        const term = new Terminal({fontFamily:'"Cascadia Mono",Consolas,"Liberation Mono",monospace',fontSize:13,cursorBlink:true,scrollback:5000,convertEol:false,screenReaderMode:true,allowProposedApi:false,disableStdin:true,rightClickSelectsWord:false,linkHandler:{activate:()=>{}}});
+        const term = new Terminal({fontFamily:metadata.font_family,fontSize:metadata.font_size,cursorStyle:metadata.cursor_style,cursorBlink:metadata.cursor_blink,scrollback:5000,convertEol:false,screenReaderMode:true,allowProposedApi:false,disableStdin:true,rightClickSelectsWord:false,linkHandler:{activate:()=>{}}});
         const addon = new FitAddon.FitAddon();
         term.loadAddon(addon);
         term.open(wrapper);
@@ -357,6 +357,14 @@
         const visible=!!surface.getClientRects().length;
         if(!visible && !engines.has(`${metadata.epoch}:${metadata.id}`)){detach();return;}
         activate(metadata,surface);
+        const options = engine.term.options;
+        if (options.fontSize !== metadata.font_size || options.fontFamily !== metadata.font_family) {
+            options.fontFamily = metadata.font_family;
+            options.fontSize = metadata.font_size;
+            fit();
+        }
+        if (options.cursorStyle !== metadata.cursor_style) options.cursorStyle = metadata.cursor_style;
+        if (options.cursorBlink !== metadata.cursor_blink) options.cursorBlink = metadata.cursor_blink;
         for (const parked of document.querySelectorAll('.terminal-parked')) {
             const cached = engines.get(parked.querySelector('.terminal-parked-key').textContent);
             const surface = parked.querySelector('.terminal-parked-surface');

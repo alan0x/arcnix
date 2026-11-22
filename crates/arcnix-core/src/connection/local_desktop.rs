@@ -5,7 +5,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 #[path = "wsl_reader.rs"]
 mod wsl_reader;
 
-use crate::text_files::{TextRange, TextSnapshot};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -13,11 +12,9 @@ use anyhow::{Context, Result, ensure};
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
 
-use crate::{
-    FileEntry,
-    permissions::Metadata,
-    text_files::{Document, Version},
-};
+use crate::FileEntry;
+use crate::permissions::Metadata;
+use crate::text_files::{Document, TextRange, TextSnapshot, Version};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -170,6 +167,19 @@ impl Target {
         Ok((directory, entries))
     }
 
+    pub fn file_properties(&self, path: &str) -> Result<Metadata> {
+        crate::terminal::validate_directory(path)?;
+        let output = self.run(&["properties", path], &[])?;
+        let output = String::from_utf8_lossy(&output);
+        let mut lines = output.lines();
+        let mut info = metadata(lines.next().context("Missing file metadata")?)?;
+        info.set_account_names(
+            lines.next().unwrap_or_default(),
+            lines.next().unwrap_or_default(),
+        );
+        Ok(info)
+    }
+
     pub fn metadata(&self, path: &str) -> Result<Metadata> {
         crate::terminal::validate_directory(path)?;
         metadata(std::str::from_utf8(&self.run(&["stat", path], &[])?)?)
@@ -281,8 +291,9 @@ impl Target {
         }
         #[cfg(unix)]
         {
-            use rustix::fs::{Mode, OFlags, open};
             use std::os::unix::fs::MetadataExt;
+
+            use rustix::fs::{Mode, OFlags, open};
             let fd = open(
                 path,
                 OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
@@ -390,6 +401,8 @@ fn metadata(info: &str) -> Result<Metadata> {
         mode: Some(u32::from_str_radix(mode, 8)?),
         uid: Some(uid.parse()?),
         gid: Some(gid.parse()?),
+        owner_name: None,
+        group_name: None,
     })
 }
 

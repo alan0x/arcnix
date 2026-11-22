@@ -351,15 +351,16 @@ pub(crate) fn view_controls(ui: Ui, remote: bool) -> impl Widget {
             .on_press(move || grid.state.revise(|s| set_icons(s, remote, true))),
     ))
 }
-pub(crate) fn file_kind(entry: &FileEntry) -> String {
+pub(crate) fn file_kind(entry: &FileEntry, language: arcnix_core::Language) -> String {
+    let translate = |label| i18n::translate_for(label, language);
     if entry.is_symlink {
-        i18n::translate("链接")
+        translate("链接")
     } else if entry.is_dir {
-        i18n::translate("文件夹")
+        translate("文件夹")
     } else if let Some(extension) = Path::new(&entry.name).extension().and_then(|e| e.to_str()) {
-        format!("{} {}", extension.to_uppercase(), i18n::translate("文件"))
+        format!("{} {}", extension.to_uppercase(), translate("文件"))
     } else {
-        i18n::translate("文件")
+        translate("文件")
     }
 }
 pub(crate) fn timestamp(value: Option<u64>) -> String {
@@ -381,15 +382,19 @@ pub(crate) fn information(ui: Ui, remote: bool) -> impl Widget {
                 if chosen.len() == 1 {
                     let file = chosen[0];
                     if file.is_dir {
-                        format!("{} · {}", file.name, file_kind(file))
+                        format!(
+                            "{} · {}",
+                            file.name,
+                            file_kind(file, i18n::workspace_language(s))
+                        )
                     } else {
                         format!(
                             "{} · {} · {} ({} {})",
                             file.name,
-                            file_kind(file),
+                            file_kind(file, i18n::workspace_language(s)),
                             size(file.size),
                             file.size,
-                            i18n::translate("字节")
+                            i18n::translate_for("字节", i18n::workspace_language(s))
                         )
                     }
                 } else if !chosen.is_empty() {
@@ -399,11 +404,17 @@ pub(crate) fn information(ui: Ui, remote: bool) -> impl Widget {
                         .fold(0u64, |total, f| total.saturating_add(f.size));
                     format!(
                         "{} · {}",
-                        i18n::translate(&format!("已选 {} 项", chosen.len())),
+                        i18n::translate_for(
+                            &format!("已选 {} 项", chosen.len()),
+                            i18n::workspace_language(s)
+                        ),
                         size(bytes)
                     )
                 } else {
-                    i18n::translate(&format!("{} 个项目", all.len()))
+                    i18n::translate_for(
+                        &format!("{} 个项目", all.len()),
+                        i18n::workspace_language(s),
+                    )
                 }
             })),
         text()
@@ -424,13 +435,13 @@ pub(crate) fn information(ui: Ui, remote: bool) -> impl Widget {
                 let file = &chosen[0];
                 let mut value = format!(
                     "{}: {}",
-                    i18n::translate("修改时间"),
+                    i18n::translate_for("修改时间", i18n::workspace_language(s)),
                     timestamp(file.modified)
                 );
                 if let Some(mode) = file.permissions {
                     value.push_str(&format!(
                         " · {}: {:04o}",
-                        i18n::translate("权限"),
+                        i18n::translate_for("权限", i18n::workspace_language(s)),
                         mode & 0o7777
                     ));
                 }
@@ -1345,9 +1356,12 @@ pub(crate) fn listing(ui: Ui, remote: bool, files: bool) -> impl Widget {
                                 when(
                                     state.map(move |s| file_columns::visible(s, remote).kind),
                                     move || {
-                                        text()
-                                            .class("file-type")
-                                            .content(entry.map(|r| file_kind(&r.entry)))
+                                        text().class("file-type").content(state.map(move |s| {
+                                            file_kind(
+                                                &entry.get().entry,
+                                                i18n::workspace_language(s),
+                                            )
+                                        }))
                                     },
                                 ),
                                 when(

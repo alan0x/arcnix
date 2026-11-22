@@ -36,6 +36,7 @@ enum Command {
     Toggle,
     Seek(f64),
     Volume(f64),
+    Speed(f64),
 }
 enum Event {
     State(Transport),
@@ -89,6 +90,7 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                             let valid = match cmd {
                                 Command::Seek(t) => (0.0..=player.transport.duration).contains(&t),
                                 Command::Volume(v) => (0.0..=100.0).contains(&v),
+                                Command::Speed(v) => (0.5..=2.0).contains(&v),
                                 Command::Toggle => true,
                             };
                             if valid {
@@ -117,6 +119,7 @@ struct Surface {
     hwnd: HWND,
     serial: u64,
     layout: Option<Viewport>,
+    preferences: Option<(u8, u16)>,
     worker: std::thread::JoinHandle<()>,
 }
 impl Surface {
@@ -235,6 +238,19 @@ impl Host {
             }
         }
         if let Some(surface) = &mut self.surface {
+            self.ui.state.with(|s| {
+                if let Some(commands) = native(s).and_then(|p| p.commands.as_ref()) {
+                    let prefs = &server_apps_ui::current(s).app_settings;
+                    let (volume, speed) = (prefs.player.volume, prefs.player.speed);
+                    if surface.preferences.is_none_or(|p| p.0 != volume) {
+                        let _ = commands.send(Command::Volume(f64::from(volume)));
+                    }
+                    if surface.preferences.is_none_or(|p| p.1 != speed) {
+                        let _ = commands.send(Command::Speed(f64::from(speed) / 100.0));
+                    }
+                    surface.preferences = Some((volume, speed));
+                }
+            });
             let visible = self.ui.state.with(|s| {
                 server_desktop::visible(s)
                     && s.workbench.window_visible(WorkspacePage::Player)
@@ -325,6 +341,7 @@ impl Host {
             hwnd,
             serial,
             layout: None,
+            preferences: None,
             worker,
         })
     }

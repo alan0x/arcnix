@@ -91,6 +91,7 @@ enum Dialog {
     },
     Import,
     Connect,
+    AppSettings(WorkspacePage),
     FilesSettings,
     FileProperties,
     FileColumns {
@@ -1002,6 +1003,7 @@ impl Ui {
                 file_browser::refresh_changed_entry(events,remote,response.serial,file_browser::NewEntryFocus::Select(name));
             }
             Update::Trash{remote,result}=>trash_ui::completed(events,response.serial,remote,result),
+            Update::FileAdminRequired(retry)=>file_actions::offer_retry(events,response.serial,retry),
             Update::ManagedRemoteFiles(result)=>file_actions::completed(events,response.serial,result),
             Update::FileAlias(result)=>file_actions::alias_resolved(events,response.serial,result),
             Update::Deleted{remote,result}=>file_context::deleted(events,response.serial,remote,result),
@@ -1009,7 +1011,7 @@ impl Ui {
             Update::FileMetadata(result)=>file_properties::metadata(events,response.serial,result),
             Update::Permissions(result)=>file_properties::finished(events,response.serial,result),
             Update::CodeFile(reply)=>state.revise(|s|code_workbench::reply(s,response.serial,reply)),
-            Update::TextFile(reply) if state.with(|s|s.code.pending.contains_key(&response.serial))=>state.revise(|s|code_workbench::saved(s,response.serial,reply)),
+            Update::TextFile(reply) if state.with(|s|s.code.pending.contains_key(&response.serial))=>state.revise(|s|code_workbench::document_reply(s,response.serial,reply)),
             Update::TextFile(reply)=>text_editor::event(events,response.serial,reply),
             Update::Error(message)=>{
                 if file_browser::mutation_failed(events,response.serial,&message) {return;}
@@ -1819,21 +1821,19 @@ fn modal_with_header(
         let close = ui.clone();
         let scrim = ui.clone();
         let focus = scope.cage(None);
-        let title = if ui.state.with(|s| {
-            matches!(
+        let desktop_language = ui.state.with(|s| {
+            (matches!(s.dialog, Some(Dialog::FileProperties | Dialog::FilesSettings | Dialog::FileElevation)) && server_desktop::owns_dialog(s)) || matches!(
                 s.dialog,
                 Some(
                     Dialog::DesktopTimeZone
+                        | Dialog::AppSettings(_)
                         | Dialog::OpenDesktopFile(_)
                         | Dialog::DesktopIcons
                         | Dialog::DockShortcuts
                 )
             )
-        }) {
-            i18n::desktop::bind(title)
-        } else {
-            i18n::bind(title)
-        };
+        });
+        let title = i18n::bind_in(desktop_language, title);
         let mounted = scope.mount_with(|| {
             let mut backdrop = col();
             // Glory bounds the number of nodes in a focus scope. These app catalogues
@@ -1866,7 +1866,7 @@ fn modal_with_header(
                 .fill((
                     button()
                         .class("modal-scrim")
-                        .label(i18n::bind("关闭对话框"))
+                        .label(i18n::bind_in(desktop_language, "关闭对话框"))
                         .focus(FocusMode::Programmatic)
                         .enabled(ui.state.map(|s| {
                             (s.file_pending.is_none()
@@ -1896,6 +1896,7 @@ fn modal_with_header(
                                     Dialog::ConfigureNetwork
                                     | Dialog::FileAssociation { .. }
                                     | Dialog::FilesSettings
+                                    | Dialog::AppSettings(_)
                                     | Dialog::TransferDefaults
                                     | Dialog::ConfigurationBackup
                                     | Dialog::ConfigurationRestore,
@@ -1916,7 +1917,7 @@ fn modal_with_header(
                                 .fill(text().class("dialog-title").content(title))
                                 .fill(header)
                                 .fill(
-                                    close_action("关闭对话框")
+                                    (if desktop_language { i18n::desktop::close_action("关闭对话框") } else { close_action("关闭对话框") })
                                         .enabled(ui.state.map(|s| {
                                             (s.file_pending.is_none()
                                                 || file_context::deletion_dialog(s)
@@ -1945,7 +1946,7 @@ fn modal_with_header(
                                     }
                                     .to_string()
                                 }))
-                                .content(i18n::bind(ui.state.map(|s| s.dialog_error.clone()))),
+                                .content(i18n::bind_in(desktop_language, ui.state.map(|s| s.dialog_error.clone()))),
                             row().class("modal-footer").fill(footer),
                             resize_handles(),
                         )),
@@ -2159,6 +2160,7 @@ fn app(ui: Ui) -> impl Widget {
                 fragment((
                     fragment((
                         desktop_system_settings::time_zone_dialog(ui.clone()),
+                        app_settings::dialog(ui.clone()),
                         desktop_customization_ui::shortcut_settings_dialog(ui.clone()),
                         desktop_apps::dialog(ui.clone()),
                         text_editor::dialogs(ui.clone()),

@@ -170,7 +170,7 @@ def main():
             files = page.locator('.desktop-window.app-files.active')
             files.locator('.files-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
             files.get_by_role('button', name='terminal-folder', exact=True).click(button='right')
-            app.action('Terminal here')
+            app.open_in('New Terminal tab')
             terminal_running()
             expect(tabs).to_have_count(6)
             command('pwd')

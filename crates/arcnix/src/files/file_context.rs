@@ -221,7 +221,7 @@ fn action<F: FnMut() + 'static>(
         } else {
             "menu-item"
         })
-        .label(i18n::bind(label))
+        .label(i18n::workspace_label(ui.state, label))
         .enabled(ui.state.map(move |s| enabled(s, remote)))
         .on_press(move || {
             close(&close_ui);
@@ -392,7 +392,7 @@ pub(crate) fn desktop_menu_dismiss(ui: Ui) -> impl Widget {
         let state = ui.state;
         button()
             .class("menu-dismiss")
-            .label(i18n::bind("关闭操作菜单"))
+            .label(i18n::workspace_label(state, "关闭操作菜单"))
             .focus(FocusMode::Programmatic)
             .on(activate, move |_| state.revise(|s| s.file_menu = None))
     })
@@ -411,17 +411,31 @@ fn menu_group(content: impl IntoChildren) -> impl Widget {
     col().class("file-menu-group").fill(content)
 }
 
+fn folder_terminal_action(ui: &Ui, label: &'static str, new_window: bool) -> impl Widget + use<> {
+    let terminal = ui.clone();
+    action(
+        ui,
+        true,
+        label,
+        |s, _| s.terminal_available() && terminal_directory(s).is_some(),
+        move || {
+            if let Some(directory) = terminal.state.with(terminal_directory) {
+                terminal.terminal_here_in(directory, new_window);
+            }
+        },
+    )
+}
+
 fn open_actions(ui: Ui, remote: bool) -> impl Widget {
     let state = ui.state;
     when(
         state.map(move |s| {
-            has_item(s, remote)
-                && single(s, remote).is_some_and(|f| {
-                    (remote && s.workspace_page.is_files()) || !f.is_symlink && (remote || f.is_dir)
-                })
+            remote
+                && has_item(s, remote)
+                && single(s, remote)
+                    .is_some_and(|f| s.workspace_page.is_files() || (!f.is_symlink && !f.is_dir))
         }),
         move || {
-            let folder = ui.clone();
             let new_tab = ui.clone();
             menu_group((
                 when(
@@ -447,18 +461,6 @@ fn open_actions(ui: Ui, remote: bool) -> impl Widget {
                     move || file_open::menu(ui.clone(), regular_file, close)
                 }),
                 when(
-                    state
-                        .map(move |s| single(s, remote).is_some_and(|f| f.is_dir && !f.is_symlink)),
-                    move || {
-                        let open = folder.clone();
-                        action(&folder, remote, "打开文件夹", one, move || {
-                            if let Some(file) = open.state.with(|s| single(s, remote)) {
-                                file_browser::activate(&open, remote, &file.path);
-                            }
-                        })
-                    },
-                ),
-                when(
                     state.map(move |s| {
                         remote
                             && s.workspace_page.is_files()
@@ -467,26 +469,33 @@ fn open_actions(ui: Ui, remote: bool) -> impl Widget {
                     move || {
                         let tab = new_tab.clone();
                         let window = new_tab.clone();
-                        fragment((
-                            action(&new_tab, true, "Open in new tab", one, move || {
-                                if let Some((id, path)) = state.with(|s| {
-                                    Some((
-                                        s.workspace_page.files_window_id()?,
-                                        single(s, true)?.path,
-                                    ))
-                                }) {
-                                    files_tabs::open_tab(&tab, id, Some(path));
-                                }
-                            }),
-                            action(&new_tab, true, "Open in new window", one, move || {
-                                if let Some(file) = state.with(|s| single(s, true)) {
-                                    files_tabs::new_window(
-                                        &window,
-                                        files_tabs::WindowStart::Directory(file.path),
-                                    );
-                                }
-                            }),
-                        ))
+                        file_open::submenu(
+                            state,
+                            "Open in",
+                            state.map(|s| one(s, true)),
+                            (
+                                action(&new_tab, true, "New tab", one, move || {
+                                    if let Some((id, path)) = state.with(|s| {
+                                        Some((
+                                            s.workspace_page.files_window_id()?,
+                                            single(s, true)?.path,
+                                        ))
+                                    }) {
+                                        files_tabs::open_tab(&tab, id, Some(path));
+                                    }
+                                }),
+                                action(&new_tab, true, "New window", one, move || {
+                                    if let Some(file) = state.with(|s| single(s, true)) {
+                                        files_tabs::new_window(
+                                            &window,
+                                            files_tabs::WindowStart::Directory(file.path),
+                                        );
+                                    }
+                                }),
+                                folder_terminal_action(&new_tab, "New Terminal tab", false),
+                                folder_terminal_action(&new_tab, "New Terminal window", true),
+                            ),
+                        )
                     },
                 ),
             ))
@@ -517,7 +526,7 @@ fn edit_actions(ui: Ui, remote: bool) -> impl Widget {
                         });
                         sapid::button()
                             .class("menu-item")
-                            .label(i18n::bind(label))
+                            .label(i18n::workspace_label(state, label))
                             .enabled(enabled)
                             .on_press(move || {
                                 close(&changed);
@@ -595,7 +604,14 @@ fn item_actions(ui: Ui, remote: bool) -> impl Widget {
         action(&ui, remote, "属性", any, move || {
             properties(&info, remote)
         }),
-        when(remote, move || terminal_action(ui.clone())),
+        when(
+            state.map(move |s| {
+                remote
+                    && !(s.workspace_page.is_files()
+                        && single(s, true).is_some_and(|f| f.is_dir && !f.is_symlink))
+            }),
+            move || terminal_action(ui.clone()),
+        ),
     ))
 }
 
@@ -736,16 +752,19 @@ pub(crate) fn menu(ui: Ui, remote: bool, files: bool) -> impl Widget {
             .to_owned()
         }))
         .focus(FocusMode::Programmatic)
-        .name(i18n::bind(state.map(move |s| {
-            if files && s.file_context.is_none() {
-                "File view options"
-            } else if remote {
-                "远程文件操作"
-            } else {
-                "本地文件操作"
-            }
-            .to_owned()
-        })))
+        .name(i18n::bind_in(
+            files,
+            state.map(move |s| {
+                if files && s.file_context.is_none() {
+                    "File view options"
+                } else if remote {
+                    "远程文件操作"
+                } else {
+                    "本地文件操作"
+                }
+                .to_owned()
+            }),
+        ))
         .fill(
             when(
                 state.map(move |s| files && s.file_context.is_none()),

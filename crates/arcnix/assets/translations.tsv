@@ -1855,7 +1855,7 @@ TCP 监听	TCP listeners
 在此处打开终端	Terminal here
 终端 {}	Terminal {}
 关闭终端标签	Close terminal tab
-请先关闭一个终端标签后再打开新的终端（最多 8 个）	Close a terminal tab before opening another (8 maximum)
+已达到 {limit} 个终端标签的上限，请先关闭一个标签。	Terminal tab limit reached ({limit}). Close a tab to open another.
 关闭终端菜单	Dismiss terminal menu
 终端操作	Terminal actions
 复制	Copy
@@ -2313,7 +2313,7 @@ OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
 Markdown 预览	Markdown preview
 Markdown 预览过大，可切换到源码查看。	Markdown preview is too large. Open the source to read the file.
 已打开的文件	Open files
-更多标签页	More tabs
+所有标签页	All tabs
 从服务器重新载入	Reload from server
 关闭文件标签 {}	Close file tab {}
 要放弃所有已打开文件中的未保存修改吗？	Discard unsaved changes in all open files?
@@ -2667,3 +2667,32 @@ Linux 目录	Linux directory
 本机桌面已断开	Local desktop disconnected
 选择服务器，或在本机体验 Arcnix 桌面。	Select a server or try the Arcnix desktop on this computer.
 本机体验提供部分功能，连接服务器可使用更多功能。	This local desktop has limited features. Connect to a server for more.
+打开位置	Open in
+新建终端标签页	New Terminal tab
+新建终端窗口	New Terminal window
+字号	Font size
+光标样式	Cursor style
+方块	Block
+竖线	Bar
+下划线	Underline
+光标闪烁	Blink cursor
+行号	Line numbers
+开	On
+关	Off
+默认音量	Default volume
+播放速度	Playback speed
+字体	Font family
+自动选择	Automatic
+系统等宽字体	System monospace
+以管理员身份复制以下项目。	Copy the following items as administrator.
+以管理员身份为以下项目制作副本。	Duplicate the following items as administrator.
+以管理员身份压缩以下项目。	Compress the following items as administrator.
+以管理员身份创建符号链接。	Create symbolic links as administrator.
+服务器要求进行 sudo 认证。密码不会保存。	The server requires sudo authentication. The password is not saved.
+此操作需要管理员权限。请关闭对话框后重试剩余项目。	Administrator permission required. Close the dialog and retry the remaining items.
+没有权限读取此文件。	You do not have permission to read this file.
+以管理员身份打开	Open as administrator
+服务器拒绝了此次文件操作的 sudo 授权。	The server declined the sudo policy check for this file operation
+服务器上没有可用的 sudo。	sudo is unavailable on this server
+管理员文件操作需要服务器安装 Python 3。	Administrator file operations require Python 3 on this server
+没有权限保存此文件。	You do not have permission to save this file.

@@ -220,10 +220,10 @@ impl Ui {
     }
 }
 
-fn hidden_file_choices(ui: &Ui, title: &'static str) -> impl Widget + use<> {
+fn hidden_file_choices(ui: &Ui, desktop: bool, title: &'static str) -> impl Widget + use<> {
     select(
         ui,
-        false,
+        desktop,
         title,
         [(true, "Show hidden files"), (false, "Hide hidden files")],
         |s| s.config.settings.show_hidden_files,
@@ -236,26 +236,29 @@ pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
         ui.state.map(|s| s.dialog == Some(Dialog::FilesSettings)),
         move || {
             let close = ui.clone();
+            let desktop = ui.state.with(server_desktop::owns_dialog);
             modal_with_header(
                 ui.clone(),
-                "Files settings",
-                local_reset(&ui, false, |s, defaults| {
+                "Settings",
+                local_reset(&ui, desktop, |s, defaults| {
                     s.show_hidden_files = defaults.show_hidden_files
                 }),
                 (
-                    text().class("dialog-description").content(i18n::bind(
+                    text().class("dialog-description").content(i18n::bind_in(
+                        desktop,
                         "Show or hide dotfiles in local and remote file lists.",
                     )),
                     row()
                         .class("choice-list settings-choices")
-                        .fill(hidden_file_choices(&ui, "Files settings")),
-                    text()
-                        .class("dialog-error")
-                        .content(i18n::bind(ui.state.map(|s| s.settings.error.clone()))),
+                        .fill(hidden_file_choices(&ui, desktop, "Hidden files")),
+                    text().class("dialog-error").content(i18n::bind_in(
+                        desktop,
+                        ui.state.map(|s| s.settings.error.clone()),
+                    )),
                 ),
                 sapid::button()
                     .class("button primary")
-                    .label(i18n::bind("完成"))
+                    .label(i18n::bind_in(desktop, "完成"))
                     .on_press(move || close.close_dialog()),
             )
         },
@@ -352,7 +355,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 local_reset(&ui, false, |s, defaults| {
                     s.show_hidden_files = defaults.show_hidden_files
                 }),
-                hidden_file_choices(&ui, "Hidden files"),
+                hidden_file_choices(&ui, false, "Hidden files"),
             ),
             preferences_ui::display(ui.clone()),
             section(
@@ -421,10 +424,12 @@ pub(crate) fn about(ui: Ui, desktop: bool) -> impl Widget {
             text().class("brand-icon").content(""),
             col().class("about-identity").fill((
                 text().class("about-name").content("Arcnix"),
-                text().class("subtle settings-copyable").content(i18n::bind_in(
-                    desktop,
-                    concat!("Version ", env!("CARGO_PKG_VERSION")),
-                )),
+                text()
+                    .class("subtle settings-copyable")
+                    .content(i18n::bind_in(
+                        desktop,
+                        concat!("Version ", env!("CARGO_PKG_VERSION")),
+                    )),
             )),
         )),
         text().class("subtle").content(i18n::bind_in(

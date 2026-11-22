@@ -9,8 +9,8 @@ use crate::desktop_customization::{Appearance, Dock, Layout, Shortcut, Wallpaper
 use crate::desktop_shortcuts::Shortcuts;
 use crate::desktop_theme::{Overrides, Preset, Themes, appearance_value, built_in_wallpaper};
 use crate::server_apps::{
-    DesktopApp as App, DesktopClock, DesktopPreferences, DesktopWindow, FilesPreferences,
-    TerminalLayout,
+    DesktopApp as App, DesktopClock, DesktopPreferences, DesktopWindow, EditorSettings,
+    FilesPreferences, PlayerSettings, TerminalAppearance, TerminalLayout,
 };
 
 pub(crate) const HEADER: &[u8] = b"arcnix-desktop-v1\n";
@@ -23,6 +23,8 @@ enum Domain {
     Files,
     Browser,
     Terminal,
+    Player,
+    Editor,
     Monitor,
     App(&'static str, App),
 }
@@ -38,13 +40,13 @@ const DOMAINS: &[Domain] = &[
     Domain::App("apps/app_center.json", App::AppCenter),
     Domain::App("apps/code.json", App::Code),
     Domain::App("apps/docker.json", App::Docker),
-    Domain::App("apps/player.json", App::Player),
+    Domain::Player,
     Domain::App("apps/settings.json", App::Settings),
     Domain::App("apps/disks.json", App::Disks),
     Domain::App("apps/services.json", App::Services),
     Domain::App("apps/logs.json", App::Logs),
     Domain::App("apps/trash.json", App::Trash),
-    Domain::App("apps/text_editor.json", App::Editor),
+    Domain::Editor,
 ];
 
 #[derive(Serialize, Deserialize)]
@@ -125,6 +127,16 @@ struct Application<T: Default> {
     settings: T,
 }
 
+// Keep the existing terminal layout under "settings" when reading older snapshots.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TerminalFile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<DesktopWindow>,
+    settings: TerminalLayout,
+    appearance: TerminalAppearance,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Monitor {
@@ -179,6 +191,8 @@ impl Domain {
             Self::Browser => "apps/web_browser.json",
             Self::Terminal => "apps/terminal.json",
             Self::Monitor => "apps/monitor.json",
+            Self::Editor => "apps/text_editor.json",
+            Self::Player => "apps/player.json",
             Self::App(path, _) => path,
         }
     }
@@ -205,10 +219,20 @@ impl Domain {
                     bookmarks: prefs.browser_bookmarks.clone(),
                 },
             ))?,
-            Self::Terminal => serde_json::to_vec_pretty(&application(
+            Self::Terminal => serde_json::to_vec_pretty(&TerminalFile {
+                window: prefs.windows.get(&App::Terminal).copied(),
+                settings: prefs.terminal.clone(),
+                appearance: prefs.app_settings.terminal,
+            })?,
+            Self::Editor => serde_json::to_vec_pretty(&application(
                 prefs,
-                App::Terminal,
-                prefs.terminal.clone(),
+                App::Editor,
+                prefs.app_settings.editor,
+            ))?,
+            Self::Player => serde_json::to_vec_pretty(&application(
+                prefs,
+                App::Player,
+                prefs.app_settings.player,
             ))?,
             Self::Monitor => serde_json::to_vec_pretty(&application(
                 prefs,
@@ -272,7 +296,20 @@ impl Domain {
                     read_application::<Browser>(prefs, App::Browser, bytes)?.bookmarks
             }
             Self::Terminal => {
-                prefs.terminal = read_application::<TerminalLayout>(prefs, App::Terminal, bytes)?
+                let file: TerminalFile = read_json(bytes)?;
+                prefs
+                    .windows
+                    .extend(file.window.map(|w| (App::Terminal, w)));
+                prefs.terminal = file.settings;
+                prefs.app_settings.terminal = file.appearance;
+            }
+            Self::Editor => {
+                prefs.app_settings.editor =
+                    read_application::<EditorSettings>(prefs, App::Editor, bytes)?
+            }
+            Self::Player => {
+                prefs.app_settings.player =
+                    read_application::<PlayerSettings>(prefs, App::Player, bytes)?
             }
             Self::Monitor => {
                 prefs.resource_interval_seconds =

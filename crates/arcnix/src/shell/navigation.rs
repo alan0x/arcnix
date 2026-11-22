@@ -319,15 +319,12 @@ fn server_landing(ui: Ui) -> impl Widget {
                 empty_state(
                     "选择一台服务器",
                     "选择服务器，或在本机体验 Arcnix 桌面。",
-                    (
-                        local_desktop_entry(ui.clone()),
-                        text_action("新建服务器", Icon::Plus)
-                            .class("button with-icon primary")
-                            .on_press({
-                                let ui = ui.clone();
-                                move || servers::new_server(&ui)
-                            }),
-                    ),
+                    text_action("新建服务器", Icon::Plus)
+                        .class("button with-icon primary")
+                        .on_press({
+                            let ui = ui.clone();
+                            move || servers::new_server(&ui)
+                        }),
                 )
             }
         }),
@@ -385,7 +382,6 @@ fn server_landing(ui: Ui) -> impl Widget {
                         row().class("workspace-entries").fill((
                             server_desktop::entry(ui.clone(), server_desktop::Tab::Desktop),
                             server_desktop::entry(ui.clone(), server_desktop::Tab::TransferFiles),
-                            local_desktop_entry(ui.clone()),
                         )),
                         text()
                             .class("overview-footnote subtle")

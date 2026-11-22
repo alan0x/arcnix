@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 use crate::worker::{Response, Update};
 
 pub const OUTPUT_WINDOW: usize = 256 * 1024;
-pub const SESSION_LIMIT: usize = 8;
+pub use arcnix_core::server_apps::TERMINAL_TAB_LIMIT as SESSION_LIMIT;
 pub enum Action {
     Resume {
         id: u64,
@@ -382,7 +382,7 @@ pub fn start(
                                 }
                                 anyhow::ensure!(
                                     sessions.len() < SESSION_LIMIT,
-                                    "At most 8 terminal sessions can be open"
+                                    "At most {SESSION_LIMIT} terminal sessions can be open"
                                 );
                                 sessions.insert(
                                     id,

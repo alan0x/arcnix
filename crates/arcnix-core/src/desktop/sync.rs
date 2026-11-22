@@ -610,7 +610,7 @@ mod tests {
             browser_bookmarks,
             ..DesktopPreferences::default()
         };
-        prefs.terminal.tabs = (0..8)
+        prefs.terminal.tabs = (0..crate::server_apps::TERMINAL_TAB_LIMIT)
             .map(|id| TerminalTab {
                 id: format!("{id:x}"),
                 name: Some("\"".repeat(128)),

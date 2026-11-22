@@ -52,7 +52,14 @@ export async function registerPagedFiles(request, zh, large) {
     focus() {
       (this.viewer?.body ?? this.container).focus();
     }
+    releasePage() {
+      if (this.handle != null) {
+        void request('closePage', '', { handle: this.handle }).catch(() => {});
+        this.handle = undefined;
+      }
+    }
     clearInput() {
+      this.releasePage();
       this.version++;
       this.viewer?.dispose();
       super.clearInput();
@@ -65,6 +72,7 @@ export async function registerPagedFiles(request, zh, large) {
       if (this.input && options?.selection) void this.show(this.input, options);
     }
     async show(input, options, token) {
+      this.releasePage();
       const version = ++this.version;
       let opening = true;
       const stale = () =>
@@ -92,10 +100,14 @@ export async function registerPagedFiles(request, zh, large) {
           current.size >= input.snapshot.size &&
           (current.size > input.snapshot.size ||
             current.modified === input.snapshot.modified);
-        const initial = await request('pollTail', input.resource.path, {
+        const initial = await request('attachPage', input.resource.path, {
           snapshot: resume ? input.snapshot : current,
         });
-        if (stale()) return;
+        if (stale()) {
+          if (initial.handle != null) await request('closePage', '', { handle: initial.handle });
+          return;
+        }
+        this.handle = initial.handle;
         if (resume && String(input.tailStamp) !== String(initial.stamp))
           throw new Error(
             zh ? '文件已变化，请重新打开。' : 'File changed. Reopen the file.',
@@ -147,7 +159,8 @@ export async function registerPagedFiles(request, zh, large) {
           );
         this.viewer = new FileViewport(
           this.container,
-          request,
+          initial.handle == null ? request : (op, path, args) =>
+            op === 'closeRange' ? Promise.resolve() : request(op, path, { ...args, handle: initial.handle }),
           input.resource.path,
           snapshot,
           zh,
@@ -170,6 +183,7 @@ export async function registerPagedFiles(request, zh, large) {
       } catch (error) {
         if (!stale()) {
           this.viewer?.dispose();
+          this.releasePage();
           this.container.textContent = error.message;
         }
       }

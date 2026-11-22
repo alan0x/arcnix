@@ -192,6 +192,9 @@
                 next.add(layer);
                 if (!observed.has(layer)) resize.observe(layer);
             }
+            const trigger = control.querySelector('.window-tabs-more');
+            trigger.dataset.tabCount = String(strip.querySelectorAll('.window-tab-select').length);
+            trigger.title = trigger.getAttribute('aria-label') || '';
             const gap = parseFloat(getComputedStyle(control.parentElement).columnGap) || 0;
             const reserved = control.offsetWidth ? control.offsetWidth + gap : 0;
             const overflow = strip.getClientRects().length > 0 && strip.scrollWidth > strip.clientWidth + reserved + 1;
@@ -202,7 +205,7 @@
                 else menu.hidePopover();
             }
 
-            const active = strip.querySelector('.window-tab-select[aria-pressed=true]');
+            const active = strip.querySelector('.window-tab-select[aria-pressed=true]')?.closest('.window-tab-item');
             if (active && active !== activeTabs.get(strip) && strip.clientWidth) {
                 activeTabs.set(strip, active);
                 const tab = active.getBoundingClientRect();
@@ -231,6 +234,20 @@
         if (!menu.hasAttribute('popover')) {
             menu.setAttribute('popover', 'auto');
             menu.setAttribute('role', 'group');
+            menu.addEventListener('keydown', event => {
+                const buttons = [...menu.querySelectorAll('button')];
+                const index = buttons.indexOf(document.activeElement);
+                let next;
+                switch (event.key) {
+                    case 'ArrowDown': next = Math.min(index + 1, buttons.length - 1); break;
+                    case 'ArrowUp': next = Math.max(index - 1, 0); break;
+                    case 'Home': next = 0; break;
+                    case 'End': next = buttons.length - 1; break;
+                    default: return;
+                }
+                event.preventDefault();
+                buttons[next]?.focus();
+            });
             menu.addEventListener('toggle', () => trigger.setAttribute('aria-expanded', String(menu.matches(':popover-open'))));
         }
         menu.setAttribute('aria-label', trigger.getAttribute('aria-label'));

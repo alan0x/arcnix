@@ -22,12 +22,14 @@ use crate::{
 
 #[path = "remote_file_actions.rs"]
 mod file_actions;
+#[path = "remote_file_pager.rs"]
+mod file_pager;
 #[path = "remote_file_admin.rs"]
 mod file_admin;
 #[path = "remote_recycle.rs"]
 mod recycle;
 pub use file_actions::{DesktopDrop, FileAction};
-pub use file_admin::file_permission_denied;
+pub use file_admin::{AdminTextRetry, ManagedFileRetry, SudoPasswordRequired, file_permission_denied};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -248,6 +250,7 @@ pub struct RemoteSession {
     session: Session,
     sftp: Option<Sftp>,
     search_reader: Option<SearchReader>,
+    admin_pages: std::collections::HashMap<u64, file_pager::Reader>,
 }
 
 struct SearchReader {
@@ -455,6 +458,7 @@ impl PendingConnection {
             session,
             sftp,
             search_reader: None,
+            admin_pages: Default::default(),
         })
     }
 
@@ -1644,7 +1648,32 @@ impl RemoteSession {
             mode: stat.perm.map(|p| p & 0o7777),
             uid: stat.uid,
             gid: stat.gid,
+            owner_name: None,
+            group_name: None,
         })
+    }
+
+    pub fn file_properties(&self, path: &str) -> Result<crate::permissions::Metadata> {
+        let mut info = self.file_metadata(path)?;
+        // SFTP v3 supplies numeric IDs. Resolve those on the same host if SSH exec is available.
+        let lookup = |database: &str, id: Option<u32>| {
+            id.map(|id| format!("$(getent {database} {id} 2>/dev/null | cut -d: -f1)"))
+                .unwrap_or_default()
+        };
+        if info.uid.is_some() || info.gid.is_some() {
+            let command = format!(
+                r#"printf '%s\n' "{}" "{}""#,
+                lookup("passwd", info.uid),
+                lookup("group", info.gid)
+            );
+            if let Ok(output) = self.exec(&command)
+                && output.exit_code == 0
+                && let Some((owner, group)) = output.stdout.split_once('\n')
+            {
+                info.set_account_names(owner, group.trim_end_matches(['\r', '\n']));
+            }
+        }
+        Ok(info)
     }
 
     pub fn find_missing_desktop_paths(&self, paths: Vec<String>) -> Result<(Vec<String>, usize)> {

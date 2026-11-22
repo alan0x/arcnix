@@ -126,7 +126,7 @@ def main():
             menu = files.locator('.file-context-menu')
             expect(menu.locator('.file-color-menu').get_by_role('button', name='Red', exact=True)).to_be_visible()
             expect(menu.get_by_role('button', name='Customize folder…', exact=True)).to_be_visible()
-            expect(menu.get_by_role('button', name='Terminal here', exact=True)).to_be_enabled()
+            expect(menu.get_by_role('button', name='Open in', exact=True)).to_be_enabled()
             menu.evaluate("""element => {
                 window.filesMenuChanges = [];
                 const observer = new MutationObserver(records => {

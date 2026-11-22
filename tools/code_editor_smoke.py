@@ -85,6 +85,25 @@ def main():
             area.press('End');page.keyboard.insert_text('！');area.press('Control+s')
             expect(page.locator('.notifications-toasts')).to_contain_text('changed')
             assert path.read_bytes()==changed
+            close = host.get_by_role('button', name='Close application', exact=True)
+            close.click()
+            confirm = app.page.locator('.app-code .editor-discard')
+            expect(confirm).to_be_visible()
+            confirm.get_by_role('button', name='Keep editing').click()
+            expect(confirm).to_be_hidden()
+            close.click()
+            confirm.get_by_role('button', name='Discard changes').click()
+            expect(host).to_have_count(0)
+            assert path.read_bytes() == changed
+            app.application('Code Editor')
+            reopened = app.code()
+            reopened.evaluate("""() => window.ipc.postMessage(JSON.stringify({
+                op: 'list', id: 999999, path: '/__fixture_delay__'
+            }))""")
+            # The fixture holds this listing for 1.5 s. The titlebar must close immediately.
+            reopened.wait_for_timeout(150)
+            close.click(timeout=850)
+            expect(host).to_have_count(0, timeout=500)
             assert not errors, errors
             print(json.dumps(dict(output=str(out),composition=events,split=True,relative_image=True,conflict=True),ensure_ascii=False))
 

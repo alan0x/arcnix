@@ -15,13 +15,13 @@ Desktop downloads are available for Windows x64, macOS on Apple Silicon, and Lin
 
 ## Try the local desktop
 
-Choose **Try the local desktop** on the home screen. Linux and macOS use your current account. Windows opens an installed WSL distribution using its default account and offers a choice when several are installed. No SSH service or credentials are required.
+Choose **Try the local desktop** above the search field in the Servers sidebar. Linux and macOS use your current account. Windows opens an installed WSL distribution using its default account and offers a choice when several are installed. No SSH service or credentials are required.
 
-Open Files to browse your home directory and create a file. Double-click a text file to edit and save it, or choose **View → Edit source** in a Markdown preview. Source files open in Code Editor and supported videos open in Player. Both apps also appear in Apps and Open with. Choose **Terminal here** on a file or directory to open a shell in that location. Changes affect real files. Desktop preferences are saved on the client separately for each local target. The standalone File Transfer workspace is disabled for local desktops.
+Open Files to browse your home directory and create a file. Double-click a text file to edit and save it, or choose **View → Edit source** in a Markdown preview. Source files open in Code Editor and supported videos open in Player. Both apps also appear in Apps and Open with. Right-click a folder and choose **Open in → New Terminal tab** to start a shell there in your last active Terminal window, or **New Terminal window** for a separate window. On a file, **Terminal here** opens its containing folder. Changes affect real files. Desktop preferences are saved on the client separately for each local target. The standalone File Transfer workspace is disabled for local desktops.
 
-## Connect to local WSL on Windows
+## Previously saved WSL servers on Windows
 
-Open **New server → Choose local WSL distribution**, select an installed distribution, save and connect. Saved WSL profiles also default to a local connection. Arcnix opens an interactive Linux shell through `wsl.exe` and runs file operations as the distribution’s default Linux user. No SSH server, password or keys are required.
+For a saved WSL profile, select it in **Servers** and click **Connect**. The default connection uses the distribution directly. Arcnix opens an interactive Linux shell through `wsl.exe` and runs file operations as the distribution’s default Linux user. No SSH server, password or keys are required.
 
 Browse directories, create files and folders, preview UTF-8 text, and upload or download individual files. Copies preserve existing destinations. You can also open the current directory in a terminal or Windows File Explorer.
 

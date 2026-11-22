@@ -7,6 +7,35 @@ document.addEventListener('loadstart', event => {
     }
 }, true);
 
+// Apply each preference on load and on an explicit preference change. Transport
+// controls can still change the volume for just the current video.
+(() => {
+    const applied = new WeakMap();
+    function apply(video) {
+        const raw = video.closest('.remote-player')?.querySelector('.player-preferences')?.textContent;
+        if (!raw || raw === applied.get(video)?.raw) return;
+        const [volume, speed] = JSON.parse(raw);
+        const previous = applied.get(video);
+        if (volume !== previous?.volume) video.volume = volume / 100;
+        if (speed !== previous?.speed) {
+            video.defaultPlaybackRate = speed / 100;
+            video.playbackRate = speed / 100;
+        }
+        applied.set(video, {raw, volume, speed});
+    }
+    document.addEventListener('loadstart', event => {
+        if (event.target.matches?.('.remote-player-screen video')) {
+            applied.delete(event.target);
+            apply(event.target);
+        }
+    }, true);
+    new MutationObserver(records => {
+        if (records.some(({target}) => (target.parentElement?.closest('.player-preferences') || target.matches?.('.player-preferences')))) {
+            for (const video of document.querySelectorAll('.remote-player-screen video')) apply(video);
+        }
+    }).observe(document, {subtree:true, childList:true, characterData:true});
+})();
+
 // Keep slider thumbs local during a drag; send one SFTP seek on release.
 (() => {
     let mounted, last;

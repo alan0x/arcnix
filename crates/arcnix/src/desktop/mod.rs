@@ -1,4 +1,5 @@
 pub(crate) mod app_icon;
+pub(crate) mod app_settings;
 pub(crate) mod desktop_appearance_ui;
 pub(crate) mod desktop_apps;
 pub(crate) mod desktop_customization_ui;

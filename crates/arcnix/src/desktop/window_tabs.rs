@@ -13,6 +13,7 @@ struct Group {
 pub(crate) struct Groups {
     windows: BTreeMap<u32, Group>,
     pub current: u32,
+    focus_order: Vec<u32>,
     next: u32,
 }
 
@@ -128,6 +129,10 @@ pub fn focus(s: &mut State, window: WorkspacePage) {
     };
     let id = window.tab_window().unwrap_or_default();
     groups.current = id;
+    if groups.focus_order.last() != Some(&id) {
+        groups.focus_order.retain(|&window| window != id);
+        groups.focus_order.push(id);
+    }
     let selected = groups.selected(id);
     match app {
         DesktopApp::Terminal => {
@@ -162,8 +167,14 @@ pub fn forget(s: &mut State, window: WorkspacePage) {
     {
         let id = window.tab_window().unwrap_or_default();
         groups.windows.remove(&id);
+        groups.focus_order.retain(|&window| window != id);
         if groups.current == id {
-            groups.current = groups.windows.keys().next().copied().unwrap_or_default();
+            groups.current = groups
+                .focus_order
+                .last()
+                .copied()
+                .or_else(|| groups.first_window())
+                .unwrap_or_default();
         }
     }
 }

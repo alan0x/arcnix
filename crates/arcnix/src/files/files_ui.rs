@@ -828,7 +828,7 @@ pub(crate) fn appearance_menu(
                     let ui = ui.clone();
                     sapid::button()
                         .class("file-color-swatch")
-                        .name(i18n::bind(label))
+                        .name(crate::i18n::workspace_label(state, label))
                         .pressed(state.map(move |s| {
                             current(s).is_some_and(|(path, _)| {
                                 preferences(s).colors.get(&path) == Some(&color)
@@ -863,7 +863,7 @@ pub(crate) fn appearance_menu(
                     let target = favorite_target.clone();
                     sapid::button()
                         .class("menu-item")
-                        .label(i18n::bind("Toggle favorite"))
+                        .label(crate::i18n::workspace_label(state, "Toggle favorite"))
                         .on_press(move || {
                             if let Some((path, _)) = state.with(&target) {
                                 close(&ui);
@@ -873,12 +873,12 @@ pub(crate) fn appearance_menu(
                 }),
                 row()
                     .class("file-color-menu")
-                    .name(i18n::bind("Tags"))
+                    .name(crate::i18n::workspace_label(state, "Tags"))
                     .fill((
                         fragment(swatches),
                         sapid::button()
                             .class("file-color-swatch file-color-clear")
-                            .name(i18n::bind("Clear tag"))
+                            .name(crate::i18n::workspace_label(state, "Clear tag"))
                             .enabled(state.map(move |s| {
                                 can_clear(s).is_some_and(|(path, _)| {
                                     preferences(s).colors.contains_key(&path)
@@ -901,7 +901,7 @@ pub(crate) fn appearance_menu(
                         let edit_target = edit_target.clone();
                         sapid::button()
                             .class("menu-item")
-                            .label(i18n::bind("Customize folder…"))
+                            .label(crate::i18n::workspace_label(state, "Customize folder…"))
                             .on_press(move || {
                                 if let Some((path, true)) = state.with(&edit_target) {
                                     close(&customize);

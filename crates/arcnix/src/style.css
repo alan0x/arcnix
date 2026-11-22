@@ -2490,6 +2490,12 @@ button,
 }
 .window-tab-strip { position: relative; overflow: auto hidden; scrollbar-width: none; }
 .window-tabs-overflow { flex: none; }
+.window-tabs-overflow .window-tabs-more {
+  display: inline-flex; align-items: center; justify-content: center; gap: 2px;
+  width: auto !important; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.window-tabs-more::before { content: attr(data-tab-count); font-size: var(--font-small); }
+.window-tabs-more .glyph-chevron-right { width: 12px; height: 12px; transform: rotate(90deg); }
 .window-tabs-overflow:not([data-tabs-overflow]), .window-tabs-menu:not(:popover-open) { display: none !important; }
 .window-tabs-menu {
   position: fixed; inset: auto; margin: 0; box-sizing: border-box;
@@ -2547,6 +2553,8 @@ button,
   background: color-mix(in srgb, var(--surface) 65%, transparent); color: var(--muted);
 }
 .editor-numbers { white-space: pre; text-align: right; padding-right: 10px; }
+.editor-sheet.hide-line-numbers { --editor-gutter-width: 0px !important; }
+.editor-sheet.hide-line-numbers .editor-gutter { display: none; }
 .editor-code-clip { left: var(--editor-gutter-width); display: none; }
 .editor-highlighted:not(.editor-composing) .editor-code-clip { display: block; }
 .editor-code-lines { width: max-content; white-space: pre; }
@@ -2592,3 +2600,5 @@ button,
 .markdown-preview table { border-collapse: collapse; }
 .markdown-preview :is(th, td) { border: 1px solid var(--line); padding: 4px 10px; }
 .markdown-preview input[type=checkbox] { display: inline; width: auto; height: auto; margin: 0 5px 0 0; }
+
+.editor-read-error { display: flex; flex: 1; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; }

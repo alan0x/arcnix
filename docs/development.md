@@ -116,7 +116,7 @@ Windows 默认配置路径为 `%APPDATA%\arcnix\Arcnix\config\config.json`。配
 
 连接服务器后打开 **Desktop → Terminal**，自动打开交互式 SSH 终端。支持 ANSI 颜色、UTF-8、键盘输入、Ctrl+C、窗口大小同步和最近 5000 行滚动历史；切换页面、语言或返回文件管理会保留当前终端会话与显示内容。工具栏提供复制选中文字、粘贴、清空显示、重新启动和关闭终端的图标按钮。
 
-远程文件的右键菜单提供 **Terminal here／在此处打开终端**：文件夹进入其自身目录，文件进入父目录，空白处进入当前目录；多选时禁用。入口会新开终端标签，保留原终端的会话、正在运行的程序及显示内容。最多保留 8 个标签，标签上的关闭按钮仅关闭该会话，工具栏重启仅重启当前标签并保留其起始目录。起始目录通过 SSH 会话启动命令按字面值传递，支持空格、中文、引号等字符；控制字符及非绝对路径不接受，目录不存在时显示退出错误，不回退到主目录。
+远程文件的右键菜单提供 **Terminal here／在此处打开终端**：文件夹进入其自身目录，文件进入父目录，空白处进入当前目录；多选时禁用。入口会新开终端标签，保留原终端的会话、正在运行的程序及显示内容。最多保留 32 个标签，标签上的关闭按钮仅关闭该会话，工具栏重启仅重启当前标签并保留其起始目录。起始目录通过 SSH 会话启动命令按字面值传递，支持空格、中文、引号等字符；控制字符及非绝对路径不接受，目录不存在时显示退出错误，不回退到主目录。
 
 Terminal 标签栏右侧的“＋”直接新建标签。终端区域右键打开应用菜单，提供复制、粘贴、全选、清空显示、新建、重命名和关闭标签，并分列显示快捷键；在标签上右键时，重命名和关闭操作指向该标签。菜单适配深浅主题并避开窗口边缘，Shift+F10／菜单键打开，方向键及 Home／End 导航，Escape 关闭并恢复焦点。复制使用打开菜单时的选区，粘贴不额外发送 Enter。Ctrl+Shift+T 新建，Ctrl+Shift+W 关闭当前标签，Ctrl+Tab／Ctrl+Shift+Tab 切换，Ctrl+Shift+A 全选，Ctrl+Shift+L 清空显示；Ctrl+C 保持“有选区则复制，否则中断”，Ctrl+L／Ctrl+R 保留远程终端行为。自定义标签名仅保存在当前会话内，重启该标签保留名称，断开服务器清除。`python tools/terminal_context_smoke.py` 验证右键菜单、剪贴板、多标签和快捷键。
 
@@ -210,7 +210,7 @@ cargo test --workspace --locked -- --include-ignored
 
 测试服务仅监听 `127.0.0.1`，使用隔离临时目录、每次生成的密钥和固定测试账户 `arcnix / arcnix-test`。它只提供固定测试命令结果，不会执行传入的本机 shell 命令。验证包括真实握手、指纹拒绝、密码／私钥认证、中文路径、上传下载字节一致性、空文件、覆盖保护和取消清理。不要把这个测试服务用于生产。
 
-Windows 本机直连的桌面回归测试使用 `python tools/wsl_direct_smoke.py --distribution Ubuntu`，覆盖旧配置、真实 PTY、目录和文本预览。SSH 模式的回归测试入口为 `python tools/wsl_smoke.py --help`。使用独立测试发行版及其默认账号的未加密测试私钥、SSH 端口和已核对的主机指纹。脚本检查选择发行版、配置保存、SFTP、重开客户端后连接、空闲后的交互终端，以及错误端口上的另一台 SSH 服务器被拒绝。
+Windows 本机直连的桌面回归测试使用 `python tools/wsl_direct_smoke.py --distribution Ubuntu`，覆盖旧配置、真实 PTY、目录和文本预览。SSH 模式的回归测试入口为 `python tools/wsl_smoke.py --help`。使用独立测试发行版及其默认账号的未加密测试私钥、SSH 端口和已核对的主机指纹。脚本检查已保存 WSL 配置的编辑、SFTP、重开客户端后连接、空闲后的交互终端，以及错误端口上的另一台 SSH 服务器被拒绝。
 
 功能规划见 [docs/v0.1-plan.md](v0.1-plan.md)。
 改进记录见 [CHANGELOG.md](CHANGELOG.md)，OpenSSH 导入边界见 [docs/ssh-config-import.md](ssh-config-import.md)。
@@ -255,7 +255,7 @@ Compose 内置 Nginx、Redis、Caddy。定义与清单存放于 `~/.arcnix/apps/
 
 Disks 通过有限 lsblk/findmnt 查询设备、分区及挂载使用量，不提供分区或格式化操作；未知容量保留为未知，挂载点可打开 Files。Services 合并 list-units 和 list-unit-files，区分运行状态与开机启用状态；enable/disable 不隐式启动／停止。新启动任务以审核后的系统服务执行，用户脚本存放于目标用户 ~/.arcnix/services/<name>/run.sh，单元在 /etc/systemd/system/arcnix-startup-<name>.service，启用后需独立启动。持续程序由 systemd 管理，客户端无需常驻。
 
-Terminal 仅保留一个窗口标题栏，整合标签与操作菜单，不重复服务器地址。布局保存最多 8 个标签的独立 ID、名称、初始目录、活动标签及窗口最大化状态，不保存输出或输入历史。检测到 tmux 后使用独立 arcnix socket 中的 terminal-<id> 会话，重新连接恢复已有屏幕、目录和程序；关闭标签或客户端只分离连接，exit 才结束对应 shell。未检测到 tmux 时只恢复布局，不自动安装。tmux 默认不跨服务器重启保活。
+Terminal 仅保留一个窗口标题栏，整合标签与操作菜单，不重复服务器地址。布局保存最多 32 个标签的独立 ID、名称、初始目录、活动标签及窗口最大化状态，不保存输出或输入历史。检测到 tmux 后使用独立 arcnix socket 中的 terminal-<id> 会话，重新连接恢复已有屏幕、目录和程序；关闭标签或客户端只分离连接，exit 才结束对应 shell。未检测到 tmux 时只恢复布局，不自动安装。tmux 默认不跨服务器重启保活。
 
 扩展验证入口为 `python tools/desktop_extensions_smoke.py` 和 `cargo test -p arcnix-core --test desktop_extensions_integration --locked -- --ignored --nocapture`（设置下述 WSL 发行版变量）。前者覆盖主题边界、Disks 浏览、Services、Compose 和 DNF/Snap 安装及终端跨进程恢复；后者执行真实 Linux 磁盘查询、私有工具命令、隔离挂载中的 systemd 配置验证，以及真实 tmux 的重复连接。不会安装真实软件包或联系 Docker daemon。
 

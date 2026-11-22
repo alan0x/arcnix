@@ -87,14 +87,13 @@ def main():
             expect(p.locator('.wsl-connected')).to_be_visible()
             assert not json.loads(app.config.read_text(encoding='utf-8'))['config']['trusted_hosts']
             p.locator('.tree-new-server').click()
-            button('Choose local WSL distribution').click()
-            picker = p.get_by_role('dialog', name='Local WSL distribution')
-            expect(picker.get_by_role('button', name='Back', exact=True)).to_be_visible()
-            expect(picker.get_by_role('button', name='Refresh', exact=True)).to_be_visible()
-            choice = picker.locator('.wsl-distribution').filter(has=p.get_by_text(distro,exact=True))
-            expect(choice.locator('.subtle')).to_have_text(re.compile('^(Running|Stopped)$'))
-            assert not re.search(r'[\u3400-\u9fff]', picker.locator('.modal-footer').inner_text())
-            choice.click()
+            dialog = p.get_by_role('dialog', name='New server')
+            expect(dialog.get_by_role('textbox', name='Name', exact=True)).to_be_visible()
+            expect(dialog.get_by_role('button', name='Choose local WSL distribution')).to_have_count(0)
+            dialog.get_by_role('button', name='Cancel').click()
+            p.locator('.host-select').hover()
+            p.locator('.host-more').click()
+            button('Edit server').click()
             transport = p.get_by_role('radiogroup', name='WSL connection method', exact=True)
             direct = transport.get_by_role('radio', name='Local connection', exact=True)
             expect(direct).to_be_checked()
@@ -107,18 +106,9 @@ def main():
         with Desktop(root / 'zh', cfg) as app:
             p = app.page
             p.locator('.tree-new-server').click()
-            p.get_by_role('button', name='选择本机 WSL 发行版', exact=True).click()
-            picker = p.get_by_role('dialog', name='本机 WSL 发行版')
-            expect(picker.get_by_text('选择发行版会启动它。终端和文件操作使用该发行版的默认 Linux 账号。')).to_be_visible()
-            expect(picker.get_by_role('button', name='刷新', exact=True)).to_be_visible()
-            choice = picker.locator('.wsl-distribution').filter(has=p.get_by_text(distro,exact=True))
-            status = choice.locator('.subtle')
-            expect(status).to_have_text(re.compile('^(运行中|已停止)$'))
-            name_box = choice.get_by_text(distro, exact=True).bounding_box()
-            status_box = status.bounding_box()
-            assert name_box['x'] + name_box['width'] < status_box['x']
-            picker.get_by_role('button', name='返回', exact=True).click()
-            expect(p.get_by_role('button', name='选择本机 WSL 发行版', exact=True)).to_be_visible()
+            dialog = p.get_by_role('dialog', name='新建服务器')
+            expect(dialog.get_by_role('textbox', name='名称', exact=True)).to_be_visible()
+            expect(dialog.get_by_role('button', name='选择本机 WSL 发行版')).to_have_count(0)
     finally:
         linux('rm', '-rf', '--', scratch)
 

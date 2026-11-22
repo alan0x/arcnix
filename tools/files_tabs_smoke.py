@@ -38,7 +38,7 @@ def main():
             expect(hidden_dir).to_have_count(0)
             assert not json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['show_hidden_files']
             active.locator('.files-new-tab + .files-settings').click()
-            settings = page.get_by_role('dialog', name='Files settings')
+            settings = page.get_by_role('dialog', name='Settings')
             expect(settings.get_by_role('radio', name='Hide hidden files', exact=True)).to_be_checked()
             settings.get_by_role('radio', name='Show hidden files', exact=True).check()
             settings.get_by_role('button', name='Done').click()
@@ -46,7 +46,7 @@ def main():
             expect(hidden_dir).to_be_visible()
             assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['show_hidden_files']
             active.get_by_role('button', name='Projects', exact=True).click(button='right')
-            app.action('Open in new tab')
+            app.open_in('New tab')
             expect(root).to_have_text(['/', 'Projects'])
             note = app.file('notes.txt')
             expect(note).to_be_visible()

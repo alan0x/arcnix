@@ -110,6 +110,7 @@ window.arcnixReply = (replies) => {
 
 class RemoteFiles extends EmptyFileSystemProvider {
   versions = new Map();
+  authorizedDocuments = new Map();
   large = new Map();
   remember(path, snapshot) {
     if (snapshot) this.large.set(path, snapshot);
@@ -130,13 +131,23 @@ class RemoteFiles extends EmptyFileSystemProvider {
   async readFile(uri) {
     let document;
     try {
-      document = await request('read', uri.path);
+      // The workbench rereads saved models on focus. Reuse the authorized
+      // snapshot while this editor is open. Saving verifies the full hash.
+      const cached = this.authorizedDocuments.get(uri.path);
+      if (cached) {
+        const stat = await this.stat(uri);
+        if (stat.size === cached.version.size && stat.mtime === cached.version.modified * 1000)
+          document = cached;
+        else this.authorizedDocuments.delete(uri.path);
+      }
+      document ??= await request('openText', uri.path);
+      if (document.elevated) this.authorizedDocuments.set(uri.path, document);
     } catch (error) {
       if (error.code !== FileSystemProviderErrorCode.FileNotFound)
         (await getService(INotificationService)).error(error);
       throw error;
     }
-    const { content, ...baseline } = document;
+    const { content, elevated, ...baseline } = document;
     if (!(await getService(IWorkingCopyService)).isDirty(uri))
       this.versions.set(uri.path, baseline);
     const text = baseline.crlf ? content.replaceAll('\n', '\r\n') : content;
@@ -166,6 +177,8 @@ class RemoteFiles extends EmptyFileSystemProvider {
       ...baseline,
       content,
     });
+    if (this.authorizedDocuments.has(uri.path))
+      this.authorizedDocuments.set(uri.path, { ...baseline, content, elevated: true });
   }
 }
 const remoteFiles = new RemoteFiles();
@@ -345,6 +358,12 @@ const remoteSearch = new RemoteSearch(root, request, zh, pagedFiles);
 for (const type of [SearchProviderType.file, SearchProviderType.text])
   searchService.registerSearchResultProvider('sftp', type, remoteSearch);
 const editors = await getService(IEditorService);
+editors.onDidCloseEditor(({ editor }) => {
+  if (editor.resource?.scheme === 'sftp') remoteFiles.authorizedDocuments.delete(editor.resource.path);
+});
+(await getService(ITextFileService)).files.onDidRemove(uri => {
+  if (uri.scheme === 'sftp') remoteFiles.authorizedDocuments.delete(uri.path);
+});
 const commands = await getService(ICommandService);
 window.arcnixCommand = (id) => commands.executeCommand(id);
 window.arcnixOpen = async (path) => {

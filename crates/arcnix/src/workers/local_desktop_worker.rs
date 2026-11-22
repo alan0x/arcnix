@@ -87,6 +87,15 @@ impl Session {
         let target = &self.target;
         let file_result = |r| message(r).map_err(FileFailure::ordinary);
         std::ops::ControlFlow::Break(match action {
+            Action::AttachCodePage {
+                path,
+                snapshot,
+                sudo,
+            } => Update::CodeFile(message((|| {
+                ensure!(sudo.is_none(), "Local editing uses the current account");
+                let (snapshot, stamp) = target.poll_text_tail(&path, snapshot, None)?;
+                Ok(serde_json::json!({ "snapshot":snapshot, "stamp":stamp }))
+            })())),
             Action::CodeFile(request) => Update::CodeFile(message(
                 request.execute(crate::code_workbench::Files::Local(target), || Ok(())),
             )),
@@ -130,11 +139,15 @@ impl Session {
             Action::ResolveFileAlias(path) => {
                 Update::FileAlias(message(target.resolve_alias(&path)))
             }
-            Action::FileMetadata(path) => Update::FileMetadata(message(target.metadata(&path))),
-            Action::TextRead { path, cancel } => Update::TextFile(file_result((|| {
+            Action::FileMetadata(path) => {
+                Update::FileMetadata(message(target.file_properties(&path)))
+            }
+            Action::TextRead { path, cancel, sudo } => Update::TextFile(file_result((|| {
+                ensure!(sudo.is_none(), "Local editing uses the current account");
                 ensure!(!cancel.load(Ordering::Acquire), "Read cancelled");
                 target.read(&path)
-            })())),
+            })(
+            ))),
             Action::TextSave {
                 document,
                 content,

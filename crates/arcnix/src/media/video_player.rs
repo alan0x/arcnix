@@ -546,6 +546,10 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let idle = ui.clone();
     col().class("remote-player").fill((
+        text().class("player-preferences hidden").content(state.map(|s| {
+            let prefs = &server_apps_ui::current(s).app_settings;
+            serde_json::json!([prefs.player.volume, prefs.player.speed]).to_string()
+        })),
         #[cfg(windows)]
         crate::mpv_native::bridge(ui.clone()),
         col()

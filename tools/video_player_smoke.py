@@ -307,8 +307,7 @@ def run(preview, binary=None, read_delay=.003):
             expect(window).to_be_hidden()
             app.workspace('Transfer files')
             started = time.monotonic()
-            app.file('folder').click(button='right')
-            app.action('Open folder')
+            app.file('folder').dblclick()
             expect(app.file('nested.txt')).to_be_visible(timeout=2500)
             browse = time.monotonic() - started
             eventually(lambda: media_element.evaluate('(v,t) => !v.paused && v.currentTime > t + .25', playing_at))

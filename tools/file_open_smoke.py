@@ -102,7 +102,7 @@ def main():
             right_click('notes.customnote')
             show_submenu()
             expect(submenu.get_by_role('button', name='Code Editor', exact=True)).to_have_count(0)
-            app.action('Open')
+            app.action('Choose another app')
             select_app('Code Editor')
             expect(app.code().locator('.view-lines')).to_contain_text('Unrecognized extension')
             eventually(lambda: associations().get('customnote', {}).get('opened_with') == ['code'])
@@ -130,7 +130,7 @@ def main():
             expect(submenu.get_by_role('button', name='Text Editor', exact=True)).to_be_visible()
             expect(submenu.get_by_role('button', name='Code Editor', exact=True)).to_be_visible()
             expect(submenu.get_by_role('button', name='Player', exact=True)).to_be_visible()
-            app.action('Open')
+            app.action('Text Editor')
             expect(page.get_by_role('dialog', name='Text Editor', exact=True).get_by_role(
                 'textbox', name='File contents', exact=True,
             )).to_have_value(re.compile('const greeting'))
@@ -152,11 +152,11 @@ def main():
 
             right_click('page.html')
             expect(menu.locator('.file-menu-group').first.get_by_role('button')).to_have_text(
-                ['Open', 'Open with'])
+                ['Open with'])
             show_submenu()
             expect(submenu.get_by_role('button', name='Browser', exact=True)).to_be_visible()
             expect(submenu.get_by_role('button', name='Code Editor', exact=True)).to_be_visible()
-            app.action('Open')
+            app.action('Browser')
             expect(page.locator('.desktop-window.app-browser.active')).to_be_visible()
             def preview_tab():
                 page.wait_for_timeout(100)
@@ -240,7 +240,7 @@ def main():
             groups = menu.locator(':scope > .file-menu-group')
             expect(groups).to_have_count(5)
             expect(groups.nth(0).get_by_role('button')).to_have_text(
-                ['Open', 'Open with'])
+                ['Open with'])
             expect(groups.nth(1).get_by_role('button')).to_have_text(
                 ['Copy', 'Duplicate', 'Make alias', 'Compress', 'Paste', 'Rename'])
             expect(groups.nth(2).get_by_role('button')).to_have_text(
@@ -251,8 +251,7 @@ def main():
                 ['Move to Trash', 'Delete permanently'])
             assert groups.nth(1).evaluate(
                 'group => parseFloat(getComputedStyle(group).borderBlockStartWidth) > 0')
-            expect(menu.get_by_role('button', name='Open', exact=True)).to_be_focused()
-            page.keyboard.press('ArrowDown')
+            expect(menu.get_by_role('button', name='Open', exact=True)).to_have_count(0)
             trigger = menu.get_by_role('button', name='Open with', exact=True)
             expect(trigger).to_be_focused()
             page.keyboard.press('ArrowRight')

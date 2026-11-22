@@ -9,7 +9,7 @@ use crate::desktop_shortcuts::Shortcuts;
 use crate::remote::{CommandStream, RemoteSession};
 use crate::{CommandOutput, Theme};
 
-const TERMINAL_TAB_LIMIT: usize = 8;
+pub const TERMINAL_TAB_LIMIT: usize = 32;
 const TERMINAL_TAB_NAME_LIMIT: usize = 128;
 
 // Bound untrusted transport input using the existing field limits. JSON can
@@ -51,6 +51,7 @@ pub struct DesktopPreferences {
     pub clock: DesktopClock,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_interval_seconds: Option<u64>,
+    pub app_settings: DesktopAppSettings,
     pub shortcuts: Shortcuts,
     #[serde(skip_serializing_if = "TerminalLayout::is_empty")]
     pub terminal: TerminalLayout,
@@ -65,6 +66,112 @@ pub struct DesktopPreferences {
     pub browser_bookmarks: Vec<crate::browser::Bookmark>,
     #[serde(skip_serializing_if = "crate::desktop_customization::Appearance::is_default")]
     pub appearance: crate::desktop_customization::Appearance,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DesktopAppSettings {
+    pub terminal: TerminalAppearance,
+    pub editor: EditorSettings,
+    pub player: PlayerSettings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalAppearance {
+    pub font_size: u8,
+    pub font_family: TerminalFont,
+    pub cursor_style: CursorStyle,
+    pub cursor_blink: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalFont {
+    Automatic,
+    System,
+    Consolas,
+    Menlo,
+}
+
+impl TerminalFont {
+    pub fn css(self) -> &'static str {
+        match self {
+            Self::Automatic => r#""Cascadia Mono", Consolas, "Liberation Mono", monospace"#,
+            Self::System => "ui-monospace, monospace",
+            Self::Consolas => "Consolas, monospace",
+            Self::Menlo => "Menlo, monospace",
+        }
+    }
+}
+
+impl Default for TerminalAppearance {
+    fn default() -> Self {
+        Self {
+            font_size: 13,
+            font_family: TerminalFont::Automatic,
+            cursor_style: CursorStyle::Block,
+            cursor_blink: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EditorSettings {
+    pub font_size: u8,
+    pub line_numbers: bool,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 13,
+            line_numbers: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlayerSettings {
+    pub volume: u8,
+    pub speed: u16,
+}
+
+impl Default for PlayerSettings {
+    fn default() -> Self {
+        Self {
+            volume: 100,
+            speed: 100,
+        }
+    }
+}
+
+impl DesktopAppSettings {
+    pub const FONT_SIZES: [u8; 7] = [12, 13, 14, 16, 18, 20, 24];
+    pub const SPEEDS: [u16; 6] = [50, 75, 100, 125, 150, 200];
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            Self::FONT_SIZES.contains(&self.terminal.font_size)
+                && Self::FONT_SIZES.contains(&self.editor.font_size),
+            "Invalid app font size"
+        );
+        ensure!(
+            self.player.volume <= 100 && Self::SPEEDS.contains(&self.player.speed),
+            "Invalid playback defaults"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,7 +412,7 @@ impl TerminalLayout {
     fn validate(&self) -> Result<()> {
         ensure!(
             self.tabs.len() <= TERMINAL_TAB_LIMIT,
-            "At most 8 terminal tabs can be saved"
+            "At most {TERMINAL_TAB_LIMIT} terminal tabs can be saved"
         );
         let mut ids = std::collections::HashSet::new();
         for tab in &self.tabs {
@@ -337,6 +444,7 @@ impl Default for DesktopPreferences {
             time_zone: None,
             clock: DesktopClock::default(),
             resource_interval_seconds: None,
+            app_settings: DesktopAppSettings::default(),
             shortcuts: Shortcuts::default(),
             terminal: Default::default(),
             windows: Default::default(),
@@ -361,6 +469,7 @@ impl DesktopPreferences {
                 .is_none_or(|seconds| crate::AppSettings::RESOURCE_INTERVALS.contains(&seconds)),
             "Invalid desktop resource refresh interval"
         );
+        self.app_settings.validate()?;
         self.terminal.validate()?;
         self.shortcuts.validate()?;
         self.files.validate()?;
@@ -525,6 +634,23 @@ pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
 mod tests {
     use super::*;
     use crate::desktop_customization::DockItem;
+
+    #[test]
+    fn app_preferences_round_trip_through_desktop_storage() -> Result<()> {
+        let mut prefs = parse_preferences(r#"{"version":1}"#)?;
+        assert_eq!(prefs.app_settings, DesktopAppSettings::default());
+        prefs.app_settings.terminal.font_family = TerminalFont::Consolas;
+        prefs.app_settings.terminal.cursor_blink = false;
+        prefs.app_settings.editor.font_size = 18;
+        prefs.app_settings.editor.line_numbers = false;
+        prefs.app_settings.player.volume = 40;
+        prefs.app_settings.player.speed = 150;
+        let packet = crate::desktop_storage::encode(&prefs)?;
+        assert_eq!(crate::desktop_storage::decode(&packet)?, prefs);
+        prefs.app_settings.player.speed = 0;
+        assert!(prefs.validate().is_err());
+        Ok(())
+    }
 
     #[test]
     fn desktop_clock_settings_round_trip_with_legacy_defaults() -> Result<()> {

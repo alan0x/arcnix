@@ -264,6 +264,10 @@ enum Input {
 }
 #[derive(Serialize)]
 struct Metadata<'a> {
+    font_family: &'static str,
+    font_size: u8,
+    cursor_style: arcnix_core::server_apps::CursorStyle,
+    cursor_blink: bool,
     epoch: u64,
     id: u64,
     status: Status,
@@ -305,6 +309,9 @@ impl Ui {
         self.terminal_open(columns, rows, directory, false);
     }
     pub(crate) fn terminal_here(&self, directory: String) {
+        self.terminal_here_in(directory, false);
+    }
+    pub(crate) fn terminal_here_in(&self, directory: String, new_window: bool) {
         if !directory_supported(&directory) || !self.state.with(State::terminal_available) {
             return;
         }
@@ -312,13 +319,25 @@ impl Ui {
             .state
             .with(|s| s.terminal.session_count() >= terminal_worker::SESSION_LIMIT)
         {
-            self.error("Close a terminal tab before opening another (8 maximum)");
+            self.error(tab_limit_message());
             return;
         }
         self.state.revise(|s| {
             s.file_menu = None;
             s.file_context = None;
-            let page = window_tabs::current(s, WorkspacePage::Terminal);
+            let page = if new_window
+                && s.workbench
+                    .apps
+                    .iter()
+                    .any(|page| page.base() == WorkspacePage::Terminal)
+            {
+                window_tabs::page(
+                    arcnix_core::server_apps::DesktopApp::Terminal,
+                    s.terminal.groups.new_window(),
+                )
+            } else {
+                window_tabs::current(s, WorkspacePage::Terminal)
+            };
             server_desktop::select_app(s, page);
         });
         self.terminal_open(100, 30, Some(directory), true);
@@ -341,10 +360,7 @@ impl Ui {
             .state
             .with(|s| s.terminal.session_count() >= terminal_worker::SESSION_LIMIT)
         {
-            self.state.revise(|s| {
-                s.dialog_error =
-                    i18n::translate("Close a terminal tab before opening another (8 maximum)")
-            });
+            self.state.revise(|s| s.dialog_error = tab_limit_message());
             return;
         }
         self.close_dialog();
@@ -371,7 +387,7 @@ impl Ui {
                 .state
                 .with(|s| s.terminal.session_count() >= terminal_worker::SESSION_LIMIT)
         {
-            self.error("Close a terminal tab before opening another (8 maximum)");
+            self.error(tab_limit_message());
             return;
         }
         let (id, previous) = self.state.revise(|s| {
@@ -826,6 +842,11 @@ fn handle_input(ui: &Ui, json: String) {
         _ => {}
     }
 }
+pub(crate) fn tab_limit_message() -> String {
+    i18n::translate("Terminal tab limit reached ({limit}). Close a tab to open another.")
+        .replace("{limit}", &terminal_worker::SESSION_LIMIT.to_string())
+}
+
 fn tabs(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     let new_tab = ui.clone();
@@ -874,10 +895,7 @@ fn tabs(ui: Ui, window: u32) -> impl Widget {
             server_desktop::tab_overflow(),
             icon_action("新建终端标签", Icon::Plus)
                 .class("icon-button terminal-new-tab")
-                .enabled(state.map(|s| {
-                    s.terminal_available()
-                        && s.terminal.session_count() < terminal_worker::SESSION_LIMIT
-                }))
+                .enabled(state.map(State::terminal_available))
                 .on_press(move || {
                     let id = new_tab.state.with(|s| s.terminal.id);
                     new_tab.terminal_new_tab(id);
@@ -1031,7 +1049,12 @@ fn page(ui: Ui, window: u32) -> impl Widget {
                     }
                 }),
             text().class("terminal-state").content(state.map(|s| {
+                let prefs = &server_apps_ui::current(s).app_settings;
                 serde_json::to_string(&Metadata {
+                    font_family: prefs.terminal.font_family.css(),
+                    font_size: prefs.terminal.font_size,
+                    cursor_style: prefs.terminal.cursor_style,
+                    cursor_blink: prefs.terminal.cursor_blink,
                     epoch: s.epoch,
                     id: s.terminal.id,
                     status: s.terminal.status,

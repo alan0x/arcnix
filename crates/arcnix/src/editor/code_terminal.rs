@@ -69,9 +69,7 @@ pub(crate) fn request(ui: &Ui, msg: Value) {
                 return None;
             }
             if sessions.ids.len() >= SESSION_LIMIT {
-                let message = crate::i18n::translate(
-                    "Close a terminal tab before opening another (8 maximum)",
-                );
+                let message = crate::terminal::tab_limit_message();
                 sessions
                     .events
                     .push(json!({ "token": token, "error": message }));

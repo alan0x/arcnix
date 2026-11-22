@@ -129,7 +129,7 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
     let mut icons: Vec<_> = server_desktop::available_apps(s)
         .into_iter()
         .filter_map(server_desktop::app_id)
-        .filter(|&app| shortcut_visible(settings, app))
+        .filter(|&app| default_app_shortcut(s, app) && shortcut_visible(settings, app))
         .map(Shortcut::App)
         .collect();
     if s.sftp_available {
@@ -152,14 +152,15 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
 }
 
 fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
-    default_app_shortcut(app) && prefs.show_apps && !prefs.hidden.contains(&app)
+    prefs.show_apps && !prefs.hidden.contains(&app)
 }
 
-fn default_app_shortcut(app: DesktopApp) -> bool {
-    !matches!(
-        app,
-        DesktopApp::Player | DesktopApp::Editor | DesktopApp::Code
-    )
+fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
+    match app {
+        DesktopApp::Code | DesktopApp::Player => s.local_desktop.is_some(),
+        DesktopApp::Editor => false,
+        _ => true,
+    }
 }
 
 fn set_shortcut_visible(ui: &Ui, app: DesktopApp, visible: bool) {
@@ -187,28 +188,17 @@ fn set_shortcut_visible(ui: &Ui, app: DesktopApp, visible: bool) {
     });
 }
 
-fn shortcut_choices(apps: impl IntoIterator<Item = WorkspacePage>, zone: Zone) -> Vec<DockItem> {
-    apps.into_iter()
-        .filter_map(server_desktop::app_id)
-        .filter(|&app| zone == Zone::Dock || default_app_shortcut(app))
-        .map(DockItem::App)
-        .chain([SystemIcon::Home, SystemIcon::Trash].map(|system| DockItem::System { system }))
-        .collect()
-}
-
 fn available_shortcuts(s: &State, zone: Zone) -> Vec<DockItem> {
-    let mut choices = shortcut_choices(server_desktop::available_apps(s), zone);
-    if s.local_desktop.is_some() {
-        choices.retain(|item| {
-            !matches!(
-                item,
-                DockItem::System {
-                    system: SystemIcon::Trash
-                }
-            )
-        });
-    }
-    choices
+    let apps = server_desktop::available_apps(s)
+        .into_iter()
+        .filter_map(server_desktop::app_id)
+        .filter(|&app| zone == Zone::Dock || default_app_shortcut(s, app))
+        .map(DockItem::App);
+    let system_icons = [SystemIcon::Home, SystemIcon::Trash]
+        .into_iter()
+        .filter(|&icon| icon != SystemIcon::Trash || s.local_desktop.is_none())
+        .map(|system| DockItem::System { system });
+    apps.chain(system_icons).collect()
 }
 
 fn dock_choices(s: &State) -> Vec<DockItem> {
@@ -219,11 +209,10 @@ fn dock_choices(s: &State) -> Vec<DockItem> {
 }
 
 fn dock_icons(s: &State) -> Vec<Shortcut> {
-    let dock = &appearance(s).dock;
     let mut icons: Vec<_> = dock_choices(s)
         .into_iter()
         .filter(|&item| {
-            dock_pinned(dock, item) && (s.sftp_available || matches!(item, DockItem::App(_)))
+            dock_pinned(s, item) && (s.sftp_available || matches!(item, DockItem::App(_)))
         })
         .map(Shortcut::from)
         .collect();
@@ -242,20 +231,21 @@ fn dock_icons(s: &State) -> Vec<Shortcut> {
     icons
 }
 
-fn dock_pinned(dock: &Dock, item: DockItem) -> bool {
+fn dock_pinned(s: &State, item: DockItem) -> bool {
+    let dock = &appearance(s).dock;
     match item {
         DockItem::App(app) => {
             !dock.unpinned.contains(&app)
-                && (default_app_shortcut(app) || dock.extra_pins.contains(&app))
+                && (default_app_shortcut(s, app) || dock.extra_pins.contains(&app))
         }
         DockItem::System { .. } => dock.order.contains(&item),
     }
 }
 
-fn set_app_pin(dock: &mut Dock, app: DesktopApp, pinned: bool) {
+fn set_app_pin(s: &State, dock: &mut Dock, app: DesktopApp, pinned: bool) {
     dock.unpinned.retain(|&id| id != app);
     dock.extra_pins.retain(|&id| id != app);
-    match (default_app_shortcut(app), pinned) {
+    match (default_app_shortcut(s, app), pinned) {
         (true, false) => dock.unpinned.push(app),
         (false, true) => dock.extra_pins.push(app),
         _ => {}
@@ -265,19 +255,19 @@ fn set_app_pin(dock: &mut Dock, app: DesktopApp, pinned: bool) {
 fn toggle_dock_pin(ui: &Ui, item: DockItem) {
     update(ui, |prefs| {
         let dock = &mut prefs.dock;
-        let pinned = dock_pinned(dock, item);
+        let pinned = ui.state.with(|s| dock_pinned(s, item));
         match item {
-            DockItem::App(app) => set_app_pin(dock, app, !pinned),
+            DockItem::App(app) => ui.state.with(|s| set_app_pin(s, dock, app, !pinned)),
             _ if pinned => dock.order.retain(|&id| id != item),
-            _ => {
-                for candidate in shortcut_choices(server_desktop::APP_LAUNCHERS, Zone::Dock) {
-                    if (candidate == item || dock_pinned(dock, candidate))
+            _ => ui.state.with(|s| {
+                for candidate in available_shortcuts(s, Zone::Dock) {
+                    if (candidate == item || dock_pinned(s, candidate))
                         && !dock.order.contains(&candidate)
                     {
                         dock.order.push(candidate);
                     }
                 }
-            }
+            }),
         }
     });
 }
@@ -681,7 +671,7 @@ fn gesture(ui: &Ui, value: &str) {
                     let mut order: Vec<_> = icons
                         .into_iter()
                         .filter_map(dock_item)
-                        .filter(|&entry| entry == item || dock_pinned(dock, entry))
+                        .filter(|&entry| entry == item || ui.state.with(|s| dock_pinned(s, entry)))
                         .collect();
                     for &entry in &dock.order {
                         if !order.contains(&entry) {
@@ -690,7 +680,7 @@ fn gesture(ui: &Ui, value: &str) {
                     }
                     dock.order = order;
                     if let DockItem::App(app) = item {
-                        set_app_pin(dock, app, true);
+                        ui.state.with(|s| set_app_pin(s, dock, app, true));
                     }
                 }
             });
@@ -736,7 +726,7 @@ fn dock_pin_action(ui: &Ui, item: DockItem) -> sapid::Button {
     menu_action(
         ui,
         ui.state.map(move |s| {
-            if dock_pinned(&appearance(s).dock, item) {
+            if dock_pinned(s, item) {
                 "Remove from dock"
             } else {
                 "Keep in dock"
@@ -1407,7 +1397,7 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                                 .checked(state.map(move |s| {
                                     let prefs = appearance(s);
                                     if dock {
-                                        dock_pinned(&prefs.dock, item)
+                                        dock_pinned(s, item)
                                     } else {
                                         match item {
                                             DockItem::App(app) => shortcut_visible(prefs, app),
@@ -1420,9 +1410,7 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                                 .enabled(state.map(server_apps_ui::preferences_ready))
                                 .on_checked_change(move |visible| {
                                     if dock {
-                                        if state.with(|s| dock_pinned(&appearance(s).dock, item))
-                                            != visible
-                                        {
+                                        if state.with(|s| dock_pinned(s, item)) != visible {
                                             toggle_dock_pin(&change, item);
                                         }
                                     } else {

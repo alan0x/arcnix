@@ -252,6 +252,10 @@ class Desktop:
         return self.page.locator('.remote-slot:visible' if remote else '.local-slot:visible').get_by_role('button', name=name, exact=True)
     def action(self, name):
         self.page.locator('.file-context-menu:visible').get_by_role('button', name=name, exact=True).click()
+    def open_in(self, destination):
+        menu = self.page.locator('.file-context-menu:visible')
+        menu.get_by_role('button', name='Open in', exact=True).hover()
+        menu.locator('.file-open-submenu').get_by_role('button', name=destination, exact=True).click()
     def screenshot(self, name):
         self.page.screenshot(path=str(self.out/name))
     def stop(self):

@@ -368,6 +368,14 @@
                 if (!input.disabled && input.closest('.app-editor.active:not(.hidden)') && !input.closest('[inert]'))
                     input.focus({preventScroll: true});
             }
+            const prefs = editor.closest('.desktop-editor')?.querySelector('.editor-preferences')?.textContent;
+            if (view && prefs && view.preferences !== prefs) {
+                const [size, numbers] = JSON.parse(prefs);
+                host.style.setProperty('--font-code', size + 'px');
+                host.style.setProperty('--editor-line-height', Math.round(size * 22 / 13) + 'px');
+                host.classList.toggle('hide-line-numbers', !numbers);
+                view.preferences = prefs;
+            }
             const syntax = fileMode(editor);
             view?.setSyntax(syntax);
             setText(editor.querySelector('.editor-mode-name'), syntax?.name || '');

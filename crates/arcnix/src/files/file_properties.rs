@@ -214,11 +214,14 @@ fn bit(ui: Ui, bit: u32, owner: &'static str, capability: &'static str) -> impl 
     let state = ui.state;
     sapid::checkbox()
         .class("permission-check")
-        .name(
-            state.map(move |_| {
-                format!("{} {}", i18n::translate(owner), i18n::translate(capability))
-            }),
-        )
+        .name(state.map(move |s| {
+            let language = i18n::workspace_language(s);
+            format!(
+                "{} {}",
+                i18n::translate_for(owner, language),
+                i18n::translate_for(capability, language)
+            )
+        }))
         .checked(state.map(move |s| {
             s.properties
                 .as_ref()
@@ -236,16 +239,50 @@ fn bit(ui: Ui, bit: u32, owner: &'static str, capability: &'static str) -> impl 
 fn detail(
     ui: &Ui,
     label: &'static str,
-    value: impl Fn(&Editor) -> String + 'static,
+    value: impl Fn(&Editor, arcnix_core::Language) -> String + 'static,
 ) -> impl Widget {
     row().class("property-detail").fill((
-        text().class("property-label").content(i18n::bind(label)),
-        text().class("property-value").selectable(true).content(
-            ui.state
-                .map(move |s| s.properties.as_ref().map(&value).unwrap_or_default()),
-        ),
+        text()
+            .class("property-label")
+            .content(i18n::workspace_label(ui.state, label)),
+        text()
+            .class("property-value")
+            .selectable(true)
+            .content(ui.state.map(move |s| {
+                s.properties
+                    .as_ref()
+                    .map(|p| value(p, i18n::workspace_language(s)))
+                    .unwrap_or_default()
+            })),
     ))
 }
+fn account(id: Option<u32>, name: Option<&str>) -> String {
+    match (id, name) {
+        (Some(id), Some(name)) => format!("{name} ({id})"),
+        (Some(id), None) => id.to_string(),
+        _ => "—".into(),
+    }
+}
+
+fn permission_row_label(
+    state: Cage<State>,
+    label: &'static str,
+    name: fn(&Metadata) -> Option<&str>,
+) -> impl Widget {
+    text().content(state.map(move |s| {
+        let label = i18n::translate_for(label, i18n::workspace_language(s));
+        match s
+            .properties
+            .as_ref()
+            .and_then(|p| p.metadata.as_ref())
+            .and_then(name)
+        {
+            Some(name) => format!("{label} · {name}"),
+            None => label,
+        }
+    }))
+}
+
 fn paths(p: &Editor) -> String {
     p.entries
         .iter()
@@ -272,51 +309,52 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             row().class("property-identity").fill((
                 when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.entries.len() == 1 && p.entries[0].is_dir)), || icons::glyph(Icon::Folder)).otherwise(|| icons::glyph(Icon::File)),
                 col().fill((
-                    text().class("property-name").content(state.map(|s| s.properties.as_ref().map(|p| if p.entries.len() == 1 { p.entries[0].name.clone() } else { i18n::translate(&format!("已选 {} 项", p.entries.len())) }).unwrap_or_default())),
-                    text().class("subtle").content(state.map(|s| s.properties.as_ref().map(|p| if p.entries.len() == 1 { file_browser::file_kind(&p.entries[0]) } else { i18n::translate("多个项目") }).unwrap_or_default())),
+                    text().class("property-name").content(state.map(|s| s.properties.as_ref().map(|p| if p.entries.len() == 1 { p.entries[0].name.clone() } else { i18n::translate_for(&format!("已选 {} 项", p.entries.len()), i18n::workspace_language(s)) }).unwrap_or_default())),
+                    text().class("subtle").content(state.map(|s| s.properties.as_ref().map(|p| if p.entries.len() == 1 { file_browser::file_kind(&p.entries[0], i18n::workspace_language(s)) } else { i18n::translate_for("多个项目", i18n::workspace_language(s)) }).unwrap_or_default())),
                 )),
-                icon_action("复制所选路径", Icon::Copy).on_press(move || {
+                icon_action("复制所选路径", Icon::Copy).name(state.with(|s| i18n::translate_for("复制所选路径", i18n::workspace_language(s)))).on_press(move || {
                     if let Some(value) = copy.state.with(|s| s.properties.as_ref().map(paths)) && let Err(error) = clipboard::copy(&value) { copy.error(format!("复制路径失败：{error:#}")); }
                 }),
             )),
             col().class("property-details").fill((
-                detail(&ui, "路径", paths),
-                detail(&ui, "大小", |p| { if p.entries.iter().all(|e| e.is_dir) { return i18n::translate("未统计"); } let bytes = p.entries.iter().filter(|e| !e.is_dir && !e.is_symlink).fold(0u64, |a,e| a.saturating_add(e.size)); format!("{} ({bytes} {})", size(bytes), i18n::translate("字节")) }),
-                detail(&ui, "修改时间", |p| if p.entries.len() == 1 { file_browser::timestamp(p.entries[0].modified) } else { "—".into() }),
+                detail(&ui, "路径", |p, _| paths(p)),
+                detail(&ui, "大小", |p, language| { if p.entries.iter().all(|e| e.is_dir) { return i18n::translate_for("未统计", language); } let bytes = p.entries.iter().filter(|e| !e.is_dir && !e.is_symlink).fold(0u64, |a,e| a.saturating_add(e.size)); format!("{} ({bytes} {})", size(bytes), i18n::translate_for("字节", language)) }),
+                detail(&ui, "修改时间", |p, _| if p.entries.len() == 1 { file_browser::timestamp(p.entries[0].modified) } else { "—".into() }),
                 when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.remote)), { let ui = ui.clone(); move || fragment((
-                    detail(&ui, "所有者 / 组", |p| p.metadata.as_ref().map(|m| format!("{} / {}", m.uid.map(|v| v.to_string()).unwrap_or_else(|| "—".into()), m.gid.map(|v| v.to_string()).unwrap_or_else(|| "—".into()))).unwrap_or_else(|| "—".into())),
-                    detail(&ui, "权限预览", |p| permissions::parse(&p.mode).map(|m| format!("{m:04o} · {}", permissions::symbolic(m))).unwrap_or_else(|_| i18n::translate("混合权限"))),
+                    detail(&ui, "所有者 / 组", |p, _| p.metadata.as_ref().map(|m| format!("{} / {}", account(m.uid, m.owner_name.as_deref()), account(m.gid, m.group_name.as_deref()))).unwrap_or_else(|| "—".into())),
+                    detail(&ui, "权限预览", |p, language| permissions::parse(&p.mode).map(|m| format!("{m:04o} · {}", permissions::symbolic(m))).unwrap_or_else(|_| i18n::translate_for("混合权限", language))),
                 )) }),
-                when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.entries.iter().any(|e| e.is_dir) || p.entries.len() > 100)), || text().class("subtle").content(i18n::bind("文件夹大小未递归统计，最多显示 100 条路径。"))),
+                when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.entries.iter().any(|e| e.is_dir) || p.entries.len() > 100)), move || text().class("subtle").content(i18n::workspace_label(state, "文件夹大小未递归统计，最多显示 100 条路径。"))),
             )),
             when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.remote)), { let ui = ui.clone(); move || col().class("permissions-panel").fill((
-                text().class("section-title").content(i18n::bind("权限")),
-                text().class("subtle").content(i18n::bind("仅修改所选项目，不递归修改文件夹内容。符号链接不支持权限修改。")),
+                text().class("section-title").content(i18n::workspace_label(state, "权限")),
+                text().class("subtle").content(i18n::workspace_label(state, "仅修改所选项目，不递归修改文件夹内容。符号链接不支持权限修改。")),
                 row().class("permission-matrix").fill((
-                    fragment((text().content(""), text().class("permission-column-label").content(i18n::bind("读取")), text().class("permission-column-label").content(i18n::bind("写入")), text().class("permission-column-label").content(i18n::bind("执行")))),
-                    fragment((text().content(i18n::bind("所有者")), bit(ui.clone(), 0o400, "所有者", "读取"), bit(ui.clone(), 0o200, "所有者", "写入"), bit(ui.clone(), 0o100, "所有者", "执行"))),
-                    fragment((text().content(i18n::bind("组")), bit(ui.clone(), 0o040, "组", "读取"), bit(ui.clone(), 0o020, "组", "写入"), bit(ui.clone(), 0o010, "组", "执行"))),
-                    fragment((text().content(i18n::bind("其他用户")), bit(ui.clone(), 0o004, "其他用户", "读取"), bit(ui.clone(), 0o002, "其他用户", "写入"), bit(ui.clone(), 0o001, "其他用户", "执行"))),
+                    fragment((text().content(""), text().class("permission-column-label").content(i18n::workspace_label(state, "读取")), text().class("permission-column-label").content(i18n::workspace_label(state, "写入")), text().class("permission-column-label").content(i18n::workspace_label(state, "执行")))),
+                    fragment((permission_row_label(state, "所有者", |m| m.owner_name.as_deref()), bit(ui.clone(), 0o400, "所有者", "读取"), bit(ui.clone(), 0o200, "所有者", "写入"), bit(ui.clone(), 0o100, "所有者", "执行"))),
+                    fragment((permission_row_label(state, "组", |m| m.group_name.as_deref()), bit(ui.clone(), 0o040, "组", "读取"), bit(ui.clone(), 0o020, "组", "写入"), bit(ui.clone(), 0o010, "组", "执行"))),
+                    fragment((text().content(i18n::workspace_label(state, "其他用户")), bit(ui.clone(), 0o004, "其他用户", "读取"), bit(ui.clone(), 0o002, "其他用户", "写入"), bit(ui.clone(), 0o001, "其他用户", "执行"))),
                 )),
                 row().class("permission-mode-row").fill((
-                    text().content(i18n::bind("八进制权限")),
-                    input().class("permission-mode").name(i18n::bind("八进制权限")).value(state.map(|s| s.properties.as_ref().map(|p| p.mode.clone()).unwrap_or_default()))
+                    text().content(i18n::workspace_label(state, "八进制权限")),
+                    input().class("permission-mode").name(i18n::workspace_label(state, "八进制权限")).value(state.map(|s| s.properties.as_ref().map(|p| p.mode.clone()).unwrap_or_default()))
                         .enabled(state.map(editable)).on(value_changed, { let mode_ui = mode_ui.clone(); move |event| if let Event::ValueChanged { value, .. } = event { mode_ui.state.revise(|s| if let Some(p) = &mut s.properties { p.mode = value; p.dirty = true; p.saved = false; }); } }),
                     text().class("subtle").content("000–7777"),
                 )),
-                text().class("subtle").content(i18n::bind("特殊位通过四位八进制值设置；读写执行勾选会保留特殊位。")),
-            )) }).otherwise(|| text().class("subtle").content(i18n::bind("本地 Windows 权限由系统 ACL 管理；此处仅查看基本信息。"))),
+                text().class("subtle").content(i18n::workspace_label(state, "特殊位通过四位八进制值设置；读写执行勾选会保留特殊位。")),
+            )) }).otherwise(move || text().class("subtle").content(i18n::workspace_label(state, "本地 Windows 权限由系统 ACL 管理；此处仅查看基本信息。"))),
             text().class("property-feedback").content(state.map(|s| s.properties.as_ref().map(|p| {
-                if p.pending.is_some() { i18n::translate("正在保存权限…") }
-                else if p.metadata_request.is_some() { i18n::translate("正在读取属性…") }
-                else if !p.error.is_empty() { p.error.clone() }
-                else if p.saved { i18n::translate("权限已保存") }
-                else if p.dirty { permissions::parse(&p.mode).err().map(|e| e.to_string()).unwrap_or_default() }
+                let tr = |label: &str| i18n::translate_for(label, i18n::workspace_language(s));
+                if p.pending.is_some() { tr("正在保存权限…") }
+                else if p.metadata_request.is_some() { tr("正在读取属性…") }
+                else if !p.error.is_empty() { tr(&p.error) }
+                else if p.saved { tr("权限已保存") }
+                else if p.dirty { permissions::parse(&p.mode).err().map(|e| tr(&e.to_string())).unwrap_or_default() }
                 else { String::new() }
             }).unwrap_or_default())),
         )),
             when(state.map(|s| s.properties.as_ref().is_some_and(|p| p.remote)), move || {
-                let apply = apply.clone(); sapid::button().class("button primary").label(i18n::bind("保存权限"))
+                let apply = apply.clone(); sapid::button().class("button primary").label(i18n::workspace_label(state, "保存权限"))
                     .enabled(state.map(|s| editable(s) && s.properties.as_ref().is_some_and(|p| p.dirty && permissions::parse(&p.mode).is_ok())))
                     .on_press(move || save(&apply))
             })

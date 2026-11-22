@@ -1,10 +1,12 @@
-"""Exercise the Windows WSL picker and SSH transport against a dedicated test distribution."""
+"""Exercise a saved Windows WSL profile and its SSH transport against a dedicated test distribution."""
 import argparse
 import json
 import re
+import subprocess
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 from desktop_fixture import Desktop, Peer, expect
 
@@ -17,15 +19,17 @@ def main():
     parser.add_argument('--fingerprint', required=True, help='Expected SHA256 SSH host fingerprint')
     args = parser.parse_args()
     root = Path(tempfile.mkdtemp(prefix='arcnix-wsl-', dir=Path(__file__).resolve().parents[1] / 'artifacts'))
-    config = dict(version=1, config=dict(groups=[], servers=[], trusted_hosts=[], local_directory=str(root)))
+    user = subprocess.check_output(['wsl.exe', '-d', args.distribution, '--exec', 'id', '-un']).decode().strip()
+    profile = dict(id='local-wsl', name='WSL fixture', wsl_distribution=args.distribution,
+                   host=quote(args.distribution, safe='').replace('~', '%7E')+'.wsl.localhost', port=22, username=user, auth='Password')
+    config = dict(version=1, config=dict(groups=[], servers=[profile], trusted_hosts=[], local_directory=str(root)))
     with Desktop(root / 'client', config) as app:
         page = app.page
-        page.locator('.tree-new-server').click()
-        page.get_by_role('button', name='Choose local WSL distribution', exact=True).click()
-        page.get_by_role('button').filter(has=page.get_by_text(args.distribution, exact=True)).click()
+        page.locator('.host-select').hover()
+        page.locator('.host-more').click()
+        page.get_by_role('button', name='Edit server', exact=True).click()
         page.get_by_role('radio', name='SSH', exact=True).check()
-        user = page.get_by_role('textbox', name='Username', exact=True).input_value()
-        assert user
+        expect(page.get_by_role('textbox', name='Username', exact=True)).to_have_value(user)
         page.get_by_role('textbox', name='Port', exact=True).fill(str(args.port))
         page.get_by_role('radio', name='Private key', exact=True).check()
         page.get_by_role('textbox', name='Private key file').fill(str(args.key.resolve(strict=True)))
