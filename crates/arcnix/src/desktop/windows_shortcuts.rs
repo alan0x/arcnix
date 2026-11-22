@@ -81,13 +81,13 @@ fn down(key: VIRTUAL_KEY) -> bool {
 impl Routing {
     fn intercept(&mut self, event: &KBDLLHOOKSTRUCT) -> bool {
         let matches_key = |key: VIRTUAL_KEY| u32::from(key.0) == event.vkCode;
-        if !SHORTCUTS.iter().any(|&(key, _, _)| matches_key(key)) {
+        if !SHORTCUTS.iter().any(|&(key, ..)| matches_key(key)) {
             return false;
         }
         if let Some(index) = SHORTCUTS
             .iter()
             .enumerate()
-            .position(|(index, &(key, _, _))| self.held[index] && matches_key(key))
+            .position(|(index, &(key, ..))| self.held[index] && matches_key(key))
         {
             if event.flags.contains(LLKHF_UP) {
                 self.held[index] = false;

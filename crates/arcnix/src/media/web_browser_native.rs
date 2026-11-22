@@ -367,7 +367,7 @@ impl Host {
                 if let Some(page) = self.ui.state.with(|s| {
                     web_browser::visible_tabs(s)
                         .find(|(_, tab, _)| tab.id == id)
-                        .map(|(window, _, _)| {
+                        .map(|(window, ..)| {
                             window_tabs::page(arcnix_core::server_apps::DesktopApp::Browser, window)
                         })
                         .filter(|page| *page != s.workspace_page)
@@ -485,7 +485,7 @@ impl Host {
             }) {
                 return false;
             }
-            if !next.iter().any(|(tab, _, _, _)| id == tab) && preview.viewport.take().is_some() {
+            if !next.iter().any(|(tab, ..)| id == tab) && preview.viewport.take().is_some() {
                 let _ = preview.view.set_visible(false);
             }
             true

@@ -1,5 +1,6 @@
-use crate::*;
 use arcnix_core::server_apps::{CursorStyle, DesktopAppSettings, TerminalFont};
+
+use crate::*;
 
 fn choice<T: Copy + PartialEq + 'static, L: Into<String> + 'static>(
     ui: &Ui,

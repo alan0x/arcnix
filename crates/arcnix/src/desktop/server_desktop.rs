@@ -1325,12 +1325,15 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                                 text()
                                     .class("desktop-wallpaper-mode")
                                     .content(state.map(|s| {
-                                        s.local_desktop.as_ref().map_or_else(String::new, |target| {
-                                            i18n::translate_for(
-                                                navigation::local_desktop_mode(target),
-                                                desktop_system_settings::language(s),
-                                            )
-                                        })
+                                        s.local_desktop.as_ref().map_or_else(
+                                            String::new,
+                                            |target| {
+                                                i18n::translate_for(
+                                                    navigation::local_desktop_mode(target),
+                                                    desktop_system_settings::language(s),
+                                                )
+                                            },
+                                        )
                                     })),
                                 text()
                                     .class("desktop-wallpaper-address")

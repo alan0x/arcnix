@@ -27,8 +27,8 @@ base64 = "0.22"
 zeroize = { version = "1", features = ["derive"] }
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 arcnix-core.workspace = true
-glory = { version = "0.9.0", default-features = false, features = ["wry"] }
-sapid = "0.9.0"
+glory = { version = "0.9.1", default-features = false, features = ["wry"] }
+sapid = "0.9.1"
 async-channel = "2"
 sha2 = "0.10"
 ssh2 = { version = "0.9.7", features = ["openssl-on-win32", "vendored-openssl"] }

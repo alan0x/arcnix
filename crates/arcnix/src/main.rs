@@ -1852,16 +1852,20 @@ fn modal_with_header(
         let scrim = ui.clone();
         let focus = scope.cage(None);
         let desktop_language = ui.state.with(|s| {
-            (matches!(s.dialog, Some(Dialog::FileProperties | Dialog::FilesSettings | Dialog::FileElevation)) && server_desktop::owns_dialog(s)) || matches!(
+            (matches!(
                 s.dialog,
-                Some(
-                    Dialog::DesktopTimeZone
-                        | Dialog::AppSettings(_)
-                        | Dialog::OpenDesktopFile(_)
-                        | Dialog::DesktopIcons
-                        | Dialog::DockShortcuts
+                Some(Dialog::FileProperties | Dialog::FilesSettings | Dialog::FileElevation)
+            ) && server_desktop::owns_dialog(s))
+                || matches!(
+                    s.dialog,
+                    Some(
+                        Dialog::DesktopTimeZone
+                            | Dialog::AppSettings(_)
+                            | Dialog::OpenDesktopFile(_)
+                            | Dialog::DesktopIcons
+                            | Dialog::DockShortcuts
+                    )
                 )
-            )
         });
         let title = i18n::bind_in(desktop_language, title);
         let mounted = scope.mount_with(|| {

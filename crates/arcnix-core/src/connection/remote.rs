@@ -22,14 +22,16 @@ use crate::{
 
 #[path = "remote_file_actions.rs"]
 mod file_actions;
-#[path = "remote_file_pager.rs"]
-mod file_pager;
 #[path = "remote_file_admin.rs"]
 mod file_admin;
+#[path = "remote_file_pager.rs"]
+mod file_pager;
 #[path = "remote_recycle.rs"]
 mod recycle;
 pub use file_actions::{DesktopDrop, FileAction};
-pub use file_admin::{AdminTextRetry, ManagedFileRetry, SudoPasswordRequired, file_permission_denied};
+pub use file_admin::{
+    AdminTextRetry, ManagedFileRetry, SudoPasswordRequired, file_permission_denied,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 1024 * 1024;

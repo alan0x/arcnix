@@ -385,9 +385,11 @@ pub(crate) fn defaults(ui: &Ui, desktop: bool) -> impl Widget + use<> {
         row().class("folder-default-row").fill((
             field("Visible columns"),
             row().class("folder-default-columns").fill((
-                sapid::checkbox().class("preference-check")
+                sapid::checkbox()
+                    .class("preference-check")
                     .label(crate::i18n::bind_in(desktop, "名称"))
-                    .checked(true).enabled(false),
+                    .checked(true)
+                    .enabled(false),
                 fragment(columns),
             )),
         )),

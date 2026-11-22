@@ -348,11 +348,22 @@ pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                                 .target(
                                     row().class("trash-file-row").fill((
                                         row().class("trash-file-name").fill((
-                                            text().class(item.map(|entry| {
-                                                let directory = entry.payload.as_ref().is_some_and(|target| target.directory);
-                                                let icon = files_search::file_icon(files_ui::item_name(&entry.original), directory);
-                                                format!("action-glyph file-entry-icon glyph-{}", icon.name())
-                                            })).content(""),
+                                            text()
+                                                .class(item.map(|entry| {
+                                                    let directory = entry
+                                                        .payload
+                                                        .as_ref()
+                                                        .is_some_and(|target| target.directory);
+                                                    let icon = files_search::file_icon(
+                                                        files_ui::item_name(&entry.original),
+                                                        directory,
+                                                    );
+                                                    format!(
+                                                        "action-glyph file-entry-icon glyph-{}",
+                                                        icon.name()
+                                                    )
+                                                }))
+                                                .content(""),
                                             text().content(item.map(|i| {
                                                 i.original
                                                     .rsplit('/')

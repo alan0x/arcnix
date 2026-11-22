@@ -1160,7 +1160,9 @@ pub(crate) fn entry_name_class<T: 'static>(
 }
 
 pub(crate) fn entry_icon_class(s: &State, file: &FileEntry, files: bool) -> String {
-    let mut class = if files && file.is_dir && !file.is_symlink
+    let mut class = if files
+        && file.is_dir
+        && !file.is_symlink
         && let Some(class) = files_ui::folder_icon_class(s, &file.path)
     {
         format!("action-glyph file-entry-icon file-folder-symbol folder-custom-mark {class}")
@@ -1182,9 +1184,7 @@ pub(crate) fn entry_name<T: 'static>(
 ) -> impl IntoChildren {
     (
         text()
-            .class(state.map(move |s| {
-                entry.with(|entry| entry_icon_class(s, file(entry), files))
-            }))
+            .class(state.map(move |s| entry.with(|entry| entry_icon_class(s, file(entry), files))))
             .content(""),
         text()
             .class("file-label")

@@ -2,22 +2,19 @@
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
-use std::os::windows::{
-    ffi::OsStrExt,
-    fs::{MetadataExt, OpenOptionsExt},
-};
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::local_desktop::join;
-use crate::{
-    FileEntry, metrics,
-    permissions::Metadata,
-    remote::FileLocation,
-    text_files::{Document, LIMIT, TextSnapshot, Version},
-};
 use anyhow::{Context, Result, bail, ensure};
 use windows_sys::Win32::Storage::FileSystem::*;
+
+use crate::local_desktop::join;
+use crate::permissions::Metadata;
+use crate::remote::FileLocation;
+use crate::text_files::{Document, LIMIT, TextSnapshot, Version};
+use crate::{FileEntry, metrics};
 
 fn wide(path: &OsStr) -> Vec<u16> {
     path.encode_wide().chain(Some(0)).collect()
@@ -310,13 +307,11 @@ pub fn clock() -> Result<crate::server_apps::ClockSample> {
     })
 }
 pub fn sample() -> Result<metrics::ResourceSnapshot> {
-    use windows_sys::Win32::{
-        Foundation::FILETIME,
-        System::{
-            SystemInformation::{GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX},
-            Threading::GetSystemTimes,
-        },
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::SystemInformation::{
+        GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
     };
+    use windows_sys::Win32::System::Threading::GetSystemTimes;
     let mut sample = metrics::ResourceSnapshot {
         uptime_seconds: Some(unsafe { GetTickCount64() } as f64 / 1000.),
         ..Default::default()

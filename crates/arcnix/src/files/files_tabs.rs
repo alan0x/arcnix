@@ -538,41 +538,53 @@ pub(crate) fn preview_header(state: Cage<State>, id: u32) -> impl Widget {
 }
 
 pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
-    col().class(state.map(move |s| {
-        if snapshot(s, id).is_some_and(|tab| tab.folder_view(s).icons) { "files-inactive-preview icons-view" }
-        else { "files-inactive-preview" }.to_owned()
-    })).fill((
-        text().class("files-icon-pixels hidden").content(state.map(move |s| {
-            snapshot(s, id).map(|tab| tab.folder_view(s).icon_size.to_string()).unwrap_or_default()
-        })),
-        each(state.map(move |s| {
-            snapshot(s, id)
-                .map(|tab| tab.preview_entries(s))
-                .unwrap_or_default()
+    col()
+        .class(state.map(move |s| {
+            if snapshot(s, id).is_some_and(|tab| tab.folder_view(s).icons) {
+                "files-inactive-preview icons-view"
+            } else {
+                "files-inactive-preview"
+            }
+            .to_owned()
         }))
-        .key(|entry| entry.path.clone())
-        .children(move |entry| {
-            let value = entry.value;
-            row()
-                .name(value.map(|entry| entry.path.clone()))
-                .class(value.map(|entry| {
-                    if entry.is_symlink {
-                        "files-inactive-entry"
-                    } else if entry.is_dir {
-                        "files-inactive-entry files-inactive-draggable files-directory-row"
-                    } else {
-                        "files-inactive-entry files-inactive-draggable"
-                    }
-                    .to_owned()
-                }))
-                .fill((
-                    text()
-                        .class(state.map(move |s| {
-                            value.with(|file| file_browser::entry_icon_class(s, file, true))
-                        }))
-                        .content(""),
-                    text().class("file-label").content(value.map(|file| file.name.clone())),
-                ))
-        }),
-    ))
+        .fill((
+            text()
+                .class("files-icon-pixels hidden")
+                .content(state.map(move |s| {
+                    snapshot(s, id)
+                        .map(|tab| tab.folder_view(s).icon_size.to_string())
+                        .unwrap_or_default()
+                })),
+            each(state.map(move |s| {
+                snapshot(s, id)
+                    .map(|tab| tab.preview_entries(s))
+                    .unwrap_or_default()
+            }))
+            .key(|entry| entry.path.clone())
+            .children(move |entry| {
+                let value = entry.value;
+                row()
+                    .name(value.map(|entry| entry.path.clone()))
+                    .class(value.map(|entry| {
+                        if entry.is_symlink {
+                            "files-inactive-entry"
+                        } else if entry.is_dir {
+                            "files-inactive-entry files-inactive-draggable files-directory-row"
+                        } else {
+                            "files-inactive-entry files-inactive-draggable"
+                        }
+                        .to_owned()
+                    }))
+                    .fill((
+                        text()
+                            .class(state.map(move |s| {
+                                value.with(|file| file_browser::entry_icon_class(s, file, true))
+                            }))
+                            .content(""),
+                        text()
+                            .class("file-label")
+                            .content(value.map(|file| file.name.clone())),
+                    ))
+            }),
+        ))
 }

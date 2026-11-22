@@ -212,7 +212,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub folder_defaults: FolderOverrides,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub folder_views: std::collections::BTreeMap<String, std::collections::BTreeMap<String, FolderOverrides>>,
+    pub folder_views:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, FolderOverrides>>,
     #[serde(default = "capture_desktop_shortcuts_default")]
     pub capture_desktop_shortcuts: bool,
     #[serde(default)]

@@ -1,10 +1,8 @@
 //! A read-only PDF window. A document's renderer lives until its command sender is dropped.
 use arcnix_core::file_associations::{FileApp, filename};
 use base64::Engine;
-use hayro::{
-    PixmapSettings, RenderCache,
-    hayro_syntax::{Pdf, PdfData, DecryptionError, LoadPdfError},
-};
+use hayro::hayro_syntax::{DecryptionError, LoadPdfError, Pdf, PdfData};
+use hayro::{PixmapSettings, RenderCache};
 use zeroize::Zeroizing;
 
 use crate::i18n::desktop as i18n;

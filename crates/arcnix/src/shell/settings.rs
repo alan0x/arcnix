@@ -77,29 +77,34 @@ where
             }]
         })
         .with_partial_eq();
-    row().class("settings-select-field").fill(
-        each(language)
-            .key(|language| *language as u8)
-            .children(move |item| {
-                let language = item.value.get();
-                let apply = apply.clone();
-                sapid::native_select(key.clone())
-                    .class(format!("settings-select setting-{slug}"))
-                    .name(i18n::translate_for(title, language))
-                    .placeholder(i18n::translate_for("Custom", language))
-                    .options(options.iter().enumerate().map(|(i, (_, label))| {
-                        sapid::select_option(i.to_string(), i18n::translate_for(label, language))
-                    }))
-                    .value(selected)
-                    .enabled(state.map(enabled))
-                    .on_value_change(move |key| {
-                        if let Some(key) = key {
-                            apply(key);
-                        }
-                    })
-            }),
-    )
-    .fill(icons::glyph(Icon::Collapse))
+    row()
+        .class("settings-select-field")
+        .fill(
+            each(language)
+                .key(|language| *language as u8)
+                .children(move |item| {
+                    let language = item.value.get();
+                    let apply = apply.clone();
+                    sapid::native_select(key.clone())
+                        .class(format!("settings-select setting-{slug}"))
+                        .name(i18n::translate_for(title, language))
+                        .placeholder(i18n::translate_for("Custom", language))
+                        .options(options.iter().enumerate().map(|(i, (_, label))| {
+                            sapid::select_option(
+                                i.to_string(),
+                                i18n::translate_for(label, language),
+                            )
+                        }))
+                        .value(selected)
+                        .enabled(state.map(enabled))
+                        .on_value_change(move |key| {
+                            if let Some(key) = key {
+                                apply(key);
+                            }
+                        })
+                }),
+        )
+        .fill(icons::glyph(Icon::Collapse))
 }
 
 pub(crate) fn reset_button(desktop: bool, reset: impl FnMut() + 'static) -> sapid::Button {
@@ -188,7 +193,8 @@ impl Ui {
                     i18n::set_language(language);
                 }
                 self.state.revise(|s| {
-                    let views_changed = s.config.settings.folder_views != config.settings.folder_views
+                    let views_changed = s.config.settings.folder_views
+                        != config.settings.folder_views
                         || s.config.settings.folder_defaults != config.settings.folder_defaults;
                     s.config = config;
                     s.settings.error.clear();
@@ -256,9 +262,12 @@ pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
                         .fill(hidden_files_switch(&ui, desktop)),
                     when(ui.state.map(|s| !s.settings.error.is_empty()), {
                         let state = ui.state;
-                        move || text().class("dialog-error").content(i18n::bind_in(
-                            desktop, state.map(|s| s.settings.error.clone()),
-                        ))
+                        move || {
+                            text().class("dialog-error").content(i18n::bind_in(
+                                desktop,
+                                state.map(|s| s.settings.error.clone()),
+                            ))
+                        }
                     }),
                 ),
                 sapid::button()

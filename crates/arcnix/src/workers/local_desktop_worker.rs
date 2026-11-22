@@ -1,14 +1,13 @@
-use super::worker::{Action, FileFailure, Update, create_named_entry};
-use crate::server_apps_worker::{Action as AppAction, Reply};
-use anyhow::{Result, ensure};
-use arcnix_core::{
-    FileEntry,
-    desktop_customization::DesktopItems,
-    local_desktop::{Target, join},
-    sync,
-};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+
+use anyhow::{Result, ensure};
+use arcnix_core::desktop_customization::DesktopItems;
+use arcnix_core::local_desktop::{Target, join};
+use arcnix_core::{FileEntry, sync};
+
+use super::worker::{Action, FileFailure, Update, create_named_entry};
+use crate::server_apps_worker::{Action as AppAction, Reply};
 
 pub(super) struct Session {
     pub target: Target,
@@ -66,8 +65,7 @@ impl Session {
                 } else {
                     Vec::new()
                 };
-                entries
-                    .retain(|e| !e.is_hidden() && !e.name.chars().any(char::is_control));
+                entries.retain(|e| !e.is_hidden() && !e.name.chars().any(char::is_control));
                 entries.truncate(128);
                 Reply::DesktopItems(DesktopItems {
                     home: self.home.clone(),

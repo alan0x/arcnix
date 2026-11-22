@@ -197,7 +197,7 @@ impl RemoteSession {
     fn check_admin_policy(&self, stage: &str, request: Request<'_>) -> Result<()> {
         let data = Zeroizing::new(serde_json::to_vec(&request)?);
         ensure!(data.len() <= 8 * 1024 * 1024, "File selection is too large");
-        let command = admin_command(&stage, &format!("{:x}", Sha256::digest(&data)));
+        let command = admin_command(stage, &format!("{:x}", Sha256::digest(&data)));
         self.check_sudo_command(&command)
     }
 

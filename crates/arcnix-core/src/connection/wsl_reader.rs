@@ -3,7 +3,8 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use anyhow::{Context, Result};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 use crate::text_files::TextSnapshot;
 

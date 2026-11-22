@@ -982,8 +982,7 @@ mod tests {
         );
         let mut r = complete(&job());
         r.steps[2].detail = "secret 密".repeat(30);
-        let safe =
-            crate::tasks::redact_log(&packet(&r), &["passed", "1", "task", "secret", "密"]);
+        let safe = crate::tasks::redact_log(&packet(&r), &["passed", "1", "task", "secret", "密"]);
         let parsed = report(
             &safe,
             "task",

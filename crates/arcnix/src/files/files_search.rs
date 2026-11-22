@@ -125,7 +125,11 @@ pub(crate) fn file_icon(name: &str, directory: bool) -> Icon {
         return Icon::Folder;
     }
     let ext = extension(name);
-    for (kind, icon) in [(Kind::Images, Icon::Image), (Kind::Audio, Icon::Audio), (Kind::Videos, Icon::Video)] {
+    for (kind, icon) in [
+        (Kind::Images, Icon::Image),
+        (Kind::Audio, Icon::Audio),
+        (Kind::Videos, Icon::Video),
+    ] {
         if kind.has_extension(ext) {
             return icon;
         }

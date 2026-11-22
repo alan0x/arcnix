@@ -711,9 +711,16 @@ pub(crate) fn start_with_limiter(
                     continue;
                 }
                 if let Action::OpenPdf(path, commands) = action {
-                    match desktop.target.read_bounded_file(&path, crate::pdf_reader::LIMIT) {
-                        Ok(bytes) => crate::pdf_reader::start(bytes, commands, events.clone(), epoch, serial),
-                        Err(error) => send(Update::Pdf(crate::pdf_reader::Reply::Failed(format!("{error:#}")))),
+                    match desktop
+                        .target
+                        .read_bounded_file(&path, crate::pdf_reader::LIMIT)
+                    {
+                        Ok(bytes) => {
+                            crate::pdf_reader::start(bytes, commands, events.clone(), epoch, serial)
+                        }
+                        Err(error) => send(Update::Pdf(crate::pdf_reader::Reply::Failed(format!(
+                            "{error:#}"
+                        )))),
                     }
                     continue;
                 }
@@ -1335,8 +1342,15 @@ pub(crate) fn start_with_limiter(
                             .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                         match action {
                             Action::OpenPdf(path, commands) => {
-                                let bytes = remote.read_bounded_file(&path, crate::pdf_reader::LIMIT)?;
-                                crate::pdf_reader::start(bytes, commands, events.clone(), epoch, serial);
+                                let bytes =
+                                    remote.read_bounded_file(&path, crate::pdf_reader::LIMIT)?;
+                                crate::pdf_reader::start(
+                                    bytes,
+                                    commands,
+                                    events.clone(),
+                                    epoch,
+                                    serial,
+                                );
                                 file_completed = true;
                             }
                             Action::TextRead { path, cancel, sudo } => {

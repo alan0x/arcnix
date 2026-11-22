@@ -3,3 +3,7 @@ extend-exclude = ["/target/**", "/artifacts/**", "Cargo.lock", "crates/arcnix/as
 
 [default.extend-words]
 arcnix = "arcnix"
+
+[type.js.extend-words]
+# HTMLMediaElement event name.
+seeked = "seeked"

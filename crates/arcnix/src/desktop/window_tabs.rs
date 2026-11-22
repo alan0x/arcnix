@@ -1,7 +1,9 @@
 //! Window ownership is separate from the application payload (PTY, WebView or document).
-use crate::*;
-use arcnix_core::server_apps::DesktopApp;
 use std::collections::BTreeMap;
+
+use arcnix_core::server_apps::DesktopApp;
+
+use crate::*;
 
 #[derive(Clone, Default)]
 struct Group {

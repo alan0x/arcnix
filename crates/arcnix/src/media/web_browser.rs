@@ -1,9 +1,9 @@
 //! The browser chrome belongs to the desktop. Web content is hosted separately.
-use arcnix_core::server_apps::DesktopApp;
 use std::collections::{BTreeMap, VecDeque};
 
 use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT, normalize_address, parse_address};
 use arcnix_core::browser_proxy::Diagnosis;
+use arcnix_core::server_apps::DesktopApp;
 use zeroize::Zeroizing;
 
 use crate::i18n::desktop as i18n;

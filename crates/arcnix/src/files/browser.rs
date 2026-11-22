@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 
-use arcnix_core::{FileEntry, TransferJob, TransferStatus, new_id};
-
 pub use arcnix_core::FileSort as Sort;
+use arcnix_core::{FileEntry, TransferJob, TransferStatus, new_id};
 pub fn visible(entries: &[FileEntry], query: &str, sort: Sort, descending: bool) -> Vec<FileEntry> {
     let query = query.to_lowercase();
     let mut rows: Vec<_> = entries

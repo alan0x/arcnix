@@ -28,7 +28,7 @@ jobs:
         with:
           toolchain: nightly-2026-11-04
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - run: cargo +nightly-2026-11-04 fmt --all -- --check
 
   typos:
     name: Typos

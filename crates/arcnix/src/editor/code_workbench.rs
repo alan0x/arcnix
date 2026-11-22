@@ -1,10 +1,11 @@
 //! Files exposed to the embedded workbench from the active desktop.
+use std::result::Result;
+
 use anyhow::Context;
 use arcnix_core::remote::RemoteSession;
 use arcnix_core::text_files::{Document, TextSnapshot, Version};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::result::Result;
 
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, icon_action};

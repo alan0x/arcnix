@@ -191,7 +191,8 @@ fn accent_controls(ui: Ui) -> impl Widget {
                     if let Event::Keyboard {
                         command: glory::render::KeyboardCommand::Dismiss,
                         ..
-                    } = event {
+                    } = event
+                    {
                         draft.revise(|value| *value = state.with(accent_color).to_string());
                     }
                 })

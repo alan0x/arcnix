@@ -295,7 +295,8 @@ impl Theme {
         self.style(dark).accent.or(self.accent)
     }
 
-    /// The selected color for swatches and solid fills. Accent text uses the readable palette shade.
+    /// The selected color for swatches and solid fills. Accent text uses the readable palette
+    /// shade.
     pub fn accent_fill(&self, dark: bool) -> Rgb {
         self.style(dark)
             .colors

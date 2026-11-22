@@ -98,7 +98,9 @@ pub(crate) fn offer_retry(ui: &Ui, serial: u64, retry: arcnix_core::remote::Mana
         false
     });
     if busy {
-        ui.error("Administrator permission required. Close the dialog and retry the remaining items.");
+        ui.error(
+            "Administrator permission required. Close the dialog and retry the remaining items.",
+        );
     }
     ui.refresh(true);
     files_tabs::refresh_windows(ui);
