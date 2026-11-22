@@ -1,54 +1,22 @@
-//! File column preferences belong to the selected server, independently per pane.
 use crate::*;
 
 pub(crate) fn visible(s: &State, remote: bool) -> VisibleFileColumns {
-    let settings = s
-        .config
-        .servers
-        .iter()
-        .find(|p| Some(&p.id) == s.selected.as_ref())
-        .map(|p| p.file_columns)
-        .unwrap_or(s.unassigned_columns);
-    if remote {
-        settings.remote
-    } else {
-        settings.local
-    }
+    files_view::current(s, remote).columns
 }
-fn set(ui: &Ui, remote: bool, change: impl FnOnce(&mut VisibleFileColumns)) {
-    ui.state.revise(|s| {
-        let settings = if let Some(profile) = s
-            .config
-            .servers
-            .iter_mut()
-            .find(|p| Some(&p.id) == s.selected.as_ref())
+
+fn set(ui: &Ui, remote: bool, edit: impl FnOnce(&mut VisibleFileColumns)) {
+    let view = ui.state.with(|s| files_view::current(s, remote));
+    let mut columns = view.columns;
+    edit(&mut columns);
+    files_view::change(ui, remote, |v| {
+        v.columns = Some(columns);
+        if (view.sort == Sort::Size && !columns.size)
+            || (view.sort == Sort::Modified && !columns.modified)
         {
-            &mut profile.file_columns
-        } else {
-            &mut s.unassigned_columns
-        };
-        change(if remote {
-            &mut settings.remote
-        } else {
-            &mut settings.local
-        });
-        let columns = if remote {
-            settings.remote
-        } else {
-            settings.local
-        };
-        let (sort, descending) = if remote {
-            (&mut s.remote_sort, &mut s.remote_desc)
-        } else {
-            (&mut s.local_sort, &mut s.local_desc)
-        };
-        if (*sort == Sort::Size && !columns.size) || (*sort == Sort::Modified && !columns.modified)
-        {
-            *sort = Sort::Name;
-            *descending = false;
+            v.sort = Some(Sort::Name);
+            v.descending = Some(false);
         }
     });
-    ui.save();
 }
 pub(crate) fn open(ui: &Ui, remote: bool) {
     if ui.state.with(|s| s.file_pending.is_none()) {
@@ -58,9 +26,10 @@ pub(crate) fn open(ui: &Ui, remote: bool) {
 fn choice(
     ui: Ui,
     remote: bool,
+    desktop: bool,
     label: &'static str,
     get: fn(VisibleFileColumns) -> bool,
-    toggle: fn(&mut VisibleFileColumns),
+    write: fn(&mut VisibleFileColumns, bool),
 ) -> impl Widget {
     sapid::checkbox()
         .class(ui.state.map(move |s| {
@@ -71,10 +40,10 @@ fn choice(
             }
             .to_owned()
         }))
-        .name(i18n::bind(label))
-        .label(i18n::bind(label))
+        .name(i18n::bind_in(desktop, label))
+        .label(i18n::bind_in(desktop, label))
         .checked(ui.state.map(move |s| get(visible(s, remote))))
-        .on_checked_change(move |_| set(&ui, remote, toggle))
+        .on_checked_change(move |checked| set(&ui, remote, |columns| write(columns, checked)))
 }
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
     let state = ui.state;
@@ -83,55 +52,39 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
         move || {
             let remote =
                 state.with(|s| matches!(s.dialog, Some(Dialog::FileColumns { remote: true })));
+            let desktop = state.with(server_desktop::owns_dialog);
             let reset = ui.clone();
             let close = ui.clone();
             modal_with_header(
                 ui.clone(),
                 "显示列",
-                settings::reset_button(false, move || {
-                    set(&reset, remote, |c| *c = VisibleFileColumns::default())
+                settings::reset_button(desktop, move || {
+                    files_view::change(&reset, remote, |v| v.columns = None)
                 }),
                 col().class("column-settings").fill((
                     text().class("subtle").content(state.map(move |s| {
-                        let name = s
-                            .config
-                            .servers
-                            .iter()
-                            .find(|p| Some(&p.id) == s.selected.as_ref())
-                            .map(|p| p.name.as_str())
-                            .unwrap_or("");
-                        format!(
-                            "{name} · {}",
-                            i18n::translate(if remote {
-                                "远程文件"
-                            } else {
-                                "本地文件"
-                            })
-                        )
+                        if remote {
+                            s.remote_path.clone()
+                        } else {
+                            s.local_path.clone()
+                        }
                     })),
-                    text()
-                        .class("column-hint")
-                        .content(i18n::bind("名称始终显示。设置会自动保存到当前服务器。")),
-                    choice(ui.clone(), remote, "大小", |c| c.size, |c| c.size = !c.size),
-                    choice(ui.clone(), remote, "类型", |c| c.kind, |c| c.kind = !c.kind),
-                    choice(
-                        ui.clone(),
-                        remote,
-                        "修改时间",
-                        |c| c.modified,
-                        |c| c.modified = !c.modified,
-                    ),
-                    choice(
-                        ui.clone(),
-                        remote,
-                        "权限",
-                        |c| c.permissions,
-                        |c| c.permissions = !c.permissions,
+                    text().class("column-hint").content(i18n::bind_in(
+                        desktop,
+                        "名称始终显示。更改仅应用于此文件夹。",
+                    )),
+                    fragment(
+                        files_view::COLUMN_CHOICES
+                            .iter()
+                            .map(|&(label, get, write)| {
+                                choice(ui.clone(), remote, desktop, label, get, write)
+                            })
+                            .collect::<Vec<_>>(),
                     ),
                 )),
                 sapid::button()
                     .class("button primary")
-                    .label(i18n::bind("完成"))
+                    .label(i18n::bind_in(desktop, "完成"))
                     .on_press(move || close.close_dialog()),
             )
         },

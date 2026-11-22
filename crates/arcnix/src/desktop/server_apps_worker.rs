@@ -145,6 +145,7 @@ fn picker_entries(
     for (name, path) in paths {
         match session.file_metadata(&path) {
             Ok(meta) if !meta.symlink => entries.push(arcnix_core::FileEntry {
+                hidden_attribute: meta.hidden_attribute,
                 name,
                 path,
                 is_dir: meta.directory,

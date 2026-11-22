@@ -1555,6 +1555,7 @@ impl RemoteSession {
                 "目录超过 {TREE_ENTRY_LIMIT} 个项目"
             );
             entries.push(FileEntry {
+                hidden_attribute: false,
                 name,
                 path,
                 is_dir,
@@ -1644,6 +1645,7 @@ impl RemoteSession {
         validate_path(path)?;
         let stat = self.sftp()?.lstat(Path::new(path))?;
         Ok(crate::permissions::Metadata {
+            hidden_attribute: false,
             size: stat.size.unwrap_or(0),
             modified: stat.mtime,
             directory: stat.is_dir(),

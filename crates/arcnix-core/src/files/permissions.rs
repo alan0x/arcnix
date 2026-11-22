@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 
 #[derive(Clone, Debug)]
 pub struct Metadata {
+    pub hidden_attribute: bool,
     pub size: u64,
     pub modified: Option<u64>,
     pub directory: bool,

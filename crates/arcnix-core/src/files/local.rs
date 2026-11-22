@@ -123,6 +123,19 @@ pub fn delete_with_progress(
     deletion::remove_with_progress(&LocalFiles, targets, check, progress)
 }
 
+pub(crate) fn hidden_attribute(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 pub fn list_dir(path: &Path) -> Result<(PathBuf, Vec<FileEntry>)> {
     let path = fs::canonicalize(path).context("Cannot open local directory")?;
     let mut entries = Vec::new();
@@ -139,6 +152,7 @@ pub fn list_dir(path: &Path) -> Result<(PathBuf, Vec<FileEntry>)> {
             .into_string()
             .map_err(|_| anyhow::anyhow!("Path is not valid Unicode"))?;
         entries.push(FileEntry {
+            hidden_attribute: hidden_attribute(&metadata),
             name,
             path: entry_path,
             is_dir: item.path().is_dir(),

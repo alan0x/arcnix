@@ -26,6 +26,29 @@ impl Default for VisibleFileColumns {
     }
 }
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FileSort {
+    #[default]
+    Name,
+    Size,
+    Modified,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct FolderOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_size: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<FileSort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descending: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<VisibleFileColumns>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct FileColumnSettings {
     pub local: VisibleFileColumns,
@@ -186,6 +209,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub theme: Theme,
     pub show_hidden_files: bool,
+    #[serde(default)]
+    pub folder_defaults: FolderOverrides,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub folder_views: std::collections::BTreeMap<String, std::collections::BTreeMap<String, FolderOverrides>>,
     #[serde(default = "capture_desktop_shortcuts_default")]
     pub capture_desktop_shortcuts: bool,
     #[serde(default)]
@@ -223,6 +250,8 @@ impl Default for AppSettings {
             language: Language::English,
             theme: Theme::System,
             show_hidden_files: true,
+            folder_defaults: Default::default(),
+            folder_views: Default::default(),
             capture_desktop_shortcuts: capture_desktop_shortcuts_default(),
             shortcut_scheme: Default::default(),
             resource_interval_seconds: 3,
@@ -254,6 +283,7 @@ pub struct TransferRule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEntry {
+    pub hidden_attribute: bool,
     pub name: String,
     pub path: String,
     pub is_dir: bool,
@@ -261,6 +291,12 @@ pub struct FileEntry {
     pub size: u64,
     pub modified: Option<u64>,
     pub permissions: Option<u32>,
+}
+
+impl FileEntry {
+    pub fn is_hidden(&self) -> bool {
+        self.hidden_attribute || self.name.starts_with('.')
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]

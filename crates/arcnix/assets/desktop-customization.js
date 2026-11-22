@@ -510,6 +510,7 @@
     function update() {
         updateTheme();
         updateTimeZonePicker();
+        updateSizeControl(document, '.default-file-size', '.folder-defaults', '--files-icon-preview');
         const settings = document.querySelector('.desktop-window.app-settings.active');
         updateSizeControl(settings, '.dock-size-control', '.desktop-dock', '--dock-preview');
         updateClock();

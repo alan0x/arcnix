@@ -15,7 +15,9 @@ def main():
         (peer.root / 'Projects/notes.txt').write_text('original', encoding='utf-8')
         (peer.root / '.private').mkdir()
         (peer.root / '.env').touch()
-        with Desktop(out / 'desktop', peer.config([peer.profile('Files tabs')], local)) as app:
+        config = peer.config([peer.profile('Files tabs')], local)
+        config['config']['settings']['folder_views'] = {'server:Files tabs': {'/': {'show_hidden': False}}}
+        with Desktop(out / 'desktop', config) as app:
             page = app.page
             app.connect()
             app.application('Files')
@@ -25,7 +27,11 @@ def main():
             expect(root).to_have_text('/')
             hidden_dir = app.file('.private')
             dotfile = app.file('.env')
+            expect(hidden_dir.locator('.file-entry-icon')).to_have_css('opacity', '0.6')
+            expect(app.file('Projects').locator('.file-entry-icon')).to_have_css('opacity', '1')
             dotfile.click()
+            expect(dotfile.locator('.file-entry-icon')).to_have_css('opacity', '0.6')
+            expect(dotfile.locator('.file-label')).to_have_css('opacity', '1')
             page.keyboard.press('F2')
             rename = active.locator('.file-inline-name')
             expect(rename).to_be_focused()
@@ -36,7 +42,8 @@ def main():
             page.keyboard.press('Control+h')
             expect(dotfile).to_have_count(0)
             expect(hidden_dir).to_have_count(0)
-            assert not json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['show_hidden_files']
+            prefs = json.loads(app.config.read_bytes())['config']['settings']
+            assert not prefs['show_hidden_files']
             active.locator('.files-new-tab + .files-settings').click()
             settings = page.get_by_role('dialog', name='Settings')
             close = settings.get_by_role('button', name='Close dialog', exact=True)
@@ -55,6 +62,12 @@ def main():
             expect(close).to_be_focused()
             expect(close).to_have_css('outline-style', 'solid')
             show_hidden = settings.get_by_role('switch', name='Show hidden files', exact=True)
+            expect(settings.locator('.dialog-description')).to_have_count(0)
+            label = settings.locator('.sapid-switch-label').bounding_box()
+            track = settings.locator('.sapid-switch-track').bounding_box()
+            row = settings.locator('.settings-choices').bounding_box()
+            assert label['x'] < track['x'] and abs(label['x'] - row['x']) < 2
+            assert abs(track['x'] + track['width'] - row['x'] - row['width']) < 2
             expect(show_hidden).not_to_be_checked()
             show_hidden.check()
             expect(show_hidden).to_be_checked()
@@ -168,7 +181,7 @@ def main():
             menu = active.locator('.file-actions-menu')
             expect(menu.get_by_role('button')).to_have_text([
                 'Detailed list', 'Icon grid', '24 px', '48 px', '64 px', '96 px',
-                'Name', 'Size', 'Modified', 'Descending', 'Visible columns',
+                'Name', 'Size', 'Modified', 'Descending', 'Visible columns', 'Use default view',
             ])
             search = active.get_by_role('button', name='Search files', exact=True)
             assert search.evaluate("e => e.nextElementSibling.matches('.path-refresh')")
@@ -177,6 +190,7 @@ def main():
             def icon_size(pixels):
                 eventually(lambda: abs(icon.evaluate("e => parseFloat(getComputedStyle(e).width)") - pixels) < .1)
             icon_size(96)
+            expect(hidden_dir.locator('.file-entry-icon')).to_have_css('opacity', '0.6')
             slider = menu.get_by_role('slider', name='File icon size')
             slider.focus()
             slider.press('ArrowLeft')
@@ -207,10 +221,40 @@ def main():
             expect(menu.get_by_role('button', name='Descending')).to_have_attribute('aria-pressed', 'true')
             page.keyboard.press('Escape')
             active.locator('.files-tab-select').filter(has_text=original).first.click()
-            icon_size(24)
+            icon_size(64)
             actions.click()
-            expect(menu.get_by_role('button', name='Name', exact=True)).to_have_attribute('aria-pressed', 'true')
-            expect(menu.get_by_role('button', name='Descending')).to_have_attribute('aria-pressed', 'false')
+            expect(menu.get_by_role('button', name='Size', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(menu.get_by_role('button', name='Descending')).to_have_attribute('aria-pressed', 'true')
+            page.keyboard.press('Escape')
+            app.file('Projects').dblclick()
+            expect(pane).to_have_class(re.compile(r'\bdetails-view\b'))
+            active.locator('.files-settings').click()
+            settings.get_by_role('radio', name='Icon grid', exact=True).check()
+            settings.get_by_role('radio', name='Modified', exact=True).check()
+            settings.get_by_role('checkbox', name='Type', exact=True).check()
+            size = settings.get_by_role('slider', name='File icon size')
+            size.press('Home')
+            size.press('ArrowRight')
+            settings.get_by_role('button', name='Done', exact=True).click()
+            icon_size(25)
+            active.locator('.files-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
+            icon_size(64)
+
+        # Fresh process, same SSH profile and saved client configuration.
+        with Desktop(out / 'desktop', None) as app:
+            app.connect()
+            app.application('Files')
+            active = app.page.locator('.app-files.active')
+            active.locator('.files-sidebar').get_by_role('button', name='Filesystem', exact=True).click()
+            expect(active.locator('.files-icon-pixels')).to_have_text('64')
+            active.get_by_role('button', name='File view options', exact=True).click()
+            menu = active.locator('.file-actions-menu')
+            expect(menu.get_by_role('button', name='Size', exact=True)).to_have_attribute('aria-pressed', 'true')
+            menu.get_by_role('button', name='Use default view').click()
+            expect(active.locator('.files-icon-pixels')).to_have_text('25')
+            active.locator('.view-list').click()
+            expect(active.locator('.column-type').first).to_be_visible()
+            expect(active.locator('.column-modified').first).to_contain_text('↑')
     print('Files tab navigation, detach, merge, shortcuts, hidden files settings, Trash menus and restore passed.')
 
 

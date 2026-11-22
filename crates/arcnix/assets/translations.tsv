@@ -388,7 +388,7 @@ SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问�
 自定义此计算机上的应用。	Customize this application on your computer.
 选择整个应用使用的语言。	Choose the language used throughout the application.
 选择配色主题。	Choose a color theme.
-适用于本地和远程列表中名称以点（.）开头的文件和文件夹。	Applies to files and folders whose names start with a dot in local and remote lists.
+在所有文件夹中显示隐藏项，包括点号开头的文件和文件夹，以及 Windows 本机带有隐藏属性的项目。	Show hidden items across all folders, including dotfiles and local Windows items with the Hidden attribute.
 仅在资源页面打开时刷新数值。	Refresh resource values only while the Resources page is open.
 偏好设置保存在此计算机上。文件分栏和冲突选择仍按服务器独立保存。	Preferences are saved on this computer. File pane sizes and conflict choices remain separate for each server.
 更改会自动保存。	Changes are saved automatically.
@@ -2751,3 +2751,9 @@ PDF 密码错误。	Incorrect PDF password.
 PDF 密码	PDF password
 解锁 PDF	Unlock PDF
 文件超过 {} MiB。	File exceeds {} MiB
+默认文件夹视图	Default folder view
+视图模式	View mode
+排序顺序	Sort order
+升序	Ascending
+使用默认视图	Use default view
+名称始终显示。更改仅应用于此文件夹。	Name is always visible. Changes apply to this folder only.

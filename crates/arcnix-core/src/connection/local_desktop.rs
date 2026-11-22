@@ -190,6 +190,7 @@ impl Target {
                 _ => 0,
             };
             entries.push(FileEntry {
+                hidden_attribute: m.hidden_attribute,
                 name: name.into(),
                 path: join(&directory, name),
                 is_dir: m.directory,
@@ -498,6 +499,7 @@ fn metadata(info: &str) -> Result<Metadata> {
         anyhow::bail!("Invalid file metadata")
     };
     Ok(Metadata {
+        hidden_attribute: false,
         size: size.parse()?,
         modified: modified.split('.').next().and_then(|s| s.parse().ok()),
         directory: *kind == "d",

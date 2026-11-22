@@ -429,6 +429,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--file-icon-size) + 56px)), 1fr));
 }
 .files-pane.icons-view .file-row { height: calc(var(--file-icon-size) + 66px); min-height: calc(var(--file-icon-size) + 66px); }
+.file-entry-icon.hidden-file-icon { opacity: .6; }
 :is(.files-pane, .files-inactive-preview).icons-view .file-entry-icon { width: var(--file-icon-size) !important; height: var(--file-icon-size) !important; }
 .file-view-heading { padding: 4px 8px; font-size: var(--font-small); color: var(--muted); }
 .file-view-sizes { padding-inline: 4px; }
@@ -1089,16 +1090,26 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   inset: 0; width: 100%; height: 100%; min-height: 0; cursor: inherit;
 }
 .settings-segmented .sapid-segment:hover:has(input:enabled:not(:checked)) { background: var(--button-hover, var(--surface)); }
-.settings-select-field { width: min(100%, 13.5rem); max-width: 100%; min-width: 0; }
+.settings-select-field { position: relative; width: min(100%, 13.5rem); max-width: 100%; min-width: 0; }
 .settings-select {
-  box-sizing: border-box; appearance: auto; align-self: flex-start; width: 100%;
-  min-height: 34px !important; padding: 5px 9px !important;
-  border: 0 !important; border-bottom: 1px solid var(--line) !important; border-radius: 4px 4px 0 0 !important;
-  background-color: color-mix(in srgb, var(--surface) 94%, var(--accent)) !important;
-  color: var(--text) !important; font: inherit !important; cursor: pointer;
+  box-sizing: border-box; appearance: none; width: 100%; min-width: 0;
+  min-height: 36px !important; padding: 5px 10px !important; padding-inline-end: 36px !important;
+  border: 1px solid var(--line) !important; border-radius: 5px !important;
+  background: var(--input) !important; color: var(--text) !important;
+  font: inherit !important; text-overflow: ellipsis; cursor: pointer;
 }
-.settings-select:hover:enabled { border-bottom-color: var(--line-hover) !important; }
-.settings-select:focus-visible,
+.settings-select-field > .action-glyph {
+  position: absolute; inset-inline-end: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: var(--muted); pointer-events: none;
+}
+.settings-select:hover:enabled { border-color: var(--line-hover) !important; }
+.settings-select:enabled:focus-visible {
+  border-color: var(--accent) !important; outline: 1px solid var(--accent); outline-offset: -2px;
+}
+.settings-select-field:has(.settings-select:disabled) > .action-glyph { opacity: .65; }
+@media (forced-colors: active) {
+  .settings-select-field > .action-glyph { forced-color-adjust: none; color: ButtonText; }
+}
 .theme-custom-color input.sapid-color-editor:focus-visible {
   outline: none; box-shadow: inset 0 -2px var(--accent);
 }
@@ -1246,6 +1257,15 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   outline: 2px solid var(--accent); outline-offset: 3px;
 }
 .settings-choices .sapid-switch-label { color: var(--text) !important; }
+.folder-defaults { display: flex; flex-direction: column; gap: 8px; }
+.folder-default-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; min-height: 38px; }
+.folder-default-row .field-label { color: var(--text); }
+.folder-default-columns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 12px; }
+.folder-default-columns .preference-check { color: var(--text) !important; }
+.folder-default-columns .preference-check:has(input:disabled) { color: var(--muted) !important; }
+.folder-defaults .default-file-size { max-width: 100%; }
+.folder-defaults .icon-size-slider { width: 165px; }
+.settings-choices .hidden-files-switch { flex: 1; justify-content: space-between; }
 .update-panel .preference-check { color: var(--text) !important; }
 .desktop-settings-page .desktop-time-preview {
   margin: 0; padding: 0; color: var(--text); font-size: var(--font-body);

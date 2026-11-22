@@ -411,7 +411,6 @@ pub(crate) fn awaiting_directory(ui: &Ui, serial: u64) -> bool {
 }
 
 pub(crate) fn listed(ui: &Ui, result: Result<Vec<FileEntry>, String>) {
-    let show_hidden = ui.state.with(|s| s.config.settings.show_hidden_files);
     let favorite = ui
         .state
         .with(|s| matches!(collection(s), Some(Collection::Favorite(_))));
@@ -430,12 +429,7 @@ pub(crate) fn listed(ui: &Ui, result: Result<Vec<FileEntry>, String>) {
         directory.request = None;
         match result {
             Ok(mut entries) => {
-                entries.retain(|e| {
-                    !e.is_symlink
-                        && (directory.collection.is_some()
-                            || show_hidden
-                            || !e.name.starts_with('.'))
-                });
+                entries.retain(|e| !e.is_symlink);
                 directory.entries = entries;
             }
             Err(error) => directory.error = error,
@@ -688,6 +682,7 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
             s.desktop_file_picker.as_ref().map_or_else(Vec::new, |d| {
                 d.entries
                     .iter()
+                    .filter(|entry| s.config.settings.show_hidden_files || !entry.is_hidden())
                     .filter(|entry| d.filter.includes(entry, formats))
                     .cloned()
                     .collect()

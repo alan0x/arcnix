@@ -41,6 +41,7 @@ impl Session {
                         && !m.symlink
                     {
                         entries.push(FileEntry {
+                            hidden_attribute: m.hidden_attribute,
                             name: arcnix_core::file_associations::filename(&path).into(),
                             path,
                             is_dir: m.directory,
@@ -66,7 +67,7 @@ impl Session {
                     Vec::new()
                 };
                 entries
-                    .retain(|e| !e.name.starts_with('.') && !e.name.chars().any(char::is_control));
+                    .retain(|e| !e.is_hidden() && !e.name.chars().any(char::is_control));
                 entries.truncate(128);
                 Reply::DesktopItems(DesktopItems {
                     home: self.home.clone(),

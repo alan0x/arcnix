@@ -427,7 +427,7 @@ pub fn items(session: &RemoteSession) -> Result<DesktopItems> {
         });
     }
     let (path, mut entries) = session.list_dir(&path)?;
-    entries.retain(|entry| valid_name(&entry.name) && !entry.name.starts_with('.'));
+    entries.retain(|entry| valid_name(&entry.name) && !entry.is_hidden());
     entries.sort_by(|a, b| (!a.is_dir, &a.name).cmp(&(!b.is_dir, &b.name)));
     entries.truncate(MAX_FILES);
     Ok(DesktopItems {

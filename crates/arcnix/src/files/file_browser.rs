@@ -31,9 +31,6 @@ pub(crate) enum NewEntryFocus {
 pub(crate) struct BrowserState {
     local: PaneState,
     remote: PaneState,
-    local_icons: bool,
-    remote_icons: bool,
-    pub(crate) icon_size: files_view::IconSize,
     drag: Option<FileDrag>,
     remote_history: RemoteHistory,
 }
@@ -84,10 +81,6 @@ pub(crate) struct TabSnapshot {
     selection: HashSet<String>,
     pane: PaneState,
     history: RemoteHistory,
-    pub(super) icons: bool,
-    pub(super) icon_size: files_view::IconSize,
-    sort: Sort,
-    descending: bool,
     tag: Option<files_ui::TagFilter>,
     search: files_search::Search,
     view: files_tabs::Location,
@@ -106,20 +99,25 @@ impl TabSnapshot {
         }
     }
 
-    pub(crate) fn preview_entries(&self, show_hidden: bool) -> Vec<FileEntry> {
+    pub(super) fn folder_view(&self, s: &State) -> files_view::FolderView {
+        files_view::for_path(s, true, &self.path)
+    }
+
+    pub(crate) fn preview_entries(&self, s: &State) -> Vec<FileEntry> {
         if self.view != files_tabs::Location::Directory || !self.ready {
             Vec::new()
         } else {
             let search = self.search.open.then_some(&self.search);
             let range = search.and_then(files_search::Search::date_range);
+            let view = self.folder_view(s);
             visible(
                 &self.entries,
                 search.map_or("", |s| s.query.trim()),
-                self.sort,
-                self.descending,
+                view.sort,
+                view.descending,
             )
             .into_iter()
-            .filter(|entry| show_hidden || !entry.name.starts_with('.'))
+            .filter(|entry| s.config.settings.show_hidden_files || !entry.is_hidden())
             .filter(|entry| search.is_none_or(|s| s.accepts(entry, range.as_ref())))
             .take(100)
             .collect()
@@ -203,10 +201,6 @@ pub(crate) fn capture_tab(s: &State) -> TabSnapshot {
         selection: s.remote_selection.clone(),
         pane,
         history: s.file_browser.remote_history.clone(),
-        icons: s.file_browser.remote_icons,
-        icon_size: s.file_browser.icon_size,
-        sort: s.remote_sort,
-        descending: s.remote_desc,
         tag: s.server_apps.files_tag,
         search: s.server_apps.files_search.clone(),
         view: s.workbench.files.location,
@@ -220,10 +214,6 @@ pub(crate) fn restore_tab(s: &mut State, tab: &TabSnapshot) {
     s.remote_selection.clone_from(&tab.selection);
     s.file_browser.remote.clone_from(&tab.pane);
     s.file_browser.remote_history.clone_from(&tab.history);
-    s.file_browser.remote_icons = tab.icons;
-    s.file_browser.icon_size = tab.icon_size;
-    s.remote_sort = tab.sort;
-    s.remote_desc = tab.descending;
     s.server_apps.files_tag = tab.tag;
     s.server_apps.files_search.clone_from(&tab.search);
     s.server_apps.files_open_pending = None;
@@ -296,21 +286,7 @@ pub(crate) struct FileRow {
     loading: bool,
 }
 pub(crate) fn icons(s: &State, remote: bool) -> bool {
-    if remote {
-        s.file_browser.remote_icons
-    } else {
-        s.file_browser.local_icons
-    }
-}
-pub(crate) fn set_icons(s: &mut State, remote: bool, icons: bool) {
-    if remote {
-        s.file_browser.remote_icons = icons;
-    } else {
-        s.file_browser.local_icons = icons;
-    }
-    if icons {
-        prune_selection(s, remote);
-    }
+    files_view::current(s, remote).icons
 }
 pub(crate) fn prune_selection(s: &mut State, remote: bool) {
     let visible: HashSet<_> = entries(s, remote).into_iter().map(|f| f.path).collect();
@@ -338,7 +314,7 @@ pub(crate) fn view_controls(ui: Ui, remote: bool) -> impl Widget {
                 }
                 .to_owned()
             }))
-            .on_press(move || list.state.revise(|s| set_icons(s, remote, false))),
+            .on_press(move || files_view::change(&list, remote, |v| v.icons = Some(false))),
         icon_action("平铺图标", Icon::Grid)
             .class(state.map(move |s| {
                 if icons(s, remote) {
@@ -348,7 +324,7 @@ pub(crate) fn view_controls(ui: Ui, remote: bool) -> impl Widget {
                 }
                 .to_owned()
             }))
-            .on_press(move || grid.state.revise(|s| set_icons(s, remote, true))),
+            .on_press(move || files_view::change(&grid, remote, |v| v.icons = Some(true))),
     ))
 }
 pub(crate) fn file_kind(entry: &FileEntry, language: arcnix_core::Language) -> String {
@@ -495,20 +471,20 @@ fn search_is_open(s: &State, remote: bool) -> bool {
 
 fn sorted(s: &State, remote: bool, entries: &[FileEntry]) -> Vec<FileEntry> {
     let search = search_is_open(s, remote).then(|| files_search::current(s));
-    let (query, sort, descending) = if remote {
-        let query = if desktop_listing(s, remote) {
+    let view = files_view::current(s, remote);
+    let query = if remote {
+        if desktop_listing(s, remote) {
             search.map_or("", |search| search.query.trim())
         } else {
             s.remote_filter.as_str()
-        };
-        (query, s.remote_sort, s.remote_desc)
+        }
     } else {
-        (s.local_filter.as_str(), s.local_sort, s.local_desc)
+        s.local_filter.as_str()
     };
     let range = search.and_then(files_search::Search::date_range);
-    visible(entries, query, sort, descending)
+    visible(entries, query, view.sort, view.descending)
         .into_iter()
-        .filter(|f| s.config.settings.show_hidden_files || !f.name.starts_with('.'))
+        .filter(|f| s.config.settings.show_hidden_files || !f.is_hidden())
         .filter(|f| search.is_none_or(|search| search.accepts(f, range.as_ref())))
         .collect()
 }
@@ -1184,13 +1160,18 @@ pub(crate) fn entry_name_class<T: 'static>(
 }
 
 pub(crate) fn entry_icon_class(s: &State, file: &FileEntry, files: bool) -> String {
-    if files && file.is_dir && !file.is_symlink
+    let mut class = if files && file.is_dir && !file.is_symlink
         && let Some(class) = files_ui::folder_icon_class(s, &file.path)
     {
-        return format!("action-glyph file-entry-icon file-folder-symbol folder-custom-mark {class}");
+        format!("action-glyph file-entry-icon file-folder-symbol folder-custom-mark {class}")
+    } else {
+        let icon = files_search::file_icon(&file.name, file.is_dir);
+        format!("action-glyph file-entry-icon glyph-{}", icon.name())
+    };
+    if file.is_hidden() {
+        class.push_str(" hidden-file-icon");
     }
-    let icon = files_search::file_icon(&file.name, file.is_dir);
-    format!("action-glyph file-entry-icon glyph-{}", icon.name())
+    class
 }
 
 pub(crate) fn entry_name<T: 'static>(
@@ -1718,6 +1699,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(path, is_dir)| FileEntry {
+            hidden_attribute: false,
             name: path.rsplit('/').next().unwrap().into(),
             path: path.into(),
             is_dir,

@@ -185,15 +185,17 @@ def main():
             dialog.get_by_role('button', name='Done', exact=True).click()
             expect(page.locator('.remote-slot .column-permissions')).to_be_visible()
             expect(page.locator('.remote-slot .column-modified')).to_have_count(0)
-            persisted = json.loads(config.read_text())['config']['servers']
-            assert persisted[0]['file_columns']['local']['kind'] and not persisted[0]['file_columns']['local']['size']
-            assert persisted[0]['file_columns']['remote']['permissions'] and not persisted[0]['file_columns']['remote']['modified']
+            persisted = json.loads(config.read_text())['config']['settings']['folder_views']
+            local_columns = next(iter(persisted['local-windows'].values()))['columns']
+            assert local_columns['kind'] and not local_columns['size']
+            remote_columns = persisted['server:options-first']['/']['columns']
+            assert remote_columns['permissions'] and not remote_columns['modified']
             page.locator('.host-select').nth(1).click()
             connect()
-            expect(page.locator('.local-slot .column-size')).to_be_visible()
+            expect(page.locator('.local-slot .column-size')).to_have_count(0)
             expect(page.locator('.remote-slot .column-modified')).to_be_visible()
             expect(page.locator('.remote-slot .column-permissions')).to_have_count(0)
-            checks.append('Column visibility updates headers and rows, saves each pane separately, and switching servers restores independent defaults')
+            checks.append('Column visibility updates headers and rows, persists by folder, and switching servers retains local choices while isolating remote ones')
 
             browser.close()
             app.terminate()
@@ -206,7 +208,7 @@ def main():
             expect(page.locator('.remote-slot .column-modified')).to_have_count(0)
             page.locator('.host-select').nth(1).click()
             connect()
-            expect(page.locator('.local-slot .column-size')).to_be_visible()
+            expect(page.locator('.local-slot .column-size')).to_have_count(0)
             dialog = columns('.remote-slot')
             dialog.get_by_role('checkbox', name='Type', exact=True).check()
             dialog.get_by_role('button', name='Reset', exact=True).click()

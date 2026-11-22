@@ -1,5 +1,6 @@
 """Exercise the image viewer through the desktop, Files, and the SFTP file picker."""
 from pathlib import Path
+import subprocess
 import tempfile
 import time
 
@@ -115,8 +116,12 @@ def main():
     with tempfile.TemporaryDirectory(dir=Path.home()) as path:
         folder = Path(path)
         images(folder)
+        hidden_folder = folder / 'Hidden folder'
+        hidden_folder.mkdir()
+        for item in (hidden_folder, folder / '02.svg'):
+            subprocess.run(['attrib', '+H', str(item)], check=True)
         cfg = dict(version=1, config=dict(servers=[], groups=[], trusted_hosts=[],
-                                           settings=dict(language='English')))
+                                           settings=dict(language='English', show_hidden_files=True, resource_interval_seconds=3)))
         with Desktop(out / 'local', cfg) as app:
             p = app.page
             p.get_by_role('button', name='Try the local desktop', exact=True).click()
@@ -124,8 +129,20 @@ def main():
             expect(p.locator('.connection-state')).to_have_text('Connected locally')
             app.application('Files')
             app.file(folder.name).dblclick()
+            for name in ('Hidden folder', '02.svg'):
+                expect(app.file(name).locator('.file-entry-icon')).to_have_css('opacity', '0.6')
+            expect(app.file('notes.txt').locator('.file-entry-icon')).to_have_css('opacity', '1')
+            p.keyboard.press('Control+h')
+            for name in ('Hidden folder', '02.svg'):
+                expect(app.file(name)).to_have_count(0)
+            p.keyboard.press('Control+h')
             app.file('02.svg').dblclick()
-            expect(p.locator('.app-image.active .viewer-dimensions')).to_have_text('2048 × 512')
+            viewer = p.locator('.app-image.active')
+            expect(viewer.locator('.viewer-dimensions')).to_have_text('2048 × 512')
+            viewer.get_by_role('button', name='Open image').click()
+            picker = p.get_by_role('dialog', name='Open image')
+            for name in ('Hidden folder', '02.svg'):
+                expect(picker.get_by_role('button', name=name, exact=True).locator('.file-entry-icon')).to_have_css('opacity', '0.6')
 
 
 if __name__ == '__main__':

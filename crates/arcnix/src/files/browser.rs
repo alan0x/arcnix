@@ -2,13 +2,7 @@ use std::collections::HashSet;
 
 use arcnix_core::{FileEntry, TransferJob, TransferStatus, new_id};
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub enum Sort {
-    #[default]
-    Name,
-    Size,
-    Modified,
-}
+pub use arcnix_core::FileSort as Sort;
 pub fn visible(entries: &[FileEntry], query: &str, sort: Sort, descending: bool) -> Vec<FileEntry> {
     let query = query.to_lowercase();
     let mut rows: Vec<_> = entries
@@ -66,6 +60,7 @@ mod tests {
     use super::*;
     fn entry(name: &str, dir: bool, size: u64) -> FileEntry {
         FileEntry {
+            hidden_attribute: false,
             name: name.into(),
             path: name.into(),
             is_dir: dir,

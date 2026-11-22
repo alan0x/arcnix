@@ -93,7 +93,7 @@ pub(crate) fn listed(s: &mut State, entries: Vec<FileEntry>) {
             !e.is_dir
                 && !e.is_symlink
                 && supports(&e.path)
-                && (s.config.settings.show_hidden_files || !e.name.starts_with('.'))
+                && (s.config.settings.show_hidden_files || !e.is_hidden())
         })
         .map(|e| e.path)
         .collect();

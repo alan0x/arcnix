@@ -141,31 +141,19 @@ fn sort_button(
         .class(class)
         .label(state.map(move |s| {
             let label = label.get();
-            let (current, descending) = if remote {
-                (s.remote_sort, s.remote_desc)
-            } else {
-                (s.local_sort, s.local_desc)
-            };
-            if current == sort {
-                format!("{label} {}", if descending { "↓" } else { "↑" })
+            let view = files_view::current(s, remote);
+            if view.sort == sort {
+                format!("{label} {}", if view.descending { "↓" } else { "↑" })
             } else {
                 label
             }
         }))
         .on_press(move || {
-            ui.state.revise(|s| {
-                let (current, descending) = if remote {
-                    (&mut s.remote_sort, &mut s.remote_desc)
-                } else {
-                    (&mut s.local_sort, &mut s.local_desc)
-                };
-                if *current == sort {
-                    *descending = !*descending
-                } else {
-                    *current = sort;
-                    *descending = false
-                }
-            })
+            let view = ui.state.with(|s| files_view::current(s, remote));
+            files_view::change(&ui, remote, |v| {
+                v.sort = Some(sort);
+                v.descending = Some(view.sort == sort && !view.descending);
+            });
         })
 }
 fn transfer_button(ui: Ui, remote: bool) -> impl Widget {
@@ -327,7 +315,7 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
         when(compact, {
             let ui = ui.clone();
             move || fragment((
-                text().class("files-icon-pixels hidden").content(state.map(|s| s.file_browser.icon_size.pixels().to_string())),
+                text().class("files-icon-pixels hidden").content(state.map(move |s| files_view::current(s, remote).icon_size.to_string())),
                 file_context::menu(ui.clone(), remote, true),
             ))
         }),

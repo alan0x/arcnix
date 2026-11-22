@@ -99,6 +99,7 @@ where
                     })
             }),
     )
+    .fill(icons::glyph(Icon::Collapse))
 }
 
 pub(crate) fn reset_button(desktop: bool, reset: impl FnMut() + 'static) -> sapid::Button {
@@ -187,9 +188,11 @@ impl Ui {
                     i18n::set_language(language);
                 }
                 self.state.revise(|s| {
+                    let views_changed = s.config.settings.folder_views != config.settings.folder_views
+                        || s.config.settings.folder_defaults != config.settings.folder_defaults;
                     s.config = config;
                     s.settings.error.clear();
-                    if previous_hidden != s.config.settings.show_hidden_files {
+                    if views_changed || previous_hidden != s.config.settings.show_hidden_files {
                         file_browser::prune_selection(s, false);
                         file_browser::prune_selection(s, true);
                     }
@@ -223,6 +226,8 @@ impl Ui {
 fn hidden_files_switch(ui: &Ui, desktop: bool) -> sapid::Switch {
     let ui = ui.clone();
     sapid::switch()
+        .class("hidden-files-switch")
+        .label_position(sapid::SwitchLabelPosition::Before)
         .label(i18n::bind_in(desktop, "Show hidden files"))
         .checked(
             ui.state
@@ -241,20 +246,20 @@ pub(crate) fn files_dialog(ui: Ui) -> impl Widget {
                 ui.clone(),
                 "Settings",
                 local_reset(&ui, desktop, |s, defaults| {
-                    s.show_hidden_files = defaults.show_hidden_files
+                    s.show_hidden_files = defaults.show_hidden_files;
+                    s.folder_defaults = defaults.folder_defaults;
                 }),
                 (
-                    text().class("dialog-description").content(i18n::bind_in(
-                        desktop,
-                        "Applies to files and folders whose names start with a dot in local and remote lists.",
-                    )),
+                    files_view::defaults(&ui, desktop),
                     row()
                         .class("choice-list settings-choices")
                         .fill(hidden_files_switch(&ui, desktop)),
-                    text().class("dialog-error").content(i18n::bind_in(
-                        desktop,
-                        ui.state.map(|s| s.settings.error.clone()),
-                    )),
+                    when(ui.state.map(|s| !s.settings.error.is_empty()), {
+                        let state = ui.state;
+                        move || text().class("dialog-error").content(i18n::bind_in(
+                            desktop, state.map(|s| s.settings.error.clone()),
+                        ))
+                    }),
                 ),
                 sapid::button()
                     .class("button primary")
@@ -351,7 +356,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 &ui,
                 navigation::SettingsSection::Files,
                 "Hidden files",
-                "Applies to files and folders whose names start with a dot in local and remote lists.",
+                "Show hidden items across all folders, including dotfiles and local Windows items with the Hidden attribute.",
                 local_reset(&ui, false, |s, defaults| {
                     s.show_hidden_files = defaults.show_hidden_files
                 }),

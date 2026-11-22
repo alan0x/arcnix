@@ -432,13 +432,14 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
                             if ui.state.with(|s| s.workspace_page != page) {
                                 ui.focus_desktop_app(page);
                             }
-                            ui.state.revise(|s| files_view::step(s, larger));
+                            files_view::step(&ui, larger);
                         }
                     }
                     Gesture::ToggleHidden { window } => {
                         if let Some(show) = ui.state.with(|s| {
                             (server_desktop::visible(s)
                                 && s.workspace_page == WorkspacePage::Files(window)
+                                && directory(s, window).is_some()
                                 && s.dialog.is_none()
                                 && s.fingerprint.is_none())
                             .then_some(!s.config.settings.show_hidden_files)
@@ -538,15 +539,15 @@ pub(crate) fn preview_header(state: Cage<State>, id: u32) -> impl Widget {
 
 pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
     col().class(state.map(move |s| {
-        if snapshot(s, id).is_some_and(|tab| tab.icons) { "files-inactive-preview icons-view" }
+        if snapshot(s, id).is_some_and(|tab| tab.folder_view(s).icons) { "files-inactive-preview icons-view" }
         else { "files-inactive-preview" }.to_owned()
     })).fill((
         text().class("files-icon-pixels hidden").content(state.map(move |s| {
-            snapshot(s, id).map(|tab| tab.icon_size.pixels().to_string()).unwrap_or_default()
+            snapshot(s, id).map(|tab| tab.folder_view(s).icon_size.to_string()).unwrap_or_default()
         })),
         each(state.map(move |s| {
             snapshot(s, id)
-                .map(|tab| tab.preview_entries(s.config.settings.show_hidden_files))
+                .map(|tab| tab.preview_entries(s))
                 .unwrap_or_default()
         }))
         .key(|entry| entry.path.clone())

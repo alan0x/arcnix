@@ -113,6 +113,7 @@ pub fn list(path: &str) -> Result<(String, Vec<FileEntry>)> {
             drives()
                 .into_iter()
                 .map(|path| FileEntry {
+                    hidden_attribute: false,
                     name: path[1..].into(),
                     path,
                     is_dir: true,
@@ -146,6 +147,7 @@ fn modified(m: &fs::Metadata) -> Option<u64> {
 pub fn metadata(path: &str) -> Result<Metadata> {
     if path == "/" {
         return Ok(Metadata {
+            hidden_attribute: false,
             directory: true,
             symlink: false,
             size: 0,
@@ -159,6 +161,7 @@ pub fn metadata(path: &str) -> Result<Metadata> {
     }
     let m = fs::symlink_metadata(physical(path)?)?;
     Ok(Metadata {
+        hidden_attribute: crate::local::hidden_attribute(&m),
         directory: m.is_dir(),
         symlink: m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0,
         size: m.len(),

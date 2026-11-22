@@ -374,7 +374,9 @@ pub(crate) fn date_time(ui: Ui) -> impl Widget {
                             prefs.clock.format = ClockFormat::default()
                         }),
                     ),
-                    row().class("choice-list").fill(time_format_choices(&ui)),
+                    row()
+                        .class("desktop-setting-controls choice-list")
+                        .fill(time_format_choices(&ui)),
                 )),
         ))
 }
