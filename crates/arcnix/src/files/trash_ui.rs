@@ -22,7 +22,8 @@ fn visible(s: &State, remote: bool) -> bool {
 }
 
 fn available(s: &State, remote: bool) -> bool {
-    (!remote || (s.connected && s.sftp_available && !s.system_task_running))
+    (!remote
+        || (s.local_desktop.is_none() && s.connected && s.sftp_available && !s.system_task_running))
         && s.file_pending.is_none()
         && s.trash[remote as usize].pending.is_none()
 }
@@ -51,10 +52,9 @@ fn request(ui: &Ui, remote: bool, operation: Operation) {
 }
 
 pub(crate) fn desktop_file(ui: &Ui, file: &FileEntry, permanent: bool) {
-    if !ui
-        .state
-        .with(|s| s.dialog.is_none() && file_context::can_change_files(s, true))
-    {
+    if !ui.state.with(|s| {
+        s.local_desktop.is_none() && s.dialog.is_none() && file_context::can_change_files(s, true)
+    }) {
         return;
     }
     let targets = vec![arcnix_core::deletion::Target::from(file)];
@@ -93,6 +93,9 @@ pub(crate) fn enter(ui: &Ui) {
 }
 
 pub(crate) fn open(ui: &Ui, remote: bool) {
+    if remote && ui.state.with(|s| s.local_desktop.is_some()) {
+        return;
+    }
     #[cfg(target_os = "macos")]
     if !remote {
         if let Err(error) = std::process::Command::new("osascript")

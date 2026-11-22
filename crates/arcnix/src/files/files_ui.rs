@@ -637,6 +637,7 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                         }),
                     sapid::button()
                         .class("files-place files-trash-place")
+                        .enabled(state.map(|s| s.local_desktop.is_none()))
                         .name(i18n::bind("回收站"))
                         .pressed(state.map(move |s| files_tabs::showing_trash(s, window)))
                         .fill((

@@ -136,7 +136,7 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
         if settings.layout.show_home {
             icons.insert(0, Shortcut::System(SystemIcon::Home));
         }
-        if settings.layout.show_trash {
+        if settings.layout.show_trash && s.local_desktop.is_none() {
             icons.push(Shortcut::System(SystemIcon::Trash));
         }
     }
@@ -196,9 +196,24 @@ fn shortcut_choices(apps: impl IntoIterator<Item = WorkspacePage>) -> Vec<DockIt
         .collect()
 }
 
+fn available_shortcuts(s: &State) -> Vec<DockItem> {
+    let mut choices = shortcut_choices(server_desktop::available_apps(s));
+    if s.local_desktop.is_some() {
+        choices.retain(|item| {
+            !matches!(
+                item,
+                DockItem::System {
+                    system: SystemIcon::Trash
+                }
+            )
+        });
+    }
+    choices
+}
+
 fn dock_choices(s: &State) -> Vec<DockItem> {
     ordered(
-        shortcut_choices(server_desktop::available_apps(s)),
+        available_shortcuts(s),
         &appearance(s).dock.order,
     )
 }
@@ -913,26 +928,29 @@ pub(crate) fn context_menu(ui: Ui) -> impl Widget {
                             },
                             Ui::close_desktop_menu,
                         ),
-                        when(!dock && file.is_some(), {
-                            let ui = ui.clone();
-                            let name = file.clone().unwrap_or_default();
-                            move || {
-                                let buttons = [("移入回收站", false), ("永久删除", true)]
-                                    .into_iter()
-                                    .map(|(label, permanent)| {
-                                        let name = name.clone();
-                                        menu_action(&ui, label, move |ui| {
-                                            if let Some(file) =
-                                                ui.state.with(|s| find_file(s, &name).cloned())
-                                            {
-                                                trash_ui::desktop_file(ui, &file, permanent);
-                                            }
+                        when(
+                            !dock && file.is_some() && state.with(|s| s.local_desktop.is_none()),
+                            {
+                                let ui = ui.clone();
+                                let name = file.clone().unwrap_or_default();
+                                move || {
+                                    let buttons = [("移入回收站", false), ("永久删除", true)]
+                                        .into_iter()
+                                        .map(|(label, permanent)| {
+                                            let name = name.clone();
+                                            menu_action(&ui, label, move |ui| {
+                                                if let Some(file) =
+                                                    ui.state.with(|s| find_file(s, &name).cloned())
+                                                {
+                                                    trash_ui::desktop_file(ui, &file, permanent);
+                                                }
+                                            })
                                         })
-                                    })
-                                    .collect::<Vec<_>>();
-                                fragment(buttons)
-                            }
-                        }),
+                                        .collect::<Vec<_>>();
+                                    fragment(buttons)
+                                }
+                            },
+                        ),
                         when(directory.is_some(), {
                             let ui = ui.clone();
                             move || {
@@ -1141,6 +1159,10 @@ fn settings_sections(s: &State) -> Vec<(SettingsPage, &'static str, Icon)> {
     let language = desktop_system_settings::language(s);
     SETTINGS_SECTIONS
         .into_iter()
+        .filter(|(page, ..)| {
+            s.local_desktop.is_none()
+                || !matches!(page, SettingsPage::Network | SettingsPage::DefaultApps)
+        })
         .filter(|(_, label, _, terms)| {
             query.split_whitespace().all(|word| {
                 std::iter::once(label).chain(terms.iter()).any(|term| {
@@ -1330,7 +1352,7 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                 }),
                 col().class("desktop-shortcut-options").fill(
                     each(state.map(move |s| {
-                        let choices = shortcut_choices(server_desktop::available_apps(s));
+                        let choices = available_shortcuts(s);
                         if dock {
                             ordered(
                                 choices,

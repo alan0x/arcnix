@@ -2,11 +2,11 @@ use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 
 use anyhow::{Context, Result};
+use arcnix_core::local_desktop::Target;
 use arcnix_core::terminal::Output;
-use arcnix_core::wsl;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-pub(super) struct WslTerminal {
+pub(super) struct LocalTerminal {
     child: Box<dyn Child + Send + Sync>,
     input: SyncSender<Vec<u8>>,
     output: Receiver<std::io::Result<Vec<u8>>>,
@@ -15,18 +15,39 @@ pub(super) struct WslTerminal {
     remainder: Vec<u8>,
 }
 
-impl WslTerminal {
+impl LocalTerminal {
     pub(super) fn open(
-        name: &str,
+        target: &Target,
         directory: Option<&str>,
         columns: u32,
         rows: u32,
     ) -> Result<Self> {
-        wsl::profile_host(name)?;
+        if let Some(path) = directory {
+            arcnix_core::terminal::validate_directory(path)?;
+        }
         let size = size(columns, rows);
         let pair = native_pty_system().openpty(size)?;
-        let mut command = CommandBuilder::new(wsl::launcher_path()?);
-        command.args(["--distribution", name, "--cd", directory.unwrap_or("~")]);
+        let command = match target {
+            #[cfg(windows)]
+            Target::Wsl(name) => {
+                arcnix_core::wsl::profile_host(name)?;
+                let mut cmd = CommandBuilder::new(arcnix_core::wsl::launcher_path()?);
+                cmd.args(["--distribution", name, "--cd", directory.unwrap_or("~")]);
+                cmd
+            }
+            #[cfg(unix)]
+            Target::Native => {
+                let mut cmd = CommandBuilder::new_default_prog();
+                let cwd = directory
+                    .map(std::path::PathBuf::from)
+                    .or_else(std::env::home_dir)
+                    .context("Missing home directory")?;
+                anyhow::ensure!(cwd.is_dir(), "Terminal directory does not exist");
+                cmd.cwd(cwd);
+                cmd.env("TERM", "xterm-256color");
+                cmd
+            }
+        };
         let mut reader = pair.master.try_clone_reader()?;
         let mut writer = pair.master.take_writer()?;
         let child = pair.slave.spawn_command(command)?;
@@ -42,7 +63,12 @@ impl WslTerminal {
                             break;
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::BrokenPipe
+                            || (cfg!(unix) && e.raw_os_error() == Some(5)) =>
+                    {
+                        break;
+                    }
                     Err(e) => {
                         let _ = tx.send(Err(e));
                         break;
@@ -77,11 +103,11 @@ fn size(columns: u32, rows: u32) -> PtySize {
     }
 }
 
-impl super::terminal_worker::TerminalIo for WslTerminal {
+impl super::terminal_worker::TerminalIo for LocalTerminal {
     fn input(&mut self, bytes: Vec<u8>) -> Result<()> {
         self.input
             .try_send(bytes)
-            .context("WSL terminal input queue is unavailable")
+            .context("Terminal input queue is unavailable")
     }
     fn resize(&mut self, columns: u32, rows: u32) -> Result<()> {
         if let Some(master) = &self.master {
@@ -116,10 +142,53 @@ impl super::terminal_worker::TerminalIo for WslTerminal {
     }
 }
 
-impl Drop for WslTerminal {
+impl Drop for LocalTerminal {
     fn drop(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::super::terminal_worker::TerminalIo;
+    use super::*;
+
+    #[test]
+    fn native_terminal_uses_requested_directory_and_size() -> Result<()> {
+        use std::time::{Duration, Instant};
+        let folder = std::env::temp_dir().join(format!("arcnix-pty-{}", arcnix_core::new_id()));
+        std::fs::create_dir(&folder)?;
+        let result = (|| -> Result<()> {
+            let mut pty = LocalTerminal::open(&Target::Native, folder.to_str(), 80, 24)?;
+            let deadline = Instant::now() + Duration::from_secs(15);
+            pty.resize(96, 32)?;
+            // A login script can reset the terminal and discard early typeahead.
+            // Repeat the harmless probe until the interactive shell handles it.
+            let mut next_probe = Instant::now();
+            while pty.poll(65536)?.exit_code.is_none() {
+                let now = Instant::now();
+                anyhow::ensure!(now < deadline, "Native terminal command did not finish");
+                if now >= next_probe && !folder.join("size").exists() {
+                    pty.input(
+                        b"HISTFILE=/dev/null; pwd -P > cwd; stty size > size; exit\r".to_vec(),
+                    )?;
+                    next_probe = now + Duration::from_millis(500);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(
+                std::fs::read_to_string(folder.join("cwd"))?.trim_end(),
+                folder.canonicalize()?.to_str().unwrap()
+            );
+            assert_eq!(
+                std::fs::read_to_string(folder.join("size"))?.trim(),
+                "32 96"
+            );
+            Ok(())
+        })();
+        std::fs::remove_dir_all(folder)?;
+        result
     }
 }

@@ -209,6 +209,7 @@ define_state! {
     |config, local_path, notice|
     session {
         selected: Option<String> = None,
+        local_desktop: Option<local_desktop::Target> = None,
         #[cfg(windows)]
         wsl: wsl_workspace::Workspace = Default::default(),
         dialog: Option<Dialog> = None,
@@ -498,6 +499,49 @@ impl Ui {
                 .with(|s| !s.terminal_available() && !s.connecting)
         {
             self.request_connect();
+        }
+    }
+
+    fn enter_local_desktop(&self, target: local_desktop::Target) {
+        if self.state.with(|s| s.system_task_running) {
+            return;
+        }
+        let scope = target.scope();
+        let mut id = format!("@{scope}");
+        while self
+            .state
+            .with(|s| s.config.servers.iter().any(|p| p.id == id))
+        {
+            id.push('@');
+        }
+        if self.state.with(|s| s.selected.as_ref() != Some(&id)) {
+            self.switch_session(Some(id));
+        }
+        let connect = self.state.revise(|s| {
+            navigation::change_page(s, navigation::Page::Servers, "local-desktop");
+            s.dialog = None;
+            dismiss_menus(s);
+            server_desktop::select_tab(s, server_desktop::Tab::Desktop);
+            s.local_desktop = Some(target.clone());
+            if s.connected || s.connecting {
+                return false;
+            }
+            s.advance_epoch();
+            s.sync_scope = Some(scope.clone());
+            s.connecting = true;
+            s.notice.clear();
+            true
+        });
+        if connect {
+            let prefs = self
+                .store
+                .path()
+                .with_file_name("local-desktops")
+                .join(scope)
+                .join("desktop.json");
+            self.send(Action::LocalDesktop(target, prefs));
+        } else {
+            self.desktop_enter();
         }
     }
 
@@ -894,6 +938,10 @@ impl Ui {
                     events.disconnect();events.log(format!("拒绝连接：主机密钥发生变化。已保存：{}；当前：{fingerprint}。请通过可信渠道核实后手动更新配置。",known.unwrap()));
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
+            Update::LocalDesktop(result)=>match result {
+                Ok(home)=>{state.revise(|s| {s.connected=true;s.connecting=false;s.sftp_available=true;s.remote_path=home;});events.server_apps_connected();events.refresh(true);events.desktop_enter();}
+                Err(message)=>{state.revise(|s|{s.connecting=false;s.notice=message;});}
+            },
             Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
                 #[cfg(windows)]
                 if state.with(|s| server_desktop::launcher_running(s, WorkspacePage::Browser)) { events.open_web_browser(); }
@@ -1031,6 +1079,10 @@ impl Ui {
         }
     }
     fn request_connect(&self) {
+        if let Some(target) = self.state.with(|s| s.local_desktop.clone()) {
+            self.enter_local_desktop(target);
+            return;
+        }
         #[cfg(windows)]
         if self.state.with(State::local_wsl_selected) {
             wsl_workspace::connect(self);
@@ -1937,7 +1989,15 @@ fn connection_controls(ui: Ui) -> impl Widget {
                 .to_string()
             }))
             .content(i18n::bind(state.map(|s| {
-                if s.connected {
+                if s.local_desktop.is_some() {
+                    if s.connected {
+                        "已直连本机"
+                    } else if s.connecting {
+                        "正在打开本机桌面…"
+                    } else {
+                        "本机桌面已断开"
+                    }
+                } else if s.connected {
                     "SSH 已连接"
                 } else if s.connecting {
                     "SSH 正在连接…"
@@ -1964,7 +2024,8 @@ fn connection_controls(ui: Ui) -> impl Widget {
                     "断开连接"
                 } else if s.connecting {
                     "取消连接"
-                } else if s.config.available_servers().next().is_none() {
+                } else if s.local_desktop.is_none() && s.config.available_servers().next().is_none()
+                {
                     "添加服务器"
                 } else {
                     "Desktop"
@@ -1978,7 +2039,9 @@ fn connection_controls(ui: Ui) -> impl Widget {
             .on_press(move || {
                 if state.with(|s| s.connected || s.connecting) {
                     ui.disconnect();
-                } else if state.with(|s| s.config.available_servers().next().is_none()) {
+                } else if state.with(|s| {
+                    s.local_desktop.is_none() && s.config.available_servers().next().is_none()
+                }) {
                     servers::new_server(&ui);
                 } else {
                     ui.open_workbench(server_desktop::Tab::Desktop);

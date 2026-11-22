@@ -13,7 +13,7 @@ const CHUNK_BYTES: usize = 256 * 1024;
 const MAX_PACKET_BYTES: usize = CHUNK_BYTES.div_ceil(3) * 4 + 1024;
 
 pub(crate) fn choose_download(ui: &Ui, entries: Vec<FileEntry>) {
-    if !entries.is_empty() {
+    if !entries.is_empty() && ui.state.with(|s| s.local_desktop.is_none()) {
         let (epoch, destination) = ui.state.with(|s| (s.epoch, s.local_path.clone()));
         ui.open_dialog(Dialog::FilesDownload {
             epoch,
@@ -225,7 +225,8 @@ enum DropEvent {
 }
 
 pub(crate) fn upload_ready(s: &State) -> bool {
-    server_desktop::visible(s)
+    s.local_desktop.is_none()
+        && server_desktop::visible(s)
         && workspace::ready(s, true)
         && s.server_apps.files_tag.is_none()
         && s.dialog.is_none()

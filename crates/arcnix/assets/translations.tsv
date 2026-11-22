@@ -2659,3 +2659,10 @@ Linux 目录	Linux directory
 预览支持不超过 64 KiB 的 UTF-8 文本文件	Preview supports UTF-8 text files up to 64 KiB
 请选择新的目标文件名	Choose a new destination file name
 无法新建此条目。请检查名称及目录权限。	Could not create this entry. Check its name and the directory permissions.
+体验本机桌面	Try the local desktop
+本机 Mac	Local Mac
+本机 Linux	Local Linux
+已直连本机	Connected locally
+正在打开本机桌面…	Opening local desktop…
+本机桌面已断开	Local desktop disconnected
+选择服务器，或在本机体验 Arcnix 桌面。	Select a server or try the Arcnix desktop on this computer.

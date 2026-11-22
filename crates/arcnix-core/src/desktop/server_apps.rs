@@ -449,7 +449,11 @@ pub fn clock(session: &RemoteSession) -> Result<ClockSample> {
         256,
     )?;
     ensure!(output.exit_code == 0, "Cannot read the server clock");
-    let mut fields = output.stdout.trim().splitn(3, ' ');
+    parse_clock(&output.stdout)
+}
+
+pub(crate) fn parse_clock(output: &str) -> Result<ClockSample> {
+    let mut fields = output.trim().splitn(3, ' ');
     let seconds = fields
         .next()
         .ok_or_else(|| anyhow::anyhow!("Missing server time"))?;

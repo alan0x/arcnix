@@ -112,10 +112,7 @@ pub(crate) fn workspace_visible(s: &State) -> bool {
         && s.connected
         && s.workbench.active != server_desktop::Tab::Home
         && s.workspace_page != WorkspacePage::Desktop
-        && s.config
-            .servers
-            .iter()
-            .any(|p| Some(&p.id) == s.selected.as_ref())
+        && (s.local_desktop.is_some() || selected_profile(s).is_some())
 }
 
 fn rail_button(
@@ -288,6 +285,31 @@ fn empty_state(
     ))
 }
 
+pub(crate) fn local_desktop_label(target: &local_desktop::Target) -> String {
+    match target {
+        #[cfg(windows)]
+        local_desktop::Target::Wsl(name) => format!("WSL · {name}"),
+        #[cfg(unix)]
+        local_desktop::Target::Native => i18n::translate(if cfg!(target_os = "macos") {
+            "本机 Mac"
+        } else {
+            "本机 Linux"
+        }),
+    }
+}
+
+pub(crate) fn local_desktop_entry(ui: Ui) -> impl Widget {
+    text_action("体验本机桌面", Icon::Grid)
+        .class("button with-icon local-desktop-entry")
+        .enabled(ui.state.map(|s| !s.system_task_running))
+        .on_press(move || {
+            #[cfg(windows)]
+            wsl_ui::open_desktop(&ui);
+            #[cfg(unix)]
+            ui.enter_local_desktop(local_desktop::Target::Native);
+        })
+}
+
 fn server_landing(ui: Ui) -> impl Widget {
     let state = ui.state;
     col().class("server-landing page-scroll").fill((
@@ -296,71 +318,82 @@ fn server_landing(ui: Ui) -> impl Widget {
             move || {
                 empty_state(
                     "选择一台服务器",
-                    "从左侧选择服务器，连接后即可开始管理。",
-                    text_action("新建服务器", Icon::Plus)
-                        .class("button with-icon primary")
-                        .on_press({
-                            let ui = ui.clone();
-                            move || servers::new_server(&ui)
-                        }),
+                    "选择服务器，或在本机体验 Arcnix 桌面。",
+                    (
+                        local_desktop_entry(ui.clone()),
+                        text_action("新建服务器", Icon::Plus)
+                            .class("button with-icon primary")
+                            .on_press({
+                                let ui = ui.clone();
+                                move || servers::new_server(&ui)
+                            }),
+                    ),
                 )
             }
         }),
-        when(state.map(|s| s.selected.is_some()), {
+        when(state.map(|s| s.local_desktop.is_some()), {
             let ui = ui.clone();
-            move || {
-                let edit = ui.clone();
-                col().class("server-overview").fill((
-                    text()
-                        .class("overview-server-icon action-glyph glyph-server")
-                        .content(""),
-                    icon_action("编辑服务器", Icon::Settings)
-                        .class("icon-button overview-edit")
-                        .on_press(move || {
-                            if let Some(id) = state.with(|s| s.selected.clone()) {
-                                servers::edit_server(&edit, &id);
-                            }
-                        }),
-                    text().class("home-title").content(state.map(|s| {
-                        s.config
-                            .servers
-                            .iter()
-                            .find(|p| Some(&p.id) == s.selected.as_ref())
-                            .map(|p| p.name.clone())
-                            .unwrap_or_default()
-                    })),
-                    text()
-                        .class("home-description")
-                        .content(i18n::bind(state.map(|s| {
-                            if s.connecting {
-                                "正在建立安全连接…"
-                            } else {
-                                "选择桌面管理服务器，或打开独立的文件传输工作区。"
-                            }
-                            .to_owned()
-                        }))),
-                    row().class("server-facts").fill((
-                        detail("主机", &ui, |p| p.host.clone()),
-                        detail("端口", &ui, |p| p.port.to_string()),
-                        detail("用户", &ui, |p| p.username.clone()),
-                        detail("认证方式", &ui, |p| {
-                            i18n::translate(if p.auth == AuthMethod::Password {
-                                "密码"
-                            } else {
-                                "私钥"
-                            })
-                        }),
-                    )),
-                    row().class("workspace-entries").fill((
-                        server_desktop::entry(ui.clone(), server_desktop::Tab::Desktop),
-                        server_desktop::entry(ui.clone(), server_desktop::Tab::TransferFiles),
-                    )),
-                    text()
-                        .class("overview-footnote subtle")
-                        .content(i18n::bind("密码与私钥口令仅用于本次连接，不会保存到配置。")),
-                ))
-            }
+            move || server_desktop::entry(ui.clone(), server_desktop::Tab::Desktop)
         }),
+        when(
+            state.map(|s| s.selected.is_some() && s.local_desktop.is_none()),
+            {
+                let ui = ui.clone();
+                move || {
+                    let edit = ui.clone();
+                    col().class("server-overview").fill((
+                        text()
+                            .class("overview-server-icon action-glyph glyph-server")
+                            .content(""),
+                        icon_action("编辑服务器", Icon::Settings)
+                            .class("icon-button overview-edit")
+                            .on_press(move || {
+                                if let Some(id) = state.with(|s| s.selected.clone()) {
+                                    servers::edit_server(&edit, &id);
+                                }
+                            }),
+                        text().class("home-title").content(state.map(|s| {
+                            s.config
+                                .servers
+                                .iter()
+                                .find(|p| Some(&p.id) == s.selected.as_ref())
+                                .map(|p| p.name.clone())
+                                .unwrap_or_default()
+                        })),
+                        text()
+                            .class("home-description")
+                            .content(i18n::bind(state.map(|s| {
+                                if s.connecting {
+                                    "正在建立安全连接…"
+                                } else {
+                                    "选择桌面管理服务器，或打开独立的文件传输工作区。"
+                                }
+                                .to_owned()
+                            }))),
+                        row().class("server-facts").fill((
+                            detail("主机", &ui, |p| p.host.clone()),
+                            detail("端口", &ui, |p| p.port.to_string()),
+                            detail("用户", &ui, |p| p.username.clone()),
+                            detail("认证方式", &ui, |p| {
+                                i18n::translate(if p.auth == AuthMethod::Password {
+                                    "密码"
+                                } else {
+                                    "私钥"
+                                })
+                            }),
+                        )),
+                        row().class("workspace-entries").fill((
+                            server_desktop::entry(ui.clone(), server_desktop::Tab::Desktop),
+                            server_desktop::entry(ui.clone(), server_desktop::Tab::TransferFiles),
+                            local_desktop_entry(ui.clone()),
+                        )),
+                        text()
+                            .class("overview-footnote subtle")
+                            .content(i18n::bind("密码与私钥口令仅用于本次连接，不会保存到配置。")),
+                    ))
+                }
+            },
+        ),
     ))
 }
 
@@ -479,30 +512,30 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                         .to_owned()
                     })
                     .fill((
-                        text().class("page-header-title").content(state.map(|s| {
-                            match s.navigation {
-                                Page::Servers => s
-                                    .config
-                                    .servers
-                                    .iter()
-                                    .find(|p| Some(&p.id) == s.selected.as_ref())
-                                    .map(|p| p.name.clone())
-                                    .unwrap_or_else(|| i18n::translate("服务器")),
+                        text().class("page-header-title").content(state.map(
+                            |s| match s.navigation {
+                                Page::Servers if s.selected.is_some() => {
+                                    server_desktop::selected_name(s)
+                                }
+                                Page::Servers => i18n::translate("服务器"),
                                 Page::Scripts => i18n::translate("Scripts"),
                                 Page::Tasks => i18n::translate("Tasks"),
                                 Page::Backups => i18n::translate("Backups"),
                                 Page::Notifications => i18n::translate("所有活动"),
                                 Page::Settings => i18n::translate(s.settings_section.label()),
-                            }
-                        })),
+                            },
+                        )),
                         when(workbench, {
                             let ui = ui.clone();
                             move || server_desktop::tabs(ui.clone())
                         }),
-                        when(state.map(server_desktop::visible), {
-                            let ui = ui.clone();
-                            move || workspace::transfer_progress_buttons(ui.clone())
-                        }),
+                        when(
+                            state.map(|s| server_desktop::visible(s) && s.local_desktop.is_none()),
+                            {
+                                let ui = ui.clone();
+                                move || workspace::transfer_progress_buttons(ui.clone())
+                            },
+                        ),
                         when(workbench, {
                             let ui = ui.clone();
                             move || connection_controls(ui.clone())

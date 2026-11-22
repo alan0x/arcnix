@@ -1,4 +1,5 @@
 pub mod browser_proxy;
+pub mod local_desktop;
 pub mod private_keys;
 pub(crate) mod private_program;
 pub mod remote;

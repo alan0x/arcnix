@@ -220,9 +220,20 @@ pub(crate) const APP_LAUNCHERS: [WorkspacePage; 10] = [
     WorkspacePage::Editor,
 ];
 
+fn local_app(page: WorkspacePage) -> bool {
+    matches!(
+        page.base(),
+        WorkspacePage::Files(_)
+            | WorkspacePage::Editor
+            | WorkspacePage::Terminal
+            | WorkspacePage::Settings
+    )
+}
+
 pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
     APP_LAUNCHERS
         .into_iter()
+        .filter(|page| s.local_desktop.is_none() || local_app(*page))
         .filter(|page| match page {
             WorkspacePage::Browser => cfg!(windows),
             WorkspacePage::Docker => s.server_apps.applications.docker,
@@ -506,6 +517,9 @@ impl Ui {
     }
 
     fn enter_workbench(&self, tab: Tab, connect: bool) {
+        if tab == Tab::TransferFiles && self.state.with(|s| s.local_desktop.is_some()) {
+            return;
+        }
         if self.state.with(|s| s.workbench.active != tab) {
             self.state.revise(|s| select_tab(s, tab));
         }
@@ -515,7 +529,10 @@ impl Ui {
         {
             if connect {
                 self.request_connect();
-            } else if self.state.with(connect_prompt_needed) {
+            } else if self
+                .state
+                .with(|s| s.local_desktop.is_none() && connect_prompt_needed(s))
+            {
                 self.open_dialog(Dialog::Connect);
             }
         }
@@ -568,6 +585,9 @@ impl Ui {
     }
 
     pub(crate) fn focus_desktop_app(&self, page: WorkspacePage) {
+        if self.state.with(|s| s.local_desktop.is_some()) && !local_app(page) {
+            return;
+        }
         if page.is_files()
             && self
                 .state
@@ -1064,7 +1084,10 @@ fn app_windows(ui: Ui) -> impl Widget {
     )
 }
 
-fn selected_name(s: &State) -> String {
+pub(crate) fn selected_name(s: &State) -> String {
+    if let Some(target) = &s.local_desktop {
+        return navigation::local_desktop_label(target);
+    }
     s.config
         .servers
         .iter()
@@ -1298,7 +1321,13 @@ pub(crate) fn reconnect(ui: Ui) -> impl Widget {
         text()
             .class("home-description")
             .content(i18n::bind(state.map(|s| {
-                if s.connecting {
+                if s.local_desktop.is_some() {
+                    if s.connecting {
+                        "正在打开本机桌面…"
+                    } else {
+                        "体验本机桌面"
+                    }
+                } else if s.connecting {
                     "正在建立安全连接…"
                 } else {
                     "连接服务器以打开此工作区。"

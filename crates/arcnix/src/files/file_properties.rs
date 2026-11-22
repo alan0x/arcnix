@@ -104,7 +104,8 @@ pub(crate) fn metadata(ui: &Ui, serial: u64, result: std::result::Result<Metadat
     });
 }
 fn editable(s: &State) -> bool {
-    s.connected
+    s.local_desktop.is_none()
+        && s.connected
         && s.sftp_available
         && !s.system_task_running
         && s.file_pending.is_none()

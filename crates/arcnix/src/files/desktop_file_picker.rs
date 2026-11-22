@@ -560,7 +560,7 @@ fn sidebar(ui: Ui) -> impl Widget {
                 read_directory(&places, path);
             })),
             sapid::button()
-                .class("files-place files-trash-place")
+                .class("files-place files-trash-place").enabled(state.map(|s|s.local_desktop.is_none()))
                 .name(i18n::bind("回收站"))
                 .pressed(state.map(|s| matches!(collection(s), Some(Collection::Trash))))
                 .fill((icons::glyph(Icon::Clear), text().content(i18n::bind("回收站"))))

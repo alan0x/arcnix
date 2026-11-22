@@ -18,7 +18,9 @@ pub use config::{model, preferences, server_labels, store};
 use connection::private_program;
 #[cfg(windows)]
 pub use connection::wsl;
-pub use connection::{browser_proxy, private_keys, remote, ssh_config, terminal, transport_error};
+pub use connection::{
+    browser_proxy, local_desktop, private_keys, remote, ssh_config, terminal, transport_error,
+};
 use desktop::desktop_storage;
 pub use desktop::{
     browser, desktop_customization, desktop_shortcuts, desktop_theme, desktop_time_zone,

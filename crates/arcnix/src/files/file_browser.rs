@@ -570,6 +570,9 @@ pub(crate) fn selected_entries(s: &State, remote: bool) -> Vec<FileEntry> {
     transfer_roots(&all, selected, remote)
 }
 pub(crate) fn transfer_ready(s: &State) -> bool {
+    if s.local_desktop.is_some() {
+        return false;
+    }
     workspace::ready(s, false) && workspace::ready(s, true)
 }
 

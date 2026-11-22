@@ -13,6 +13,12 @@ Arcnix is a desktop app for managing Linux servers over SSH. The interface runs 
 
 Desktop downloads are available for Windows x64, macOS on Apple Silicon, and Linux x64 and ARM64.
 
+## Try the local desktop
+
+Choose **Try the local desktop** on the home screen. Linux and macOS use your current account. Windows opens an installed WSL distribution using its default account and offers a choice when several are installed. No SSH service or credentials are required.
+
+Open Files to browse your home directory and create a file. Double-click a text file to edit and save it, or choose **View → Edit source** in a Markdown preview. Choose **Terminal here** on a file or directory to open a shell in that location. Changes affect real files. Desktop preferences are saved on the client separately for each local target. The standalone File Transfer workspace is disabled for local desktops.
+
 ## Connect to local WSL on Windows
 
 Open **New server → Choose local WSL distribution**, select an installed distribution, save and connect. Saved WSL profiles also default to a local connection. Arcnix opens an interactive Linux shell through `wsl.exe` and runs file operations as the distribution’s default Linux user. No SSH server, password or keys are required.

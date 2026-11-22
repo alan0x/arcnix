@@ -240,6 +240,18 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
                     move || root_menu(ui.clone())
                 }),
             )),
+        when(
+            state.map(|s| {
+                s.selected.is_some()
+                    && (s.workbench.active != server_desktop::Tab::Home
+                        || s.local_desktop.is_some()
+                        || s.local_wsl_selected())
+            }),
+            {
+                let ui = ui.clone();
+                move || navigation::local_desktop_entry(ui.clone())
+            },
+        ),
         row().class("server-search").fill((
             input()
                 .name(i18n::bind("搜索"))

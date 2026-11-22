@@ -350,6 +350,9 @@ pub(crate) fn menu(
 }
 
 fn direct_action(s: &State, path: &str, app: FileApp) -> bool {
+    if s.local_desktop.is_some() {
+        return app == FileApp::TextEditor;
+    }
     APPS.contains(&app)
         && (known(path, app)
             || extension(path)
@@ -414,6 +417,9 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
     if !ui.state.with(code_workbench::available) {
         return;
     }
+    if ui.state.with(|s| s.local_desktop.is_some()) && app != FileApp::TextEditor {
+        return;
+    }
     match app {
         FileApp::TextEditor => text_editor::open(ui, path),
         FileApp::Code => code_workbench::open(ui, path),
@@ -426,6 +432,10 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
 }
 
 pub(crate) fn open(ui: &Ui, path: &str) {
+    if ui.state.with(|s| s.local_desktop.is_some()) {
+        text_editor::open(ui, path);
+        return;
+    }
     if let Some(app) = ui.state.with(|s| default_app(&s.config.settings, path)) {
         launch(ui, path, app);
     } else {
@@ -434,6 +444,10 @@ pub(crate) fn open(ui: &Ui, path: &str) {
 }
 
 pub(crate) fn choose(ui: &Ui, path: &str) {
+    if ui.state.with(|s| s.local_desktop.is_some()) {
+        text_editor::open(ui, path);
+        return;
+    }
     if !ui.state.with(code_workbench::available) {
         return;
     }

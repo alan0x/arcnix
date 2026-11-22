@@ -75,8 +75,7 @@ pub enum Target {
         fingerprint: String,
         secret: Zeroizing<String>,
     },
-    #[cfg(windows)]
-    Wsl(String),
+    Local(arcnix_core::local_desktop::Target),
 }
 struct Credentials {
     epoch: u64,
@@ -175,10 +174,9 @@ fn spawn_session(
                     fingerprint,
                     secret,
                 } => (profile, fingerprint, secret),
-                #[cfg(windows)]
-                Target::Wsl(name) => {
-                    return Ok(Box::new(super::wsl_terminal::WslTerminal::open(
-                        name,
+                Target::Local(target) => {
+                    return Ok(Box::new(super::local_terminal::LocalTerminal::open(
+                        target,
                         directory.as_deref(),
                         columns,
                         rows,

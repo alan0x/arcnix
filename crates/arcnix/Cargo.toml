@@ -16,6 +16,7 @@ name = "arcnix"
 path = "src/main.rs"
 
 [dependencies]
+portable-pty = "0.9"
 flate2 = "1"
 pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["html"] }
 anyhow.workspace = true
@@ -43,7 +44,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSS
 keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
 
 [target.'cfg(windows)'.dependencies]
-portable-pty = "0.9"
 keyring-core = "1.0.1"
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
 libloading = "0.8.9"

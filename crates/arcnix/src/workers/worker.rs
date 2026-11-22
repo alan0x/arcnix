@@ -37,7 +37,7 @@ pub struct FileFailure {
 }
 
 impl FileFailure {
-    fn ordinary(message: String) -> Self {
+    pub(super) fn ordinary(message: String) -> Self {
         Self {
             message,
             permission_denied: false,
@@ -46,6 +46,7 @@ impl FileFailure {
 }
 
 pub enum Action {
+    LocalDesktop(local_desktop::Target, PathBuf),
     PlayVideo {
         path: String,
         prefer_content: bool,
@@ -201,6 +202,7 @@ impl BrowserProxyControl {
 }
 
 pub enum Update {
+    LocalDesktop(Result<String, String>),
     Video(Result<Arc<crate::video_player::Source>, String>),
     #[cfg(windows)]
     Html(Result<String, String>),
@@ -343,7 +345,7 @@ fn deletion_progress(
         }
     }
 }
-fn create_named_entry(
+pub(super) fn create_named_entry(
     default_name: &str,
     mut try_create: impl FnMut(&str) -> anyhow::Result<bool>,
 ) -> anyhow::Result<String> {
@@ -385,7 +387,9 @@ pub(crate) fn start_with_limiter(
                     router_generation.store(request.epoch, Ordering::Release);
                     let _ = routed_terminal.send(crate::terminal_worker::Command::Attach {
                         epoch: request.epoch,
-                        target: crate::terminal_worker::Target::Wsl(name),
+                        target: crate::terminal_worker::Target::Local(local_desktop::Target::Wsl(
+                            name,
+                        )),
                     });
                 }
                 #[cfg(windows)]
@@ -415,7 +419,10 @@ pub(crate) fn start_with_limiter(
                 _ => {
                     if matches!(
                         request.action,
-                        Action::Probe(..) | Action::ProbeSaved(..) | Action::Disconnect
+                        Action::LocalDesktop(..)
+                            | Action::Probe(..)
+                            | Action::ProbeSaved(..)
+                            | Action::Disconnect
                     ) {
                         router_generation.store(request.epoch, Ordering::Release);
                         let _ = routed_terminal.send(crate::terminal_worker::Command::Reset);
@@ -541,6 +548,7 @@ pub(crate) fn start_with_limiter(
     thread::spawn(move || {
         let mut transfers =
             crate::transfer_worker::Pool::with_limiter(events.clone(), generation.clone(), limiter);
+        let mut local_desktop: Option<super::local_desktop_worker::Session> = None;
         let mut pending: Option<PendingConnection> = None;
         let mut session: Option<RemoteSession> = None;
         let mut saved_login: Option<(crate::ssh_credentials::Key, zeroize::Zeroizing<String>)> =
@@ -564,6 +572,58 @@ pub(crate) fn start_with_limiter(
                     serial,
                     update,
                 });
+            };
+            if matches!(
+                action,
+                Action::LocalDesktop(..)
+                    | Action::Probe(..)
+                    | Action::ProbeSaved(..)
+                    | Action::Disconnect
+            ) {
+                local_desktop = None;
+            }
+            if let Action::LocalDesktop(target, prefs) = action {
+                if epoch != generation.load(Ordering::Acquire) {
+                    continue;
+                }
+                session = None;
+                pending = None;
+                active_profile = None;
+                session_access = None;
+                saved_login = None;
+                transfers.reset();
+                active_epoch = epoch;
+                let result = target
+                    .home()
+                    .map(|home| {
+                        let _ = terminal.send(crate::terminal_worker::Command::Attach {
+                            epoch,
+                            target: crate::terminal_worker::Target::Local(target.clone()),
+                        });
+                        local_desktop = Some(super::local_desktop_worker::Session {
+                            target,
+                            home: home.clone(),
+                            prefs,
+                        });
+                        home
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                send(Update::LocalDesktop(result));
+                continue;
+            }
+            let action = if let Some(desktop) = &local_desktop {
+                if epoch != active_epoch || epoch != generation.load(Ordering::Acquire) {
+                    continue;
+                }
+                match desktop.dispatch(action) {
+                    std::ops::ControlFlow::Break(update) => {
+                        send(update);
+                        continue;
+                    }
+                    std::ops::ControlFlow::Continue(action) => action,
+                }
+            } else {
+                action
             };
             let connection = || {
                 active_profile
@@ -636,10 +696,7 @@ pub(crate) fn start_with_limiter(
                 }) {
                     Some(remote) => arcnix_core::browser_proxy::repair_forwarding(remote, &sudo)
                         .map_err(|error| {
-                            arcnix_core::tasks::redact_log(
-                                &format!("{error:#}"),
-                                &[sudo.as_str()],
-                            )
+                            arcnix_core::tasks::redact_log(&format!("{error:#}"), &[sudo.as_str()])
                         }),
                     None => Err("Connect a server first".into()),
                 };

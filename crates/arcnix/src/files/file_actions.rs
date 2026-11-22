@@ -7,7 +7,8 @@ use serde::Deserialize;
 use crate::*;
 
 pub(crate) fn available(s: &State) -> bool {
-    s.workspace_page.is_files()
+    s.local_desktop.is_none()
+        && s.workspace_page.is_files()
         && server_desktop::visible(s)
         && s.sftp_available
         && s.dialog.is_none()
@@ -23,7 +24,7 @@ fn selected(s: &State) -> Vec<String> {
 }
 
 pub(crate) fn has_selection(s: &State) -> bool {
-    !selected(s).is_empty()
+    s.local_desktop.is_none() && !selected(s).is_empty()
 }
 
 pub(crate) fn copy(ui: &Ui) {

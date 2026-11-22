@@ -302,6 +302,47 @@ pub fn sync_desktop(
     anyhow::bail!("Desktop settings changed during sync; retrying")
 }
 
+/// Preferences for a local desktop are scoped to its host or WSL distribution.
+pub fn read_local_desktop(path: &Path) -> Result<DesktopPreferences> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(DESKTOP_JSON_READ_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= DESKTOP_JSON_READ_LIMIT,
+        "Desktop settings are too large"
+    );
+    parse_preferences(std::str::from_utf8(&bytes)?)
+}
+
+pub fn save_local_desktop(
+    path: &Path,
+    pending: &Pending<DesktopPreferences>,
+) -> Result<DesktopResult> {
+    std::fs::create_dir_all(path.parent().context("Missing local desktop directory")?)?;
+    let lock = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("lock"))?;
+    lock.lock()?;
+    let remote = read_local_desktop(path)?;
+    let (merged, paths) = resolve_desktop(pending, &remote, true)?;
+    if !paths.is_empty() {
+        return Ok(DesktopResult::Conflict { remote, paths });
+    }
+    merged.validate()?;
+    if merged != remote {
+        crate::store::replace_document(path, &serde_json::to_vec(&merged)?)?;
+    }
+    Ok(DesktopResult::Saved(merged))
+}
+
 /// Three-way merge. The selected side applies only to conflicting values.
 pub fn merge_desktop(
     base: &DesktopPreferences,

@@ -238,7 +238,10 @@ fn one(s: &State, remote: bool) -> bool {
     available(s, remote) && single(s, remote).is_some()
 }
 pub(crate) fn can_delete(s: &State, remote: bool) -> bool {
-    workspace::ready(s, remote) && can_change_files(s, remote) && any(s, remote)
+    (!remote || s.local_desktop.is_none())
+        && workspace::ready(s, remote)
+        && can_change_files(s, remote)
+        && any(s, remote)
 }
 pub(crate) fn can_change_files(s: &State, remote: bool) -> bool {
     (!remote || (s.connected && s.sftp_available && !s.system_task_running))
