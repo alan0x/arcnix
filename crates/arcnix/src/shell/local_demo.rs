@@ -4,7 +4,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
     let read = ui.clone();
     let write = ui.clone();
     #[cfg(windows)]
-    let warning = local_desktop::windows_host::powershell()
+    let warning = terminals::check_local_terminal(&local_desktop::Target::Native)
         .err()
         .map(|error| error.to_string());
     #[cfg(not(windows))]

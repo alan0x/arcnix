@@ -260,14 +260,8 @@ def main():
             button('Desktop').click()
             panel.locator('.setting-icon-arrangement:visible').get_by_role('radio', name='Horizontal', exact=True).check()
             panel.locator('.setting-starting-edge:visible').get_by_role('radio', name='Right to left', exact=True).check()
-            panel.get_by_role('radiogroup', name='Desktop icon size', exact=True).get_by_role('radio', name='Large', exact=True).check()
-            expect(grid).to_have_class('desktop-shortcuts icons-by-row icons-from-right icons-large')
-            expect(grid).to_have_css('direction', 'rtl')
-            check_shortcut_gutter()
+            presets = panel.get_by_role('radiogroup', name='Desktop icon size', exact=True)
             desktop_size = panel.get_by_role('slider', name='Desktop icon size', exact=True)
-            expect(desktop_size).to_have_value('64')
-            eventually(lambda: persist().get('layout', {}).get('size') == 'large')
-            assert persist()['show_server'] is False
             desktop_size.scroll_into_view_if_needed()
             icon = grid.locator('.desktop-app-icon').first
 
@@ -278,7 +272,17 @@ def main():
                 }''', pixels))
                 expect(icon).to_have_css('border-top-left-radius', '29%')
 
-            check_desktop_icon(64)
+            icon_presets = [('Small', '32'), ('Medium', '48'), ('Large', '64')]
+            for label, pixels in icon_presets:
+                preset = presets.get_by_role('radio', name=label, exact=True)
+                preset.check()
+                expect(preset).to_be_checked()
+                expect(desktop_size).to_have_value(pixels)
+                check_desktop_icon(int(pixels))
+                eventually(lambda: persist().get('layout', {}).get('size') == label.lower())
+            expect(grid).to_have_css('direction', 'rtl')
+            check_shortcut_gutter()
+            assert persist()['show_server'] is False
             track = desktop_size.bounding_box()
             y = track['y'] + track['height'] / 2
             page.mouse.move(track['x'] + track['width'] * 0.65, y)
@@ -299,7 +303,13 @@ def main():
             eventually(lambda: persist()['layout'].get('icon_size') == pixels)
             expect(grid).to_have_class(f'desktop-shortcuts icons-by-row icons-from-right icons-size-{pixels}')
             button('Dock').click()
-            expect(panel.get_by_role('slider', name='Dock icon size', exact=True)).to_have_value('48')
+            dock_slider = panel.get_by_role('slider', name='Dock icon size', exact=True)
+            dock_presets = panel.get_by_role('radiogroup', name='Dock icon size', exact=True)
+            expect(dock_slider).to_have_value('48')
+            for label, expected in icon_presets:
+                dock_presets.get_by_role('radio', name=label, exact=True).check()
+                expect(dock_slider).to_have_value(expected)
+            dock_presets.get_by_role('radio', name='Medium', exact=True).check()
             button('Desktop').click()
             expect(desktop_size).to_be_visible()
             visible = shortcut_options('App icons')

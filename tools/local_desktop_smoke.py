@@ -39,6 +39,9 @@ def main():
         directory = Path(temp)
         with Desktop(out, cfg) as app:
             enter(app, 'Read-only mode')
+            rust = directory / 'readonly.rs'
+            source = 'fn main() {}'
+            rust.write_text(source, encoding='utf-8')
             (directory / 'readonly.txt').write_text('Host file', encoding='utf-8')
             app.application('Files')
             app.file(directory.name).dblclick()
@@ -51,6 +54,37 @@ def main():
             expect(area).not_to_be_editable()
             app.page.locator('.app-editor.active .window-close').click()
             (directory / 'readonly.txt').unlink()
+            app.file(rust.name).dblclick()
+            code = app.code()
+            lines = code.locator('.monaco-editor .view-lines').first
+            expect(lines).to_contain_text(source)
+            expect(code.get_by_role('menubar').get_by_role('menuitem', name='Terminal', exact=True)).to_have_count(0)
+            code.keyboard.press('Control+Backquote')
+            expect(code.locator('.xterm:visible')).to_have_count(0)
+            # The command palette and shortcuts must not be able to invoke a missing backend.
+            assert code.evaluate('''async () => {
+                try { await window.arcnixCommand('workbench.action.terminal.new'); return false; }
+                catch (error) { return /command .* not found/i.test(error.message); }
+            }''')
+            document = code.evaluate_handle('document')
+            app.page.locator('.app-code.active .window-minimize').click()
+            app.application('Code Editor')
+            assert code.evaluate('old => document === old', document)
+            expect(lines).to_contain_text(source)
+            rendered = lines.inner_text()
+            code.locator('.monaco-editor textarea.inputarea').first.press('x')
+            assert lines.inner_text() == rendered
+            app.page.locator('.app-code.active .window-close').click()
+            expect(app.page.locator('.app-code.active')).to_have_count(0)
+            app.application('Files')
+            app.file(rust.name).click(button='right')
+            app.page.locator('.file-context-menu:visible').get_by_role('button', name='Open with', exact=True).hover()
+            app.action('Text Editor')
+            expect(area).to_have_value(source)
+            expect(area).not_to_be_editable()
+            app.page.locator('.app-editor.active .window-close').click()
+            assert rust.read_text(encoding='utf-8') == source
+            rust.unlink()
             app.application('Monitor')
             expect(app.page.locator('.monitor-metric-grid')).to_contain_text('logical processors', timeout=30000)
             app.page.locator('.app-monitor.active').get_by_role('button', name='Disks', exact=True).click()
@@ -107,6 +141,16 @@ def main():
             code = app.code()
             area = code.locator('.monaco-editor textarea.inputarea').first
             expect(code.locator('.view-lines').first).to_contain_text('print(1)')
+            code.keyboard.press('Control+Backquote')
+            rows = code.locator('.xterm-rows:visible').last
+            expect(rows).to_contain_text('PS ', timeout=15000)
+            keyboard = code.locator('.xterm-helper-textarea:visible').last
+            keyboard.focus()
+            code.keyboard.type('Write-Output (6 * 7)')
+            keyboard.press('Enter')
+            expect(rows).to_contain_text('42')
+            code.evaluate("window.arcnixCommand('workbench.action.terminal.kill')")
+            expect(rows).to_have_count(0)
             area.focus()
             area.press('Control+End')
             code.keyboard.insert_text('print(2)')

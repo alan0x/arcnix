@@ -7,6 +7,26 @@ from server_apps_fixture import read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
 
+def check_search(panel):
+    search = panel.get_by_role('textbox', name='Search shortcuts', exact=True)
+    results = panel.locator('.desktop-key-binding:visible')
+    groups = panel.locator('.desktop-shortcut-group:visible')
+    expect(groups).to_have_count(4)
+    search.fill('tErMiNaL copy')
+    expect(groups).to_have_count(1)
+    expect(results).to_have_count(2)
+    search.fill('ctrl + tab')
+    expect(results).to_have_count(2)
+    expect(results.first).to_contain_text('Switch to next app')
+    search.fill('zzzz-no-shortcut')
+    expect(groups).to_have_count(0)
+    expect(panel.get_by_text('No matching shortcuts.', exact=True)).to_be_visible()
+    panel.get_by_role('button', name='Clear search', exact=True).click()
+    expect(search).to_be_focused()
+    expect(search).to_have_value('')
+    expect(groups).to_have_count(4)
+
+
 def main():
     out = ROOT / 'artifacts' / 'desktop-shortcuts' / f'run-{time.time_ns()}'
     out.mkdir(parents=True)
@@ -106,6 +126,7 @@ def main():
         expect(terminal_input).to_be_focused()
 
         panel = settings()
+        check_search(panel)
         tabs = page.locator('.desktop-settings-tabs')
         capture = panel.get_by_role('checkbox', name='Use Windows shortcuts on the desktop')
         if capture.count():
@@ -131,7 +152,13 @@ def main():
         button = record(fullscreen, 'Control+Tab')
         expect(panel.locator('.desktop-shortcut-error')).to_have_text('This shortcut is already in use.')
         expect(button).to_contain_text('Ctrl+Shift+F')
+        search = panel.get_by_role('textbox', name='Search shortcuts')
+        search.fill('Ctrl+Shift+F')
         button = record(fullscreen, 'Control+l')
+        expect(button).to_be_hidden()
+        search.fill('Ctrl+L')
+        expect(button).to_be_visible()
+        search.fill('')
         expect(button).to_contain_text('Ctrl+L')
         eventually(lambda: bindings().get('fullscreen') == 'Ctrl+L')
         previous_app = panel.get_by_role('checkbox', name='Switch to previous app', exact=True)
@@ -141,6 +168,7 @@ def main():
         expect(panel.get_by_role('button', name='Change shortcut: Switch to previous app', exact=True)).to_contain_text('Ctrl+Shift+Tab')
         page.keyboard.press('Control+Shift+Tab')
         title('Settings')
+        page.locator('.desktop-canvas').focus()
         page.keyboard.press('Control+l')
         exit_fullscreen = page.locator('.desktop-fullscreen-exit')
         expect(exit_fullscreen).to_be_visible()
@@ -198,7 +226,7 @@ def main():
         previous_app = panel.get_by_role('checkbox', name='Switch to previous app', exact=True)
         expect(previous_app).not_to_be_checked()
         reset_fullscreen = panel.get_by_role('button', name=f'Reset shortcut: {fullscreen} (Default: Ctrl+Shift+F)', exact=True)
-        fullscreen_row = panel.locator('.desktop-key-binding').filter(has=reset_fullscreen)
+        fullscreen_row = panel.locator('.desktop-key-binding').filter(has=page.get_by_role('checkbox', name=fullscreen, exact=True))
         expect(fullscreen_row.get_by_text('Customized', exact=True)).to_be_visible()
         page.keyboard.press('Control+l')
         expect(exit_fullscreen).to_be_visible()

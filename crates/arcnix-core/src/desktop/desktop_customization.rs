@@ -12,6 +12,10 @@ use crate::remote::RemoteSession;
 use crate::server_apps::DesktopApp;
 
 const MAX_FILES: usize = 128;
+pub const MIN_ICON_SIZE: u8 = 32;
+pub const MEDIUM_ICON_SIZE: u8 = 48;
+pub const MAX_ICON_SIZE: u8 = 64;
+pub const ICON_SIZE_RANGE: std::ops::RangeInclusive<u8> = MIN_ICON_SIZE..=MAX_ICON_SIZE;
 pub const MAX_ICONS: usize = MAX_FILES + DesktopApp::COUNT + 2;
 pub(crate) const DESKTOP_NAME_LIMIT: usize = 255;
 pub(crate) const WALLPAPER_PATH_LIMIT: usize = 1536;
@@ -62,20 +66,29 @@ pub enum Wallpaper {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DockSize {
+pub enum IconSize {
     Small,
     #[default]
     Medium,
     Large,
 }
 
-impl DockSize {
+pub use IconSize as DockSize;
+pub use IconSize as DesktopIconSize;
+
+impl IconSize {
     pub const fn pixels(self) -> u8 {
         match self {
-            Self::Small => Dock::MIN_ICON_SIZE,
-            Self::Medium => 48,
-            Self::Large => Dock::MAX_ICON_SIZE,
+            Self::Small => MIN_ICON_SIZE,
+            Self::Medium => MEDIUM_ICON_SIZE,
+            Self::Large => MAX_ICON_SIZE,
         }
+    }
+
+    fn from_pixels(pixels: u8) -> Option<Self> {
+        [Self::Small, Self::Medium, Self::Large]
+            .into_iter()
+            .find(|size| size.pixels() == pixels)
     }
 }
 
@@ -153,8 +166,8 @@ impl Default for Dock {
 }
 
 impl Dock {
-    pub const MIN_ICON_SIZE: u8 = 32;
-    pub const MAX_ICON_SIZE: u8 = 64;
+    pub const MIN_ICON_SIZE: u8 = MIN_ICON_SIZE;
+    pub const MAX_ICON_SIZE: u8 = MAX_ICON_SIZE;
 
     pub fn icon_pixels(&self) -> u8 {
         self.icon_size
@@ -164,10 +177,7 @@ impl Dock {
 
     pub fn set_icon_pixels(&mut self, pixels: u8) {
         let pixels = pixels.clamp(Self::MIN_ICON_SIZE, Self::MAX_ICON_SIZE);
-        if let Some(preset) = [DockSize::Small, DockSize::Medium, DockSize::Large]
-            .into_iter()
-            .find(|size| size.pixels() == pixels)
-        {
+        if let Some(preset) = IconSize::from_pixels(pixels) {
             self.size = preset;
             self.icon_size = None;
         } else {
@@ -190,25 +200,6 @@ pub enum IconDirection {
     #[default]
     LeftToRight,
     RightToLeft,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DesktopIconSize {
-    Small,
-    #[default]
-    Medium,
-    Large,
-}
-
-impl DesktopIconSize {
-    pub const fn pixels(self) -> u8 {
-        match self {
-            Self::Small => 40,
-            Self::Medium => 55,
-            Self::Large => 64,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,8 +231,8 @@ fn desktop_icon_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Optio
 }
 
 impl Layout {
-    pub const MIN_ICON_SIZE: u8 = 32;
-    pub const MAX_ICON_SIZE: u8 = 64;
+    pub const MIN_ICON_SIZE: u8 = MIN_ICON_SIZE;
+    pub const MAX_ICON_SIZE: u8 = MAX_ICON_SIZE;
 
     pub fn icon_pixels(&self) -> u8 {
         self.icon_size
@@ -251,14 +242,7 @@ impl Layout {
 
     pub fn set_icon_pixels(&mut self, pixels: u8) {
         let pixels = pixels.clamp(Self::MIN_ICON_SIZE, Self::MAX_ICON_SIZE);
-        if let Some(preset) = [
-            DesktopIconSize::Small,
-            DesktopIconSize::Medium,
-            DesktopIconSize::Large,
-        ]
-        .into_iter()
-        .find(|size| size.pixels() == pixels)
-        {
+        if let Some(preset) = IconSize::from_pixels(pixels) {
             self.size = preset;
             self.icon_size = None;
         } else {

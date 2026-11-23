@@ -2706,9 +2706,13 @@ Linux 目录	Linux directory
 只读模式	Read-only mode
 读写模式	Read-write mode
 本机桌面当前为只读模式	This local desktop is read-only
+本机终端不可用	Local terminal unavailable
+此 Windows 版本不支持本机终端。	This Windows version does not support local terminals.
 未找到 PowerShell。文件和监控仍可使用。请恢复 Windows PowerShell 或安装 PowerShell 7 后再使用终端。	PowerShell was not found. Files and Monitor are available. Restore Windows PowerShell or install PowerShell 7 to use Terminal.
 静音	Mute
 取消静音	Unmute
+搜索快捷键	Search shortcuts
+没有匹配的快捷键。	No matching shortcuts.
 图片查看器	Image Viewer
 打开图片	Open image
 所有支持的图片	All supported images

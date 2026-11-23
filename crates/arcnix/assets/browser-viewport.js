@@ -1,6 +1,7 @@
 // Keep the native browser surface inside its DOM window. Subtract the
-// rectangles of apps and overlays above it before exposing the child HWND.
+// rectangles of apps and overlays above it before exposing the native view.
 function observeNativeSurface(app) {
+    const clipRegions = nativeSurfaceRegionClipping(app);
     const previous = new WeakMap();
     let frame;
     const watched = new Set();
@@ -32,12 +33,12 @@ function observeNativeSurface(app) {
 
     function syncWindow(browser, bridge, next) {
         const surface = browser.querySelector(app === 'player' ? '.remote-player-screen' : '.browser-surface');
-        const commandButton = nativeSurfaceRegionClipping && app === 'code' ? browser.querySelector('.code-quick-open') : null;
+        const commandButton = clipRegions && app === 'code' ? browser.querySelector('.code-quick-open') : null;
         const menuSlot = app === 'code' ? browser.querySelector('.code-menu-slot') : null;
         const canvas = browser.closest('.desktop-canvas');
         const layer = browser.closest('.desktop-window-layer');
-        const frameElement = nativeSurfaceRegionClipping ? canvas : layer;
-        const dock = nativeSurfaceRegionClipping ? canvas.querySelector('.desktop-dock-zone') : null;
+        const frameElement = clipRegions ? canvas : layer;
+        const dock = clipRegions ? canvas.querySelector('.desktop-dock-zone') : null;
         const menubar = canvas.parentElement.querySelector('.desktop-menubar');
         const windows = Array.from(layer.querySelectorAll('.desktop-window:not(.hidden)'));
         for (const node of [surface, commandButton, menuSlot, frameElement, dock, menubar, ...windows]) if (node) next.add(node);

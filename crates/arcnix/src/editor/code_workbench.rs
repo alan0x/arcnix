@@ -194,19 +194,7 @@ impl FileRequest {
                     Files::Remote(remote) => {
                         arcnix_core::desktop_customization::read_wallpaper(remote, &path)?
                     }
-                    Files::Local(target) => {
-                        arcnix_core::desktop_customization::read_image(&path, |limit| {
-                            use std::io::Read;
-                            let (file, snapshot) = target.open_binary(&path)?;
-                            anyhow::ensure!(
-                                snapshot.size <= limit as u64,
-                                "Image exceeds maximum size"
-                            );
-                            let mut bytes = Vec::with_capacity(snapshot.size as usize + 1);
-                            file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-                            Ok(bytes)
-                        })?
-                    }
+                    Files::Local(target) => target.read_image(&path)?,
                 };
                 Ok(json!(format!(
                     "data:{};base64,{}",
@@ -464,7 +452,7 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
     let state = ui.state;
     let command = move |id: &'static str| move || state.revise(|s| s.code.commands.push(id));
     row().class("code-title-tools").fill((
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         view().class("code-menu-slot"),
         icon_action("Back", Icon::Go)
             .class("icon-button code-back")

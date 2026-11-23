@@ -6,6 +6,38 @@ use arcnix_core::local_desktop::Target;
 use arcnix_core::terminal::Output;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+/// Check before advertising a local terminal. portable-pty assumes the ConPTY
+/// exports exist when it opens its first Windows pseudo console.
+pub(crate) fn check_support(target: &Target) -> Result<()> {
+    target.require_write()?;
+    #[cfg(windows)]
+    {
+        use std::sync::OnceLock;
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        use windows::core::{s, w};
+        static CONPTY: OnceLock<bool> = OnceLock::new();
+        let supported = CONPTY.get_or_init(|| unsafe {
+            GetModuleHandleW(w!("kernel32.dll")).is_ok_and(|kernel| {
+                [
+                    s!("CreatePseudoConsole"),
+                    s!("ResizePseudoConsole"),
+                    s!("ClosePseudoConsole"),
+                ]
+                .into_iter()
+                .all(|symbol| GetProcAddress(kernel, symbol).is_some())
+            })
+        });
+        anyhow::ensure!(
+            *supported,
+            "This Windows version does not support local terminals."
+        );
+        if matches!(target, Target::Native) {
+            arcnix_core::local_desktop::windows_host::powershell()?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) struct LocalTerminal {
     child: Box<dyn Child + Send + Sync>,
     input: SyncSender<Vec<u8>>,
@@ -22,7 +54,7 @@ impl LocalTerminal {
         columns: u32,
         rows: u32,
     ) -> Result<Self> {
-        target.require_write()?;
+        check_support(target)?;
         if let Some(path) = directory {
             arcnix_core::terminal::validate_directory(path)?;
         }

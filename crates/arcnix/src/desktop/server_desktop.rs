@@ -227,7 +227,7 @@ pub(crate) const APP_LAUNCHERS: [WorkspacePage; 12] = [
 ];
 
 fn local_app(s: &State, page: WorkspacePage) -> bool {
-    if page.base() == WorkspacePage::Terminal && s.demo_read_only() {
+    if page.base() == WorkspacePage::Terminal && !s.terminal_available() {
         return false;
     }
     if page.base() == WorkspacePage::Monitor {

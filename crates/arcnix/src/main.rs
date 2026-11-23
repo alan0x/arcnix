@@ -212,6 +212,7 @@ define_state! {
     session {
         selected: Option<String> = None,
         local_desktop: Option<local_desktop::Target> = None,
+        local_terminal_supported: bool = false,
         #[cfg(windows)]
         wsl: wsl_workspace::Workspace = Default::default(),
         dialog: Option<Dialog> = None,
@@ -331,14 +332,7 @@ define_state! {
     }
 }
 impl ServerSession {
-    fn terminal_available(&self) -> bool {
-        if self
-            .local_desktop
-            .as_ref()
-            .is_some_and(local_desktop::Target::read_only)
-        {
-            return false;
-        }
+    fn connection_active(&self) -> bool {
         #[cfg(windows)]
         if self.wsl.directory.is_some() {
             return true;
@@ -363,10 +357,10 @@ impl State {
         let mut epochs = self
             .parked
             .values()
-            .filter(|session| session.terminal_available())
+            .filter(|session| session.connection_active())
             .map(|session| session.epoch)
             .collect::<Vec<_>>();
-        if self.terminal_available() {
+        if self.connection_active() {
             epochs.push(self.epoch);
         }
         epochs.sort_unstable();
@@ -374,11 +368,11 @@ impl State {
     }
 
     fn active_connections(&self) -> usize {
-        usize::from(self.terminal_available())
+        usize::from(self.connection_active())
             + self
                 .parked
                 .values()
-                .filter(|s| s.terminal_available())
+                .filter(|s| s.connection_active())
                 .count()
     }
 
@@ -397,13 +391,10 @@ impl State {
                 .is_some()
     }
     fn terminal_available(&self) -> bool {
-        if self
-            .local_desktop
-            .as_ref()
-            .is_some_and(local_desktop::Target::read_only)
-        {
-            return false;
-        }
+        self.connection_active() && (self.local_desktop.is_none() || self.local_terminal_supported)
+    }
+
+    fn connection_active(&self) -> bool {
         #[cfg(windows)]
         if self.wsl.directory.is_some() {
             return true;
@@ -412,11 +403,11 @@ impl State {
     }
     fn server_connection(&self, id: &str) -> (bool, bool) {
         if self.selected.as_deref() == Some(id) {
-            (self.terminal_available(), self.connecting)
+            (self.connection_active(), self.connecting)
         } else {
             self.parked
                 .get(&Some(id.to_owned()))
-                .map(|session| (session.terminal_available(), session.connecting))
+                .map(|session| (session.connection_active(), session.connecting))
                 .unwrap_or_default()
         }
     }
@@ -514,7 +505,7 @@ impl Ui {
         if connect_now
             && self
                 .state
-                .with(|s| !s.terminal_available() && !s.connecting)
+                .with(|s| !s.connection_active() && !s.connecting)
         {
             self.request_connect();
         }
@@ -532,6 +523,7 @@ impl Ui {
                 return;
             }
         };
+        let terminal_supported = terminals::check_local_terminal(&target).is_ok();
         let session_scope = if target.read_only() {
             format!("{scope}-readonly")
         } else {
@@ -556,6 +548,7 @@ impl Ui {
             if s.connected || s.connecting {
                 return false;
             }
+            s.local_terminal_supported = terminal_supported;
             s.advance_epoch();
             s.sync_scope = Some(session_scope.clone());
             s.connecting = true;
@@ -2467,9 +2460,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/window-tabs.js"),
                     include_str!("../assets/files-tabs.js"),
                     if cfg!(windows) {
-                        "const nativeSurfaceRegionClipping = true;"
+                        "const nativeSurfaceRegionClipping = () => true;"
+                    } else if cfg!(target_os = "macos") {
+                        "const nativeSurfaceRegionClipping = app => app === 'code';"
                     } else {
-                        "const nativeSurfaceRegionClipping = false;"
+                        "const nativeSurfaceRegionClipping = () => false;"
                     },
                     include_str!("../assets/browser-viewport.js"),
                     include_str!("../assets/video-player.js"),
@@ -2506,6 +2501,39 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_launchers_follow_the_session_capability() {
+        let mut state = State::new(AppConfig::default(), String::new(), String::new());
+        state.connected = true;
+        state.local_desktop = Some(local_desktop::Target::Native);
+        for supported in [false, true] {
+            state.local_terminal_supported = supported;
+            assert_eq!(state.terminal_available(), supported);
+            assert_eq!(server_desktop::available_apps(&state).contains(&WorkspacePage::Terminal), supported);
+        }
+        state.local_terminal_supported = false;
+        state.local_desktop = None;
+        assert!(state.terminal_available());
+    }
+
+    #[test]
+    fn read_only_desktop_stays_connected_without_terminal_access() {
+        let mut state = State::new(AppConfig::default(), String::new(), String::new());
+        state.epoch = 1;
+        state.connected = true;
+        state.local_desktop = Some(local_desktop::Target::ReadOnlyHost);
+        assert!(!state.terminal_available());
+        assert_eq!(state.connected_epochs(), [1]);
+
+        let mut session = ServerSession::new(String::new());
+        state.swap_session(&mut session);
+        state.parked.insert(None, session);
+        assert_eq!(state.connected_epochs(), [1]);
+        assert_eq!(state.active_connections(), 1);
+        state.parked.get_mut(&None).unwrap().connected = false;
+        assert!(state.connected_epochs().is_empty());
+    }
+
     #[test]
     fn only_unencrypted_private_keys_skip_the_credential_dialog() {
         struct Cleanup(PathBuf);

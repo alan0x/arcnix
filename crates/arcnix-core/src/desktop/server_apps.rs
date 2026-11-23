@@ -780,6 +780,25 @@ mod tests {
     }
 
     #[test]
+    fn desktop_and_dock_share_all_icon_presets() -> Result<()> {
+        for (preset, expected) in [("small", 32), ("medium", 48), ("large", 64)] {
+            let json = serde_json::json!({
+                "appearance": {"dock": {"size": preset}, "layout": {"size": preset}}
+            });
+            let prefs = parse_preferences(&json.to_string())?;
+            assert_eq!(prefs.appearance.dock.icon_pixels(), expected);
+            assert_eq!(prefs.appearance.layout.icon_pixels(), expected);
+        }
+        let prefs =
+            parse_preferences(r#"{"appearance":{"layout":{"size":"small","icon_size":40}}}"#)?;
+        assert_eq!(prefs.appearance.layout.icon_pixels(), 40);
+        let custom =
+            parse_preferences(r#"{"appearance":{"layout":{"size":"medium","icon_size":55}}}"#)?;
+        assert_eq!(custom.appearance.layout.icon_pixels(), 55);
+        Ok(())
+    }
+
+    #[test]
     fn legacy_icon_sizes_fit_the_current_controls() -> Result<()> {
         let mut prefs = parse_preferences(
             r#"{"appearance":{"dock":{"icon_size":24},"layout":{"icon_size":88}}}"#,

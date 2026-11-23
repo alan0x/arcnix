@@ -128,11 +128,13 @@ export function codeMenuServices() {
     ['workbench.action.navigateForward', 'Forward', '前进', ContextKeyExpr.has('canNavigateForward')],
     ['workbench.action.gotoLine', 'Go to line…', '转到行…', text],
   ]);
-  menu('Terminal', '终端', [
-    ['workbench.action.terminal.new', 'New terminal', '新建终端'],
-    ['workbench.action.terminal.toggleTerminal', 'Toggle terminal', '显示或隐藏终端'],
-    ['workbench.action.terminal.kill', 'Kill active terminal', '关闭活动终端', ContextKeyExpr.has('terminalIsOpen')],
-  ]);
+  if (window.arcnixWorkspace.terminalAvailable) {
+    menu('Terminal', '终端', [
+      ['workbench.action.terminal.new', 'New terminal', '新建终端'],
+      ['workbench.action.terminal.toggleTerminal', 'Toggle terminal', '显示或隐藏终端'],
+      ['workbench.action.terminal.kill', 'Kill active terminal', '关闭活动终端', ContextKeyExpr.has('terminalIsOpen')],
+    ]);
+  }
   function localThemePicker(id, title, list, current, apply) {
     registerAction2(
       class extends Action2 {

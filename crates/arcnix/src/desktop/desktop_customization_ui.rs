@@ -1,8 +1,7 @@
-use std::ops::RangeInclusive;
-
 use arcnix_core::desktop_customization::{
-    self as desktop, Appearance, DesktopIconSize, DesktopItems, Dock, DockItem, DockPosition,
-    DockSize, IconDirection, IconFlow, Layout, Shortcut, SystemIcon, Wallpaper,
+    self as desktop, Appearance, DesktopItems, Dock, DockItem, DockPosition, IconDirection,
+    IconFlow, Layout, MAX_ICON_SIZE, MEDIUM_ICON_SIZE, MIN_ICON_SIZE, Shortcut, SystemIcon,
+    Wallpaper,
 };
 use arcnix_core::server_apps::DesktopApp;
 use serde::Deserialize;
@@ -431,15 +430,13 @@ const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 3] = [
 pub(crate) fn customization_css() -> String {
     use std::fmt::Write;
 
-    let mut css = String::new();
-    for size in Dock::MIN_ICON_SIZE..=Dock::MAX_ICON_SIZE {
+    let mut css = format!(":root {{ --medium-icon-size: {MEDIUM_ICON_SIZE}px; }}\n");
+    for size in desktop::ICON_SIZE_RANGE {
         writeln!(
             css,
             ".desktop-dock.dock-size-{size} {{ --dock-ideal: {size}px; }}"
         )
         .unwrap();
-    }
-    for size in Layout::MIN_ICON_SIZE..=Layout::MAX_ICON_SIZE {
         writeln!(
             css,
             ".desktop-shortcuts.icons-size-{size} {{ --desktop-icon-ideal: {size}px; }}"
@@ -1467,7 +1464,7 @@ pub(crate) fn settings_row(
 fn choices<T: Copy + PartialEq + 'static>(
     ui: &Ui,
     title: &'static str,
-    options: &'static [(T, &'static str)],
+    options: &[(T, &'static str)],
     read: fn(&Appearance) -> T,
     write: fn(&mut Appearance, T),
 ) -> impl Widget + use<T> {
@@ -1545,14 +1542,6 @@ pub(crate) fn icon_settings(ui: Ui) -> impl Widget {
                 &ui,
                 "Desktop icon size",
                 "icon-size-control desktop-size-control",
-                Layout::MIN_ICON_SIZE..=Layout::MAX_ICON_SIZE,
-                const {
-                    &[
-                        (DesktopIconSize::Small.pixels(), "Small"),
-                        (DesktopIconSize::Medium.pixels(), "Medium"),
-                        (DesktopIconSize::Large.pixels(), "Large"),
-                    ]
-                },
                 |prefs| prefs.layout.icon_pixels(),
                 |prefs, value| prefs.layout.set_icon_pixels(value),
             ),
@@ -1583,27 +1572,19 @@ pub(crate) fn icon_grid_class(s: &State) -> String {
         IconDirection::LeftToRight => "",
         IconDirection::RightToLeft => " icons-from-right",
     };
-    let size = match layout.icon_pixels() {
-        pixels if pixels == DesktopIconSize::Small.pixels() => " icons-small".to_owned(),
-        pixels if pixels == DesktopIconSize::Medium.pixels() => String::new(),
-        pixels if pixels == DesktopIconSize::Large.pixels() => " icons-large".to_owned(),
-        pixels => format!(" icons-size-{pixels}"),
-    };
-    format!("desktop-shortcuts{flow}{direction}{size}")
+    let pixels = layout.icon_pixels();
+    format!("desktop-shortcuts{flow}{direction} icons-size-{pixels}")
 }
 
 fn icon_size_control(
     ui: &Ui,
     label: &'static str,
     class: &'static str,
-    range: RangeInclusive<u8>,
-    presets: &'static [(u8, &'static str)],
     read: fn(&Appearance) -> u8,
     write: fn(&mut Appearance, u8),
 ) -> impl Widget + use<> {
     let state = ui.state;
     let resize_icons = ui.clone();
-    let (min, max) = (*range.start(), *range.end());
     col().class("icon-size-options").fill((
         row().class(class).fill((
             input()
@@ -1613,16 +1594,28 @@ fn icon_size_control(
                 .on(value_changed, move |event| {
                     if let Event::ValueChanged { value, .. } = event
                         && let Ok(pixels) = value.parse::<u8>()
-                        && range.contains(&pixels)
+                        && desktop::ICON_SIZE_RANGE.contains(&pixels)
                     {
                         update(&resize_icons, |prefs| write(prefs, pixels));
                     }
                 }),
-            text()
-                .class("icon-size-state hidden")
-                .content(state.map(move |s| format!("{min},{max},{}", read(appearance(s))))),
+            text().class("icon-size-state hidden").content(
+                state.map(move |s| {
+                    format!("{MIN_ICON_SIZE},{MAX_ICON_SIZE},{}", read(appearance(s)))
+                }),
+            ),
         )),
-        choices(ui, label, presets, read, write),
+        choices(
+            ui,
+            label,
+            &[
+                (MIN_ICON_SIZE, "Small"),
+                (MEDIUM_ICON_SIZE, "Medium"),
+                (MAX_ICON_SIZE, "Large"),
+            ],
+            read,
+            write,
+        ),
     ))
 }
 
@@ -1739,14 +1732,6 @@ fn dock_icons_settings(ui: Ui) -> impl Widget {
                     &ui,
                     "Dock icon size",
                     "icon-size-control dock-size-control",
-                    Dock::MIN_ICON_SIZE..=Dock::MAX_ICON_SIZE,
-                    const {
-                        &[
-                            (DockSize::Small.pixels(), "Small"),
-                            (DockSize::Medium.pixels(), "Medium"),
-                            (DockSize::Large.pixels(), "Large"),
-                        ]
-                    },
                     |prefs| prefs.dock.icon_pixels(),
                     |prefs, value| prefs.dock.set_icon_pixels(value),
                 ),

@@ -20,13 +20,17 @@
             mutations.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         }
         if (!document.documentElement.classList.contains('has-menu-slot')) return;
-        const bar = menu.getBoundingClientRect();
-        let right = bar.left;
+        // The native hit region starts at the host slot, including the
+        // workbench theme's inset between the slot and the menu itself.
+        const slot = menu.closest('.titlebar-left').getBoundingClientRect();
+        let right = slot.left;
         for (const button of menu.querySelectorAll(':scope > .menubar-menu-button')) {
             const bounds = button.getBoundingClientRect();
-            if (bounds.width && bounds.height) right = Math.max(right, bounds.right);
+            if (bounds.width && bounds.height && getComputedStyle(button).visibility === 'visible') {
+                right = Math.max(right, bounds.right);
+            }
         }
-        const width = Math.round((Math.min(right, bar.right) - bar.left) * devicePixelRatio);
+        const width = Math.round((Math.min(right, slot.right) - slot.left) * devicePixelRatio);
         if (width !== reportedWidth) {
             reportedWidth = width;
             window.ipc.postMessage(JSON.stringify({ op: 'menuWidth', width }));

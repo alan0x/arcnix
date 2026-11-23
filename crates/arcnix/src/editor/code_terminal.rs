@@ -63,10 +63,14 @@ pub(crate) fn request(ui: &Ui, msg: Value) {
         if !s.connected {
             return None;
         }
-        if s.demo_read_only() {
+        if !s.terminal_available() {
             if matches!(action, Command::Open { .. }) {
                 let error = crate::i18n::translate_for(
-                    "This local desktop is read-only",
+                    if s.demo_read_only() {
+                        "This local desktop is read-only"
+                    } else {
+                        "Local terminal unavailable"
+                    },
                     crate::i18n::workspace_language(s),
                 );
                 s.code

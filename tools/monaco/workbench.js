@@ -60,7 +60,6 @@ import { RemoteSearch } from './search.js';
 import { pagedEditorId, registerPagedFiles } from './paged-files.js';
 import { codeMenuServices } from './menus.js';
 import { registerCodeFormatters } from './formatters.js';
-import { sshTerminalServices } from './ssh-terminal.js';
 import textmate from '@codingame/monaco-vscode-textmate-service-override';
 import '@codingame/monaco-vscode-docker-default-extension';
 import '@codingame/monaco-vscode-ini-default-extension';
@@ -307,13 +306,17 @@ registerAction2(
     }
   },
 );
+// Importing the terminal override also registers its commands, shortcuts and views.
+const terminalServices = window.arcnixWorkspace.terminalAvailable
+  ? (await import('./ssh-terminal.js')).sshTerminalServices(root, send, window.arcnixWorkspace.terminalLabel)
+  : {};
 await initialize(
   {
     ...workbench(),
     ...explorer(),
     ...search(),
     ...codeMenuServices(),
-    ...(window.arcnixWorkspace.readOnly ? {} : sshTerminalServices(root, send, window.arcnixWorkspace.terminalLabel)),
+    ...terminalServices,
     ...configuration(),
     ...model(),
     ...languages(),

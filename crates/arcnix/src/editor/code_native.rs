@@ -9,6 +9,8 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use glory::wry::shell::NativeWindow;
 use serde_json::{Value, json};
+#[cfg(target_os = "macos")]
+use wry::WebViewExtMacOS;
 use wry::{WebView, WebViewBuilder};
 
 use crate::*;
@@ -18,9 +20,18 @@ const ORIGIN: &str = "http://arcnixcode.localhost";
 #[cfg(not(windows))]
 const ORIGIN: &str = "arcnixcode://localhost";
 
-#[cfg(windows)]
+#[cfg(target_os = "macos")]
+mod mac_surface;
+
+struct CodeView {
+    web: WebView,
+    #[cfg(target_os = "macos")]
+    surface: mac_surface::Surface,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 fn position(
-    view: &WebView,
+    view: &CodeView,
     viewport: &native_viewport::Viewport,
     picker: bool,
     menu_width: Option<i32>,
@@ -82,22 +93,26 @@ fn position(
             menu.map_or(0, |m| m.width()),
         ]
     });
-    view.evaluate_script(&format!(
+    view.web.evaluate_script(&format!(
         "window.arcnixCommandSlot?.({}, {})",
         json!(geometry),
         json!(viewport.title_colors)
     ))?;
-    web_browser_native::position(view, &port)
+    #[cfg(windows)]
+    return web_browser_native::position(&view.web, &port);
+    #[cfg(target_os = "macos")]
+    view.surface.position(&view.web.webview(), &port)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn position(
-    view: &WebView,
+    view: &CodeView,
     viewport: &native_viewport::Viewport,
     _picker: bool,
     _menu_width: Option<i32>,
 ) -> Result<()> {
     use wry::dpi::{PhysicalPosition, PhysicalSize};
+    let view = &view.web;
     let Some(area) = viewport
         .area
         .zip(viewport.frame)
@@ -170,7 +185,7 @@ pub(crate) struct Host {
     tx: mpsc::Sender<(u64, String)>,
     serial: u64,
     epoch: Option<u64>,
-    view: Option<WebView>,
+    view: Option<CodeView>,
     ready: bool,
     save_shortcut: Option<Vec<String>>,
     picker: bool,
@@ -195,7 +210,7 @@ impl Host {
             bounds: None,
         }
     }
-    fn create(&mut self, window: &NativeWindow) -> Result<WebView> {
+    fn create(&mut self, window: &NativeWindow) -> Result<CodeView> {
         let opts = self.ui.state.revise(|s| {
             let root = if s.remote_path.starts_with('/') {
                 s.remote_path.as_str()
@@ -211,6 +226,7 @@ impl Host {
             json!({
                 "root": root,
                 "readOnly": s.demo_read_only(),
+                "terminalAvailable": s.terminal_available(),
                 "terminalLabel": if s.local_desktop.is_none() {"SSH"} else if cfg!(windows) {"PowerShell"} else {"Terminal"},
                 "windowsHost": cfg!(windows) && s.local_desktop.is_some(),
                 "pageBytes": arcnix_core::text_files::PAGE_BYTES,
@@ -226,7 +242,7 @@ impl Host {
             "window.arcnixWorkspace={opts};\n{}",
             include_str!("../../assets/shortcut-chords.js")
         );
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let script = format!("{script}\n{}", include_str!("../../assets/code-menubar.js"));
         #[cfg(not(windows))]
         let script = format!(
@@ -274,11 +290,15 @@ impl Host {
                 }
             }
         }
-        Ok(view)
+        Ok(CodeView {
+            #[cfg(target_os = "macos")]
+            surface: mac_surface::Surface::attach(&view.webview())?,
+            web: view,
+        })
     }
     pub fn hide(&mut self) {
         if let Some(view) = &self.view {
-            let _ = view.set_visible(false);
+            let _ = view.web.set_visible(false);
         }
         self.bounds = None;
     }
@@ -318,7 +338,8 @@ impl Host {
                 }
             }
         }
-        let Some(view) = &self.view else { return };
+        let Some(code) = &self.view else { return };
+        let view = &code.web;
         let mut layout_changed = false;
         while let Ok((serial, raw)) = self.rx.try_recv() {
             if serial != self.serial {
@@ -501,7 +522,7 @@ impl Host {
         });
         if self.bounds != next || layout_changed {
             if let Some(port) = &next {
-                if let Err(error) = position(view, port, self.picker, self.menu_width) {
+                if let Err(error) = position(code, port, self.picker, self.menu_width) {
                     self.ui.state.revise(|s| s.code.error = error.to_string());
                 }
             } else {

@@ -283,7 +283,80 @@ fn change(ui: &Ui, apply: impl FnOnce(&mut Profile, Preset) -> anyhow::Result<()
     }
 }
 
+fn matching_shortcut(s: &State, query: &str, group: &str, label: &str, action: Shortcut) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let language = desktop_system_settings::language(s);
+    let text = format!(
+        "{} {label} {} {}",
+        crate::i18n::translate_for(group, Language::English),
+        crate::i18n::translate_for(group, language),
+        crate::i18n::translate_for(label, language)
+    )
+    .to_lowercase();
+    let keys = keys(s);
+    let chords: Vec<_> = keys
+        .binding(action)
+        .into_iter()
+        .chain(keys.additions(action).iter().map(String::as_str))
+        .map(|chord| keys.preset.display(chord).to_lowercase())
+        .collect();
+    query.split_whitespace().all(|word| {
+        text.contains(word)
+            || chords.iter().any(|chord| {
+                if word.contains('+') {
+                    chord == word || (word.ends_with('+') && chord.starts_with(word))
+                } else {
+                    chord.split('+').any(|key| key.starts_with(word))
+                }
+            })
+    })
+}
+
 pub(crate) fn controls(ui: Ui) -> impl Widget {
+    widget(move |scope| {
+        let query = scope.cage(String::new());
+        let field = scope.cage(None);
+        let focus = scope.clone();
+        let search = row()
+            .class("desktop-settings-search shortcut-search")
+            .fill((
+                icons::glyph(Icon::Search),
+                sapid::text_field()
+                    .unstyled()
+                    .name(i18n::bind("Search shortcuts"))
+                    .placeholder(i18n::bind("Search shortcuts"))
+                    .node_ref(field)
+                    .value(query)
+                    .on_value_change(move |value| query.revise(|current| *current = value)),
+                when(query.map(|q| !q.is_empty()), move || {
+                    let focus = focus.clone();
+                    close_action("Clear search")
+                        .class("desktop-settings-search-clear")
+                        .on_press(move || {
+                            query.revise(String::clear);
+                            if let Some(id) = field.get() {
+                                let _ = focus.action(glory::render::Action::Focus(id));
+                            }
+                        })
+                }),
+            ));
+        let terms = scope.bond(move || {
+            query
+                .get()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+                .replace(" +", "+")
+                .replace("+ ", "+")
+        });
+        shortcut_controls(ui.clone(), terms, search).show_in(scope)
+    })
+}
+
+fn shortcut_controls(ui: Ui, terms: Bond<String>, search: impl Widget) -> impl Widget {
     let state = ui.state;
     let capture = ui.clone();
     let error = text()
@@ -291,10 +364,19 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
         .content(i18n::bind(
             state.map(|s| s.server_apps.shortcut_error.clone()),
         ));
-    col().class("desktop-settings-pane desktop-custom-keys").fill((
-        row().class("section-heading").fill((
+    let pane_class = state.map(move |_| {
+        if terms.with(String::is_empty) {
+            "desktop-settings-pane desktop-custom-keys"
+        } else {
+            "desktop-settings-pane desktop-custom-keys shortcut-filtered"
+        }
+        .to_owned()
+    });
+    col().class(pane_class).fill((
+        row().class("section-heading shortcut-search-heading").fill((
             text().class("section-title").content(i18n::bind("Keyboard shortcuts")),
             help_ui::tip("Change shortcut", "Click a shortcut to change it, or + to add another. Esc cancels. Changes to this preset are saved on the server."),
+            search,
         )),
         col().class("desktop-settings-card desktop-shortcut-scheme").fill((
             row().class("desktop-setting-row").fill((
@@ -319,7 +401,7 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
         )),
         when(state.map(|s| cfg!(windows) && keys(s).preset == Preset::Windows), move || {
             let capture = capture.clone();
-            col().class("desktop-settings-card").fill((
+            col().class("desktop-settings-card shortcut-capture-card").fill((
                 sapid::checkbox().class("preference-check desktop-capture-shortcuts")
                     .name(i18n::bind("Use Windows shortcuts on the desktop"))
                     .label(i18n::bind("Use Windows shortcuts on the desktop"))
@@ -332,6 +414,7 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
             ))
         }),
         error,
+        text().class("subtle shortcut-search-empty").content(i18n::bind("No matching shortcuts.")),
         fragment(GROUPS.iter().map(move |(scope, definitions)| {
             let scope = *scope;
             let title = match scope {
@@ -354,7 +437,13 @@ pub(crate) fn controls(ui: Ui) -> impl Widget {
                     let enable = ui.clone();
                     let reset = ui.clone();
                     let modified = state.map(move |s| keys(s).modified(action));
-                    row().class("desktop-key-binding").fill((
+                    row().class(state.map(move |s| {
+                        if terms.with(|q| matching_shortcut(s, q, title, label, action)) {
+                            "desktop-key-binding".to_owned()
+                        } else {
+                            "desktop-key-binding hidden".to_owned()
+                        }
+                    })).fill((
                         row().class("desktop-shortcut-label").fill((
                             sapid::checkbox()
                                 .class("preference-check desktop-shortcut-enabled")
