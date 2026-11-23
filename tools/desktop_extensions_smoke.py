@@ -101,6 +101,13 @@ def main():
             sidebar_widths = []
             for width, height in [(1440, 980), (1100, 780), (900, 660)]:
                 p.set_viewport_size(dict(width=width, height=height))
+                heading = p.locator('.monitor-titlebar .monitor-heading')
+                expect(heading).to_have_text('Network')
+                sidebar_header = p.locator('.monitor-sidebar-heading').bounding_box()
+                pane = p.locator('.monitor-content').bounding_box()
+                title = heading.bounding_box()
+                assert abs(sidebar_header['x'] + sidebar_header['width'] - pane['x']) < 2
+                assert abs(title['x'] + title['width'] / 2 - pane['x'] - pane['width'] / 2) < 2
                 sidebar_widths.append(sections.evaluate('el => el.offsetWidth'))
                 assert network.evaluate('''button => {
                     const icon = button.querySelector('.action-glyph').getBoundingClientRect();

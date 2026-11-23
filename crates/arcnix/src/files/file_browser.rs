@@ -554,7 +554,10 @@ pub(crate) fn selected_entries(s: &State, remote: bool) -> Vec<FileEntry> {
         &s.local_selection
     };
     let all = entries(s, remote);
-    transfer_roots(&all, selected, remote)
+    selected_roots(&all, selected, remote)
+        .filter(|entry| !entry.is_symlink)
+        .cloned()
+        .collect()
 }
 pub(crate) fn transfer_ready(s: &State) -> bool {
     if s.local_desktop.is_some() {
@@ -645,15 +648,19 @@ fn drop_transfer(ui: &Ui, remote: bool, id: u64) {
         );
     }
 }
-fn transfer_roots(all: &[FileEntry], selected: &HashSet<String>, remote: bool) -> Vec<FileEntry> {
+pub(super) fn selected_roots<'a>(
+    all: &'a [FileEntry],
+    selected: &'a HashSet<String>,
+    remote: bool,
+) -> impl Iterator<Item = &'a FileEntry> {
     let directories: HashSet<_> = all
         .iter()
         .filter(|f| f.is_dir && !f.is_symlink && selected.contains(&f.path))
         .map(|f| f.path.as_str())
         .collect();
     all.iter()
-        .filter(|entry| selected.contains(&entry.path) && !entry.is_symlink)
-        .filter(|entry| {
+        .filter(|entry| selected.contains(&entry.path))
+        .filter(move |entry| {
             if remote {
                 !entry
                     .path
@@ -667,8 +674,6 @@ fn transfer_roots(all: &[FileEntry], selected: &HashSet<String>, remote: bool) -
                     .any(|parent| directories.contains(parent))
             }
         })
-        .cloned()
-        .collect()
 }
 
 #[derive(Deserialize)]
@@ -1710,7 +1715,7 @@ mod tests {
         })
         .collect();
         let selected = entries.iter().map(|f| f.path.clone()).collect();
-        let result = transfer_roots(&entries, &selected, true);
+        let result: Vec<_> = selected_roots(&entries, &selected, true).collect();
         assert_eq!(
             result.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
             ["/a", "/ab/file", "/a\\b/file"]

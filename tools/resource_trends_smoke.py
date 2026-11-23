@@ -86,7 +86,7 @@ with Peer(out/'peer') as peer:
         expect(memory_svg).to_be_focused()
         expect(memory_svg).to_have_css('outline-style','none')
         expect(p.locator('.resource-trend-memory .resource-trend-tooltip')).to_be_visible()
-        tip=p.get_by_role('button',name='Help: Session trends',exact=True);tip.hover();expect(p.get_by_role('tooltip')).to_contain_text('monotonic clock');tip.click();p.mouse.move(1400,950);expect(p.get_by_role('tooltip')).to_be_visible();p.keyboard.press('Escape')
+        tip=p.get_by_role('button',name='Help: Session trends',exact=True);tip.hover();expect(p.get_by_role('tooltip')).to_contain_text('Gaps indicate missing data.');tip.click();p.mouse.move(1400,950);expect(p.get_by_role('tooltip')).to_be_visible();p.keyboard.press('Escape')
         passed('Charts expose samples by pointer and keyboard, outline only keyboard focus, and keep detailed guidance in hover/click help')
 
         sidebar=p.locator('.monitor-sidebar')

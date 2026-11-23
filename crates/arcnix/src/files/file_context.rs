@@ -265,17 +265,8 @@ pub(crate) fn begin_delete(ui: &Ui, remote: bool) {
     ui.open_dialog(Dialog::DeleteFiles { remote, targets });
 }
 pub(crate) fn targets(s: &State, remote: bool) -> Vec<arcnix_core::deletion::Target> {
-    let files = chosen(s, remote);
-    files
-        .iter()
-        .filter(|entry| {
-            !files.iter().any(|parent| {
-                parent.path != entry.path
-                    && parent.is_dir
-                    && !parent.is_symlink
-                    && Path::new(&entry.path).starts_with(&parent.path)
-            })
-        })
+    let files = file_browser::entries(s, remote);
+    file_browser::selected_roots(&files, selection(s, remote), remote)
         .map(arcnix_core::deletion::Target::from)
         .collect()
 }
@@ -818,6 +809,196 @@ fn context_actions(ui: Ui, remote: bool) -> impl Widget {
         }),
     ))
 }
+const DELETE_PREVIEW: usize = 3;
+const DELETE_PAGE: usize = 25;
+
+fn delete_path_parts(path: &str, remote: bool) -> (&str, &str) {
+    if remote {
+        return match path.rsplit_once('/') {
+            Some(("", name)) => ("/", name),
+            Some(parts) => parts,
+            None => (".", path),
+        };
+    }
+    let local = Path::new(path);
+    (
+        local.parent().and_then(Path::to_str).unwrap_or("."),
+        local
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path),
+    )
+}
+
+fn delete_review(state: Cage<State>, desktop: bool) -> impl Widget {
+    widget(move |scope| {
+        let Some((remote, count, folder_contents, name, parent)) = state.with(|s| {
+            let Some(Dialog::DeleteFiles { remote, targets }) = &s.dialog else {
+                return None;
+            };
+            let first = targets.first()?;
+            let (parent, name) = delete_path_parts(&first.path, *remote);
+            let shared = targets
+                .iter()
+                .skip(1)
+                .all(|t| delete_path_parts(&t.path, *remote).0 == parent);
+            Some((
+                *remote,
+                targets.len(),
+                targets.iter().any(|t| t.directory && !t.symlink),
+                (targets.len() == 1).then(|| name.to_owned()),
+                shared.then(|| {
+                    if *remote {
+                        parent.to_owned()
+                    } else {
+                        local_display(Path::new(parent))
+                    }
+                }),
+            ))
+        }) else {
+            return Ok(());
+        };
+        let icon = match (count, folder_contents) {
+            (1, true) => Icon::Folder,
+            (1, false) => Icon::File,
+            _ => Icon::List,
+        };
+        let heading = match name {
+            Some(name) => Vary::Value(name),
+            None if remote => i18n::bind_in(desktop, format!("{count} 个远程项目")),
+            None => i18n::bind_in(desktop, format!("{count} 个本地项目")),
+        };
+        let shared_parent = parent.is_some();
+        let location = parent.map(|parent| {
+            let source = i18n::bind_in(
+                desktop,
+                if remote {
+                    "远程文件"
+                } else {
+                    "本地文件"
+                },
+            );
+            scope.bond(move || {
+                if count == 1 {
+                    format!("{} · {parent}", source.get())
+                } else {
+                    parent.clone()
+                }
+            })
+        });
+        let warning = if folder_contents {
+            "文件夹内的内容也会删除。此操作无法撤销。"
+        } else {
+            "此操作无法撤销。"
+        };
+        let page = scope.cage(None::<usize>);
+        let paths = page.map(move |page| {
+            let (start, limit) =
+                page.map_or((0, DELETE_PREVIEW), |n| (n * DELETE_PAGE, DELETE_PAGE));
+            state.with(|s| {
+                let Some(Dialog::DeleteFiles { targets, .. }) = &s.dialog else {
+                    return Vec::new();
+                };
+                targets
+                    .iter()
+                    .skip(start)
+                    .take(limit)
+                    .map(|target| {
+                        if shared_parent {
+                            delete_path_parts(&target.path, remote).1.to_owned()
+                        } else if remote {
+                            target.path.clone()
+                        } else {
+                            local_display(Path::new(&target.path))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+        });
+        col()
+            .class("file-delete-review")
+            .fill((
+                row().class("file-delete-summary").fill((
+                    icons::glyph(icon),
+                    col().class("file-delete-labels").fill((
+                        text()
+                            .class("file-delete-name")
+                            .selectable(true)
+                            .content(heading),
+                        location.map(|path| {
+                            text()
+                                .class("file-delete-location")
+                                .selectable(true)
+                                .content(path)
+                        }),
+                    )),
+                )),
+                when(count > 1, move || {
+                    col()
+                        .class("file-delete-list")
+                        .fill(each(paths).key(Clone::clone).children(|item| {
+                            text()
+                                .class("file-delete-path")
+                                .selectable(true)
+                                .content(item.value.get())
+                        }))
+                }),
+                when(count > DELETE_PREVIEW, move || {
+                    row().class("file-delete-navigation").fill((
+                        sapid::button()
+                            .class("button file-delete-toggle")
+                            .label(i18n::bind_in(
+                                desktop,
+                                page.map(move |page| {
+                                    if page.is_some() {
+                                        "收起清单".to_owned()
+                                    } else {
+                                        format!("查看全部 {count} 项")
+                                    }
+                                }),
+                            ))
+                            .pressed(page.map(Option::is_some))
+                            .on_press(move || {
+                                page.revise(|p| *p = if p.is_some() { None } else { Some(0) })
+                            }),
+                        when(
+                            page.map(move |p| p.is_some() && count > DELETE_PAGE),
+                            move || {
+                                row().class("file-delete-pages").fill((
+                                    sapid::button()
+                                        .class("button")
+                                        .label(i18n::bind_in(desktop, "上一页"))
+                                        .enabled(page.map(|p| p.unwrap_or(0) > 0))
+                                        .on_press(move || {
+                                            page.revise(|p| *p = p.map(|n| n.saturating_sub(1)))
+                                        }),
+                                    text().content(page.map(move |p| {
+                                        format!(
+                                            "{} / {}",
+                                            p.unwrap_or(0) + 1,
+                                            count.div_ceil(DELETE_PAGE)
+                                        )
+                                    })),
+                                    sapid::button()
+                                        .class("button")
+                                        .label(i18n::bind_in(desktop, "下一页"))
+                                        .enabled(page.map(move |p| {
+                                            p.unwrap_or(0) + 1 < count.div_ceil(DELETE_PAGE)
+                                        }))
+                                        .on_press(move || page.revise(|p| *p = p.map(|n| n + 1))),
+                                ))
+                            },
+                        ),
+                    ))
+                }),
+                text()
+                    .class("file-delete-warning")
+                    .content(i18n::bind_in(desktop, warning)),
+            ))
+            .show_in(scope)
+    })
+}
+
 pub(crate) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
     let delete_ui = ui.clone();
@@ -829,49 +1010,34 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             move || {
                 let apply = delete_ui.clone();
                 let cancel = delete_ui.clone();
+                let desktop = state.with(server_desktop::owns_dialog);
                 modal(
                     delete_ui.clone(),
                     "永久删除",
-                    col().class("file-delete-body").fill((
+                    when(state.map(deletion_dialog), move || {
                         text()
                             .class("file-task-progress")
-                            .content(state.map(progress_text)),
-                        text().content(i18n::bind(
-                            "永久删除所选项目及文件夹内的内容？此操作无法撤销，不会移入回收站。",
-                        )),
-                        text()
-                            .class("file-properties")
-                            .selectable(true)
-                            .content(state.map(|s| {
-                                if let Some(Dialog::DeleteFiles { remote, targets }) = &s.dialog {
-                                    let heading = i18n::translate(if *remote {
-                                        "远程文件"
-                                    } else {
-                                        "本地文件"
-                                    });
-                                    let paths = targets
-                                        .iter()
-                                        .map(|t| {
-                                            if *remote {
-                                                t.path.clone()
-                                            } else {
-                                                local_display(Path::new(&t.path))
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    format!("{heading} ({})\n\n{paths}", targets.len())
-                                } else {
-                                    String::new()
-                                }
-                            })),
-                    )),
+                            .content(state.map(progress_text))
+                    })
+                    .otherwise(move || delete_review(state, desktop)),
                     (
-                        text_action("取消", Icon::Close)
-                            .enabled(true)
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind_in(
+                                desktop,
+                                state.map(|s| {
+                                    if deletion_dialog(s) {
+                                        "停止删除"
+                                    } else {
+                                        "取消"
+                                    }
+                                    .to_owned()
+                                }),
+                            ))
                             .on_press(move || cancel.close_dialog()),
-                        text_action("永久删除", Icon::Clear)
-                            .class("button danger with-icon")
+                        sapid::button()
+                            .label(i18n::bind_in(desktop, "永久删除"))
+                            .class("button danger")
                             .enabled(state.map(|s| {
                                 if let Some(Dialog::DeleteFiles { remote, .. }) = &s.dialog {
                                     can_change_files(s, *remote)

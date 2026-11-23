@@ -213,7 +213,7 @@ def main():
             expect(details.or_(page.locator('.monitor-port-details'))).to_be_visible()
             if details.is_visible():
                 details.click()
-            heading = page.locator('.monitor-content.monitor-processes > .help-heading')
+            heading = page.locator('.monitor-titlebar')
             expect(heading.locator('.monitor-heading')).to_have_text('进程')
             expect(heading.locator('.help-trigger')).to_be_visible()
             expect(refresh_button).to_have_text('刷新端口')

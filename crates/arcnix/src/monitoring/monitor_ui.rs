@@ -29,7 +29,7 @@ impl Section {
         Self::Logs,
     ];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
             Self::Cpu => "CPU",
@@ -160,6 +160,28 @@ pub(crate) fn window_tools(ui: Ui) -> impl Widget {
     let logs = ui.clone();
     fragment((
         when(
+            state.map(|s| s.metrics.section == Section::Processes),
+            move || {
+                fragment((
+                    when(state.map(processes_ui::port_details_visible), || {
+                        help_ui::tip(
+                            "Listening ports and processes",
+                            "TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions.",
+                        )
+                    }),
+                    when(
+                        state.map(|s| !processes_ui::port_details_visible(s)),
+                        || {
+                            help_ui::tip(
+                                "Process inventory",
+                                "CPU is the average over the process lifetime. Memory is the resident set size (RSS). Listening ports are shown when SSH permissions allow the process to be identified.",
+                            )
+                        },
+                    ),
+                ))
+            },
+        ),
+        when(
             state.map(|s| s.metrics.section.shows_samples()),
             move || {
                 let refresh = ui.clone();
@@ -242,24 +264,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 };
                 col()
                     .class(format!("monitor-content {}", section.class()))
-                    .fill((
-                        row().class("help-heading").fill((
-                            text()
-                                .class("pane-title monitor-heading")
-                                .content(i18n::bind(section.label())),
-                            when(section == Section::Processes, move || {
-                                fragment((
-                                    when(state.map(processes_ui::port_details_visible), || {
-                                        help_ui::tip("Listening ports and processes", "TCP listeners and bound UDP ports in the current network namespace. Process details depend on permissions.")
-                                    }),
-                                    when(state.map(|s| !processes_ui::port_details_visible(s)), || {
-                                        help_ui::tip("Process inventory", "CPU is the average over the process lifetime. Memory is the resident set size (RSS). Listening ports are shown when SSH permissions allow the process to be identified.")
-                                    }),
-                                ))
-                            }),
-                        )),
-                        content,
-                    ))
+                    .fill(content)
             }),
     ))
 }

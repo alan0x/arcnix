@@ -68,12 +68,12 @@ pub(crate) fn panel(ui: Ui, section: monitor_ui::Section) -> impl Widget {
     });
     col().class("resource-trends").fill((
         row().class("resource-trend-toolbar").fill((
-            row().class("help-heading").fill((text().class("section-title").content(i18n::bind("Session trends")),crate::help_ui::group("Session trends",&[
-                "Show the last 1, 5 or 15 minutes of reads in this connection, ending at the latest received read. Times use this client's monotonic clock; CPU and network rates use server counters. Missing values, failed reads, pauses and page changes break the lines instead of filling them with zero.",
-                "Move over a chart or focus it and use Left, Right, Home or End to inspect a sample. CPU and memory use a fixed 0–100% scale. Network shows receive and transmit rates excluding loopback, with a shared scale for the selected range.",
-                "History is kept only in memory for this connection, up to 15 minutes and 1,024 reads. Clearing history does not change the server. Connection changes or closing the client discard it; collection does not run on another page or in the background.",
-                "A read delayed by more than two sampling intervals starts a new segment. Rates need a fresh pair of samples after a gap. Consecutive manual refreshes can still calculate rates while automatic sampling is paused.",
-            ]))),
+            row().class("help-heading").fill((
+                text().class("section-title").content(i18n::bind("Session trends")),
+                crate::help_ui::tip_raw("Session trends", i18n::bind(
+                    "Hover or use the left and right arrow keys to inspect a sample. Gaps indicate missing data.",
+                )),
+            )),
             row().class("script-actions resource-trend-windows").fill(each(vec![(60u16,"1 min"),(300,"5 min"),(900,"15 min")]).key(|(n,_)|*n).children(move|item|{let (seconds,label)=item.value.get();btn(label,move||state.revise(|s|s.metrics.window=seconds)).class(state.map(move|s|if (if s.metrics.window==0{300}else{s.metrics.window})==seconds{"choice active"}else{"choice"}.to_owned()))})),
             btn("Clear history",move||state.revise(|s|{s.metrics.history=Default::default();s.metrics.origin=None;observability::metrics_leave(s);})),
             sapid::button().class("button").label(i18n::bind(state.map(|s|if s.metrics.paused{"Resume sampling"}else{"Pause sampling"}.to_owned()))).on_press(move||{

@@ -1039,7 +1039,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
             tab_overflow(),
         )),
         WorkspacePage::Editor => fragment(text_editor::menubar(ui.clone())),
-        WorkspacePage::Monitor => fragment(monitor_ui::window_tools(ui.clone())),
+
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone(), id)),
         _ => fragment(()),
@@ -1066,9 +1066,17 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     state.map(server_apps_ui::settings_save_status),
                 )),
         ))
+    } else if page == WorkspacePage::Monitor {
+        fragment((
+            row().class("monitor-sidebar-heading").fill((mark, title)),
+            text().class("monitor-heading").content(i18n::desktop::bind(
+                state.map(|s| s.metrics.section.label().to_owned()),
+            )),
+        ))
     } else {
         fragment((mark, title, tools))
     };
+    let monitor_tools = ui.clone();
     let content = match page.base() {
         WorkspacePage::Terminal => fragment(terminal::window_page(ui, id)),
         WorkspacePage::Files(id) => fragment(files_tabs::window_content(ui, id)),
@@ -1117,12 +1125,17 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                     "desktop-window-titlebar files-titlebar"
                 } else if page == WorkspacePage::Settings {
                     "desktop-window-titlebar desktop-settings-titlebar"
+                } else if page == WorkspacePage::Monitor {
+                    "desktop-window-titlebar monitor-titlebar"
                 } else {
                     "desktop-window-titlebar"
                 })
                 .fill((
                     titlebar,
                     row().class("desktop-window-actions").fill((
+                        when(page == WorkspacePage::Monitor, move || {
+                            monitor_ui::window_tools(monitor_tools.clone())
+                        }),
                         when(page == WorkspacePage::Player, move || {
                             let ui = browse_video.clone();
                             i18n::desktop::icon_action("Open video", Icon::OpenVideo)

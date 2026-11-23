@@ -110,7 +110,7 @@ def main():
             expect(deletion.locator('.file-task-progress')).to_contain_text('Scanning:')
             expect(deletion.get_by_role('button', name='Close dialog', exact=True)).to_be_enabled()
             start = time.monotonic()
-            deletion.get_by_role('button', name='Cancel', exact=True).click()
+            deletion.get_by_role('button', name='Stop deletion', exact=True).click()
             expect(deletion).not_to_be_visible()
             assert time.monotonic() - start < 2
             expect(page.locator('.file-task-status')).not_to_be_visible(timeout=5000)

@@ -152,7 +152,12 @@ SSH / SFTP · 凭据不写入配置	SSH / SFTP · Credentials are not stored
 删除文件	Delete files
 删除	Delete
 永久删除	Delete permanently
-永久删除所选项目及文件夹内的内容？此操作无法撤销，不会移入回收站。	Permanently delete the selected items and folder contents? This cannot be undone. Items will not go to the recycle bin.
+此操作无法撤销。	This cannot be undone.
+文件夹内的内容也会删除。此操作无法撤销。	Folder contents will also be deleted. This cannot be undone.
+{count} 个本地项目	{count} local items
+{count} 个远程项目	{count} remote items
+查看全部 {count} 项	View all {count} items
+收起清单	Show fewer items
 已删除 {count} 个项目	Deleted {count} entries
 删除未完成：{message}	Deletion incomplete: {message}
 主机地址	Host address
@@ -1659,12 +1664,9 @@ journal 查询时间范围无效	Invalid bounded journal time window
 秒	s
 分钟	min
 只在此服务器的资源页打开时读取只读样本。离开后不再发送新请求，已发出的读取可能完成；客户端关闭期间不采集历史。	Read-only samples are collected only while this server's Resources page is open. Leaving the page stops new requests; an in-flight read may finish. No history is collected while the client is closed.
-显示本次连接最近 1、5 或 15 分钟的读取，以最后接收的读取为终点。时间轴使用客户端单调时钟，CPU 与网络速率使用服务器计数。缺失、失败、暂停及页面切换会断开曲线，不填充为零。	Show the last 1, 5 or 15 minutes of reads in this connection, ending at the latest received read. Times use this client's monotonic clock; CPU and network rates use server counters. Missing values, failed reads, pauses and page changes break the lines instead of filling them with zero.
-移动鼠标到图中，或聚焦后使用左右方向键、Home、End 查看样本。CPU 与内存固定为 0–100%；网络排除回环，接收与发送在所选范围共用刻度。	Move over a chart or focus it and use Left, Right, Home or End to inspect a sample. CPU and memory use a fixed 0–100% scale. Network shows receive and transmit rates excluding loopback, with a shared scale for the selected range.
-历史只保存在本次连接的内存中，最多 15 分钟、1,024 次读取。清除历史不会修改服务器；连接变化或关闭客户端后丢弃，不在其他页面或后台继续采集。	History is kept only in memory for this connection, up to 15 minutes and 1,024 reads. Clearing history does not change the server. Connection changes or closing the client discard it; collection does not run on another page or in the background.
+悬停或用左右方向键查看采样值。曲线断开表示缺少数据。	Hover or use the left and right arrow keys to inspect a sample. Gaps indicate missing data.
 每 {} 秒	Every {} s
 采样已暂停 · 最近成功 {}	Sampling paused · Last success {}
-超过两个采样间隔才完成的读取会开始新的一段；间断后速率需要重新取得一对样本。暂停自动采样时，连续手动刷新仍可计算速率。	A read delayed by more than two sampling intervals starts a new segment. Rates need a fresh pair of samples after a gap. Consecutive manual refreshes can still calculate rates while automatic sampling is paused.
 使用配置参数	Use configuration parameters
 配置默认值	Default configuration values
 配置参数	Configuration parameters

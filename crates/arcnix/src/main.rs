@@ -1853,7 +1853,12 @@ fn modal_with_header(
         let desktop_language = ui.state.with(|s| {
             (matches!(
                 s.dialog,
-                Some(Dialog::FileProperties | Dialog::FilesSettings | Dialog::FileElevation)
+                Some(
+                    Dialog::FileProperties
+                        | Dialog::FilesSettings
+                        | Dialog::FileElevation
+                        | Dialog::DeleteFiles { .. }
+                )
             ) && server_desktop::owns_dialog(s))
                 || matches!(
                     s.dialog,
@@ -1934,6 +1939,7 @@ fn modal_with_header(
                                     | Dialog::ConfigurationBackup
                                     | Dialog::ConfigurationRestore,
                                 ) => "modal-card settings-surface",
+                                Some(Dialog::DeleteFiles { .. }) => "modal-card file-delete-dialog",
                                 Some(Dialog::OpenDesktopFile(_)) => "modal-card file-picker-dialog",
                                 Some(Dialog::TextEditor) => "modal-card remote-editor-modal",
                                 _ => "modal-card",

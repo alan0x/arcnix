@@ -95,7 +95,7 @@ def main():
             expect(page.locator('.docker-ports').get_by_role('button', name='worker', exact=True)).to_contain_text('Host network')
             page.locator('.docker-ports').get_by_role('button', name='Server listeners', exact=True).click()
             expect(page.locator('.desktop-window.active .desktop-window-title')).to_have_text('Monitor')
-            expect(page.locator('.monitor-content .monitor-heading')).to_have_text('Processes')
+            expect(page.locator('.monitor-titlebar .monitor-heading')).to_have_text('Processes')
             expect(page.locator('.monitor-port-details .resource-ports')).to_be_visible()
             docker()
             page.locator('.docker-ports').get_by_role('button', name='web', exact=True).click()
