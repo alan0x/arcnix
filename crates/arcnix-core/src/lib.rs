@@ -19,7 +19,8 @@ use connection::private_program;
 #[cfg(windows)]
 pub use connection::wsl;
 pub use connection::{
-    browser_proxy, local_desktop, private_keys, remote, ssh_config, terminal, transport_error,
+    browser_proxy, file_capabilities, host, local_desktop, private_keys, remote, ssh_config,
+    terminal, transport_error,
 };
 use desktop::desktop_storage;
 pub use desktop::{

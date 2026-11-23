@@ -3,7 +3,9 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Result, ensure};
 use arcnix_core::desktop_customization::DesktopItems;
+use arcnix_core::file_capabilities::{DirectoryReader, DocumentReader, DocumentWriter};
 use arcnix_core::local_desktop::{Target, join};
+use arcnix_core::metrics::ResourceReader;
 use arcnix_core::{FileEntry, sync};
 
 use super::worker::{Action, FileFailure, Update, create_named_entry};
@@ -100,14 +102,9 @@ impl Session {
             Action::CodeFile(request) => Update::CodeFile(message(
                 request.execute(crate::code_workbench::Files::Local(target), || Ok(())),
             )),
-            #[cfg(windows)]
-            Action::MetricsSample if !matches!(target, Target::Wsl(_)) => {
-                Update::Metrics(message(arcnix_core::local_desktop::windows_host::sample()))
-            }
-            #[cfg(target_os = "linux")]
-            Action::MetricsSample => Update::Metrics(message(target.metrics())),
+            Action::MetricsSample => Update::Metrics(message(target.sample_resources())),
             Action::Keepalive => Update::Alive,
-            Action::Remote(path) => match target.list(&path) {
+            Action::Remote(path) => match target.list_entries(&path) {
                 Ok((path, entries)) => Update::Remote(path, entries),
                 Err(error) => Update::BrowseError {
                     remote: true,
@@ -115,7 +112,7 @@ impl Session {
                 },
             },
             Action::Children { remote: true, path } => Update::Children {
-                result: message(target.list(&path).map(|(_, v)| v)),
+                result: message(target.list_entries(&path).map(|(_, v)| v)),
                 parent: path,
                 remote: true,
             },
@@ -151,8 +148,10 @@ impl Session {
             }
             Action::TextRead { path, cancel, sudo } => Update::TextFile(file_result((|| {
                 ensure!(sudo.is_none(), "Local editing uses the current account");
-                ensure!(!cancel.load(Ordering::Acquire), "Read cancelled");
-                target.read(&path)
+                target.read_document(&path, &|| {
+                    ensure!(!cancel.load(Ordering::Acquire), "Read cancelled");
+                    Ok(())
+                })
             })(
             ))),
             Action::TextSave {
@@ -162,9 +161,10 @@ impl Session {
                 sudo,
             } => Update::TextFile(file_result((|| {
                 ensure!(sudo.is_none(), "Local editing uses the current account");
-                let bytes = document.encode(&content)?;
-                ensure!(!cancel.load(Ordering::Acquire), "Save cancelled");
-                target.write(&document.path, Some(&document.version), &bytes)
+                target.save_document(&document, &content, &|| {
+                    ensure!(!cancel.load(Ordering::Acquire), "Save cancelled");
+                    Ok(())
+                })
             })())),
             Action::TextSaveAs {
                 path,

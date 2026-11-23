@@ -1,11 +1,45 @@
-//! Deterministic Linux sample parsing and rate tests; the optional SSH test uses
-//! only the loopback fixture and never installs or executes a remote agent.
+//! Resource sampling and rate tests. Optional SSH tests use loopback targets.
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use arcnix_core::ServerProfile;
-use arcnix_core::metrics::{self, ResourceSnapshot};
+use arcnix_core::metrics::{self, ResourceReader, ResourceSnapshot};
 use arcnix_core::remote::PendingConnection;
+
+#[cfg(target_os = "macos")]
+#[test]
+fn samples_the_read_only_mac_twice() -> Result<()> {
+    let target = arcnix_core::local_desktop::Target::ReadOnlyHost;
+    assert!(target.supports_metrics());
+    assert!(target.require_write().is_err());
+    let first = target.metrics()?;
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let second = target.metrics()?;
+    let usage = metrics::usage(&second, Some(&first));
+    assert!(second.uptime_seconds > first.uptime_seconds);
+    assert!(
+        usage
+            .cpu_percent
+            .is_some_and(|value| (0.0..=100.0).contains(&value))
+    );
+    assert!(second.memory.is_some_and(|memory| memory.total_bytes > 0));
+    assert!(second.disks.iter().any(|disk| disk.mount == "/"));
+    assert!(
+        second
+            .networks
+            .iter()
+            .all(|network| network.interface != "lo0")
+    );
+    assert!(
+        usage
+            .networks
+            .iter()
+            .any(|network| network.receive_bytes_per_second.is_some()),
+        "no network counter pairs: {:?}",
+        second.warnings
+    );
+    Ok(())
+}
 
 fn response(cpu: &str, memory: &str, uptime: &str, network: &str, disk: &str) -> String {
     format!(
@@ -197,12 +231,58 @@ fn samples_over_real_ssh_without_sftp() -> Result<()> {
     let fingerprint = pending.fingerprint().to_string();
     let session = pending.authenticate("arcnix-test", &fingerprint)?;
     assert!(!session.sftp_available());
-    let snapshot = metrics::sample(&session)?;
+    let reading = session.sample_resources()?;
+    assert_eq!(
+        reading.remote_platform,
+        Some(arcnix_core::host::HostOs::Linux)
+    );
+    let snapshot = reading.snapshot;
     assert_eq!(snapshot.cpu.context("fixture CPU")?.logical_cpus, 2);
     assert_eq!(
         snapshot.memory.context("fixture memory")?.total_bytes,
         1024 * 1024 * 1024
     );
     assert_eq!(snapshot.disks[1].mount, "/srv/my data");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires a loopback macOS OpenSSH instance"]
+fn samples_darwin_over_native_openssh() -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        address: SocketAddr,
+        username: String,
+        private_key: std::path::PathBuf,
+        fingerprint: String,
+    }
+    // Fixture JSON may point to an independently started loopback OpenSSH server.
+    let fixture_path = std::env::var("ARCNIX_TEST_DARWIN_SSH_FIXTURE")?;
+    let fixture: Fixture = serde_json::from_slice(&std::fs::read(fixture_path)?)?;
+    anyhow::ensure!(
+        fixture.address.ip().is_loopback(),
+        "fixture must be loopback"
+    );
+    let profile = ServerProfile {
+        host: fixture.address.ip().to_string(),
+        port: fixture.address.port(),
+        username: fixture.username,
+        auth: arcnix_core::AuthMethod::PrivateKey,
+        private_key: Some(fixture.private_key),
+        ..Default::default()
+    };
+    let session = PendingConnection::open(&profile)?.authenticate("", &fixture.fingerprint)?;
+    let previous = session.sample_resources()?;
+    let current = session.sample_resources()?;
+    assert_eq!(
+        current.remote_platform,
+        Some(arcnix_core::host::HostOs::MacOs)
+    );
+    let usage = current.usage(Some(&previous.snapshot));
+    assert!(usage.cpu_percent.is_some_and(|p| (0. ..=100.).contains(&p)));
+    assert!(usage.snapshot.memory.is_some());
+    assert!(usage.snapshot.disks.iter().any(|disk| disk.mount == "/"));
+    assert!(usage.receive_bytes_per_second.is_some());
     Ok(())
 }

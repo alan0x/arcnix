@@ -230,8 +230,11 @@ fn local_app(s: &State, page: WorkspacePage) -> bool {
     if page.base() == WorkspacePage::Terminal && s.demo_read_only() {
         return false;
     }
-    if cfg!(any(windows, target_os = "linux")) && page.base() == WorkspacePage::Monitor {
-        return true;
+    if page.base() == WorkspacePage::Monitor {
+        return s
+            .local_desktop
+            .as_ref()
+            .is_some_and(local_desktop::Target::supports_metrics);
     }
     matches!(
         page.base(),

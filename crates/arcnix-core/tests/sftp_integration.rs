@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
+use arcnix_core::file_capabilities::{DocumentReader, DocumentWriter};
 use arcnix_core::remote::{PendingConnection, RemoteSession, TransferCancelled};
 use arcnix_core::{AuthMethod, ServerProfile, new_id};
 use sha2::{Digest, Sha256};
@@ -42,13 +43,17 @@ fn text_editor_preserves_format_permissions_and_refuses_changed_remote_content()
     let path = format!("/editor-{}.txt", new_id());
     let cancel = AtomicBool::new(false);
     session.upload(&source, &path, &cancel, |_, _| {})?;
-    let document = session.read_text(&path, || Ok(()))?;
+    let document = session.read_document(&path, &|| Ok(()))?;
     assert!(document.bom && document.crlf);
-    let saved = session.save_text(&document, "secret=fixture-only\nvalue=new\n", || Ok(()))?;
+    let saved = session.save_document(&document, "secret=fixture-only\nvalue=new\n", &|| Ok(()))?;
     assert_eq!(saved.version.mode, document.version.mode);
     assert_eq!(saved.version.uid, document.version.uid);
     assert_eq!(saved.version.gid, document.version.gid);
-    assert!(session.save_text(&document, "stale\n", || Ok(())).is_err());
+    assert!(
+        session
+            .save_document(&document, "stale\n", &|| Ok(()))
+            .is_err()
+    );
     let download = temp.join("verified");
     session.download(&path, &download, &cancel, |_, _| {})?;
     assert_eq!(
@@ -57,10 +62,13 @@ fn text_editor_preserves_format_permissions_and_refuses_changed_remote_content()
     );
     assert!(
         session
-            .save_text(&saved, "canceled\n", || anyhow::bail!("Canceled"))
+            .save_document(&saved, "canceled\n", &|| anyhow::bail!("Canceled"))
             .is_err()
     );
-    assert_eq!(session.read_text(&path, || Ok(()))?.content, saved.content);
+    assert_eq!(
+        session.read_document(&path, &|| Ok(()))?.content,
+        saved.content
+    );
     let fixture: serde_json::Value =
         serde_json::from_slice(&fs::read(std::env::var("ARCNIX_TEST_FIXTURE")?)?)?;
     let root = fs::canonicalize(fixture["root"].as_str().context("Missing fixture root")?)?;
@@ -76,13 +84,13 @@ fn text_editor_preserves_format_permissions_and_refuses_changed_remote_content()
         .write(true)
         .open(&actual)?
         .set_times(fs::FileTimes::new().set_modified(modified))?;
-    let current = session.read_text(&path, || Ok(()))?;
+    let current = session.read_document(&path, &|| Ok(()))?;
     assert_eq!(current.version.size, saved.version.size);
     assert_eq!(current.version.modified, saved.version.modified);
     assert_ne!(current.version.hash, saved.version.hash);
     assert!(
         session
-            .save_text(&saved, "do not overwrite\n", || Ok(()))
+            .save_document(&saved, "do not overwrite\n", &|| Ok(()))
             .is_err()
     );
     assert_eq!(fs::read(actual)?, changed);

@@ -108,6 +108,13 @@ pub(crate) fn active(s: &State) -> Option<Section> {
         .then_some(s.metrics.section)
 }
 
+pub(crate) fn has_linux_details(s: &State) -> bool {
+    s.local_desktop.is_none()
+        && s.metrics
+            .remote_platform
+            .is_none_or(|os| os == arcnix_core::host::HostOs::Linux)
+}
+
 pub(crate) fn set_section(s: &mut State, section: Section) {
     if s.metrics.section == Section::Processes && section != Section::Processes {
         processes_ui::show_port_details(s, false);
@@ -188,17 +195,7 @@ fn sidebar(ui: Ui) -> impl Widget {
                 .map(|section| {
                     let open = ui.clone();
                     when(
-                        state.map(move |s| {
-                            s.local_desktop.is_none()
-                                || matches!(
-                                    section,
-                                    Section::Overview
-                                        | Section::Cpu
-                                        | Section::Memory
-                                        | Section::Disks
-                                        | Section::Network
-                                )
-                        }),
+                        state.map(move |s| has_linux_details(s) || section.samples_metrics()),
                         move || {
                             let open = open.clone();
                             sapid::button()
@@ -359,7 +356,7 @@ fn cpu_cards(state: Cage<State>) -> impl Widget {
         ),
         when(
             state.map(|s| {
-                s.local_desktop.is_none()
+                has_linux_details(s)
                     || s.metrics
                         .usage
                         .as_ref()
@@ -398,7 +395,7 @@ fn memory_cards(state: Cage<State>) -> impl Widget {
         ),
         when(
             state.map(|s| {
-                s.local_desktop.is_none()
+                has_linux_details(s)
                     || s.metrics
                         .usage
                         .as_ref()

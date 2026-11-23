@@ -4,7 +4,10 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 
 use anyhow::Context;
-use arcnix_core::metrics::{self, ResourceSnapshot};
+use arcnix_core::file_capabilities::{
+    BoundedFileReader, DirectoryReader, DocumentReader, DocumentWriter,
+};
+use arcnix_core::metrics::{ResourceReader, ResourceReading};
 use arcnix_core::packages::{self, SystemEnvironment};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::system_logs::{self, LogCapabilities, LogQuery, LogSnapshot};
@@ -302,7 +305,7 @@ pub enum Update {
     ConnectionLost(String),
     PackageEnvironment(Result<SystemEnvironment, String>),
     PackageList(Result<Vec<packages::Package>, String>),
-    Metrics(Result<ResourceSnapshot, String>),
+    Metrics(Result<ResourceReading, String>),
     Ports(Result<arcnix_core::resource_ports::Snapshot, String>),
     PortTerminated(Result<(), String>),
     LogCapabilities(Result<LogCapabilities, String>),
@@ -712,7 +715,7 @@ pub(crate) fn start_with_limiter(
                 if let Action::OpenPdf(path, commands) = action {
                     match desktop
                         .target
-                        .read_bounded_file(&path, crate::pdf_reader::LIMIT)
+                        .read_file_bytes(&path, crate::pdf_reader::LIMIT)
                     {
                         Ok(bytes) => {
                             crate::pdf_reader::start(bytes, commands, events.clone(), epoch, serial)
@@ -1056,7 +1059,7 @@ pub(crate) fn start_with_limiter(
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                     send(match action {
-                        Action::MetricsSample => Update::Metrics(Ok(metrics::sample(remote)?)),
+                        Action::MetricsSample => Update::Metrics(Ok(remote.sample_resources()?)),
                         Action::LogsDiscover => {
                             Update::LogCapabilities(Ok(system_logs::discover(remote)?))
                         }
@@ -1342,7 +1345,7 @@ pub(crate) fn start_with_limiter(
                         match action {
                             Action::OpenPdf(path, commands) => {
                                 let bytes =
-                                    remote.read_bounded_file(&path, crate::pdf_reader::LIMIT)?;
+                                    remote.read_file_bytes(&path, crate::pdf_reader::LIMIT)?;
                                 crate::pdf_reader::start(
                                     bytes,
                                     commands,
@@ -1366,7 +1369,7 @@ pub(crate) fn start_with_limiter(
                                     Some((retry, password)) => {
                                         remote.read_text_as_admin(retry, password, &cancel, check)
                                     }
-                                    None => remote.read_text(&path, check),
+                                    None => remote.read_document(&path, &check),
                                 };
                                 publish_text_result(
                                     result,
@@ -1416,7 +1419,7 @@ pub(crate) fn start_with_limiter(
                                     Some((retry, password)) => remote.save_text_as_admin(
                                         retry, &document, &content, password, &cancel, check,
                                     ),
-                                    None => remote.save_text(&document, &content, check),
+                                    None => remote.save_document(&document, &content, &check),
                                 };
                                 publish_text_result(
                                     result,
@@ -1480,11 +1483,11 @@ pub(crate) fn start_with_limiter(
                                 send(Update::Alive);
                             }
                             Action::Remote(path) => {
-                                let (path, entries) = remote.list_dir(&path)?;
+                                let (path, entries) = remote.list_entries(&path)?;
                                 send(Update::Remote(path, entries));
                             }
                             Action::Children { remote: true, path } => {
-                                let result = remote.list_dir(&path).map(|(_, entries)| entries);
+                                let result = remote.list_entries(&path).map(|(_, entries)| entries);
                                 match result {
                                     Ok(entries) => send(Update::Children {
                                         remote: true,
@@ -1942,7 +1945,7 @@ mod tests {
             Update::Metrics(Ok(snapshot)) => snapshot,
             _ => anyhow::bail!("expected second resource snapshot"),
         };
-        let usage = metrics::usage(&second, Some(&first));
+        let usage = second.usage(Some(&first.snapshot));
         assert_eq!(usage.cpu_percent, Some(30.0));
         assert_eq!(usage.receive_bytes_per_second, Some(1024.0));
         send(88, 5, Action::LogsDiscover)?;

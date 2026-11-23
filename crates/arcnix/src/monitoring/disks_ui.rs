@@ -12,7 +12,7 @@ pub(crate) struct DiskState {
     error: String,
 }
 fn ready(s: &State) -> bool {
-    s.connected && s.local_desktop.is_none() && s.disks.pending.is_none()
+    s.connected && monitor_ui::has_linux_details(s) && s.disks.pending.is_none()
 }
 impl Ui {
     pub(crate) fn disks_enter(&self) {
@@ -100,12 +100,12 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     col().class("disks-page").fill((
         row().class("disks-toolbar").fill((
             input().class("disk-filter").name(i18n::bind("Filter disks and mounts")).value(state.map(|s| s.disks.filter.clone())).on(value_changed, move |e| if let Event::ValueChanged { value,.. } = e { state.revise(|s| s.disks.filter = value); }),
-            when(state.map(|s| s.local_desktop.is_none()), move || {let refresh = refresh.clone(); icon_action("Refresh disks", Icon::Refresh).enabled(state.map(ready)).on_press(move || refresh.disks_refresh())}),
+            when(state.map(monitor_ui::has_linux_details), move || {let refresh = refresh.clone(); icon_action("Refresh disks", Icon::Refresh).enabled(state.map(ready)).on_press(move || refresh.disks_refresh())}),
             help_ui::tip("Disks", "Block devices and mounted filesystem usage, queried on demand. Unavailable capacity stays unknown. Select a mount to browse its files."),
         )),
         text().class("error disks-error").content(state.map(|s| s.disks.error.clone())),
         text().class("subtle disks-status").content(i18n::bind(state.map(|s| if s.disks.pending.is_some() { "Loading…" } else { "" }.to_owned()))),
-        when(state.map(|s| s.local_desktop.is_none()), || text().class("section-title").content(i18n::bind("Block devices"))),
+        when(state.map(monitor_ui::has_linux_details), || text().class("section-title").content(i18n::bind("Block devices"))),
         col().class("disk-device-list").fill(each(state.map(|s| s.disks.snapshot.as_ref().map(|v| v.devices.iter().filter(|d| format!("{} {} {}",d.path,d.model,d.mounts.join(" ")).to_lowercase().contains(&s.disks.filter.to_lowercase())).cloned().collect::<Vec<_>>()).unwrap_or_default())).key(|d| d.path.clone()).children(|item| {
             let d = item.value;
             row().class("disk-device-row").fill((
@@ -119,7 +119,9 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
         col().class("disk-mount-list").fill(each(state.map(filesystems)).key(|d| format!("{}:{}",d.source,d.target)).children(move |item| {
             let d = item.value;
             let browse = ui.clone();
-            sapid::button().class("disk-mount-row").name(d.map(|v| v.target.clone())).enabled(state.map(|s| s.sftp_available && s.connected))
+            sapid::button().class("disk-mount-row").name(d.map(|v| v.target.clone())).enabled(state.map(|s| {
+                s.sftp_available && s.connected && s.metrics.remote_platform != Some(arcnix_core::host::HostOs::Windows)
+            }))
                 .fill((text().class("disk-name").content(d.map(|v| if v.kind.is_empty() { v.target.clone() } else { format!("{} · {}",v.target,v.kind) })),
                     text().class("subtle").content(d.map(|v| v.source.clone())),
                     text().content(i18n::bind(d.map(|v| format!("Used {} / {} · Available {} · {}", bytes(v.used), bytes(v.size), bytes(v.available), v.percent)))),

@@ -1,7 +1,7 @@
 //! Files exposed to the embedded workbench from the active desktop.
 use std::result::Result;
 
-use anyhow::Context;
+use arcnix_core::file_capabilities::{DirectoryReader, EntryKind, FileEntryCreator};
 use arcnix_core::remote::RemoteSession;
 use arcnix_core::text_files::{Document, TextSnapshot, Version};
 use serde::Deserialize;
@@ -122,29 +122,20 @@ pub enum Files<'a> {
 impl Files<'_> {
     fn list(&self, path: &str) -> anyhow::Result<(String, Vec<arcnix_core::FileEntry>)> {
         match self {
-            Self::Remote(remote) => remote.list_dir(path),
-            Self::Local(target) => target.list(path),
+            Self::Remote(remote) => remote.list_entries(path),
+            Self::Local(target) => target.list_entries(path),
         }
     }
 
     fn create(&self, path: &str, directory: bool) -> anyhow::Result<()> {
+        let kind = if directory {
+            EntryKind::Directory
+        } else {
+            EntryKind::File
+        };
         match self {
-            Self::Remote(remote) if directory => remote.mkdir(path),
-            Self::Remote(remote) => remote.create_file(path),
-            Self::Local(target) => {
-                let (parent, name) = path
-                    .rsplit_once('/')
-                    .context("Expected an absolute file path")?;
-                anyhow::ensure!(
-                    target.try_create(
-                        if parent.is_empty() { "/" } else { parent },
-                        name,
-                        directory
-                    )?,
-                    "File already exists"
-                );
-                Ok(())
-            }
+            Self::Remote(remote) => remote.create_entry(path, kind),
+            Self::Local(target) => target.create_entry(path, kind),
         }
     }
 

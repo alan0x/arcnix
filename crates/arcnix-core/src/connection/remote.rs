@@ -251,6 +251,7 @@ pub struct FileLocation {
 pub struct RemoteSession {
     session: Session,
     sftp: Option<Sftp>,
+    pub(super) host_os: std::sync::OnceLock<crate::host::HostOs>,
     search_reader: Option<SearchReader>,
     admin_pages: std::collections::HashMap<u64, file_pager::Reader>,
 }
@@ -459,6 +460,7 @@ impl PendingConnection {
         Ok(RemoteSession {
             session,
             sftp,
+            host_os: Default::default(),
             search_reader: None,
             admin_pages: Default::default(),
         })

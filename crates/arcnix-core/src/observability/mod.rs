@@ -1,7 +1,9 @@
+pub(crate) mod darwin_metrics;
 pub mod disks;
 pub mod metric_history;
 pub mod metrics;
 pub mod network;
 pub mod processes;
+mod remote_metrics;
 pub mod resource_ports;
 pub mod system_logs;

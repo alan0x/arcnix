@@ -31,6 +31,32 @@ pub mod windows_host;
 pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
+impl crate::metrics::ResourceReader for Target {
+    fn sample_resources(&self) -> Result<crate::metrics::ResourceReading> {
+        ensure!(
+            self.supports_metrics(),
+            "Resource monitoring is unavailable on this desktop"
+        );
+        #[cfg(windows)]
+        {
+            windows_host::sample().map(Into::into)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let bytes = self.run_script(crate::metrics::SAMPLE_COMMAND, &["metrics"], &[])?;
+            crate::metrics::parse_snapshot(std::str::from_utf8(&bytes)?).map(Into::into)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use crate::observability::darwin_metrics;
+            let bytes = self.run_script(darwin_metrics::SAMPLE_COMMAND, &["metrics"], &[])?;
+            darwin_metrics::local_sample(std::str::from_utf8(&bytes)?).map(Into::into)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        anyhow::bail!("Resource monitoring is unavailable on this desktop")
+    }
+}
+
 impl Target {
     pub fn read_only(&self) -> bool {
         matches!(self, Self::ReadOnlyHost)
@@ -72,10 +98,13 @@ impl Target {
         self.run_script(include_str!("local_desktop.sh"), args, input)
     }
 
-    #[cfg(target_os = "linux")]
+    pub fn supports_metrics(&self) -> bool {
+        cfg!(any(target_os = "linux", target_os = "macos", windows))
+            && matches!(self, Self::Native | Self::ReadOnlyHost)
+    }
+
     pub fn metrics(&self) -> Result<crate::metrics::ResourceSnapshot> {
-        let bytes = self.run_script(crate::metrics::SAMPLE_COMMAND, &["metrics"], &[])?;
-        crate::metrics::parse_snapshot(std::str::from_utf8(&bytes)?)
+        crate::metrics::ResourceReader::sample_resources(self).map(|reading| reading.snapshot)
     }
 
     fn run_script(&self, script: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {

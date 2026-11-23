@@ -1144,6 +1144,9 @@ class Authentication(paramiko.ServerInterface):
                 else:
                     channel.sendall("Fixture command completed · 中文\n".encode())
                     channel.send_exit_status(0)
+            elif text == "uname -s":
+                channel.sendall(b"Linux\n")
+                channel.send_exit_status(0)
             elif text.startswith("# arcnix:metrics:sample"):
                 self.metrics_sample += 1
                 count = self.metrics_sample

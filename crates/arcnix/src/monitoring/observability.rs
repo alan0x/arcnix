@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arcnix_core::metrics::{self, ResourceSnapshot, ResourceUsage};
+use arcnix_core::metrics::{ResourceReading, ResourceSnapshot, ResourceUsage};
 use arcnix_core::system_logs::{JournalPeriod, LogCapabilities, LogQuery, LogSnapshot, LogSource};
 
 use crate::log_text::{LogSpan, Spans};
@@ -9,6 +9,7 @@ use crate::*;
 #[derive(Clone, Default)]
 pub(crate) struct MetricState {
     pub section: monitor_ui::Section,
+    pub remote_platform: Option<arcnix_core::host::HostOs>,
     pub pending: Option<u64>,
     previous: Option<ResourceSnapshot>,
     pub usage: Option<ResourceUsage>,
@@ -152,7 +153,7 @@ impl Ui {
 pub(crate) fn metrics_event(
     ui: &Ui,
     serial: u64,
-    result: std::result::Result<ResourceSnapshot, String>,
+    result: std::result::Result<ResourceReading, String>,
 ) {
     if !ui.state.with(|s| s.metrics.pending == Some(serial)) {
         return;
@@ -175,10 +176,11 @@ pub(crate) fn metrics_event(
             .elapsed()
             .as_secs_f64();
         match result {
-            Ok(snapshot) => {
-                m.usage = Some(metrics::usage(&snapshot, m.previous.as_ref()));
+            Ok(reading) => {
+                m.remote_platform = reading.remote_platform;
+                m.usage = Some(reading.usage(m.previous.as_ref()));
                 m.history.push(at, m.usage.as_ref());
-                m.previous = Some(snapshot);
+                m.previous = Some(reading.snapshot);
                 m.updated = clock_label();
                 m.error.clear();
             }
@@ -191,6 +193,9 @@ pub(crate) fn metrics_event(
         if !sampling {
             m.history.interrupt();
             m.previous = None;
+        }
+        if !monitor_ui::has_linux_details(s) && !s.metrics.section.samples_metrics() {
+            monitor_ui::set_section(s, monitor_ui::Section::Overview);
         }
     });
 }

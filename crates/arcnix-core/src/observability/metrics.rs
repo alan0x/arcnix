@@ -1,4 +1,4 @@
-//! Read-only Linux resource samples over the existing SSH connection.
+//! Read-only resource samples and platform-independent rate calculations.
 //!
 //! Rates use remote uptime, so client latency and wall-clock adjustments do not
 //! distort them. No remote agent, elevated permissions or persistent process is used.
@@ -77,6 +77,47 @@ pub struct ResourceSnapshot {
     pub disks: Vec<DiskUsage>,
     pub networks: Vec<NetworkCounters>,
     pub warnings: Vec<String>,
+}
+
+/// A resource sample can carry a CPU interval already measured by the host.
+#[derive(Clone, Debug, Default)]
+pub struct ResourceReading {
+    pub snapshot: ResourceSnapshot,
+    pub measured_cpu_percent: Option<f64>,
+    pub remote_platform: Option<crate::host::HostOs>,
+}
+
+impl From<ResourceSnapshot> for ResourceReading {
+    fn from(snapshot: ResourceSnapshot) -> Self {
+        Self {
+            snapshot,
+            ..Default::default()
+        }
+    }
+}
+
+impl ResourceReading {
+    pub fn usage(&self, previous: Option<&ResourceSnapshot>) -> ResourceUsage {
+        let mut usage = usage(&self.snapshot, previous);
+        if let Some(percent) = self
+            .measured_cpu_percent
+            .filter(|value| (0. ..=100.).contains(value))
+        {
+            usage.cpu_percent = Some(percent);
+        }
+        usage
+    }
+}
+
+/// Read a snapshot from the host represented by this session.
+pub trait ResourceReader {
+    fn sample_resources(&self) -> Result<ResourceReading>;
+}
+
+impl ResourceReader for RemoteSession {
+    fn sample_resources(&self) -> Result<ResourceReading> {
+        super::remote_metrics::sample(self)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -328,7 +369,7 @@ fn parse_network(text: &str, warnings: &mut Vec<String>) -> Vec<NetworkCounters>
     result
 }
 
-fn parse_disks(text: &str, warnings: &mut Vec<String>) -> Vec<DiskUsage> {
+pub(super) fn parse_disks(text: &str, warnings: &mut Vec<String>) -> Vec<DiskUsage> {
     let mut result = Vec::new();
     for line in text
         .lines()
