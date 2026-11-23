@@ -54,7 +54,7 @@ pub enum Reply {
     DesktopItems(desktop_customization::DesktopItems),
     SoftwareInventory(arcnix_core::software_catalog::Inventory),
     Disks(arcnix_core::disks::Snapshot),
-    NetworkSettings(arcnix_core::network::Snapshot),
+    NetworkSettings(arcnix_core::host::HostOs, arcnix_core::network::Snapshot),
     Processes(Vec<arcnix_core::processes::Process>),
     SoftwarePackages(Vec<arcnix_core::packages::Package>),
     ComposeProjects(arcnix_core::compose_apps::Projects),
@@ -82,7 +82,9 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         ),
         Action::ComposeList => Reply::ComposeProjects(arcnix_core::compose_apps::list(session)?),
         Action::Disks => Reply::Disks(session.read_disk_inventory()?),
-        Action::NetworkSettings => Reply::NetworkSettings(session.read_network_inventory()?),
+        Action::NetworkSettings => {
+            Reply::NetworkSettings(session.host_os()?, session.read_network_inventory()?)
+        }
         Action::Processes => Reply::Processes(session.read_process_inventory()?),
         Action::Discover => Reply::Applications(server_apps::discover(session)?),
         Action::Clock => Reply::Clock(server_apps::clock(session)?),

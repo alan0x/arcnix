@@ -293,10 +293,99 @@ fn native_linux_ssh_reads_metrics_and_host_inventory() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "requires the loopback Windows-response SSH fixture"]
+fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
+    use std::sync::atomic::AtomicBool;
+
+    use arcnix_core::host::HostOs;
+    use arcnix_core::host_capabilities::{
+        NativeServiceController, PortInventoryReader, ServiceReader,
+    };
+    use arcnix_core::operations::ServiceAction;
+    use arcnix_core::resource_ports::Inventory;
+    use arcnix_core::system_logs::{LogQuery, LogSource};
+
+    let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
+    anyhow::ensure!(address.ip().is_loopback(), "fixture must be loopback");
+    let profile = ServerProfile {
+        host: address.ip().to_string(),
+        port: address.port(),
+        username: "arcnix-windows".into(),
+        ..Default::default()
+    };
+    let pending = PendingConnection::open(&profile)?;
+    let fingerprint = pending.fingerprint().to_owned();
+    let session = pending.authenticate("arcnix-test", &fingerprint)?;
+    assert_eq!(session.host_os()?, HostOs::Windows);
+    assert!(!session.sftp_available());
+    assert_eq!(session.read_disk_inventory()?.filesystems[0].target, "/C:");
+    assert_eq!(
+        session.read_network_inventory()?.interfaces[0].name,
+        "Ethernet"
+    );
+    let processes = session.read_process_inventory()?;
+    assert_eq!(processes[0].uid, None);
+    assert_eq!(processes[0].cpu_percent, Some(12.));
+    let Inventory::Observed(ports) =
+        session.read_listening_ports(false, None, &AtomicBool::new(false))?
+    else {
+        anyhow::bail!("Expected a read-only Windows port inventory");
+    };
+    assert_eq!(ports.rows[0].port, 8443);
+    assert_eq!(ports.rows[0].address.to_string(), "::");
+    assert_eq!(ports.warnings.len(), 1);
+    assert_eq!(
+        session.discover_system_logs()?.sources,
+        vec![LogSource::WindowsSystem, LogSource::WindowsApplication]
+    );
+    let logs = session.read_system_logs(&LogQuery {
+        source: LogSource::WindowsSystem,
+        ..LogQuery::default()
+    })?;
+    assert_eq!(logs.entries[0].unit.as_deref(), Some("FixtureProvider"));
+    assert_eq!(logs.entries[0].priority, Some(3));
+    assert_eq!(session.list_services()?[0].unit, "FixtureService");
+    let plan = session.review_native_service("FixtureService", ServiceAction::Start)?;
+    assert_eq!(plan.state(), "Stopped");
+    let other = PendingConnection::open_for_known_host(&profile, &fingerprint)?
+        .authenticate("arcnix-test", &fingerprint)?;
+    assert!(
+        other
+            .apply_native_service(&plan)
+            .unwrap_err()
+            .to_string()
+            .contains("different SSH session")
+    );
+    assert!(
+        session
+            .inspect_service("FixtureService")?
+            .contains("State=Stopped")
+    );
+    session.apply_native_service(&plan)?;
+    assert!(
+        session
+            .inspect_service("FixtureService")?
+            .contains("State=Running")
+    );
+    assert!(session.apply_native_service(&plan).is_err());
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires a loopback macOS OpenSSH instance"]
 fn samples_darwin_over_native_openssh() -> Result<()> {
+    use std::sync::atomic::AtomicBool;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use arcnix_core::host_capabilities::{
+        NativeServiceController, PortInventoryReader, ServiceReader,
+    };
+    use arcnix_core::operations::ServiceAction;
+    use arcnix_core::resource_ports::Inventory;
+    use arcnix_core::system_logs::{JournalPeriod, LogQuery, LogSource};
+
     #[derive(serde::Deserialize)]
     struct Fixture {
         address: SocketAddr,
@@ -331,10 +420,61 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
     assert!(usage.snapshot.memory.is_some());
     assert!(usage.snapshot.disks.iter().any(|disk| disk.mount == "/"));
     assert!(usage.receive_bytes_per_second.is_some());
-    let error = session.discover_system_logs().unwrap_err();
-    let unsupported = error
-        .downcast_ref::<arcnix_core::host::UnsupportedHostCapability>()
-        .context("unsupported macOS log provider must be explicit")?;
-    assert_eq!(unsupported.os, arcnix_core::host::HostOs::MacOs);
+    let disks = session.read_disk_inventory()?;
+    assert!(
+        disks
+            .devices
+            .iter()
+            .any(|disk| disk.path.starts_with("/dev/disk"))
+    );
+    assert!(disks.filesystems.iter().any(|mount| mount.target == "/"));
+    let network = session.read_network_inventory()?;
+    assert!(
+        network
+            .interfaces
+            .iter()
+            .any(|interface| interface.name == "lo0" && !interface.addresses.is_empty())
+    );
+    assert!(
+        session
+            .read_process_inventory()?
+            .iter()
+            .any(|row| row.pid == 1 && row.uid == Some(0))
+    );
+    assert!(matches!(
+        session.read_listening_ports(false, None, &AtomicBool::new(false))?,
+        Inventory::Observed(_)
+    ));
+    assert_eq!(
+        session.discover_system_logs()?.sources,
+        vec![LogSource::Unified]
+    );
+    let end = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let logs = session.read_system_logs(&LogQuery {
+        source: LogSource::Unified,
+        period: JournalPeriod::Window {
+            start: end - 5,
+            end,
+        },
+        limit: 10,
+        ..LogQuery::default()
+    })?;
+    assert!(logs.entries.len() <= 10);
+    let services = session.list_services()?;
+    assert!(
+        services
+            .iter()
+            .any(|service| service.unit == "com.apple.logd")
+    );
+    let detail = session.inspect_service("com.apple.logd")?;
+    assert!(detail.contains("Domain=system") && !detail.contains("environment ="));
+    let review = session.review_native_service("com.apple.logd", ServiceAction::Restart)?;
+    assert_eq!(review.unit(), "com.apple.logd");
+    assert_eq!(
+        session
+            .review_native_service("com.apple.logd", ServiceAction::Stop)?
+            .action(),
+        ServiceAction::Stop
+    );
     Ok(())
 }

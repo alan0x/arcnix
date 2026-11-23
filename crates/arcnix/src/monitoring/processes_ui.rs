@@ -116,7 +116,7 @@ pub(crate) fn update_filter(s: &mut State) {
             .filter_map(|(index, p)| {
                 (p.program.to_lowercase().contains(&filter)
                     || p.pid.to_string().contains(&filter)
-                    || p.uid.to_string().contains(&filter)
+                    || p.uid.is_some_and(|uid| uid.to_string().contains(&filter))
                     || resource_ports_ui::process_ports(s, p)
                         .to_ascii_lowercase()
                         .contains(&filter))
@@ -348,8 +348,13 @@ fn process_row(state: Cage<State>, index: usize) -> glory::ui::View {
                     p.program.clone()
                 }
             })),
-            text().content(cell(|_, p| p.uid.to_string())),
-            text().content(cell(|_, p| format!("{:.1}%", p.cpu_percent))),
+            text().content(cell(|_, p| {
+                p.uid.map_or_else(|| "—".into(), |uid| uid.to_string())
+            })),
+            text().content(cell(|_, p| {
+                p.cpu_percent
+                    .map_or_else(|| "—".into(), |cpu| format!("{cpu:.1}%"))
+            })),
             text().content(cell(|_, p| size(p.resident_bytes))),
             text()
                 .class("monitor-process-ports")

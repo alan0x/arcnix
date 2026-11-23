@@ -436,16 +436,17 @@ class Authentication(paramiko.ServerInterface):
         self.audit_auth = audit_auth
         self.sftp_enabled = True
         self.metrics_sample = 0
+        self.windows_service_state = "Stopped"
         self.username = ""
         self.terminal_size = (100, 30)
 
     def check_auth_password(self, username, password):
         self.username = username
         self.audit_auth(username, "password")
-        self.sftp_enabled = username != "arcnix-nosftp"
+        self.sftp_enabled = username not in ("arcnix-nosftp", "arcnix-windows")
         if username == "arcnix-word":
             return paramiko.AUTH_SUCCESSFUL if password == "passed" else paramiko.AUTH_FAILED
-        return paramiko.AUTH_SUCCESSFUL if username in ("arcnix", "arcnix-nosftp", "arcnix-no-terminal", "arcnix-nosystemd") and password == "arcnix-test" else paramiko.AUTH_FAILED
+        return paramiko.AUTH_SUCCESSFUL if username in ("arcnix", "arcnix-nosftp", "arcnix-no-terminal", "arcnix-nosystemd", "arcnix-windows") and password == "arcnix-test" else paramiko.AUTH_FAILED
 
     def get_allowed_auths(self, username):
         return "password,publickey"
@@ -709,6 +710,10 @@ class Authentication(paramiko.ServerInterface):
         def reply():
             # Deliberately does not execute arbitrary commands on the developer's machine.
             text = command.decode()
+            if self.username == "arcnix-windows":
+                from server_apps_fixture import windows_inventory_reply
+                windows_inventory_reply(self, channel, text)
+                return
             if text.startswith(('# arcnix:browser:repair ', '# arcnix:sync:', '# arcnix:apps:', '# arcnix:desktop:', '# arcnix:docker:', '# arcnix:disks:', '# arcnix:compose:', '# arcnix:software:', '# arcnix:network:', '# arcnix:processes:')):
                 from server_apps_fixture import reply as application_reply
                 if application_reply(self, channel, text):

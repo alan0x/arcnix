@@ -53,6 +53,28 @@ pub struct Snapshot {
     pub matched: usize,
     pub rows: Vec<Listener>,
 }
+
+/// Read-only rows for platforms that cannot provide the Linux termination identity.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ObservedPort {
+    pub protocol: &'static str,
+    pub address: IpAddr,
+    pub port: u16,
+    pub pid: Option<u32>,
+    pub program: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObservedPorts {
+    pub rows: Vec<ObservedPort>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Inventory {
+    Linux(Snapshot),
+    Observed(ObservedPorts),
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Target {

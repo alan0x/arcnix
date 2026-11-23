@@ -457,3 +457,62 @@ def reply(server, channel, command):
         raise AssertionError('Unexpected Docker fixture action ' + kind)
     seed.write_text(json.dumps(data))
     return send(target + '\n')
+
+
+def windows_inventory_reply(server, channel, command):
+    """Decode only the encoded-command envelope and return synthetic Windows rows."""
+    prefix = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+    status = 1
+    try:
+        if command == "uname -s":
+            channel.sendall_stderr(b"uname is unavailable\r\n")
+            status = 127
+            return
+        if not command.startswith(prefix) or len(command) >= 8191:
+            channel.sendall_stderr(b"Unsupported fixture command\r\n")
+            return
+        script = base64.b64decode(command[len(prefix):], validate=True).decode("utf-16-le")
+        if "[Environment]::OSVersion.Platform" in script:
+            channel.sendall(b"ARCNIX_WINDOWS_HOST_V1\r\n")
+            status = 0
+            return
+        service_name = "FixtureService"
+        service = dict(unit=service_name, display="Fixture Windows service",
+                       state=server.windows_service_state, startup="Manual", pid=42, exit=0, can_stop=True)
+        if "Win32_DiskDrive" in script and "Win32_LogicalDisk" in script:
+            result = dict(devices=[dict(path=r"\\.\PHYSICALDRIVE0", size=2000, model="Fixture disk", kind="Fixed")],
+                          volumes=[dict(drive="C:", size=2000, free=1500, filesystem="NTFS", name="System")])
+        elif "Get-NetIPInterface" in script and "Get-NetIPAddress" in script:
+            result = dict(interfaces=[dict(ifindex=1, ifname="Ethernet", operstate="Connected",
+                                          addr_info=[dict(local="192.0.2.8", prefixlen=24)])],
+                          routes=[dict(ipv6=False, next="192.0.2.1", interface="Ethernet", metric=5)],
+                          dns=["192.0.2.2"])
+        elif "Win32_PerfFormattedData_PerfProc_Process" in script:
+            result = [dict(pid=42, program="fixture", cpu_percent=12, resident_bytes=1000)]
+        elif "Get-NetTCPConnection" in script and "Get-NetUDPEndpoint" in script:
+            result = dict(rows=[dict(protocol="tcp", address="::", port=8443, pid=42, program="fixture")],
+                          warnings=["Fixture UDP access is unavailable."])
+        elif "Get-WinEvent -ListLog" in script:
+            result = dict(sources=["System", "Application"], warnings=[])
+        elif "Get-WinEvent -FilterHashtable" in script:
+            result = [dict(timestamp="2026-01-10T12:00:00Z", provider="FixtureProvider",
+                           level=2, message="Fixture event")]
+        elif "Win32_Service" in script:
+            result = service if "$_.Name -ceq $name" in script else [service]
+        elif "System.ServiceProcess.ServiceController" in script and "Start-Service -InputObject" in script:
+            target = re.search(r"FromBase64String\('([A-Za-z0-9+/=]+)'\)", script)
+            if not target or base64.b64decode(target[1]).decode() != service_name:
+                channel.sendall_stderr(b"Invalid service in fixture request\r\n")
+                return
+            server.windows_service_state = "Running"
+            result = True
+        else:
+            channel.sendall_stderr(b"Unsupported Windows fixture request\r\n")
+            return
+        channel.sendall(("ARCNIX_HOST_JSON_V1\r\n" + json.dumps(result) + "\r\n").encode())
+        status = 0
+    except (UnicodeError, ValueError):
+        channel.sendall_stderr(b"Invalid Windows fixture request\r\n")
+    finally:
+        channel.send_exit_status(status)
+        channel.close()

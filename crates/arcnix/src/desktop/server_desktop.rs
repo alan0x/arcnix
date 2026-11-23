@@ -423,6 +423,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::ScriptRefresh(_, _, true)
                     | Dialog::ConfigureNetwork
                     | Dialog::StartupService
+                    | Dialog::NativeServiceConfirm
                     | Dialog::ScriptRun
                     | Dialog::DockerAction
                     | Dialog::DockerConfigure

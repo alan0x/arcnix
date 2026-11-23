@@ -68,6 +68,7 @@ enum Dialog {
     #[cfg(windows)]
     BrowserForwardingRepair,
     StartupService,
+    NativeServiceConfirm,
     CustomizeFolder {
         path: String,
     },

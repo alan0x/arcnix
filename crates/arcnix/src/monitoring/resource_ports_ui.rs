@@ -1,7 +1,9 @@
 //! Current-server listening ports and explicitly confirmed process termination.
 use std::collections::{BTreeSet, HashMap};
 
-use arcnix_core::resource_ports::{Holder, Listener, Snapshot, Target};
+use arcnix_core::resource_ports::{
+    Holder, Inventory, Listener, ObservedPort, ObservedPorts, Snapshot, Target,
+};
 use zeroize::Zeroizing;
 
 use crate::i18n::desktop as i18n;
@@ -15,7 +17,9 @@ pub(crate) struct PortState {
     pub pending: Option<u64>,
     terminating: Option<u64>,
     snapshot: Option<Snapshot>,
+    observed: Option<ObservedPorts>,
     process_ports: Arc<HashMap<ProcessKey, String>>,
+    observed_process_ports: Arc<HashMap<u32, String>>,
     revision: u64,
     filter: String,
     administrator: bool,
@@ -80,10 +84,9 @@ fn current(s: &State, c: &Confirmation) -> bool {
 
 impl Ui {
     pub(crate) fn ports_enter(&self) {
-        if self
-            .state
-            .with(|s| s.ports.snapshot.is_none() && s.ports.error.is_empty())
-        {
+        if self.state.with(|s| {
+            s.ports.snapshot.is_none() && s.ports.observed.is_none() && s.ports.error.is_empty()
+        }) {
             self.ports_refresh_as_user();
         }
     }
@@ -101,7 +104,7 @@ impl Ui {
             if !ready(s) {
                 return None;
             }
-            let administrator = allow_admin && s.ports.administrator;
+            let administrator = allow_admin && s.ports.administrator && !uses_observed_ports(s);
             let password = std::mem::take(&mut s.ports.password);
             if administrator && !password_valid(&password) {
                 s.ports.error = i18n::translate("Invalid credential");
@@ -221,16 +224,28 @@ impl Ui {
     }
 }
 
-pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Snapshot, String>) {
+pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Inventory, String>) {
     ui.state.revise(|s| {
         if s.ports.pending != Some(serial) {
             return;
         }
         s.ports.pending = None;
         match result {
-            Ok(snapshot) => {
-                s.ports.process_ports = Arc::new(index_by_process(&snapshot));
-                s.ports.snapshot = Some(snapshot);
+            Ok(inventory) => {
+                match inventory {
+                    Inventory::Linux(snapshot) => {
+                        s.ports.process_ports = Arc::new(index_by_process(&snapshot));
+                        s.ports.snapshot = Some(snapshot);
+                        s.ports.observed = None;
+                        s.ports.observed_process_ports = Arc::default();
+                    }
+                    Inventory::Observed(snapshot) => {
+                        s.ports.observed_process_ports = Arc::new(index_observed_ports(&snapshot));
+                        s.ports.observed = Some(snapshot);
+                        s.ports.snapshot = None;
+                        s.ports.process_ports = Arc::default();
+                    }
+                }
                 // Request serials are global across reconnects, unlike this state.
                 s.ports.revision = serial;
                 s.ports.error.clear();
@@ -310,15 +325,28 @@ pub(crate) fn process_ports<'a>(
     s: &'a State,
     process: &arcnix_core::processes::Process,
 ) -> &'a str {
-    let key = (process.pid, process.uid, process.program.clone());
-    s.ports.process_ports.get(&key).map_or("", String::as_str)
+    if uses_observed_ports(s) {
+        return s
+            .ports
+            .observed_process_ports
+            .get(&process.pid)
+            .map_or("", String::as_str);
+    }
+    process
+        .uid
+        .and_then(|uid| {
+            s.ports
+                .process_ports
+                .get(&(process.pid, uid, process.program.clone()))
+        })
+        .map_or("", String::as_str)
 }
 
 pub(crate) fn process_port_status(s: &State) -> &'static str {
     if s.ports.pending.is_some() {
         "Reading listening ports…"
     } else if !s.ports.error.is_empty() {
-        if s.ports.snapshot.is_some() {
+        if s.ports.snapshot.is_some() || s.ports.observed.is_some() {
             "Showing the previous port snapshot"
         } else {
             "Listening ports unavailable"
@@ -412,6 +440,134 @@ fn warning(snapshot: &Snapshot) -> String {
 }
 
 pub(crate) fn panel(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let observed = ui.clone();
+    fragment((
+        when(state.map(uses_observed_ports), move || {
+            observed_panel(observed.clone())
+        }),
+        when(state.map(|s| !uses_observed_ports(s)), move || {
+            linux_panel(ui.clone())
+        }),
+    ))
+}
+
+fn uses_observed_ports(s: &State) -> bool {
+    s.ports.observed.is_some() || !monitor_ui::has_linux_details(s)
+}
+
+fn observed_endpoint(row: &ObservedPort) -> String {
+    format!(
+        "{} · {}",
+        row.protocol.to_ascii_uppercase(),
+        std::net::SocketAddr::new(row.address, row.port)
+    )
+}
+
+fn index_observed_ports(snapshot: &ObservedPorts) -> HashMap<u32, String> {
+    let mut by_pid = HashMap::<_, BTreeSet<_>>::new();
+    for row in &snapshot.rows {
+        if let Some(pid) = row.pid {
+            by_pid
+                .entry(pid)
+                .or_default()
+                .insert((row.protocol, row.port));
+        }
+    }
+    by_pid
+        .into_iter()
+        .map(|(pid, ports)| {
+            let label = ports
+                .into_iter()
+                .map(|(protocol, port)| format!("{} {port}", protocol.to_ascii_uppercase()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (pid, label)
+        })
+        .collect()
+}
+
+fn observed_panel(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    col().class("resource-ports").fill((
+        row().class("resource-ports-toolbar").fill((
+            input()
+                .class("resource-ports-search")
+                .name(i18n::bind("Filter ports, PID or program"))
+                .value(state.map(|s| s.ports.filter.clone()))
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event {
+                        state.revise(|s| s.ports.filter = value);
+                    }
+                }),
+            btn("Refresh ports", move || ui.ports_refresh_as_user()).enabled(state.map(ready)),
+        )),
+        text()
+            .class("subtle")
+            .content(i18n::bind(state.map(|s| process_port_status(s).to_owned()))),
+        text()
+            .class("observability-warning")
+            .content(state.map(|s| {
+                s.ports
+                    .observed
+                    .as_ref()
+                    .map(|snapshot| snapshot.warnings.join("\n"))
+                    .unwrap_or_default()
+            })),
+        text()
+            .class("software-error")
+            .content(state.map(|s| s.ports.error.clone())),
+        col().class("resource-port-rows").fill(
+            each(state.map(|s| {
+                let filter = s.ports.filter.trim().to_lowercase();
+                s.ports
+                    .observed
+                    .iter()
+                    .flat_map(|snapshot| &snapshot.rows)
+                    .filter(|row| {
+                        format!(
+                            "{} {:?} {}",
+                            observed_endpoint(row),
+                            row.pid,
+                            row.program.as_deref().unwrap_or("")
+                        )
+                        .to_lowercase()
+                        .contains(&filter)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            }))
+            .key(|row| {
+                (
+                    row.protocol,
+                    row.address,
+                    row.port,
+                    row.pid,
+                    row.program.clone(),
+                )
+            })
+            .children(|item| {
+                let value = item.value;
+                row().class("resource-port-holder").fill((
+                    text()
+                        .class("resource-port-endpoint")
+                        .selectable(true)
+                        .content(value.map(observed_endpoint)),
+                    text()
+                        .class("resource-port-program")
+                        .selectable(true)
+                        .content(value.map(|row| match (row.pid, row.program.as_deref()) {
+                            (Some(pid), Some(name)) => format!("{pid} · {name}"),
+                            (Some(pid), None) => pid.to_string(),
+                            (None, _) => "—".into(),
+                        })),
+                ))
+            }),
+        ),
+    ))
+}
+
+fn linux_panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let refresh = ui.clone();
     col().class("resource-ports").fill((

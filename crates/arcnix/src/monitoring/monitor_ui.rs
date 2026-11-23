@@ -195,7 +195,7 @@ fn sidebar(ui: Ui) -> impl Widget {
                 .map(|section| {
                     let open = ui.clone();
                     when(
-                        state.map(move |s| has_linux_details(s) || section.samples_metrics()),
+                        state.map(move |s| s.local_desktop.is_none() || section.samples_metrics()),
                         move || {
                             let open = open.clone();
                             sapid::button()

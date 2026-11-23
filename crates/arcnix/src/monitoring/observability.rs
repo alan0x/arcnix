@@ -194,9 +194,6 @@ pub(crate) fn metrics_event(
             m.history.interrupt();
             m.previous = None;
         }
-        if !monitor_ui::has_linux_details(s) && !s.metrics.section.samples_metrics() {
-            monitor_ui::set_section(s, monitor_ui::Section::Overview);
-        }
     });
 }
 pub(crate) fn metrics_leave(s: &mut State) {
@@ -464,33 +461,45 @@ pub(crate) fn logs(ui: Ui) -> impl Widget {
                     }),
                 ),
                 when(
-                    state.map(|s| s.system_logs.query.source == LogSource::Journal),
+                    state.map(|s| s.system_logs.query.source.supports_time_filter()),
                     move || {
                         let query_ui = query_ui.clone();
                         let period_ui = period_ui.clone();
                         let priority_ui = priority_ui.clone();
                         let commit_ui = commit_ui.clone();
                         row().class("logs-query").fill((
-                            col().class("field logs-unit").fill((
-                                text()
-                                    .class("field-label")
-                                    .content(i18n::bind("服务单元（留空查看全部）")),
-                                input()
-                                    .name(i18n::bind("日志服务单元"))
-                                    .value(state.map(|s| s.system_logs.query.unit.clone()))
-                                    .enabled(state.map(log_ready))
-                                    .on(value_changed, move |e| {
-                                        if let glory::ui::Event::ValueChanged { value, .. } = e {
-                                            state.revise(|s| {
-                                                s.system_logs.query.unit = value;
-                                                s.system_logs.auto_refresh = false;
-                                                s.system_logs.snapshot = None;
-                                                s.system_logs.updated.clear();
-                                            });
-                                        }
-                                    })
-                                    .on(commit, move |_| commit_ui.logs_refresh()),
-                            )),
+                            when(
+                                state.map(|s| s.system_logs.query.source == LogSource::Journal),
+                                move || {
+                                    col().class("field logs-unit").fill((
+                                        text()
+                                            .class("field-label")
+                                            .content(i18n::bind("服务单元（留空查看全部）")),
+                                        input()
+                                            .name(i18n::bind("日志服务单元"))
+                                            .value(state.map(|s| s.system_logs.query.unit.clone()))
+                                            .enabled(state.map(log_ready))
+                                            .on(value_changed, move |e| {
+                                                if let glory::ui::Event::ValueChanged {
+                                                    value,
+                                                    ..
+                                                } = e
+                                                {
+                                                    state.revise(|s| {
+                                                        s.system_logs.query.unit = value;
+                                                        s.system_logs.auto_refresh = false;
+                                                        s.system_logs.snapshot = None;
+                                                        s.system_logs.updated.clear();
+                                                    });
+                                                }
+                                            })
+                                            .on(commit, {
+                                                let commit_ui = commit_ui.clone();
+                                                move |_| commit_ui.logs_refresh()
+                                            }),
+                                    ))
+                                },
+                            ),
                             col().class("field").fill((
                                 text().class("field-label").content(i18n::bind("时间范围")),
                                 row().class("logs-options").fill((

@@ -14,6 +14,9 @@ pub enum LogSource {
     Auth,
     Kernel,
     AptHistory,
+    Unified,
+    WindowsSystem,
+    WindowsApplication,
 }
 impl LogSource {
     pub const ALL: [Self; 6] = [
@@ -32,11 +35,14 @@ impl LogSource {
             Self::Auth => "认证日志 /var/log/auth.log",
             Self::Kernel => "内核日志 /var/log/kern.log",
             Self::AptHistory => "APT 安装历史",
+            Self::Unified => "macOS Unified Log",
+            Self::WindowsSystem => "Windows System events",
+            Self::WindowsApplication => "Windows Application events",
         }
     }
     pub fn path(self) -> Option<&'static str> {
         match self {
-            Self::Journal => None,
+            Self::Journal | Self::Unified | Self::WindowsSystem | Self::WindowsApplication => None,
             Self::Syslog => Some("/var/log/syslog"),
             Self::Messages => Some("/var/log/messages"),
             Self::Auth => Some("/var/log/auth.log"),
@@ -52,7 +58,14 @@ impl LogSource {
             Self::Auth => "auth",
             Self::Kernel => "kernel",
             Self::AptHistory => "apt",
+            Self::Unified => "unified",
+            Self::WindowsSystem => "windows-system",
+            Self::WindowsApplication => "windows-application",
         }
+    }
+
+    pub fn supports_time_filter(self) -> bool {
+        self.path().is_none()
     }
 }
 
@@ -189,7 +202,7 @@ fn valid_unit_filter(unit: &str) -> bool {
     }
     true
 }
-pub fn read_command(query: &LogQuery) -> Result<String> {
+pub(super) fn validate_query(query: &LogQuery) -> Result<()> {
     ensure!(
         (1..=MAX_LINES).contains(&query.limit),
         "日志行数应为 1–{MAX_LINES}"
@@ -198,12 +211,27 @@ pub fn read_command(query: &LogQuery) -> Result<String> {
         query.priority.is_none_or(|priority| priority <= 7),
         "日志优先级应为 0–7"
     );
+    if let JournalPeriod::Window { start, end } = query.period {
+        ensure!(
+            start <= end && end <= 253_402_300_799 && end - start <= 3600,
+            "Invalid bounded log time window"
+        );
+    }
+    Ok(())
+}
+
+pub fn read_command(query: &LogQuery) -> Result<String> {
+    validate_query(query)?;
     if let Some(path) = query.source.path() {
         return Ok(format!(
             "# arcnix:logs:read\nLC_ALL=C tail -n {} -- '{path}'",
             query.limit
         ));
     }
+    ensure!(
+        query.source == LogSource::Journal,
+        "This log source is unavailable on Linux"
+    );
     let unit = query.unit.trim();
     ensure!(
         valid_unit_filter(unit),
@@ -221,10 +249,6 @@ pub fn read_command(query: &LogQuery) -> Result<String> {
         JournalPeriod::Today => command.push_str(" --since=today"),
         JournalPeriod::Boot => command.push_str(" --boot=0"),
         JournalPeriod::Window { start, end } => {
-            ensure!(
-                start <= end && end <= 253_402_300_799 && end - start <= 3600,
-                "Invalid bounded journal time window"
-            );
             command.push_str(&format!(" --since='@{start}' --until='@{end}'"));
         }
     }

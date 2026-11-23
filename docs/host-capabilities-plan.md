@@ -28,5 +28,7 @@ SSH 执行、SFTP 和本机调用属于传输与执行层。SSH 环境探测在�
 - 第一阶段已实现并在 macOS 实机验证。只读桌面可从 Dock 打开 Monitor，两次采样后显示 CPU、内存和网络速率，磁盘页可查看挂载卷。Linux 和 Windows 本机通过同一接口继续使用原有采集器。
 - 第二阶段的基础指标已接线。SSH 首次采样时探测远端系统，连接内复用探测结果。Linux 已在原生 OpenSSH 上验证真实采样，也通过了无需 SFTP 的回环测试。Darwin 通过本机临时启动的原生 OpenSSH 实例验证了密钥认证、系统识别和两次真实采样。Windows 采样覆盖 PowerShell 脚本解析和模拟记录转换，原生 Windows OpenSSH 的 cmd 和 PowerShell 登录环境仍需实机验收。
 - 第三阶段已迁移现有文件操作。Files、Code 和查看器共用目录枚举、新建、限量读取和文档读写接口。重命名、移动、删除、回收站、权限修改、上传下载、媒体读取和文本分页分别接入对应能力。原生 Linux OpenSSH 与 sudo 验证了已审核文档、分页、复制和删除的授权及路径复核。回环 SFTP 覆盖取消、版本冲突、部分进度和并发传输。原生 Windows OpenSSH 的驱动器路径仍待实机验收。
-- 第四阶段已接入 Linux 主机清单、日志、服务查询和服务变更计划。磁盘、网卡地址、进程和监听端口可独立使用。服务变更计划继续由原有审核与后台任务执行。当前主机没有对应实现时，接口明确返回不支持，基础资源采样和 SFTP 可继续使用。macOS 与 Windows 的主机清单、日志和服务实现仍待接入。
+- 第四阶段已为 Linux、macOS 和 Windows SSH 会话接入磁盘、网卡地址、进程、监听端口、系统日志和服务接口。macOS 使用 Unified Log 和 launchd 系统域，Windows 使用 System 与 Application Event Log 及服务控制管理器。Linux 服务变更继续走后台任务。macOS 和 Windows 服务变更通过当前 SSH 会话审核并复核服务状态后执行。
+- macOS 的停止请求发送 SIGTERM，launchd 可按策略重新启动服务。系统域变更需要 root 或为该操作配置的非交互 sudo。Windows 服务变更由连接账号持有的服务权限决定。macOS 和 Windows 端口清单只读。
+- 已在原生 macOS OpenSSH 验证清单、日志、服务查询和变更预览。Windows 验证覆盖编码命令、模拟 Windows API、返回解析、过期审核拒绝，以及界面确认后刷新服务状态。Windows 原生 OpenSSH 验收和 macOS 提权变更实操仍待完成。
 - 第五阶段待实施。

@@ -310,7 +310,7 @@ pub enum Update {
     PackageEnvironment(Result<SystemEnvironment, String>),
     PackageList(Result<Vec<packages::Package>, String>),
     Metrics(Result<ResourceReading, String>),
-    Ports(Result<arcnix_core::resource_ports::Snapshot, String>),
+    Ports(Result<arcnix_core::resource_ports::Inventory, String>),
     PortTerminated(Result<(), String>),
     LogCapabilities(Result<LogCapabilities, String>),
     SystemLogs(Result<LogSnapshot, String>),

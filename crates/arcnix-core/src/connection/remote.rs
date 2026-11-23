@@ -252,6 +252,7 @@ pub struct RemoteSession {
     session: Session,
     sftp: Option<Sftp>,
     pub(super) host_os: std::sync::OnceLock<crate::host::HostOs>,
+    service_review_scope: std::sync::OnceLock<String>,
     search_reader: Option<SearchReader>,
     admin_pages: std::collections::HashMap<u64, file_pager::Reader>,
 }
@@ -461,6 +462,7 @@ impl PendingConnection {
             session,
             sftp,
             host_os: Default::default(),
+            service_review_scope: Default::default(),
             search_reader: None,
             admin_pages: Default::default(),
         })
@@ -529,6 +531,10 @@ impl PendingConnection {
 }
 
 impl RemoteSession {
+    pub(crate) fn service_review_scope(&self) -> &str {
+        self.service_review_scope.get_or_init(new_id)
+    }
+
     /// Open a regular file once for seekable, binary SFTP reads. The reported
     /// length belongs to this handle even if its directory entry is renamed.
     pub fn open_media(&self, path: &str) -> Result<(impl Read + io::Seek + use<>, u64)> {

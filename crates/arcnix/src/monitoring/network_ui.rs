@@ -1,3 +1,4 @@
+use arcnix_core::host::HostOs;
 use arcnix_core::network::Snapshot;
 
 use crate::desktop_customization_ui::{SettingsPage, settings_page};
@@ -9,6 +10,7 @@ use crate::*;
 #[derive(Clone, Default)]
 pub(crate) struct Runtime {
     snapshot: Option<Snapshot>,
+    platform: Option<HostOs>,
     pending: Option<u64>,
     error: String,
 }
@@ -19,6 +21,10 @@ fn active(s: &State) -> bool {
 
 fn ready(s: &State) -> bool {
     active(s) && s.server_apps.network.pending.is_none()
+}
+
+fn can_configure(s: &State) -> bool {
+    active(s) && s.server_apps.network.platform.or(s.metrics.remote_platform) == Some(HostOs::Linux)
 }
 
 pub(crate) fn enter(ui: &Ui) {
@@ -57,7 +63,10 @@ pub(crate) fn event(
         let network = &mut s.server_apps.network;
         network.pending = None;
         network.snapshot = match result {
-            Ok(Reply::NetworkSettings(snapshot)) => Some(snapshot),
+            Ok(Reply::NetworkSettings(platform, snapshot)) => {
+                network.platform = Some(platform);
+                Some(snapshot)
+            }
             Err(error) => {
                 network.error = error;
                 None
@@ -97,12 +106,12 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                     .enabled(state.map(ready))
                     .on_press(move || refresh(&read)),
                 btn("Configure in Terminal…", move || {
-                    if ui.state.with(active) {
+                    if ui.state.with(can_configure) {
                         ui.open_dialog(Dialog::ConfigureNetwork);
                     }
                 })
                 .class("button")
-                .enabled(state.map(active)),
+                .enabled(state.map(can_configure)),
             )),
             when(
                 state.map(|s| s.server_apps.network.pending.is_some()),

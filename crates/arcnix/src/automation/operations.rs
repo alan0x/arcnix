@@ -1,3 +1,5 @@
+use arcnix_core::host::HostOs;
+use arcnix_core::host_capabilities::NativeServicePlan;
 use arcnix_core::operations::{Intent, Service, ServiceAction, Snippet};
 
 use crate::operations_worker::{Action as OpAction, Event as OpEvent, Kind};
@@ -8,6 +10,7 @@ pub(crate) struct OperationsState {
     service_view: u8,
     startup: arcnix_core::startup_services::Definition,
     loaded: bool,
+    platform: Option<HostOs>,
     services: Vec<Service>,
     selected: String,
     inspect_after_list: bool,
@@ -16,6 +19,7 @@ pub(crate) struct OperationsState {
     output: String,
     status: String,
     error: String,
+    review: Option<(u64, NativeServicePlan)>,
     pub(crate) editor: Option<Snippet>,
 }
 fn ready(s: &State) -> bool {
@@ -98,9 +102,34 @@ impl Ui {
         }
     }
     fn service_action(&self, action: ServiceAction) {
-        let unit = self.state.with(|s| s.operations.selected.clone());
-        if !unit.is_empty() {
-            self.preview_operation(Intent::Service { unit, action });
+        let Some((unit, platform)) = self.state.with(|s| {
+            (s.dialog.is_none() && !s.operations.selected.is_empty())
+                .then(|| (s.operations.selected.clone(), s.operations.platform))
+        }) else {
+            return;
+        };
+        match platform {
+            Some(HostOs::Linux) => self.preview_operation(Intent::Service { unit, action }),
+            Some(HostOs::MacOs | HostOs::Windows) => self.op_send(OpAction::Review(unit, action)),
+            _ => (),
+        }
+    }
+
+    fn apply_native_service(&self) {
+        let plan = self.state.revise(|s| {
+            if !ready(s) || s.dialog != Some(Dialog::NativeServiceConfirm) {
+                return None;
+            }
+            let (epoch, plan) = s.operations.review.take()?;
+            if epoch != s.epoch {
+                s.dialog_error = "The server connection changed. Review the service again.".into();
+                return None;
+            }
+            s.dialog_error.clear();
+            Some(plan)
+        });
+        if let Some(plan) = plan {
+            self.op_send(OpAction::Apply(plan));
         }
     }
     fn service_logs(&self) {
@@ -179,57 +208,99 @@ impl Ui {
     }
 }
 pub(crate) fn event(ui: &Ui, serial: u64, event: OpEvent) {
+    enum Next {
+        None,
+        Inspect,
+        Review,
+        Refresh,
+    }
     let Some((expected, kind)) = ui.state.with(|s| s.operations.pending) else {
         return;
     };
     if expected != serial {
         return;
     }
-    let inspect = ui.state.revise(|s| {
+    let next = ui.state.revise(|s| {
         let op = &mut s.operations;
         op.pending = None;
         match event {
-            OpEvent::Services(items) if kind == Kind::List => {
+            OpEvent::Services(platform, items) if kind == Kind::List => {
                 if !items.iter().any(|v| v.unit == op.selected) {
                     op.selected.clear();
                 }
                 op.services = items;
                 op.loaded = true;
-                return std::mem::take(&mut op.inspect_after_list) && !op.selected.is_empty();
+                op.platform = Some(platform);
+                if std::mem::take(&mut op.inspect_after_list) && !op.selected.is_empty() {
+                    return Next::Inspect;
+                }
             }
             OpEvent::Details(text) if kind == Kind::Inspect => {
                 op.output = text;
                 op.status = "Service details".into();
             }
+            OpEvent::Review(plan) if kind == Kind::Review && s.dialog.is_none() => {
+                op.review = Some((s.epoch, plan));
+                return Next::Review;
+            }
+            OpEvent::Applied if kind == Kind::Apply => {
+                return Next::Refresh;
+            }
             OpEvent::Failed(failed, error) if failed == kind => {
                 if kind == Kind::List {
                     op.inspect_after_list = false;
+                }
+                if kind == Kind::Apply && s.dialog == Some(Dialog::NativeServiceConfirm) {
+                    s.dialog_error = error.clone();
                 }
                 op.error = error;
             }
             _ => {}
         }
-        false
+        Next::None
     });
-    if inspect {
-        ui.inspect_service();
-    } else if kind != Kind::List && ui.state.with(|s| s.operations.inspect_after_list) {
-        ui.operations_list();
+    match next {
+        Next::Inspect => ui.inspect_service(),
+        Next::Review => ui.open_dialog(Dialog::NativeServiceConfirm),
+        Next::Refresh => {
+            if ui
+                .state
+                .with(|s| s.dialog == Some(Dialog::NativeServiceConfirm))
+            {
+                ui.close_dialog();
+            }
+            ui.operations_list();
+            ui.log("Service change completed");
+        }
+        Next::None => {
+            if kind != Kind::List && ui.state.with(|s| s.operations.inspect_after_list) {
+                ui.operations_list();
+            }
+        }
     }
 }
 pub(crate) fn connection_lost(ui: &Ui) {
-    ui.state
-        .revise(|s| s.operations = OperationsState::default());
+    ui.state.revise(|s| {
+        s.operations = OperationsState::default();
+        if s.dialog == Some(Dialog::NativeServiceConfirm) {
+            s.dialog = None;
+            s.dialog_error.clear();
+        }
+    });
 }
 fn service_button(
-    ui: &Ui,
+    state: Cage<State>,
     label: &'static str,
     changing: bool,
     action: impl FnMut() + 'static,
 ) -> impl Widget {
-    btn(label, action).enabled(ui.state.map(move |s| {
+    btn(label, action).enabled(state.map(move |s| {
         ready(s) && (!changing || !scripts_ui::busy(s)) && !s.operations.selected.is_empty()
     }))
+}
+
+fn linux_services(s: &State) -> bool {
+    s.operations.platform == Some(HostOs::Linux)
 }
 fn services(ui: Ui) -> impl Widget {
     let state = ui.state;
@@ -238,6 +309,7 @@ fn services(ui: Ui) -> impl Widget {
     let logs = ui.clone();
     let start = ui.clone();
     let stop = ui.clone();
+    let request_stop = ui.clone();
     let restart = ui.clone();
     let enable = ui.clone();
     let disable = ui.clone();
@@ -261,24 +333,35 @@ fn services(ui: Ui) -> impl Widget {
             icon_action("刷新服务", Icon::Refresh)
                 .enabled(state.map(ready))
                 .on_press(move || refresh.operations_list()),
-            service_button(&ui, "Status", false, move || inspect.inspect_service()),
-            service_button(&ui, "Logs", false, move || logs.service_logs()),
-            service_button(&ui, "Start…", true, move || {
+            service_button(state, "Status", false, move || inspect.inspect_service()),
+            when(state.map(linux_services), move || {
+                let logs = logs.clone();
+                service_button(state, "Logs", false, move || logs.service_logs())
+            }),
+            service_button(state, "Start…", true, move || {
                 start.service_action(ServiceAction::Start)
             }),
-            service_button(&ui, "Stop…", true, move || {
-                stop.service_action(ServiceAction::Stop)
+            when(state.map(|s| s.operations.platform != Some(HostOs::MacOs)), move || {
+                let stop = stop.clone();
+                service_button(state, "Stop…", true, move || stop.service_action(ServiceAction::Stop))
             }),
-            service_button(&ui, "Restart…", true, move || {
+            when(state.map(|s| s.operations.platform == Some(HostOs::MacOs)), move || {
+                let stop = request_stop.clone();
+                service_button(state, "Request stop…", true, move || stop.service_action(ServiceAction::Stop))
+            }),
+            service_button(state, "Restart…", true, move || {
                 restart.service_action(ServiceAction::Restart)
             }),
-            service_button(&ui, "Enable at boot…", true, move || enable.service_action(ServiceAction::Enable)),
-            service_button(&ui, "Disable at boot…", true, move || disable.service_action(ServiceAction::Disable)),
-            text_action("New startup task", Icon::Plus).enabled(state.map(|s| ready(s) && !scripts_ui::busy(s))).on_press(move || startup.new_startup_service()),
+            service_button(state, "Enable at boot…", true, move || enable.service_action(ServiceAction::Enable)),
+            service_button(state, "Disable at boot…", true, move || disable.service_action(ServiceAction::Disable)),
+            when(state.map(linux_services), move || {
+                let startup = startup.clone();
+                text_action("New startup task", Icon::Plus).enabled(state.map(|s| ready(s) && !scripts_ui::busy(s))).on_press(move || startup.new_startup_service())
+            }),
         )),
         row().class("services-filters").fill((
             fragment([(0,"All services"),(1,"Active services"),(2,"Start at boot")].into_iter().map(move |(view,label)| sapid::button().class("button compact").label(i18n::bind(label)).pressed(state.map(move |s| s.operations.service_view == view)).on_press(move || state.revise(|s| s.operations.service_view = view))).collect::<Vec<_>>()),
-            help_ui::tip("Services", "Running state and boot enablement are independent. Enable/disable changes boot behavior; start/stop changes the current state. Actions run as reviewed server tasks. Saved commands are in Scripts."),
+            help_ui::tip("Services", "Running state and startup configuration are shown separately. Review the selected service and action before applying a change."),
         )),
         col().class("service-list").fill(
             each(state.map(|s| {
@@ -509,8 +592,39 @@ fn command_dialogs(ui: Ui) -> impl Widget {
 pub(crate) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
     let commands = ui.clone();
+    let native = ui.clone();
     fragment((
         command_dialogs(commands),
+        when(
+            state.map(|s| s.dialog == Some(Dialog::NativeServiceConfirm)),
+            move || {
+                let apply = native.clone();
+                modal(
+                    native.clone(),
+                    "Review service change",
+                    col().class("form-stack").fill((
+                        text().content(state.map(|s| {
+                            s.operations.review.as_ref().map_or_else(String::new, |(_, plan)| {
+                                format!("{} {}\nCurrent state: {}\nStartup configuration: {}", plan.action().verb(), plan.unit(), plan.state(), plan.startup())
+                            })
+                        })),
+                        text().class("subtle").content(i18n::bind(state.map(|s| {
+                            let platform = s.operations.platform;
+                            let action = s.operations.review.as_ref().map(|(_, plan)| plan.action());
+                            match (platform, action) {
+                                (Some(HostOs::Windows), Some(ServiceAction::Disable)) => "A disabled Windows service cannot be started until its startup type changes.",
+                                (Some(HostOs::MacOs), Some(ServiceAction::Stop)) => "Sends SIGTERM. launchd may relaunch the daemon on demand or because of its KeepAlive policy.",
+                                (Some(HostOs::MacOs), Some(_)) => "Uses the SSH account’s launchd permissions or noninteractive sudo.",
+                                (_, _) => "Uses the connected account’s service permissions.",
+                            }.to_owned()
+                        }))),
+                    )),
+                    btn("Apply service change", move || apply.apply_native_service())
+                        .class("button primary")
+                        .enabled(state.map(|s| ready(s) && s.operations.review.is_some())),
+                )
+            },
+        ),
         when(
             state.map(|s| s.dialog == Some(Dialog::StartupService)),
             move || {

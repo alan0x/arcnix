@@ -12,7 +12,7 @@ pub(crate) struct DiskState {
     error: String,
 }
 fn ready(s: &State) -> bool {
-    s.connected && monitor_ui::has_linux_details(s) && s.disks.pending.is_none()
+    s.connected && s.local_desktop.is_none() && s.disks.pending.is_none()
 }
 impl Ui {
     pub(crate) fn disks_enter(&self) {
@@ -100,12 +100,12 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     col().class("disks-page").fill((
         row().class("disks-toolbar").fill((
             input().class("disk-filter").name(i18n::bind("Filter disks and mounts")).value(state.map(|s| s.disks.filter.clone())).on(value_changed, move |e| if let Event::ValueChanged { value,.. } = e { state.revise(|s| s.disks.filter = value); }),
-            when(state.map(monitor_ui::has_linux_details), move || {let refresh = refresh.clone(); icon_action("Refresh disks", Icon::Refresh).enabled(state.map(ready)).on_press(move || refresh.disks_refresh())}),
+            when(state.map(|s| s.local_desktop.is_none()), move || {let refresh = refresh.clone(); icon_action("Refresh disks", Icon::Refresh).enabled(state.map(ready)).on_press(move || refresh.disks_refresh())}),
             help_ui::tip("Disks", "Block devices and mounted filesystem usage, queried on demand. Unavailable capacity stays unknown. Select a mount to browse its files."),
         )),
         text().class("error disks-error").content(state.map(|s| s.disks.error.clone())),
         text().class("subtle disks-status").content(i18n::bind(state.map(|s| if s.disks.pending.is_some() { "Loading…" } else { "" }.to_owned()))),
-        when(state.map(monitor_ui::has_linux_details), || text().class("section-title").content(i18n::bind("Block devices"))),
+        when(state.map(|s| s.disks.snapshot.as_ref().is_some_and(|snapshot| !snapshot.devices.is_empty())), || text().class("section-title").content(i18n::bind("Block devices"))),
         col().class("disk-device-list").fill(each(state.map(|s| s.disks.snapshot.as_ref().map(|v| v.devices.iter().filter(|d| format!("{} {} {}",d.path,d.model,d.mounts.join(" ")).to_lowercase().contains(&s.disks.filter.to_lowercase())).cloned().collect::<Vec<_>>()).unwrap_or_default())).key(|d| d.path.clone()).children(|item| {
             let d = item.value;
             row().class("disk-device-row").fill((

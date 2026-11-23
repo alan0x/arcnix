@@ -1,10 +1,14 @@
+mod darwin_host;
 pub(crate) mod darwin_metrics;
 pub mod disks;
 pub mod host_capabilities;
 pub mod metric_history;
 pub mod metrics;
+mod native_logs;
+mod native_services;
 pub mod network;
 pub mod processes;
 mod remote_metrics;
 pub mod resource_ports;
 pub mod system_logs;
+mod windows_host;
