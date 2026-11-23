@@ -40,16 +40,14 @@ fn launch(ui: &Ui, page: WorkspacePage) {
 
 fn search(ui: Ui, query: Cage<String>, field: Option<Cage<Option<NodeId>>>) -> impl Widget {
     let state = ui.state;
-    let mut input = input()
+    let mut input = sapid::text_field()
+        .unstyled()
         .name(i18n::bind("Search apps"))
-        .on(value_changed, move |event| {
-            if let Event::ValueChanged { value, .. } = event {
-                query.revise(|current| *current = value);
-            }
-        })
-        .on(commit, move |event| {
-            if let Event::Commit { value, .. } = event
-                && !value.trim().is_empty()
+        .placeholder(i18n::bind("Search apps"))
+        .value(query)
+        .on_value_change(move |value| query.revise(|current| *current = value))
+        .on_commit(move |value| {
+            if !value.trim().is_empty()
                 && let Some(page) = state.with(|s| matching_apps(s, &value).first().copied())
             {
                 launch(&ui, page);
@@ -59,7 +57,11 @@ fn search(ui: Ui, query: Cage<String>, field: Option<Cage<Option<NodeId>>>) -> i
         input = input.node_ref(field);
     }
     row()
-        .class("desktop-app-catalog-search")
+        .class(if field.is_some() {
+            "desktop-app-catalog-search"
+        } else {
+            "files-location-search"
+        })
         .fill((icons::glyph(Icon::Search), input))
 }
 
@@ -103,12 +105,33 @@ fn catalog(ui: Ui, query: Cage<String>) -> impl Widget {
     })
 }
 
-pub(crate) fn files(ui: Ui) -> impl Widget {
+pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
     widget(move |scope| {
         let query = scope.cage(String::new());
+        let open = ui.clone();
+        let back = ui.clone();
         col()
-            .class("desktop-app-catalog")
-            .fill((search(ui.clone(), query, None), catalog(ui.clone(), query)))
+            .class("desktop-app-catalog files-apps-catalog")
+            .fill((
+                row()
+                    .class("files-window-tools files-location-toolbar files-apps-toolbar")
+                    .fill((
+                        i18n::icon_action("Back to folder", Icon::ChevronRight)
+                            .class("icon-button files-history-back")
+                            .on_press(move || {
+                                if files_ui::activate_window(&back, window) {
+                                    files_tabs::leave_apps(&back);
+                                }
+                            }),
+                        search(ui.clone(), query, None),
+                        when(ui.state.map(|s| s.local_desktop.is_none()), move || {
+                            let open = open.clone();
+                            i18n::text_action("App Center", Icon::AppCenter)
+                                .on_press(move || launch(&open, WorkspacePage::AppCenter))
+                        }),
+                    )),
+                catalog(ui.clone(), query),
+            ))
             .show_in(scope)
     })
 }

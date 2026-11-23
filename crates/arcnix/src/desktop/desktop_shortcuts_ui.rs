@@ -178,8 +178,7 @@ fn record(ui: &Ui, action: Shortcut, chord: String, add: bool, previous: Option<
         let occupied = match action.scope() {
             ShortcutScope::Files => matches!(
                 portable.as_str(),
-                "Ctrl+T"
-                    | "Ctrl+W"
+                "Ctrl+W"
                     | "Ctrl+F"
                     | "F2"
                     | "F5"

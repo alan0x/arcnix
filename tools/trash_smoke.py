@@ -208,6 +208,38 @@ def main():
             purge(panel, item(panel, '/home/arcnix/Desktop/desktop.txt'))
             assert not desktop_file.exists()
 
+            def add_record(name):
+                (bin_dir / 'files' / name).write_text(name)
+                (bin_dir / 'info' / (name + '.trashinfo')).write_text(
+                    f'[Trash Info]\nPath=/bulk/{name}\nDeletionDate=2026-01-02T03:04:05\n')
+
+            add_record('one.txt')
+            add_record('two.txt')
+            panel.get_by_role('button', name='Refresh', exact=True).click()
+            expect(panel.locator('.trash-item')).to_have_count(2)
+            search = panel.get_by_role('textbox', name='Search Trash')
+            search.fill('not found')
+            expect(panel.get_by_text('No matching items', exact=True)).to_be_visible()
+            search.fill('BULK/ONE')
+            expect(panel.locator('.trash-item')).to_have_count(1)
+            empty = panel.get_by_role('button', name='Empty Trash', exact=True)
+            empty.click()
+            review = panel.locator('.trash-confirm')
+            expect(review).to_contain_text('all 2 items')
+            review.get_by_role('button', name='Cancel', exact=True).click()
+            assert (bin_dir / 'files' / 'two.txt').is_file()
+            empty.click()
+            add_record('new-arrival.txt')
+            review.get_by_role('button', name='Delete permanently', exact=True).click()
+            search.fill('')
+            expect(panel.locator('.trash-item')).to_have_count(1)
+            expect(item(panel, '/bulk/new-arrival.txt')).to_be_visible()
+            assert {f.name for f in (bin_dir / 'files').iterdir()} == {'new-arrival.txt'}
+            empty.click()
+            review.get_by_role('button', name='Delete permanently', exact=True).click()
+            expect(panel.locator('.trash-empty')).to_be_visible()
+            expect(empty).to_be_disabled()
+
             app.workspace('Transfer files')
             local_entry = app.file(local_file.name, remote=False)
             local_entry.click()

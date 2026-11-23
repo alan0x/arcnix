@@ -98,7 +98,8 @@ def main():
             search = catalog.get_by_role('textbox', name='Search apps', exact=True)
             expect(search).to_be_focused()
             app_tiles = catalog.locator('.desktop-app-catalog-grid').get_by_role('button')
-            expected_apps = ['Files', 'Terminal', 'Code Editor', 'Browser', 'Player', 'Monitor', 'App Center', 'Settings', 'Text Editor']
+            expected_apps = ['Files', 'Terminal', 'Code Editor', 'Browser', 'Player', 'Image Viewer', 'PDF Reader',
+                             'Monitor', 'App Center', 'Settings', 'Text Editor']
             expect(app_tiles).to_have_text(expected_apps)
             search.fill('not an app')
             expect(catalog.get_by_text('No matching apps')).to_be_visible()
@@ -123,6 +124,12 @@ def main():
             location('/home/arcnix')
             active.locator('.files-sidebar').get_by_role('button', name='Apps', exact=True).click()
             files_catalog = active.locator('.desktop-app-catalog')
+            expect(files_catalog.get_by_role('textbox', name='Search apps')).to_have_attribute('placeholder', 'Search apps')
+            files_catalog.locator('.files-apps-toolbar').get_by_role('button', name='App Center', exact=True).click()
+            center = page.locator('.desktop-window.active.app-center')
+            expect(center).to_be_visible()
+            center.locator('.window-close').click()
+            expect(files_catalog).to_be_visible()
             expect(files_catalog.locator('.desktop-app-catalog-grid').get_by_role('button')).to_have_text(expected_apps)
             expect(active.locator('.files-tab-select')).to_have_text('Apps')
             files_catalog.get_by_role('textbox', name='Search apps', exact=True).fill('text editor')
@@ -132,9 +139,13 @@ def main():
             page.locator('.desktop-window.app-editor .window-close').click()
             expect(icon('.desktop-dock', 'Text Editor')).to_have_count(0)
             expect(files_catalog).to_be_visible()
-            active.get_by_role('button', name='Back to folder', exact=True).click()
+            files_catalog.get_by_role('button', name='Back to folder', exact=True).click()
             expect(files_catalog).to_have_count(0)
             location('/home/arcnix')
+            sidebar = active.locator('.files-sidebar').bounding_box()
+            toolbar = active.locator('.files-window-tools').bounding_box()
+            assert abs(toolbar['x'] - sidebar['x'] - sidebar['width']) < 2
+            assert abs(toolbar['y'] - sidebar['y']) < 2
             active.locator('.window-close').click()
 
             page.locator('.desktop-dock').get_by_role('button', name='Apps', exact=True).click(button='right')
@@ -145,6 +156,7 @@ def main():
             settings.get_by_role('button', name='App icons', exact=True).click()
             pins = page.get_by_role('dialog', name='App icons', exact=True)
             options = pins.locator('.preference-check')
+            expect(options.first).to_be_visible()
             initial_order = options.all_text_contents()
             assert initial_order[:3] == ['Home', 'Files', 'Terminal']
             expect(pins.get_by_role('checkbox', name='Player', exact=True)).to_be_checked()

@@ -144,6 +144,8 @@ def main():
             expect(active.locator('.files-tab-select')).to_have_text(['Projects', '/'])
             expect(note).to_be_visible()
 
+            page.keyboard.press('Meta+t')
+            expect(active.locator('.files-tab')).to_have_count(2)
             page.keyboard.press('Control+t')
             expect(active.locator('.files-tab')).to_have_count(3)
             page.keyboard.press('Control+w')

@@ -2,11 +2,18 @@ use arcnix_core::recycle::{Item, Operation};
 
 use crate::*;
 
+#[derive(Clone)]
+enum Confirmation {
+    Item(Item),
+    Empty,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Bin {
     items: Vec<Item>,
     pending: Option<(u64, bool, Option<arcnix_core::deletion::Target>)>,
-    confirm: Option<Item>,
+    confirm: Option<Confirmation>,
+    purge_queue: std::collections::VecDeque<Item>,
     error: String,
 }
 
@@ -169,10 +176,16 @@ pub(crate) fn completed(
             if let Some(target) = purged {
                 files_ui::check_permanently_deleted(ui, &[target]);
             }
+            if purge_next(ui, remote) {
+                return;
+            }
         }
         Err(error) => {
-            ui.state
-                .revise(|s| s.trash[remote as usize].error = error.clone());
+            ui.state.revise(|s| {
+                let bin = &mut s.trash[remote as usize];
+                bin.purge_queue.clear();
+                bin.error.clone_from(&error);
+            });
             if !ui.state.with(|s| visible(s, remote)) {
                 ui.error(error);
             }
@@ -192,23 +205,77 @@ pub(crate) fn completed(
     }
 }
 
-pub(crate) fn location_tools(ui: Ui) -> impl Widget {
+// Process the confirmed snapshot using the same identity checks as a single purge.
+fn purge_next(ui: &Ui, remote: bool) -> bool {
+    let next = ui.state.revise(|s| {
+        let ready = available(s, remote);
+        let bin = &mut s.trash[remote as usize];
+        if !ready && !bin.purge_queue.is_empty() {
+            bin.purge_queue.clear();
+            bin.error = i18n::translate("Empty Trash interrupted");
+        }
+        bin.purge_queue.pop_front()
+    });
+    if let Some(item) = next {
+        request(ui, remote, Operation::Purge(item));
+        return true;
+    }
+    false
+}
+
+fn confirm_removal(ui: &Ui, remote: bool) {
+    if !ui.state.with(|s| available(s, remote)) {
+        return;
+    }
+    let confirmation = ui.state.revise(|s| s.trash[remote as usize].confirm.take());
+    match confirmation {
+        Some(Confirmation::Item(item)) => request(ui, remote, Operation::Purge(item)),
+        Some(Confirmation::Empty) => {
+            ui.state.revise(|s| {
+                let bin = &mut s.trash[remote as usize];
+                bin.purge_queue = bin.items.iter().cloned().collect();
+            });
+            purge_next(ui, remote);
+        }
+        None => {}
+    }
+}
+
+fn location_tools(ui: Ui, query: Cage<String>) -> impl Widget {
     let state = ui.state;
-    row().class("trash-location-tools").fill((
-        icon_action("Back to folder", Icon::ChevronRight)
-            .class("icon-button files-history-back")
-            .on_press(move || {
-                state.revise(|s| {
-                    s.workbench.files.location = files_tabs::Location::Directory;
-                    s.trash[1].confirm = None;
-                })
-            }),
-        icons::glyph(Icon::Clear),
-        text().content(i18n::bind("回收站")),
-        icon_action("刷新", Icon::Refresh)
-            .enabled(state.map(|s| available(s, true)))
-            .on_press(move || refresh(&ui, true)),
-    ))
+    row()
+        .class("files-window-tools files-location-toolbar trash-location-tools")
+        .fill((
+            icon_action("Back to folder", Icon::ChevronRight)
+                .class("icon-button files-history-back")
+                .on_press(move || {
+                    state.revise(|s| {
+                        s.workbench.files.location = files_tabs::Location::Directory;
+                        s.trash[1].confirm = None;
+                    })
+                }),
+            row().class("files-location-search").fill((
+                icons::glyph(Icon::Search),
+                sapid::text_field()
+                    .unstyled()
+                    .name(i18n::desktop::bind("Search Trash"))
+                    .placeholder(i18n::desktop::bind("Search Trash"))
+                    .value(query)
+                    .on_value_change(move |value| query.revise(|current| *current = value)),
+            )),
+            icon_action("刷新", Icon::Refresh)
+                .enabled(state.map(|s| available(s, true)))
+                .on_press(move || refresh(&ui, true)),
+            i18n::desktop::text_action("Empty Trash", Icon::Clear)
+                .enabled(state.map(|s| available(s, true) && !s.trash[1].items.is_empty()))
+                .on_press(move || {
+                    state.revise(|s| {
+                        if available(s, true) && !s.trash[1].items.is_empty() {
+                            s.trash[1].confirm = Some(Confirmation::Empty);
+                        }
+                    })
+                }),
+        ))
 }
 
 fn refresh(ui: &Ui, remote: bool) {
@@ -224,7 +291,27 @@ fn item_key(item: &Item) -> String {
 }
 
 pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
+    widget(move |scope| panel_content(scope, ui.clone(), remote, in_files).show_in(scope))
+}
+
+fn panel_content(scope: &Scope, ui: Ui, remote: bool, in_files: bool) -> impl Widget + use<> {
+    let query = scope.cage(String::new());
     let state = ui.state;
+    let items = scope.bond(move || {
+        let needle = query.get().trim().to_lowercase();
+        state.with(|s| {
+            s.trash[remote as usize]
+                .items
+                .iter()
+                .filter(|item| {
+                    needle.is_empty()
+                        || item.original.to_lowercase().contains(&needle)
+                        || (item.original.is_empty() && item.id.to_lowercase().contains(&needle))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+    });
     let refresh = ui.clone();
     let remove = ui.clone();
     let controls = state.map(move |s| available(s, remote));
@@ -235,6 +322,10 @@ pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
             "trash-panel"
         })
         .fill((
+            when(in_files, {
+                let ui = ui.clone();
+                move || location_tools(ui.clone(), query)
+            }),
             when(!in_files, move || {
                 let ui = refresh.clone();
                 row().class("trash-controls").fill(
@@ -288,12 +379,19 @@ pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                             s.trash[remote as usize]
                                 .confirm
                                 .as_ref()
-                                .map(|i| {
-                                    format!(
+                                .map(|confirmation| match confirmation {
+                                    Confirmation::Item(item) => format!(
                                         "{}\n{}",
                                         i18n::translate("永久删除此项目？此操作无法撤销。"),
-                                        display_name(i)
-                                    )
+                                        display_name(item)
+                                    ),
+                                    Confirmation::Empty => i18n::translate_for(
+                                        &format!(
+                                            "永久删除回收站中的全部 {} 项？此操作无法撤销。",
+                                            s.trash[remote as usize].items.len()
+                                        ),
+                                        i18n::workspace_language(s),
+                                    ),
                                 })
                                 .unwrap_or_default()
                         })),
@@ -303,18 +401,12 @@ pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                         text_action("永久删除", Icon::Clear)
                             .class("button danger with-icon")
                             .enabled(controls)
-                            .on_press(move || {
-                                if let Some(item) =
-                                    state.with(|s| s.trash[remote as usize].confirm.clone())
-                                {
-                                    request(&apply, remote, Operation::Purge(item));
-                                }
-                            }),
+                            .on_press(move || confirm_removal(&apply, remote)),
                     ))
                 },
             ),
             when(
-                state.map(move |s| in_files && !s.trash[remote as usize].items.is_empty()),
+                scope.bond(move || in_files && items.with(|rows| !rows.is_empty())),
                 || {
                     row().class("trash-columns").fill((
                         text().content(i18n::bind("名称")),
@@ -323,22 +415,30 @@ pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                     ))
                 },
             ),
-            col().class("trash-items").fill(
-                each(state.map(move |s| s.trash[remote as usize].items.clone()))
-                    .key(item_key)
-                    .children(move |row_item| {
-                        let item = row_item.value;
-                        let restore = ui.clone();
-                        let body = if in_files {
-                            fragment(glory::ui::widget(move |scope| {
-                                let id = scope.id();
-                                let restore = restore.clone();
-                                let remove = restore.clone();
-                                sapid::context_menu(format!(
-                                    "trash-{}-{}",
-                                    id.slot(),
-                                    id.generation()
-                                ))
+            when(
+                scope.bond(move || {
+                    in_files
+                        && items.with(Vec::is_empty)
+                        && !query.get().trim().is_empty()
+                        && state.with(|s| !s.trash[remote as usize].items.is_empty())
+                }),
+                || {
+                    text()
+                        .class("trash-status")
+                        .content(i18n::desktop::bind("No matching items"))
+                },
+            ),
+            col()
+                .class("trash-items")
+                .fill(each(items).key(item_key).children(move |row_item| {
+                    let item = row_item.value;
+                    let restore = ui.clone();
+                    let body = if in_files {
+                        fragment(glory::ui::widget(move |scope| {
+                            let id = scope.id();
+                            let restore = restore.clone();
+                            let remove = restore.clone();
+                            sapid::context_menu(format!("trash-{}-{}", id.slot(), id.generation()))
                                 .name(i18n::bind("回收站"))
                                 .target_name(item.map(display_name))
                                 .enabled(
@@ -399,41 +499,42 @@ pub(crate) fn panel(ui: Ui, remote: bool, in_files: bool) -> impl Widget {
                                         .on_activate(move || {
                                             if remove.state.with(|s| available(s, true)) {
                                                 remove.state.revise(|s| {
-                                                    s.trash[1].confirm = Some(item.get())
+                                                    s.trash[1].confirm =
+                                                        Some(Confirmation::Item(item.get()))
                                                 });
                                             }
                                         }),
                                 )
                                 .show_in(scope)
-                            }))
-                        } else {
-                            fragment((
-                                col().class("trash-details").fill((
-                                    text()
-                                        .class("trash-original")
-                                        .content(item.map(display_name)),
-                                    text()
-                                        .class("subtle")
-                                        .content(item.map(|i| i.deleted.replace('T', " "))),
-                                )),
-                                btn("还原", move || {
-                                    request(&restore, remote, Operation::Restore(item.get()))
-                                })
-                                .enabled(state.map(move |s| {
-                                    available(s, remote) && !item.get().original.is_empty()
-                                })),
-                                text_action("永久删除", Icon::Clear)
-                                    .enabled(controls)
-                                    .on_press(move || {
-                                        state.revise(|s| {
-                                            s.trash[remote as usize].confirm = Some(item.get())
-                                        })
-                                    }),
-                            ))
-                        };
-                        row().class("trash-item").fill(body)
-                    }),
-            ),
+                        }))
+                    } else {
+                        fragment((
+                            col().class("trash-details").fill((
+                                text()
+                                    .class("trash-original")
+                                    .content(item.map(display_name)),
+                                text()
+                                    .class("subtle")
+                                    .content(item.map(|i| i.deleted.replace('T', " "))),
+                            )),
+                            btn("还原", move || {
+                                request(&restore, remote, Operation::Restore(item.get()))
+                            })
+                            .enabled(state.map(move |s| {
+                                available(s, remote) && !item.get().original.is_empty()
+                            })),
+                            text_action("永久删除", Icon::Clear)
+                                .enabled(controls)
+                                .on_press(move || {
+                                    state.revise(|s| {
+                                        s.trash[remote as usize].confirm =
+                                            Some(Confirmation::Item(item.get()))
+                                    })
+                                }),
+                        ))
+                    };
+                    row().class("trash-item").fill(body)
+                })),
         ))
 }
 fn display_name(item: &Item) -> String {

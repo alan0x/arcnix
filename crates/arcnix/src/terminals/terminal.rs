@@ -489,22 +489,25 @@ impl Ui {
         self.send(Action::Terminal(TerminalAction::Close { id }));
     }
     pub(crate) fn terminal_close_tab(&self, id: u64) {
-        let page = self
-            .state
-            .with(|s| window_tabs::current(s, WorkspacePage::Terminal));
+        let closing_window = self.state.with(|s| {
+            let groups = &s.terminal.groups;
+            s.workbench.apps.iter().copied().find(|page| {
+                page.base() == WorkspacePage::Terminal
+                    && groups.tabs(page.tab_window().unwrap()) == [id]
+            })
+        });
         self.terminal_remove_tab(id);
-        self.state.revise(|s| {
-            if s.terminal
-                .groups
-                .tabs(page.tab_window().unwrap())
-                .is_empty()
-                && server_desktop::has_siblings(s, page)
-            {
+        let page_changed = closing_window.is_some_and(|page| {
+            self.state.revise(|s| {
+                let previous = s.workspace_page;
                 server_desktop::remove_window(s, page);
-            }
+                previous != s.workspace_page
+            })
         });
         self.remember_desktop_layout();
-        if self.state.with(|s| s.terminal.session_count() > 0) {
+        if page_changed {
+            self.desktop_enter();
+        } else if self.state.with(|s| s.terminal.session_count() > 0) {
             self.terminal_enter();
         }
     }

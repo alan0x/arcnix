@@ -30,6 +30,7 @@ pub enum Action {
     TerminalSelectAll,
     TerminalClear,
     TerminalContext,
+    FilesNewTab,
     FilesDuplicateWindow,
     FilesEditPath,
     FilesHidden,
@@ -126,6 +127,7 @@ pub const GROUPS: &[(Scope, &[Binding])] = &[
     (
         Scope::Files,
         &[
+            key(Action::FilesNewTab, "New tab", "Ctrl+T"),
             key(
                 Action::FilesDuplicateWindow,
                 "Duplicate current Files window",
@@ -217,6 +219,7 @@ impl Preset {
                 Action::TerminalPaste | Action::FilesPaste => return "Meta+V",
                 Action::TerminalSelectAll | Action::FilesSelectAll => return "Meta+A",
                 Action::TerminalClear => return "Meta+K",
+                Action::FilesNewTab => return "Meta+T",
                 Action::FilesDuplicateWindow => return "Meta+N",
                 Action::FilesEditPath => return "Shift+Meta+G",
                 Action::FilesHidden => return "Shift+Meta+Period",

@@ -470,7 +470,7 @@ pub(crate) fn drop_location(s: &State, path: &str) -> bool {
             .is_some_and(|locations| locations.iter().any(|location| location.path == path))
 }
 
-fn activate_sidebar(ui: &Ui, window: u32) -> bool {
+pub(crate) fn activate_window(ui: &Ui, window: u32) -> bool {
     let page = WorkspacePage::Files(window);
     if ui.state.with(|s| s.workspace_page != page) {
         ui.focus_desktop_app(page);
@@ -620,7 +620,7 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                         move |s| files_tabs::directory(s, window).unwrap_or_default(),
                         true,
                         move |path| {
-                            if activate_sidebar(&place_ui, window) {
+                            if activate_window(&place_ui, window) {
                                 file_browser::navigate(&place_ui, true, path);
                             }
                         },
@@ -633,7 +633,7 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                         .on_press({
                             let ui = ui.clone();
                             move || {
-                                if activate_sidebar(&ui, window) {
+                                if activate_window(&ui, window) {
                                     files_tabs::open_apps(&ui);
                                 }
                             }
@@ -650,7 +650,7 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                         .on_press({
                             let ui = ui.clone();
                             move || {
-                                if activate_sidebar(&ui, window) {
+                                if activate_window(&ui, window) {
                                     trash_ui::open(&ui, true);
                                 }
                             }
@@ -697,7 +697,7 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                                                     .content(""),
                                             ))
                                             .on_press(move || {
-                                                if activate_sidebar(&open, window) {
+                                                if activate_window(&open, window) {
                                                     open.open_files_item(path.get());
                                                 }
                                             }),
@@ -720,7 +720,7 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
                         {
                             let ui = ui.clone();
                             move |filter| {
-                                if activate_sidebar(&ui, window) {
+                                if activate_window(&ui, window) {
                                     ui.filter_files_tags(Some(filter));
                                 }
                             }

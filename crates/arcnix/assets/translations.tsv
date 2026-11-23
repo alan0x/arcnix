@@ -2798,3 +2798,7 @@ SSH 服务器不允许转发到此 PostgreSQL 地址。	The SSH server does not 
 已将 {name} 保存到“下载”	Saved {name} to Downloads
 无法保存 {name}	Could not save {name}
 在访达中显示	Show in Finder
+搜索回收站	Search Trash
+清空回收站	Empty Trash
+清空回收站已中断	Empty Trash interrupted
+永久删除回收站中的全部 {count} 项？此操作无法撤销。	Permanently delete all {count} items in Trash? This cannot be undone.

@@ -23,87 +23,75 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                     files_ui::drag_bridge(ui.clone()),
                     files_transfer::bridge(ui.clone()),
                     file_context::task_status(ui.clone()),
-                    files_tab_tools(ui.clone()),
                 ))
             }
-        })
-        .otherwise(move || files_tabs::preview_header(state, window)),
+        }),
         row().class("files-body").fill((
             files_ui::sidebar(ui.clone(), window),
-            when(state.map(move |s| files_tabs::showing_apps(s, window)), {
-                let ui = ui.clone();
-                move || desktop_apps::files(ui.clone())
-            }),
-            when(live, move || {
-                fragment((
-                    when(state.map(files_tabs::trash_active), {
-                        let ui = ui.clone();
-                        move || trash_ui::panel(ui.clone(), true, true)
-                    }),
-                    col()
-                        .class(state.map(|s| {
-                            if s.workbench.files.location != files_tabs::Location::Directory
-                                || s.server_apps.files_tag.is_some()
+            col().class("files-content-pane").fill((
+                when(state.map(move |s| files_tabs::showing_apps(s, window)), {
+                    let ui = ui.clone();
+                    move || desktop_apps::files(ui.clone(), window)
+                }),
+                when(live, move || {
+                    fragment((
+                        when(
+                            state.map(|s| {
+                                s.workbench.files.location == files_tabs::Location::Directory
+                                    && s.server_apps.files_tag.is_none()
+                            }),
                             {
-                                "remote-slot files-slot hidden"
-                            } else {
-                                "remote-slot files-slot"
-                            }
-                            .to_owned()
-                        }))
-                        .fill(pane(ui.clone(), true, true)),
-                    files_ui::tag_results(ui.clone()),
-                ))
-            })
-            .otherwise(move || {
-                when(
-                    state.map(move |s| !files_tabs::showing_apps(s, window)),
-                    move || files_tabs::preview_body(state, window),
-                )
-            }),
+                                let ui = ui.clone();
+                                move || files_tab_tools(ui.clone())
+                            },
+                        ),
+                        when(state.map(files_tabs::trash_active), {
+                            let ui = ui.clone();
+                            move || trash_ui::panel(ui.clone(), true, true)
+                        }),
+                        col()
+                            .class(state.map(|s| {
+                                if s.workbench.files.location != files_tabs::Location::Directory
+                                    || s.server_apps.files_tag.is_some()
+                                {
+                                    "remote-slot files-slot hidden"
+                                } else {
+                                    "remote-slot files-slot"
+                                }
+                                .to_owned()
+                            }))
+                            .fill(pane(ui.clone(), true, true)),
+                        files_ui::tag_results(ui.clone()),
+                    ))
+                })
+                .otherwise(move || {
+                    when(
+                        state.map(move |s| !files_tabs::showing_apps(s, window)),
+                        move || {
+                            fragment((
+                                files_tabs::preview_header(state, window),
+                                files_tabs::preview_body(state, window),
+                            ))
+                        },
+                    )
+                }),
+            )),
         )),
     ))
 }
 
 fn files_tab_tools(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let browse = ui.clone();
-    let back = ui.clone();
-    row().class("files-window-tools").fill((
-        when(
-            state.map(|s| s.workbench.files.location == files_tabs::Location::Apps),
-            move || {
-                let back = back.clone();
-                row().class("trash-location-tools").fill((
-                    icon_action("Back to folder", Icon::ChevronRight)
-                        .class("icon-button files-history-back")
-                        .on_press(move || files_tabs::leave_apps(&back)),
-                    icons::glyph(Icon::Grid),
-                    text().content(i18n::desktop::bind("Apps")),
-                ))
-            },
-        ),
-        when(state.map(files_tabs::trash_active), move || {
-            trash_ui::location_tools(ui.clone())
-        }),
-        when(
-            state.map(|s| {
-                s.workbench.files.location == files_tabs::Location::Directory
-                    && s.server_apps.files_tag.is_none()
-            }),
-            move || {
-                file_browser::pathbar(
-                    browse.clone(),
-                    true,
-                    true,
-                    row().class("files-path-actions").fill((
-                        file_browser::view_controls(browse.clone(), true),
-                        pane_actions(browse.clone(), true, true),
-                    )),
-                )
-            },
-        ),
-    ))
+    row()
+        .class("files-window-tools")
+        .fill(file_browser::pathbar(
+            ui.clone(),
+            true,
+            true,
+            row().class("files-path-actions").fill((
+                file_browser::view_controls(ui.clone(), true),
+                pane_actions(ui, true, true),
+            )),
+        ))
 }
 
 pub(crate) fn ready(s: &State, remote: bool) -> bool {
