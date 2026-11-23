@@ -141,6 +141,10 @@ impl TabSnapshot {
         self.tag
     }
 
+    pub(crate) fn search(&self) -> &files_search::Search {
+        &self.search
+    }
+
     pub(crate) fn refresh_entries(&mut self, entries: &[FileEntry]) {
         self.entries = entries.to_vec();
         self.selection

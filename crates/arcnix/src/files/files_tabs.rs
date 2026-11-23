@@ -153,10 +153,21 @@ pub(crate) fn leave_apps(ui: &Ui) {
 }
 
 pub(crate) fn showing_tag(s: &State, id: u32) -> Option<files_ui::TagFilter> {
+    if location(s, id) != Location::Directory {
+        return None;
+    }
     if s.workbench.files.is_live(id) {
         s.server_apps.files_tag
     } else {
         snapshot(s, id)?.tag()
+    }
+}
+
+pub(crate) fn tag_query(s: &State, id: u32) -> &str {
+    if s.workbench.files.is_live(id) {
+        &s.server_apps.files_search.tag_query
+    } else {
+        snapshot(s, id).map_or("", |tab| tab.search().tag_query.as_str())
     }
 }
 
@@ -475,6 +486,19 @@ pub(crate) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
                 .key(|tab| *tab)
                 .children(move |t| {
                     let tab = t.value.get();
+                    let dot = state.map(move |s| {
+                        let files = &s.workbench.files;
+                        let tag = if files.is_live(id) && files.groups.selected(id) == Some(tab) {
+                            showing_tag(s, id)
+                        } else {
+                            files
+                                .saved
+                                .get(&tab)
+                                .filter(|view| view.view() == Location::Directory)
+                                .and_then(|view| view.tag())
+                        };
+                        tag.map_or_else(|| "hidden".into(), files_ui::TagFilter::dot_class)
+                    });
                     let remove = choose.clone();
                     let select_ui = choose.clone();
                     row()
@@ -498,7 +522,10 @@ pub(crate) fn tab_strip(ui: Ui, id: u32) -> impl Widget {
                                     .pressed(state.map(move |s| {
                                         s.workbench.files.groups.selected(id) == Some(tab)
                                     }))
-                                    .fill(text().content(state.map(move |s| title(s, id, tab))))
+                                    .fill((
+                                        text().class(dot).content(""),
+                                        text().content(state.map(move |s| title(s, id, tab))),
+                                    ))
                                     .on_press(move || select(&select_ui, id, tab)),
                             ),
                             close_action("Close file tab")
@@ -538,6 +565,11 @@ pub(crate) fn preview_header(state: Cage<State>, id: u32) -> impl Widget {
 }
 
 pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
+    let entries = state.map(move |s| {
+        snapshot(s, id)
+            .map(|tab| tab.preview_entries(s))
+            .unwrap_or_default()
+    });
     col()
         .class(state.map(move |s| {
             if snapshot(s, id).is_some_and(|tab| tab.folder_view(s).icons) {
@@ -555,36 +587,46 @@ pub(crate) fn preview_body(state: Cage<State>, id: u32) -> impl Widget {
                         .map(|tab| tab.folder_view(s).icon_size.to_string())
                         .unwrap_or_default()
                 })),
-            each(state.map(move |s| {
-                snapshot(s, id)
-                    .map(|tab| tab.preview_entries(s))
-                    .unwrap_or_default()
-            }))
-            .key(|entry| entry.path.clone())
-            .children(move |entry| {
-                let value = entry.value;
-                row()
-                    .name(value.map(|entry| entry.path.clone()))
-                    .class(value.map(|entry| {
-                        if entry.is_symlink {
-                            "files-inactive-entry"
-                        } else if entry.is_dir {
-                            "files-inactive-entry files-inactive-draggable files-directory-row"
-                        } else {
-                            "files-inactive-entry files-inactive-draggable"
-                        }
-                        .to_owned()
-                    }))
-                    .fill((
-                        text()
-                            .class(state.map(move |s| {
-                                value.with(|file| file_browser::entry_icon_class(s, file, true))
-                            }))
-                            .content(""),
-                        text()
-                            .class("file-label")
-                            .content(value.map(|file| file.name.clone())),
-                    ))
-            }),
+            when(
+                state.map(move |s| directory(s, id).is_some() && entries.with(Vec::is_empty)),
+                move || {
+                    files_ui::empty_listing(
+                        state.map(move |s| {
+                            snapshot(s, id).is_some_and(|tab| tab.search().has_filter())
+                        }),
+                    )
+                },
+            ),
+            when(
+                state.map(move |s| showing_trash(s, id) && trash_ui::empty(s, true)),
+                || files_ui::empty_state(Icon::Clear, "回收站为空", "trash-empty"),
+            ),
+            each(entries)
+                .key(|entry| entry.path.clone())
+                .children(move |entry| {
+                    let value = entry.value;
+                    row()
+                        .name(value.map(|entry| entry.path.clone()))
+                        .class(value.map(|entry| {
+                            if entry.is_symlink {
+                                "files-inactive-entry"
+                            } else if entry.is_dir {
+                                "files-inactive-entry files-inactive-draggable files-directory-row"
+                            } else {
+                                "files-inactive-entry files-inactive-draggable"
+                            }
+                            .to_owned()
+                        }))
+                        .fill((
+                            text()
+                                .class(state.map(move |s| {
+                                    value.with(|file| file_browser::entry_icon_class(s, file, true))
+                                }))
+                                .content(""),
+                            text()
+                                .class("file-label")
+                                .content(value.map(|file| file.name.clone())),
+                        ))
+                }),
         ))
 }

@@ -10,6 +10,7 @@ pub(crate) struct Search {
     pub open: bool,
     options: bool,
     pub query: String,
+    pub tag_query: String,
     kinds: BTreeSet<Kind>,
     modified: Modified,
 }

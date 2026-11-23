@@ -65,7 +65,7 @@ fn search(ui: Ui, query: Cage<String>, field: Option<Cage<Option<NodeId>>>) -> i
         .fill((icons::glyph(Icon::Search), input))
 }
 
-fn catalog(ui: Ui, query: Cage<String>) -> impl Widget {
+fn catalog(ui: Ui, query: Cage<String>, in_files: bool) -> impl Widget {
     widget(move |scope| {
         let state = ui.state;
         let matches = scope.bond(move || state.with(|s| matching_apps(s, &query.get())));
@@ -95,10 +95,15 @@ fn catalog(ui: Ui, query: Cage<String>) -> impl Widget {
                             }
                         }),
                 ),
-                when(scope.bond(move || matches.with(Vec::is_empty)), || {
-                    text()
-                        .class("desktop-app-catalog-empty")
-                        .content(i18n::bind("No matching apps"))
+                when(scope.bond(move || matches.with(Vec::is_empty)), move || {
+                    when(in_files, || {
+                        files_ui::empty_state(Icon::Search, "No matching apps", "files-apps-empty")
+                    })
+                    .otherwise(|| {
+                        text()
+                            .class("desktop-app-catalog-empty")
+                            .content(i18n::bind("No matching apps"))
+                    })
                 }),
             ))
             .show_in(scope)
@@ -130,7 +135,7 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                                 .on_press(move || launch(&open, WorkspacePage::AppCenter))
                         }),
                     )),
-                catalog(ui.clone(), query),
+                catalog(ui.clone(), query, true),
             ))
             .show_in(scope)
     })
@@ -151,7 +156,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                         search(ui.clone(), query, Some(field)),
                         col()
                             .class("desktop-app-catalog")
-                            .fill(catalog(ui.clone(), query)),
+                            .fill(catalog(ui.clone(), query, false)),
                         (),
                     )
                 })?;

@@ -2802,3 +2802,4 @@ SSH 服务器不允许转发到此 PostgreSQL 地址。	The SSH server does not 
 清空回收站	Empty Trash
 清空回收站已中断	Empty Trash interrupted
 永久删除回收站中的全部 {count} 项？此操作无法撤销。	Permanently delete all {count} items in Trash? This cannot be undone.
+搜索标记项目	Search tagged items

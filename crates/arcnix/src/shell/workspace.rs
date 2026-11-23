@@ -29,6 +29,7 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
         row().class("files-body").fill((
             files_ui::sidebar(ui.clone(), window),
             col().class("files-content-pane").fill((
+                files_ui::tag_results(ui.clone(), window),
                 when(state.map(move |s| files_tabs::showing_apps(s, window)), {
                     let ui = ui.clone();
                     move || desktop_apps::files(ui.clone(), window)
@@ -61,12 +62,14 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                                 .to_owned()
                             }))
                             .fill(pane(ui.clone(), true, true)),
-                        files_ui::tag_results(ui.clone()),
                     ))
                 })
                 .otherwise(move || {
                     when(
-                        state.map(move |s| !files_tabs::showing_apps(s, window)),
+                        state.map(move |s| {
+                            !files_tabs::showing_apps(s, window)
+                                && files_tabs::showing_tag(s, window).is_none()
+                        }),
                         move || {
                             fragment((
                                 files_tabs::preview_header(state, window),
@@ -389,15 +392,10 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
             when(state.map(move |s| file_columns::visible(s, remote).permissions), move || text().class("column-permissions").content(i18n::bind_in(compact, "权限"))),
         )),
         file_browser::listing(ui.clone(), remote, compact),
-        text()
-            .class(state.map(move |s| {
-                if pane_entries(s, remote).is_empty() {
-                    "file-empty"
-                } else {
-                    "hidden"
-                }
-                .into()
-            }))
+        when(state.map(move |s| pane_entries(s, remote).is_empty()), move || {
+            when(state.map(move |s| compact && ready(s, remote)), move || {
+                files_ui::empty_listing(state.map(|s| files_search::current(s).has_filter()))
+            }).otherwise(move || text().class("file-empty")
             .content(i18n::bind_in(compact, state.map(move |s| {
                 if remote && !s.connected {
                     "在右上角连接 SSH 后，即可浏览 SFTP 文件".into()
@@ -405,9 +403,7 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
                     "SSH 已连接，但 SFTP 不可用（服务器未启用或当前账号无访问权限）。系统软件、资源概览和系统日志仍可使用。".into()
                 } else if !ready(s, remote) {
                     "输入路径后按 Enter".into()
-                } else if if compact {
-                    files_search::current(s).has_filter()
-                } else if remote {
+                } else if if remote {
                     !s.remote_filter.is_empty()
                 } else {
                     !s.local_filter.is_empty()
@@ -416,7 +412,8 @@ fn pane(ui: Ui, remote: bool, compact: bool) -> impl Widget {
                 } else {
                     "此文件夹为空".into()
                 }
-            }))),
+            }))))
+        }),
         file_browser::information(ui.clone(), remote),
     ))
 }

@@ -21,6 +21,14 @@ pub(crate) enum TagFilter {
 }
 
 impl TagFilter {
+    pub(crate) fn dot_class(self) -> String {
+        let color = match self {
+            Self::Color(color) => color_class(color),
+            Self::All => "tag-all",
+        };
+        format!("folder-color-dot {color}")
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Color(color) => COLORS
@@ -348,6 +356,9 @@ impl Ui {
     fn filter_files_tags(&self, filter: Option<TagFilter>) {
         self.state.revise(|s| {
             s.workbench.files.location = files_tabs::Location::Directory;
+            if s.server_apps.files_tag != filter {
+                s.server_apps.files_search.tag_query.clear();
+            }
             s.server_apps.files_tag = filter;
             s.server_apps.files_open_pending = None;
         });
@@ -567,12 +578,7 @@ fn tag_link(
         .name(i18n::bind(filter.label()))
         .pressed(state.map(move |s| current(s) == Some(filter)))
         .fill((
-            text()
-                .class(match filter {
-                    TagFilter::Color(color) => format!("folder-color-dot {}", color_class(color)),
-                    TagFilter::All => "folder-color-dot tag-all".into(),
-                })
-                .content(""),
+            text().class(filter.dot_class()).content(""),
             text().content(i18n::bind(filter.label())),
             text()
                 .class("files-drop-color hidden")
@@ -731,11 +737,18 @@ pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
     )
 }
 
-fn tagged_paths(s: &State) -> Vec<String> {
-    let Some(filter) = s.server_apps.files_tag else {
-        return Vec::new();
-    };
-    paths_for_tag(s, filter)
+pub(crate) fn empty_state(icon: Icon, label: &'static str, class: &'static str) -> impl Widget {
+    col().class(format!("files-empty-state {class}")).fill((
+        icons::glyph(icon),
+        text().class("files-empty-title").content(i18n::bind(label)),
+    ))
+}
+
+pub(crate) fn empty_listing(filtered: impl Into<Vary<bool>>) -> impl Widget {
+    when(filtered, || {
+        empty_state(Icon::Search, "No matching items", "file-empty")
+    })
+    .otherwise(|| empty_state(Icon::Folder, "This folder is empty", "file-empty"))
 }
 
 pub(crate) fn paths_for_tag(s: &State, filter: TagFilter) -> Vec<String> {
@@ -747,60 +760,98 @@ pub(crate) fn paths_for_tag(s: &State, filter: TagFilter) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn tag_results(ui: Ui) -> impl Widget {
+pub(crate) fn tag_results(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
     when(
-        state.map(|s| s.server_apps.files_tag.is_some()),
+        state.map(move |s| files_tabs::showing_tag(s, window).is_some()),
         move || {
             let back = ui.clone();
             let item_ui = ui.clone();
+            let search = ui.clone();
+            let query = state.map(move |s| files_tabs::tag_query(s, window).to_owned());
+            let paths = state.map(move |s| {
+                let Some(tag) = files_tabs::showing_tag(s, window) else {
+                    return Vec::new();
+                };
+                let mut paths = paths_for_tag(s, tag);
+                let needle = files_tabs::tag_query(s, window).trim().to_lowercase();
+                if !needle.is_empty() {
+                    paths.retain(|p| p.to_lowercase().contains(&needle));
+                }
+                paths
+            });
             col().class("files-tags-view").fill((
-                row().class("files-tags-toolbar").fill((
-                    icon_action("Back to folder", Icon::Folder)
-                        .on_press(move || back.filter_files_tags(None)),
-                    text().content(i18n::bind(state.map(|s| {
-                        s.server_apps
-                            .files_tag
-                            .map_or("Tags", TagFilter::label)
-                            .to_owned()
-                    }))),
-                )),
-                col().class("files-tags-list").fill((
-                    when(state.map(|s| tagged_paths(s).is_empty()), || {
-                        text()
-                            .class("files-tags-empty subtle")
-                            .content(i18n::bind("No tagged items"))
-                    }),
-                    each(state.map(tagged_paths))
-                        .key(String::clone)
-                        .children(move |item| {
-                            let path = item.value;
-                            let open = item_ui.clone();
-                            let clear = item_ui.clone();
-                            row().class("files-tag-result").fill((
-                                sapid::button()
-                                    .class("files-place files-tag-item")
-                                    .name(path)
-                                    .fill((
-                                        text()
-                                            .class(state.map(move |s| color_dot(s, &path.get())))
-                                            .content(""),
-                                        text()
-                                            .class("files-tag-item-name")
-                                            .content(path.map(|p| item_name(p).to_owned())),
-                                        text().class("files-tag-item-path subtle").content(path),
-                                    ))
-                                    .on_press(move || open.open_files_item(path.get())),
-                                icon_action("Clear tag", Icon::Close)
-                                    .enabled(state.map(editable))
-                                    .on_press(move || {
-                                        clear.change_files(|prefs| {
-                                            prefs.colors.remove(&path.get());
+                row()
+                    .class("files-window-tools files-location-toolbar")
+                    .fill((
+                        icon_action("Back to folder", Icon::ChevronRight)
+                            .class("icon-button files-history-back")
+                            .on_press(move || {
+                                if activate_window(&back, window) {
+                                    back.filter_files_tags(None);
+                                }
+                            }),
+                        row().class("files-location-search").fill((
+                            icons::glyph(Icon::Search),
+                            sapid::text_field()
+                                .unstyled()
+                                .name(i18n::bind("Search tagged items"))
+                                .placeholder(i18n::bind("Search tagged items"))
+                                .value(query)
+                                .on_value_change(move |value| {
+                                    if activate_window(&search, window) {
+                                        state.revise(|s| {
+                                            s.server_apps.files_search.tag_query = value
                                         });
-                                    }),
-                            ))
-                        }),
-                )),
+                                    }
+                                }),
+                        )),
+                    )),
+                when(state.map(move |_| paths.with(Vec::is_empty)), move || {
+                    when(
+                        state.map(move |_| query.with(|q| q.trim().is_empty())),
+                        || empty_state(Icon::Tag, "No tagged items", "files-tags-empty"),
+                    )
+                    .otherwise(|| {
+                        empty_state(Icon::Search, "No matching items", "files-tags-empty")
+                    })
+                }),
+                col()
+                    .class("files-tags-list")
+                    .fill(each(paths).key(String::clone).children(move |item| {
+                        let path = item.value;
+                        let open = item_ui.clone();
+                        let clear = item_ui.clone();
+                        row().class("files-tag-result").fill((
+                            sapid::button()
+                                .class("files-place files-tag-item")
+                                .name(path)
+                                .fill((
+                                    text()
+                                        .class(state.map(move |s| color_dot(s, &path.get())))
+                                        .content(""),
+                                    text()
+                                        .class("files-tag-item-name")
+                                        .content(path.map(|p| item_name(p).to_owned())),
+                                    text().class("files-tag-item-path subtle").content(path),
+                                ))
+                                .on_press(move || {
+                                    if activate_window(&open, window) {
+                                        open.open_files_item(path.get());
+                                    }
+                                }),
+                            icon_action("Clear tag", Icon::Close)
+                                .enabled(state.map(editable))
+                                .on_press(move || {
+                                    if !activate_window(&clear, window) {
+                                        return;
+                                    }
+                                    clear.change_files(|prefs| {
+                                        prefs.colors.remove(&path.get());
+                                    });
+                                }),
+                        ))
+                    })),
             ))
         },
     )

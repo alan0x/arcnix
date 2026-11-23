@@ -36,6 +36,7 @@ macro_rules! icons {
 
 icons! {
     Search => "search";
+    Tag => "tag";
     Browser => "browser", "browser";
     ChevronRight => "chevron-right";
     Server => "server";

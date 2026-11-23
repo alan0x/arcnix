@@ -39,6 +39,14 @@ fn available(s: &State, remote: bool) -> bool {
         && s.trash[remote as usize].pending.is_none()
 }
 
+pub(crate) fn empty(s: &State, remote: bool) -> bool {
+    let bin = &s.trash[remote as usize];
+    (!remote || s.sftp_available)
+        && bin.pending.is_none()
+        && bin.items.is_empty()
+        && bin.error.is_empty()
+}
+
 fn request(ui: &Ui, remote: bool, operation: Operation) {
     if !ui.state.with(|s| available(s, remote)) {
         return;
@@ -352,24 +360,9 @@ fn panel_content(scope: &Scope, ui: Ui, remote: bool, in_files: bool) -> impl Wi
                     }
                     .to_owned()
                 }))),
-            when(
-                state.map(move |s| {
-                    let bin = &s.trash[remote as usize];
-                    in_files
-                        && (!remote || s.sftp_available)
-                        && bin.pending.is_none()
-                        && bin.items.is_empty()
-                        && bin.error.is_empty()
-                }),
-                || {
-                    col().class("trash-empty").fill((
-                        icons::glyph(Icon::Clear),
-                        text()
-                            .class("trash-empty-title")
-                            .content(i18n::bind("回收站为空")),
-                    ))
-                },
-            ),
+            when(state.map(move |s| in_files && empty(s, remote)), || {
+                files_ui::empty_state(Icon::Clear, "回收站为空", "trash-empty")
+            }),
             when(
                 state.map(move |s| s.trash[remote as usize].confirm.is_some()),
                 move || {
@@ -422,11 +415,7 @@ fn panel_content(scope: &Scope, ui: Ui, remote: bool, in_files: bool) -> impl Wi
                         && !query.get().trim().is_empty()
                         && state.with(|s| !s.trash[remote as usize].items.is_empty())
                 }),
-                || {
-                    text()
-                        .class("trash-status")
-                        .content(i18n::desktop::bind("No matching items"))
-                },
+                || files_ui::empty_state(Icon::Search, "No matching items", "trash-search-empty"),
             ),
             col()
                 .class("trash-items")
