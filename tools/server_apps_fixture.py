@@ -526,6 +526,71 @@ def windows_docker_reply(server, channel, script):
     channel.sendall(("\r\n".join(lines) + "\r\n").encode())
 
 
+def windows_task_reply(server, channel):
+    with channel.makefile("rb", -1) as stream:
+        script = stream.read(32769).decode("utf-8")
+    if len(script) > 32768 or "Register-ScheduledTask" not in script or "-LogonType S4U" not in script:
+        raise ValueError("Invalid native task script")
+
+    def value(name):
+        return re.search(r"(?m)^\$" + name + r"='([^']*)'$", script)[1]
+
+    def literal(name):
+        encoded = re.search(r"(?m)^\$" + name + r"=.*FromBase64String\('([A-Za-z0-9+/=]*)'\)", script)[1]
+        return base64.b64decode(encoded).decode("utf-8")
+
+    op, task = value("op"), value("id")
+    expected_root = literal("expectedRoot")
+    root = r"C:\Users\fixture\AppData\Local\Arcnix\native-tasks-v1"
+    if expected_root and expected_root != root:
+        raise ValueError("Server task root changed")
+    fixture = server.fixture_root / "windows-native-tasks.json"
+    now = int(time.time())
+    header = "ARCNIX_NATIVE_TASKS_V1\t" + str(now) + "\t" + base64.b64encode(root.encode()).decode()
+
+    def row(identifier, record):
+        return "\t".join([identifier, str(record["created"]), str(len(record["log"])), record["state"]])
+
+    with server.hosted_tasks_lock:
+        tasks = json.loads(fixture.read_text()) if fixture.exists() else {}
+        if op == "submit":
+            if not re.fullmatch(r"verify-[a-f0-9]{32}", task):
+                raise ValueError("Invalid native task identifier")
+            source, digest = literal("source"), value("digest")
+            if task in tasks:
+                if (tasks[task]["source"], tasks[task]["digest"]) != (source, digest):
+                    raise ValueError("Task ID reused for another request")
+            else:
+                actual = hashlib.sha256(b"arcnix-windows-test").hexdigest()
+                if source == r"C:\fixture\long":
+                    state, log = "running", "Starting verification"
+                elif source == r"C:\fixture\short":
+                    state = "succeeded" if not digest or digest == actual else "failed"
+                    log = f"SHA-256: {actual}"
+                    if state == "failed":
+                        log += "\nThe checksum differs from the expected value."
+                else:
+                    raise ValueError("Unexpected fixture file path")
+                tasks[task] = dict(created=now, source=source, digest=digest, state=state, log=log)
+                fixture.write_text(json.dumps(tasks))
+            lines = ["OK"]
+        elif op == "stop" and task in tasks:
+            if tasks[task]["state"] == "running":
+                tasks[task]["state"] = "cancelled"
+                fixture.write_text(json.dumps(tasks))
+            lines = ["OK"]
+        elif op == "detail" and task in tasks:
+            data = base64.b64encode(tasks[task]["log"].encode()).decode()
+            lines = [header, row(task, tasks[task]), data]
+        elif op == "list":
+            offset = int(re.search(r"(?m)^\$offset=(\d+)$", script)[1])
+            selected = list(tasks.items())[offset:offset + 100]
+            lines = [header] + [row(key, val) for key, val in selected] + [f"END\t{int(len(tasks) > offset + 100)}"]
+        else:
+            raise ValueError("Unexpected fixture task command")
+    channel.sendall(("\r\n".join(lines) + "\r\n").encode())
+
+
 def windows_inventory_reply(server, channel, command):
     """Decode only the encoded-command envelope and return synthetic Windows rows."""
     prefix = command.split(" ", 1)[0] + " -NoLogo -NoProfile -NonInteractive -EncodedCommand "
@@ -541,6 +606,10 @@ def windows_inventory_reply(server, channel, command):
         script = base64.b64decode(command[len(prefix):], validate=True).decode("utf-16-le")
         if "[Environment]::OSVersion.Platform" in script:
             channel.sendall(b"ARCNIX_WINDOWS_HOST_V1\r\n")
+            status = 0
+            return
+        if script.startswith("# ARCNIX_NATIVE_TASKS_V1"):
+            windows_task_reply(server, channel)
             status = 0
             return
         if script.startswith("# ARCNIX_WINDOWS_DESKTOP_SYNC_V1"):

@@ -2763,3 +2763,14 @@ PDF 密码	PDF password
 升序	Ascending
 使用默认视图	Use default view
 名称始终显示。更改仅应用于此文件夹。	Name is always visible. Changes apply to this folder only.
+校验远端文件	Verify remote file
+文件校验	File verification
+服务器任务在保存结果前中断。	The server job ended before saving a result.
+校验远端文件…	Verify a remote file…
+校验远端文件	Verify a remote file
+服务器上的绝对路径	Absolute path on the server
+开始校验	Start verification
+停止校验…	Stop verification…
+停止校验	Stop verification
+服务器将计算 SHA-256。重新连接后可在服务器记录中查看结果。	The server computes SHA-256. Find the result in Server records after reconnecting.
+确认停止服务器上的本次校验。	Confirm stopping this verification on the server.

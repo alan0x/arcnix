@@ -345,6 +345,7 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
             return;
         }
         event @ (batch_worker::Event::TaskStop { .. }
+        | batch_worker::Event::NativeTask { .. }
         | batch_worker::Event::RecordPage { .. }
         | batch_worker::Event::RecordDetail { .. }) => {
             task_records_ui::event(ui, event);
@@ -400,7 +401,9 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
         batch_worker::Event::RecordStorage { .. } => unreachable!(),
         batch_worker::Event::CleanupRecords { .. } => unreachable!(),
         batch_worker::Event::ExportDownload { .. } => unreachable!(),
-        batch_worker::Event::TaskStop { .. } => unreachable!(),
+        batch_worker::Event::TaskStop { .. } | batch_worker::Event::NativeTask { .. } => {
+            unreachable!()
+        }
         batch_worker::Event::Refreshed { task, id, result } => {
             s.scripts.refreshing.remove(&(task.clone(), id.clone()));
             if let Some(record) = s.scripts.tasks.iter_mut().find(|record| record.id == task) {

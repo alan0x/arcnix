@@ -11,9 +11,9 @@ mod software;
 
 // Keep existing module paths available to the client and external callers.
 pub use automation::{
-    operations, remote_tasks, script_bundles, script_favorites, script_parameters, scripts,
-    startup_services, target_selection, task_capabilities, task_records, task_result, task_stops,
-    tasks,
+    native_tasks, operations, remote_tasks, script_bundles, script_favorites, script_parameters,
+    scripts, startup_services, target_selection, task_capabilities, task_records, task_result,
+    task_stops, tasks,
 };
 pub use config::{model, preferences, server_labels, store};
 use connection::private_program;

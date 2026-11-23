@@ -1,3 +1,4 @@
+pub mod native_tasks;
 pub mod operations;
 pub mod remote_tasks;
 pub mod script_bundles;

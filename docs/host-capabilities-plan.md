@@ -36,4 +36,7 @@ SSH 执行、SFTP 和本机调用属于传输与执行层。SSH 环境探测在�
 - 原生 macOS OpenSSH 已验证时区、服务器时钟和 Docker 清单。Windows 回环测试覆盖选择时区后的回读与时钟偏移。后台任务回环测试验证了提交、操作锁、断开后重新观察和读取历史记录。
 - macOS 接入 Homebrew formulae，Windows 接入 WinGet 社区源。已安装清单和仓库搜索通过软件包接口提供。安装、升级、卸载和刷新索引通过 SSH 终端执行，用户审核后按 Enter。Windows 连接账号需要能访问 WinGet、PowerShell 7 及 `Microsoft.WinGet.Client` 模块。
 - Windows Docker 通过目标主机本地命名管道读取容器、镜像、卷、资源和日志，并执行已确认的容器操作。访问取决于 SSH 账号的 Docker 权限。Windows 远端桌面偏好写入该账号的 `%LOCALAPPDATA%\Arcnix\desktop.v1`，沿用三方合并，按版本校验并原子替换文件。
-- macOS 本机通过临时原生 OpenSSH 验证 Homebrew 清单与搜索。Windows 回环 SSH 覆盖 WinGet、Docker 和桌面偏好传输。Windows 原生 OpenSSH、macOS 提权时区写入及两个平台的持久后台任务仍待完成。
+- macOS 本机通过临时原生 OpenSSH 验证 Homebrew 清单与搜索。Windows 回环 SSH 覆盖 WinGet、Docker 和桌面偏好传输。
+- macOS 和 Windows 的持久任务首个操作是远端文件 SHA-256 校验，可选择对比预期值。从「任务 → 服务器记录」提交并查看状态、日志和历史，活动任务可审核后停止。服务器以 SSH 账号权限执行，任务 ID 绑定到原始请求，重复提交不会重复运行。任务结束前若丢失运行实例，记录显示「已中断」。
+- macOS 通过当前账号可用且允许注册的 launchd 登录域启动一次性任务。Windows 使用 Task Scheduler 的有限权限 S4U 登录，账号需要能注册和启动该任务，校验输入为服务器上的本地常规文件。任务没有计划触发器，主机重启后保留记录，由用户决定是否重跑。
+- 原生 macOS OpenSSH 已在有 GUI 登录域的账号上验证校验成功、不匹配、断开重连、重复提交、历史与停止。Windows 已通过回环 SSH 和使用调度器替身的 PowerShell 脚本测试。Windows 原生 OpenSSH 与 Task Scheduler 联合验收、macOS 无 GUI 登录域以及 macOS 提权时区写入仍待实机验证。

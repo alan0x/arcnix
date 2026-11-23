@@ -9,7 +9,8 @@ use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::scripts::Template;
 use arcnix_core::software_capabilities::{PackageChangePlanner, PackageInventoryReader};
 use arcnix_core::task_capabilities::{
-    HostedTaskObserver, HostedTaskRecordReader, HostedTaskSubmitter, record_response,
+    FileVerificationSubmitter, HostedTaskObserver, HostedTaskRecordReader, HostedTaskSubmitter,
+    NativeHostedTaskStopper, record_response,
 };
 use arcnix_core::tasks::Status;
 use arcnix_core::{ServerProfile, operations, packages};
@@ -43,6 +44,11 @@ impl Snapshot {
         }
     }
 }
+pub enum NativeTaskAction {
+    Verify(arcnix_core::native_tasks::FileVerification),
+    Stop(String),
+}
+
 pub enum Event {
     TaskStop {
         serial: u64,
@@ -68,7 +74,12 @@ pub enum Event {
     RecordPage {
         serial: u64,
         id: String,
-        result: Result<(String, arcnix_core::task_records::Page), String>,
+        result: Result<(String, arcnix_core::task_records::Page, bool), String>,
+    },
+    NativeTask {
+        serial: u64,
+        id: String,
+        result: Result<(), String>,
     },
     RecordDetail {
         serial: u64,
@@ -301,7 +312,11 @@ pub fn record_page(
             for record in &mut page.records {
                 redact_record(record, &target);
             }
-            Ok((home, page))
+            Ok((
+                home,
+                page,
+                arcnix_core::native_tasks::supported(remote.host_os()?),
+            ))
         })()
         .map_err(|error| record_error(error, &target));
         let _ = events.send_blocking(Event::RecordPage {
@@ -311,6 +326,32 @@ pub fn record_page(
         });
     });
 }
+pub fn native_task(
+    serial: u64,
+    target: Target,
+    root: String,
+    action: NativeTaskAction,
+    events: async_channel::Sender<Event>,
+) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<()> {
+            let remote =
+                PendingConnection::open_for_known_host(&target.profile, &target.fingerprint)?
+                    .authenticate(&target.secret, &target.fingerprint)?;
+            match action {
+                NativeTaskAction::Verify(task) => remote.submit_file_verification(&root, &task),
+                NativeTaskAction::Stop(id) => remote.stop_native_hosted_task(&root, &id),
+            }
+        })()
+        .map_err(|error| record_error(error, &target));
+        let _ = events.send_blocking(Event::NativeTask {
+            serial,
+            id: target.profile.id.clone(),
+            result,
+        });
+    });
+}
+
 pub fn record_detail(
     serial: u64,
     target: Target,

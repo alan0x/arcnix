@@ -3,11 +3,16 @@ use arcnix_core::task_records::{self as records, Page};
 use zeroize::Zeroizing;
 
 use crate::*;
+#[path = "native_tasks_ui.rs"]
+mod native_tasks_ui;
 #[path = "task_stops_ui.rs"]
 mod stops_ui;
 pub(crate) fn dismiss(s: &mut State) {
     if s.dialog == Some(Dialog::TaskStop) {
         stops_ui::dismiss(s);
+    }
+    if s.dialog == Some(Dialog::NativeTask) {
+        s.task_records.native = None;
     }
 }
 
@@ -18,6 +23,7 @@ struct Group {
     secret: Option<Zeroizing<String>>,
     home: Option<String>,
     page: Option<Page>,
+    native: bool,
     pending: Option<u64>,
     error: String,
 }
@@ -38,6 +44,7 @@ pub(crate) struct RecordState {
     groups: Vec<Group>,
     serial: u64,
     viewer: Option<Viewer>,
+    native: Option<native_tasks_ui::Draft>,
     error: String,
 }
 pub(crate) fn forget(s: &mut State) {
@@ -50,9 +57,15 @@ pub(crate) fn forget(s: &mut State) {
         group.pending = None;
     }
     s.task_records.viewer = None;
+    s.task_records.native = None;
     if matches!(
         s.dialog,
-        Some(Dialog::TaskRecordConnect | Dialog::TaskRecordLog | Dialog::TaskStop)
+        Some(
+            Dialog::TaskRecordConnect
+                | Dialog::TaskRecordLog
+                | Dialog::TaskStop
+                | Dialog::NativeTask
+        )
     ) {
         s.dialog = None;
     }
@@ -180,6 +193,7 @@ impl Ui {
                             secret: Some(target.secret.clone()),
                             home: prior.and_then(|g| g.home.clone()),
                             page: prior.and_then(|g| g.page.clone()),
+                            native: prior.is_some_and(|g| g.native),
                             pending: Some(serial),
                             error: String::new(),
                         });
@@ -303,6 +317,10 @@ impl Ui {
 }
 pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
     let event = match event {
+        batch_worker::Event::NativeTask { serial, id, result } => {
+            native_tasks_ui::event(ui, serial, id, result);
+            return;
+        }
         batch_worker::Event::TaskStop {
             serial,
             task,
@@ -324,7 +342,8 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
             {
                 group.pending = None;
                 match result {
-                    Ok((home, page)) => {
+                    Ok((home, page, native)) => {
+                        group.native = native;
                         group.home = Some(home);
                         group.page = Some(page);
                         group.error.clear();
@@ -407,6 +426,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 text().class("subtle record-query-time").content(group.map(|g|g.page.as_ref().map(|p|format!("{} · {} · {}",formatting::timestamp(Some(p.sampled)),p.root,i18n::translate(&format!("Records {}–{}",if p.records.is_empty(){0}else{p.offset+1},p.offset+p.records.len() as u32)))).unwrap_or_default())),
                 text().class(group.map(|g|if g.error.is_empty(){"hidden"}else{"form-error"}.to_owned())).content(group.map(|g|g.error.clone())),
                 row().class("script-actions").fill((
+                    native_tasks_ui::start_button(ui.clone(), group, id.clone()),
                     btn("Previous records",move||{let offset=state.with(|s|s.task_records.groups.iter().find(|g|g.profile.id==prev_id).and_then(|g|g.page.as_ref()).map(|p|p.offset.saturating_sub(100)).unwrap_or(0));previous.record_page(&prev_id,offset);}).enabled(state.map(move|s|s.task_records.groups.iter().find(|g|g.profile.id==prev_enabled_id).is_some_and(|g|g.secret.is_some()&&g.pending.is_none()&&g.page.as_ref().is_some_and(|p|p.offset>0)))),
                     btn("Refresh records",move||{let offset=state.with(|s|s.task_records.groups.iter().find(|g|g.profile.id==refresh_id).and_then(|g|g.page.as_ref()).map(|p|p.offset).unwrap_or(0));refresh.record_page(&refresh_id,offset);}).enabled(state.map(move|s|s.task_records.groups.iter().find(|g|g.profile.id==enabled_id).is_some_and(|g|g.secret.is_some()&&g.pending.is_none()))),
                     btn("Older records",move||{let offset=state.with(|s|s.task_records.groups.iter().find(|g|g.profile.id==next_id).and_then(|g|g.page.as_ref()).map(|p|p.offset+100).unwrap_or(0));next.record_page(&next_id,offset);}).enabled(state.map(move|s|s.task_records.groups.iter().find(|g|g.profile.id==next_enabled_id).is_some_and(|g|g.secret.is_some()&&g.pending.is_none()&&g.page.as_ref().is_some_and(|p|p.more)))),
@@ -415,8 +435,13 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 col().class("server-record-list").fill(each(state.map(move|s|s.task_records.groups.iter().find(|g|g.profile.id==rows_id).and_then(|g|g.page.as_ref()).map(|p|p.records.clone()).unwrap_or_default())).key(|r|r.id.clone()).children(move|item|{
                     let record=item.value;let read=row_ui.clone();let server=id.clone();let record_id=record.get().id;
                     row().class("server-task-record").fill((
-                        stops_ui::selection(row_ui.clone(),server.clone(),record_id.clone()),
-                        col().class("record-copy").fill((text().class("record-name").content(record.map(|r|r.metadata.as_ref().map(|m|m.name.clone()).unwrap_or_else(||r.id.clone()))),text().class("record-id subtle").selectable(true).content(record.map(|r|r.id.clone())),text().class("subtle").content(record.map(|r|if let Some(metadata)=&r.metadata {format!("{} · {} · {} {}",i18n::translate(metadata.kind.label()),i18n::translate(&format!("Version {}",metadata.revision)),i18n::translate("Created"),formatting::timestamp(Some(metadata.created)))} else {format!("{} {}",i18n::translate("Record modified"),formatting::timestamp(Some(r.modified)))})),text().class("subtle").content(i18n::bind(record.map(|r|if r.invalid_metadata {"Record metadata is invalid; the task ID remains available"}else if r.metadata.is_none(){"Legacy record without metadata"}else{""}.to_owned()))))),
+                        when(group.map(|g| !g.native), {
+                            let ui = row_ui.clone();
+                            let (server, id) = (server.clone(), record_id.clone());
+                            move || stops_ui::selection(ui.clone(), server.clone(), id.clone())
+                        }),
+                        native_tasks_ui::stop_button(row_ui.clone(), group, record, server.clone(), record_id.clone()),
+                        col().class("record-copy").fill((text().class("record-name").content(record.map(|r|r.metadata.as_ref().map(|m|if m.kind==records::Kind::FileVerification{i18n::translate(&m.name)}else{m.name.clone()}).unwrap_or_else(||r.id.clone()))),text().class("record-id subtle").selectable(true).content(record.map(|r|r.id.clone())),text().class("subtle").content(record.map(|r|if let Some(metadata)=&r.metadata {format!("{} · {} · {} {}",i18n::translate(metadata.kind.label()),i18n::translate(&format!("Version {}",metadata.revision)),i18n::translate("Created"),formatting::timestamp(Some(metadata.created)))} else {format!("{} {}",i18n::translate("Record modified"),formatting::timestamp(Some(r.modified)))})),text().class("subtle").content(i18n::bind(record.map(|r|if r.invalid_metadata {"Record metadata is invalid; the task ID remains available"}else if r.metadata.is_none(){"Legacy record without metadata"}else{""}.to_owned()))))),
                         col().class("record-result").fill((text().class("record-status").content(i18n::bind(record.map(|r|r.label().to_owned()))),text().class("record-reason subtle").content(i18n::bind(record.map(|r|r.reason().to_owned()))))),
                         text().class("record-log-size subtle").content(record.map(|r|r.log_bytes.map(formatting::bytes).unwrap_or_else(||i18n::translate("Log unavailable")))),
                         btn("View saved log",move||read.read_record(server.clone(),record_id.clone())).class("button record-log-action").enabled(group.map(|g|g.secret.is_some()&&g.pending.is_none())),
@@ -430,6 +455,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
     fragment((
         stops_ui::dialog(ui.clone()),
+        native_tasks_ui::dialog(ui.clone()),
         when(
             state.map(|s| s.dialog == Some(Dialog::TaskRecordConnect)),
             {

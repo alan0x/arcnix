@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{Result, ensure};
 use zeroize::Zeroizing;
 
+use crate::native_tasks::{self, FileVerification};
 use crate::packages::Execution;
 use crate::remote::{CommandStream, RemoteSession};
 use crate::{operations, remote_tasks as jobs, task_records as records, task_stops as stops};
@@ -18,6 +19,26 @@ pub trait HostedTaskSubmitter {
         password: &str,
         timeout: Duration,
     ) -> Result<()>;
+}
+
+pub trait FileVerificationSubmitter {
+    fn submit_file_verification(&self, root: &str, task: &FileVerification) -> Result<()>;
+}
+
+pub trait NativeHostedTaskStopper {
+    fn stop_native_hosted_task(&self, root: &str, id: &str) -> Result<()>;
+}
+
+impl FileVerificationSubmitter for RemoteSession {
+    fn submit_file_verification(&self, root: &str, task: &FileVerification) -> Result<()> {
+        native_tasks::submit(self, root, task)
+    }
+}
+
+impl NativeHostedTaskStopper for RemoteSession {
+    fn stop_native_hosted_task(&self, root: &str, id: &str) -> Result<()> {
+        native_tasks::stop(self, root, id)
+    }
 }
 
 pub trait HostedTaskObserver {
@@ -91,6 +112,15 @@ impl HostedTaskSubmitter for RemoteSession {
 
 impl HostedTaskObserver for RemoteSession {
     fn observe_hosted_task(&self, id: &str, directory: &str) -> Result<jobs::Observation> {
+        if native_tasks::supported(self.host_os()?) {
+            let detail = native_tasks::detail(self, None, id)?;
+            let expected = format!("{}/{id}", detail.root.replace('\\', "/"));
+            ensure!(
+                directory.replace('\\', "/") == expected,
+                "Server task directory changed"
+            );
+            return Ok(jobs::Observation::from_native(detail));
+        }
         self.require_linux_capability("Server task observation")?;
         jobs::query(self, id, directory)
     }
@@ -117,6 +147,9 @@ impl HostedTaskRecordReader for RemoteSession {
         expected_root: Option<&str>,
         offset: u32,
     ) -> Result<(String, records::Page)> {
+        if native_tasks::supported(self.host_os()?) {
+            return native_tasks::page(self, expected_root, offset);
+        }
         self.require_linux_capability("Server task records")?;
         let home = if let Some(home) = home {
             home.to_owned()
@@ -139,6 +172,9 @@ impl HostedTaskRecordReader for RemoteSession {
     }
 
     fn read_task_detail(&self, home: &str, root: &str, id: &str) -> Result<records::Detail> {
+        if native_tasks::supported(self.host_os()?) {
+            return native_tasks::detail(self, Some(root), id);
+        }
         self.require_linux_capability("Server task records")?;
         let command = records::detail_command(home, root, id)?;
         let text = record_response(self, &command, None, Duration::from_secs(30), false)?;

@@ -145,6 +145,19 @@ pub struct Observation {
     result_issue: Option<crate::task_result::Issue>,
 }
 impl Observation {
+    pub(super) fn from_native(detail: crate::task_records::Detail) -> Self {
+        let record = detail.record;
+        Self {
+            id: record.id,
+            output: detail.output,
+            before: record.service.clone(),
+            service: record.service,
+            before_invocation: "-".into(),
+            invocation: "-".into(),
+            saved_exit: record.exit_code,
+            result_issue: record.result_reason,
+        }
+    }
     pub fn state_changed(&self) -> bool {
         self.before != self.service || self.before_invocation != self.invocation
     }

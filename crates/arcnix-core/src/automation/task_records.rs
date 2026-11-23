@@ -23,6 +23,7 @@ pub enum Kind {
     Cleanup,
     Recovery,
     TaskStop,
+    FileVerification,
 }
 impl Kind {
     pub fn label(&self) -> &'static str {
@@ -37,6 +38,7 @@ impl Kind {
             Self::Cleanup => "Record cleanup",
             Self::Recovery => "Residual recovery",
             Self::TaskStop => "Stop server tasks",
+            Self::FileVerification => "File verification",
         }
     }
 }
@@ -150,6 +152,8 @@ pub enum ServiceState {
     Failed,
     Missing,
     Unavailable,
+    Cancelled,
+    Interrupted,
     Unknown,
 }
 impl ServiceState {
@@ -185,7 +189,8 @@ impl ServiceState {
                 Some(_) => Status::Failed,
                 None => Status::Unknown,
             },
-            Self::Unavailable | Self::Unknown => Status::Unknown,
+            Self::Cancelled => Status::Cancelled,
+            Self::Interrupted | Self::Unavailable | Self::Unknown => Status::Unknown,
         }
     }
     pub fn reason(&self, exit_code: Option<i32>) -> &'static str {
@@ -195,6 +200,7 @@ impl ServiceState {
             return "Saved server task exit result is invalid; inspect the original task.";
         }
         match self {
+            Self::Interrupted => "The server job ended before saving a result.",
             Self::Unavailable => "Service state unavailable; saved files are still readable",
             Self::Unknown => "Unrecognized service state; inspect the server task",
             Self::Failed if exit_code == Some(0) => {
@@ -220,6 +226,9 @@ pub struct Record {
 }
 impl Record {
     pub fn label(&self) -> &'static str {
+        if self.service == ServiceState::Interrupted {
+            return "Interrupted";
+        }
         if self
             .metadata
             .as_ref()

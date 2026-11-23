@@ -114,6 +114,7 @@ enum Dialog {
     ScriptExport,
     TaskRecordConnect,
     TaskRecordLog,
+    NativeTask,
     TaskStop,
     TerminatePortProcess,
     ConfigurationBackup,
