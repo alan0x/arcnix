@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
-use super::host_capabilities::checked_command;
+use crate::host::checked_host_command as checked_command;
 use crate::remote::RemoteSession;
 use crate::resource_ports::{ObservedPort, ObservedPorts};
 use crate::{disks, network, processes};

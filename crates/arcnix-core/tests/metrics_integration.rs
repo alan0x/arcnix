@@ -304,7 +304,12 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
     };
     use arcnix_core::operations::ServiceAction;
     use arcnix_core::resource_ports::Inventory;
+    use arcnix_core::settings_capabilities::{
+        DesktopPreferencesReader, HostClockReader, SystemTimeZoneReader, SystemTimeZoneWriter,
+    };
+    use arcnix_core::software_capabilities::{ContainerInventoryReader, PackageInventoryReader};
     use arcnix_core::system_logs::{LogQuery, LogSource};
+    use arcnix_core::task_capabilities::HostedTaskSubmitter;
 
     let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
     anyhow::ensure!(address.ip().is_loopback(), "fixture must be loopback");
@@ -369,6 +374,27 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
             .contains("State=Running")
     );
     assert!(session.apply_native_service(&plan).is_err());
+    assert_eq!(
+        session.read_system_time_zone()?.name.as_deref(),
+        Some("UTC")
+    );
+    assert_eq!(session.read_host_clock()?.offset_minutes, 0);
+    assert!(
+        session
+            .change_system_time_zone("Not an installed time zone")
+            .is_err()
+    );
+    let saved = session.change_system_time_zone("China Standard Time")?;
+    assert_eq!(saved.name.as_deref(), Some("China Standard Time"));
+    assert_eq!(session.read_host_clock()?.offset_minutes, 480);
+    for error in [
+        session.read_desktop_preferences().unwrap_err(),
+        session.read_package_environment().unwrap_err(),
+        session.read_containers().unwrap_err(),
+        session.hosted_task_home().unwrap_err(),
+    ] {
+        assert!(error.is::<arcnix_core::host::UnsupportedHostCapability>());
+    }
     Ok(())
 }
 
@@ -384,6 +410,10 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
     };
     use arcnix_core::operations::ServiceAction;
     use arcnix_core::resource_ports::Inventory;
+    use arcnix_core::settings_capabilities::{
+        HostClockReader, SystemTimeZoneReader, SystemTimeZoneWriter,
+    };
+    use arcnix_core::software_capabilities::ContainerInventoryReader;
     use arcnix_core::system_logs::{JournalPeriod, LogQuery, LogSource};
 
     #[derive(serde::Deserialize)]
@@ -476,5 +506,18 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
             .action(),
         ServiceAction::Stop
     );
+    let zones = session.read_system_time_zone()?;
+    let current_zone = zones.name.as_deref().context("missing macOS time zone")?;
+    assert!(zones.choices.iter().any(|zone| zone.name == "Etc/UTC"));
+    assert_eq!(
+        session.change_system_time_zone(current_zone)?.name,
+        zones.name
+    );
+    assert!(session.read_host_clock()?.unix_seconds > 0);
+    if std::env::var_os("ARCNIX_TEST_DARWIN_DOCKER").is_some() {
+        assert!(arcnix_core::server_apps::discover(&session)?.docker);
+        let docker = session.read_containers()?;
+        assert!(!docker.version.is_empty());
+    }
     Ok(())
 }

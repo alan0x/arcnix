@@ -437,6 +437,7 @@ class Authentication(paramiko.ServerInterface):
         self.sftp_enabled = True
         self.metrics_sample = 0
         self.windows_service_state = "Stopped"
+        self.windows_time_zone = "UTC"
         self.username = ""
         self.terminal_size = (100, 30)
 

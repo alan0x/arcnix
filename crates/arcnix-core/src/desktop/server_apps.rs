@@ -600,7 +600,21 @@ pub fn discover_command() -> &'static str {
     "# arcnix:apps:discover\nprintf 'ARCNIX_APPS_V1\\n'; if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH=\"$PATH:/snap/bin\"; fi; if command -v docker >/dev/null 2>&1; then printf 'docker\\n'; if command -v timeout >/dev/null 2>&1 && timeout -k 1s 5s docker compose version --short >/dev/null 2>&1; then printf 'compose\\n'; fi; fi; if command -v snap >/dev/null 2>&1; then printf 'snap\\n'; fi; if command -v tmux >/dev/null 2>&1; then printf 'tmux\\n'; fi"
 }
 pub fn discover(session: &RemoteSession) -> Result<Applications> {
-    let output = execute(session, discover_command(), 4096)?;
+    use crate::host::HostOs;
+
+    let darwin_command;
+    let command = match session.host_os()? {
+        HostOs::Windows => return Ok(Applications::default()),
+        HostOs::MacOs => {
+            darwin_command = format!(
+                "# arcnix:apps:darwin-discover\n{}\nprintf 'ARCNIX_APPS_V1\\n'; if command -v docker >/dev/null 2>&1; then printf 'docker\\n'; fi; if command -v tmux >/dev/null 2>&1; then printf 'tmux\\n'; fi",
+                crate::docker::DARWIN_CLI_PATH
+            );
+            &darwin_command
+        }
+        _ => discover_command(),
+    };
+    let output = execute(session, command, 4096)?;
     ensure!(
         output.exit_code == 0,
         "Application detection failed: {}",

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use anyhow::{Result, ensure};
+use arcnix_core::FileEntry;
 use arcnix_core::desktop_customization::DesktopItems;
 use arcnix_core::file_capabilities::{
     DirectoryReader, DocumentDestinationWriter, DocumentReader, DocumentWriter, EntryKind,
@@ -9,7 +10,9 @@ use arcnix_core::file_capabilities::{
 };
 use arcnix_core::local_desktop::{Target, join};
 use arcnix_core::metrics::ResourceReader;
-use arcnix_core::{FileEntry, sync};
+use arcnix_core::settings_capabilities::{
+    DesktopPreferencesReader, DesktopPreferencesWriter, HostClockReader, LocalDesktopPreferences,
+};
 
 use super::worker::{Action, FileFailure, Update, create_named_entry};
 use crate::server_apps_worker::{Action as AppAction, Reply};
@@ -29,7 +32,7 @@ impl Session {
         let target = &self.target;
         Ok(match action {
             AppAction::Discover => Reply::Applications(Default::default()),
-            AppAction::Clock => Reply::Clock(target.clock()?),
+            AppAction::Clock => Reply::Clock(target.read_host_clock()?),
             AppAction::ReadTimeZone => Reply::TimeZone(arcnix_core::desktop_time_zone::TimeZones {
                 system: false,
                 name: None,
@@ -80,11 +83,11 @@ impl Session {
                 })
             }
             AppAction::ReadPreferences => {
-                Reply::Preferences(sync::read_local_desktop(&self.prefs)?)
+                Reply::Preferences(LocalDesktopPreferences(&self.prefs).read_desktop_preferences()?)
             }
-            AppAction::WritePreferences(pending) => {
-                Reply::SavedPreferences(sync::save_local_desktop(&self.prefs, &pending)?)
-            }
+            AppAction::WritePreferences(pending) => Reply::SavedPreferences(
+                LocalDesktopPreferences(&self.prefs).save_desktop_preferences(&pending)?,
+            ),
             _ => anyhow::bail!("This action is unavailable on the local desktop"),
         })
     }

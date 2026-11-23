@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use arcnix_core::ServerProfile;
 use arcnix_core::remote::PendingConnection;
-use arcnix_core::terminal::Pty;
+use arcnix_core::terminal::{Pty, TerminalMode, TerminalSessionOpener};
 fn terminal(username: &str) -> Result<Pty> {
     let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
     anyhow::ensure!(address.ip().is_loopback(), "fixture must use loopback");
@@ -19,7 +19,7 @@ fn terminal(username: &str) -> Result<Pty> {
     let fingerprint = pending.fingerprint().to_owned();
     pending
         .authenticate("arcnix-test", &fingerprint)?
-        .into_terminal(80, 24)
+        .open_terminal(80, 24, TerminalMode::Interactive)
 }
 fn until(terminal: &mut Pty, expected: &str) -> Result<Vec<u8>> {
     let deadline = Instant::now() + Duration::from_secs(8);

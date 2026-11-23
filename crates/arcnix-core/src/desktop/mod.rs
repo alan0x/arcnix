@@ -5,4 +5,5 @@ pub(crate) mod desktop_storage;
 pub mod desktop_theme;
 pub mod desktop_time_zone;
 pub mod server_apps;
+pub mod settings_capabilities;
 pub mod sync;

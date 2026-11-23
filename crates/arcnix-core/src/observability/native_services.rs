@@ -1,12 +1,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
-use base64::Engine;
 use serde::Deserialize;
 
-use super::host_capabilities::checked_command;
-use super::windows_host::json;
-use crate::host::HostOs;
+use crate::host::{HostOs, checked_host_command as checked_command, powershell_json as json};
 use crate::operations::{Service, ServiceAction};
 use crate::remote::RemoteSession;
 
@@ -176,10 +173,7 @@ fn windows_literal(id: &str) -> Result<String> {
         !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control),
         "Invalid Windows service name"
     );
-    let encoded = base64::engine::general_purpose::STANDARD.encode(id);
-    Ok(format!(
-        "[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}'))"
-    ))
+    Ok(crate::host::powershell_literal(id))
 }
 
 fn windows_job(remote: &RemoteSession, id: &str) -> Result<WindowsService> {

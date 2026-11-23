@@ -12,7 +12,8 @@ mod software;
 // Keep existing module paths available to the client and external callers.
 pub use automation::{
     operations, remote_tasks, script_bundles, script_favorites, script_parameters, scripts,
-    startup_services, target_selection, task_records, task_result, task_stops, tasks,
+    startup_services, target_selection, task_capabilities, task_records, task_result, task_stops,
+    tasks,
 };
 pub use config::{model, preferences, server_labels, store};
 use connection::private_program;
@@ -25,7 +26,7 @@ pub use connection::{
 use desktop::desktop_storage;
 pub use desktop::{
     browser, desktop_customization, desktop_shortcuts, desktop_theme, desktop_time_zone,
-    server_apps, sync,
+    server_apps, settings_capabilities, sync,
 };
 pub use files::{deletion, file_associations, local, permissions, recycle, text_files, transfer};
 pub use maintenance::{
@@ -41,5 +42,5 @@ pub use observability::{
 };
 pub use software::{
     compose_apps, docker, installation_plan, installers, packages, server_inventory,
-    software_catalog, software_install, updates,
+    software_capabilities, software_catalog, software_install, updates,
 };

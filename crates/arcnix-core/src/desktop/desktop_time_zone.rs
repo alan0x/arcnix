@@ -88,7 +88,11 @@ if [ -f /usr/share/zoneinfo/Etc/UTC ]; then printf 'Etc/UTC\n'; fi
         "Cannot read the server time zone: {}",
         result.stderr.trim()
     );
-    let mut lines = result.stdout.lines();
+    parse(&result.stdout)
+}
+
+pub(super) fn parse(output: &str) -> Result<TimeZones> {
+    let mut lines = output.lines();
     ensure!(
         lines.next() == Some("ARCNIX_TIME_ZONE_V1"),
         "Invalid server time zone response"

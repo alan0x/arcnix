@@ -7,6 +7,10 @@ use anyhow::Result;
 use arcnix_core::host_capabilities::ServiceChangePlanner;
 use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::scripts::Template;
+use arcnix_core::software_capabilities::{PackageChangePlanner, PackageInventoryReader};
+use arcnix_core::task_capabilities::{
+    HostedTaskObserver, HostedTaskRecordReader, HostedTaskSubmitter, record_response,
+};
 use arcnix_core::tasks::Status;
 use arcnix_core::{ServerProfile, operations, packages};
 use zeroize::Zeroizing;
@@ -256,42 +260,6 @@ fn record_text_with_input(
 fn record_upload(remote: &RemoteSession, command: &str, input: &[u8]) -> Result<String> {
     record_response(remote, command, Some(input), Duration::from_secs(30), true)
 }
-fn record_response(
-    remote: &RemoteSession,
-    command: &str,
-    input: Option<&[u8]>,
-    timeout: Duration,
-    upload: bool,
-) -> Result<String> {
-    let mut output = Vec::new();
-    let mut error = Vec::new();
-    let mut oversized = false;
-    let mut collect = |stream, bytes: &[u8]| {
-        let target = if matches!(stream, arcnix_core::remote::CommandStream::Stdout) {
-            &mut output
-        } else {
-            &mut error
-        };
-        if target.len() + bytes.len() <= 2 * 1024 * 1024 {
-            target.extend_from_slice(bytes);
-        } else {
-            oversized = true;
-        }
-    };
-    let result = if upload {
-        remote.exec_task_upload(command, input.unwrap_or_default(), timeout, &mut collect)
-    } else {
-        remote.exec_stream(command, input, timeout, &mut collect)
-    }?;
-    anyhow::ensure!(!oversized, "Server record response is too large");
-    anyhow::ensure!(
-        result.exit_code == 0,
-        "Cannot read server records (exit {}): {}",
-        result.exit_code,
-        String::from_utf8_lossy(&error)
-    );
-    Ok(String::from_utf8_lossy(&output).into_owned())
-}
 fn configuration_record_error(error: anyhow::Error, target: &Target) -> String {
     arcnix_core::tasks::redact_log(
         &format!("{error:#}"),
@@ -328,25 +296,8 @@ pub fn record_page(
             let remote =
                 PendingConnection::open_for_known_host(&target.profile, &target.fingerprint)?
                     .authenticate(&target.secret, &target.fingerprint)?;
-            let home = if let Some(home) = home {
-                home
-            } else {
-                let output = remote.exec(arcnix_core::task_records::home_command())?;
-                anyhow::ensure!(
-                    output.exit_code == 0,
-                    "Cannot read the remote home directory"
-                );
-                output.stdout
-            };
-            let text = record_text(
-                &remote,
-                &arcnix_core::task_records::list_command(&home, offset)?,
-            )?;
-            let mut page = arcnix_core::task_records::parse_page(&text, offset)?;
-            anyhow::ensure!(
-                expected_root.is_none_or(|root| root == page.root),
-                "Server task root changed; reconnect to browse records"
-            );
+            let (home, mut page) =
+                remote.read_task_page(home.as_deref(), expected_root.as_deref(), offset)?;
             for record in &mut page.records {
                 redact_record(record, &target);
             }
@@ -373,11 +324,7 @@ pub fn record_detail(
             let remote =
                 PendingConnection::open_for_known_host(&target.profile, &target.fingerprint)?
                     .authenticate(&target.secret, &target.fingerprint)?;
-            let text = record_text(
-                &remote,
-                &arcnix_core::task_records::detail_command(&home, &root, &id)?,
-            )?;
-            let mut detail = arcnix_core::task_records::parse_detail(&text, &id, &root)?;
+            let mut detail = remote.read_task_detail(&home, &root, &id)?;
             redact_record(&mut detail.record, &target);
             detail.output =
                 arcnix_core::tasks::redact_log(&detail.output, &[target.secret.as_str()]);
@@ -431,8 +378,7 @@ fn refresh_one(task: &str, request: Refresh, events: &async_channel::Sender<Even
     let result = (|| -> Result<_> {
         let pending = PendingConnection::open_for_known_host(&target.profile, &target.fingerprint)?;
         let remote = pending.authenticate(&target.secret, &target.fingerprint)?;
-        let mut snapshot =
-            Snapshot::received(arcnix_core::remote_tasks::query(&remote, task, &directory)?);
+        let mut snapshot = Snapshot::received(remote.observe_hosted_task(task, &directory)?);
         snapshot.observation.output =
             arcnix_core::tasks::redact_log(&snapshot.observation.output, &[target.secret.as_str()]);
         Ok(snapshot)
@@ -654,9 +600,9 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
     let template = &resolved;
     let pending = PendingConnection::open_for_known_host(&target.profile, &target.fingerprint)?;
     let remote = pending.authenticate(&target.secret, &target.fingerprint)?;
-    let home = arcnix_core::remote_tasks::preflight(&remote)?;
+    let home = remote.hosted_task_home()?;
     let directory = arcnix_core::remote_tasks::directory(&home, task)?;
-    arcnix_core::remote_tasks::operation_preflight(&remote)?;
+    remote.check_exclusive_task_slot()?;
     let (root, sudo_available) = operations::identity(&remote)?;
     anyhow::ensure!(
         root || sudo_available,
@@ -887,14 +833,14 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
             sudo_available,
         )?)
     } else if let Some(action) = &template.package_action {
-        let environment = packages::detect(&remote)?;
+        let environment = remote.read_package_environment()?;
         if let Some(definition) = &template.installation {
             anyhow::ensure!(
                 action == &packages::PackageAction::Install(definition.packages.clone())
                     && template.revision == definition.revision(),
                 "Installation definition or revision changed"
             );
-            packages::verify_available(&remote, &definition.packages)?;
+            remote.verify_install_candidates(&definition.packages)?;
             let text = read_command(
                 &remote,
                 &arcnix_core::installation_plan::Snapshot::command(definition, &environment)?,
@@ -922,7 +868,7 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
                 transaction: snapshot.transaction,
             }
         } else {
-            let plan = packages::preview(&remote, &environment, action.clone())?;
+            let plan = remote.preview_package_change(&environment, action.clone())?;
             Plan::Packages(environment, plan)
         }
     } else {
@@ -1159,23 +1105,9 @@ fn execute(
     }
     let result = (|| -> Result<bool> {
         let execution = execution(&prepared, task)?;
-        let metadata = &prepared.metadata;
-        let initialized =
-            prepared
-                .remote
-                .exec(&arcnix_core::task_records::initialize_metadata_command(
-                    &prepared.directory,
-                    metadata,
-                )?)?;
-        anyhow::ensure!(
-            initialized.exit_code == 0,
-            "Cannot initialize server task metadata"
-        );
-        let mut input = Zeroizing::new(Vec::new());
-        if execution.use_stdin_password {
-            input.extend_from_slice(prepared.target.sudo.as_bytes());
-            input.push(b'\n');
-        }
+        prepared
+            .remote
+            .initialize_task_record(&prepared.directory, &prepared.metadata)?;
         report(
             events,
             task,
@@ -1185,17 +1117,11 @@ fn execute(
             String::new(),
             None,
         );
-        let submitted = prepared.remote.exec_stream(
-            &execution.command,
-            execution.use_stdin_password.then_some(input.as_slice()),
+        prepared.remote.submit_hosted_task(
+            &execution,
+            &prepared.target.sudo,
             Duration::from_secs(30),
-            |_, _| {},
         )?;
-        anyhow::ensure!(
-            submitted.exit_code == 0,
-            "Server task submission returned exit {}",
-            submitted.exit_code
-        );
         // The server now owns the complete lifecycle. Free the submission slot
         // immediately; monitoring must never hold later targets on the client.
         report(events, task, id, Status::Running, None, String::new(), None);
@@ -1203,11 +1129,11 @@ fn execute(
         let mut previous = None;
         let deadline = std::time::Instant::now() + Duration::from_secs(3600);
         loop {
-            let mut snapshot = Snapshot::received(arcnix_core::remote_tasks::query(
-                &prepared.remote,
-                task,
-                &prepared.directory,
-            )?);
+            let mut snapshot = Snapshot::received(
+                prepared
+                    .remote
+                    .observe_hosted_task(task, &prepared.directory)?,
+            );
             snapshot.observation.output = arcnix_core::tasks::redact_log(
                 &snapshot.observation.output,
                 &[

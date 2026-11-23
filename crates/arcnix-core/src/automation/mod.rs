@@ -6,6 +6,7 @@ pub mod script_parameters;
 pub mod scripts;
 pub mod startup_services;
 pub mod target_selection;
+pub mod task_capabilities;
 pub mod task_records;
 pub mod task_result;
 pub mod task_stops;

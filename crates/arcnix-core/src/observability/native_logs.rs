@@ -2,11 +2,10 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::host_capabilities::checked_command;
 use super::system_logs::{
     JournalPeriod, LogCapabilities, LogEntry, LogQuery, LogSnapshot, LogSource, validate_query,
 };
-use super::windows_host::json;
+use crate::host::{checked_host_command as checked_command, powershell_json as json};
 use crate::remote::RemoteSession;
 
 pub(super) fn discover_darwin(remote: &RemoteSession) -> Result<LogCapabilities> {

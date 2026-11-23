@@ -1,41 +1,13 @@
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 
-use super::host_capabilities::checked_command;
-use crate::host::powershell_command;
+use crate::host::powershell_json as json;
 use crate::remote::RemoteSession;
 use crate::resource_ports::{ObservedPort, ObservedPorts};
 use crate::{disks, network, processes};
-
-pub(super) fn json<T: DeserializeOwned>(
-    remote: &RemoteSession,
-    script: &str,
-    capability: &'static str,
-) -> Result<T> {
-    let command = powershell_command(&format!(
-        "$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$WarningPreference='SilentlyContinue'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n{script}\n[Console]::WriteLine('ARCNIX_HOST_JSON_V1')\n[Console]::WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 6))"
-    ));
-    // Windows OpenSSH can pass commands through cmd.exe.
-    ensure!(
-        command.len() < 8191,
-        "Windows inventory command exceeds the shell limit"
-    );
-    let output = checked_command(remote, &command, capability)?;
-    let (header, payload) = output
-        .stdout
-        .trim()
-        .split_once('\n')
-        .context("Missing Windows inventory response")?;
-    ensure!(
-        header.trim_end() == "ARCNIX_HOST_JSON_V1",
-        "Unrecognized Windows inventory response"
-    );
-    serde_json::from_str(payload).with_context(|| format!("Invalid Windows {capability} response"))
-}
 
 pub(super) const DISKS: &str = r#"
 $devices = @(Get-CimInstance Win32_DiskDrive | ForEach-Object {

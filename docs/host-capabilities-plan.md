@@ -31,4 +31,7 @@ SSH 执行、SFTP 和本机调用属于传输与执行层。SSH 环境探测在�
 - 第四阶段已为 Linux、macOS 和 Windows SSH 会话接入磁盘、网卡地址、进程、监听端口、系统日志和服务接口。macOS 使用 Unified Log 和 launchd 系统域，Windows 使用 System 与 Application Event Log 及服务控制管理器。Linux 服务变更继续走后台任务。macOS 和 Windows 服务变更通过当前 SSH 会话审核并复核服务状态后执行。
 - macOS 的停止请求发送 SIGTERM，launchd 可按策略重新启动服务。系统域变更需要 root 或为该操作配置的非交互 sudo。Windows 服务变更由连接账号持有的服务权限决定。macOS 和 Windows 端口清单只读。
 - 已在原生 macOS OpenSSH 验证清单、日志、服务查询和变更预览。Windows 验证覆盖编码命令、模拟 Windows API、返回解析、过期审核拒绝，以及界面确认后刷新服务状态。Windows 原生 OpenSSH 验收和 macOS 提权变更实操仍待完成。
-- 第五阶段待实施。
+- 第五阶段已迁移包环境、清单、搜索、安装预览、Docker 查询与操作、Compose 查询、系统时钟与时区、桌面偏好、SSH PTY 和后台任务。包安装继续沿用 APT 审核与任务提交。任务提交、结果观察、历史读取和停止计划各自独立，保留 systemd 任务记录、操作锁和取消规则。
+- 时区由各 SSH 平台读取和应用，并回读确认结果。macOS 通过已安装的时区数据和 systemsetup，Windows 使用系统时区 ID。桌面偏好使用独立存储接口。macOS Docker 使用连接账号可以访问的本机套接字，Compose 工作流继续使用 Linux 实现。
+- 原生 macOS OpenSSH 已验证时区、服务器时钟和 Docker 清单。Windows 回环测试覆盖选择时区后的回读与时钟偏移。后台任务回环测试验证了提交、操作锁、断开后重新观察和读取历史记录。
+- 后续补齐 macOS、Windows 的软件包提供者、Windows Docker 与远端桌面偏好同步，以及这两个平台的持久后台任务。Windows 原生 OpenSSH 与 macOS 提权时区写入仍待实机验收。

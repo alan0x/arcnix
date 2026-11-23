@@ -14,6 +14,7 @@ use arcnix_core::host_capabilities::{PortController, PortInventoryReader, System
 use arcnix_core::metrics::{ResourceReader, ResourceReading};
 use arcnix_core::packages::{self, SystemEnvironment};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
+use arcnix_core::software_capabilities::PackageInventoryReader;
 use arcnix_core::system_logs::{LogCapabilities, LogQuery, LogSnapshot};
 use arcnix_core::{local, *};
 
@@ -1111,7 +1112,7 @@ pub(crate) fn start_with_limiter(
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("Connect a server first"))?;
                     if package_environment.is_none() || detect {
-                        package_environment = Some(packages::detect(remote)?);
+                        package_environment = Some(remote.read_package_environment()?);
                     }
                     let environment = package_environment.as_ref().expect("environment detected");
                     send(match action {
@@ -1119,10 +1120,10 @@ pub(crate) fn start_with_limiter(
                             Update::PackageEnvironment(Ok(environment.clone()))
                         }
                         Action::PackageSearch(query) => {
-                            Update::PackageList(Ok(packages::search(remote, environment, &query)?))
+                            Update::PackageList(Ok(remote.search_packages(environment, &query)?))
                         }
                         Action::PackageInstalled => {
-                            Update::PackageList(Ok(packages::installed(remote, environment)?))
+                            Update::PackageList(Ok(remote.read_installed_packages(environment)?))
                         }
                         _ => unreachable!(),
                     });

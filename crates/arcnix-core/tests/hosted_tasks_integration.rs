@@ -1,4 +1,96 @@
-//! Optional real systemd check using an explicitly selected local WSL distro.
+//! Hosted task capability tests through loopback SSH and an optional WSL systemd check.
+
+#[test]
+#[ignore = "requires tools/sftp_fixture.py and ARCNIX_TEST_SSH_ADDR"]
+fn hosted_task_capabilities_submit_observe_and_restore_records_after_reconnect()
+-> anyhow::Result<()> {
+    use std::net::SocketAddr;
+    use std::time::{Duration, Instant};
+
+    use anyhow::{Context, ensure};
+    use arcnix_core::remote::PendingConnection;
+    use arcnix_core::task_capabilities::{
+        HostedTaskObserver, HostedTaskRecordReader, HostedTaskSubmitter,
+    };
+    use arcnix_core::{ServerProfile, operations, remote_tasks, task_records, tasks};
+
+    let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
+    ensure!(address.ip().is_loopback(), "fixture must be loopback");
+    let profile = ServerProfile {
+        host: address.ip().to_string(),
+        port: address.port(),
+        username: "arcnix-nosftp".into(),
+        ..Default::default()
+    };
+    let pending = PendingConnection::open(&profile)?;
+    let fingerprint = pending.fingerprint().to_owned();
+    let remote = pending.authenticate("arcnix-test", &fingerprint)?;
+    assert!(!remote.sftp_available());
+    let home = remote.hosted_task_home()?;
+    remote.check_exclusive_task_slot()?;
+    let id = arcnix_core::new_id();
+    let directory = remote_tasks::directory(&home, &id)?;
+    remote.initialize_task_record(
+        &directory,
+        &task_records::Metadata {
+            version: 1,
+            id: id.clone(),
+            name: "Fixture task".into(),
+            revision: "fixture".into(),
+            kind: task_records::Kind::Script,
+            created: 0,
+            drill: None,
+            stops: None,
+            diagnostic: None,
+        },
+    )?;
+    let script = remote_tasks::launch(&id, &directory, "printf 'fixture job\\n'", None)?;
+    let execution = operations::hosted_execution(
+        &operations::Plan {
+            label: "Fixture submission".into(),
+            script,
+            administrator: true,
+            is_root: false,
+            sudo_available: true,
+        },
+        true,
+    )?;
+    remote.submit_hosted_task(&execution, "fixture-admin-secret", Duration::from_secs(5))?;
+    assert!(remote.check_exclusive_task_slot().is_err());
+    drop(remote);
+
+    let remote = PendingConnection::open_for_known_host(&profile, &fingerprint)?
+        .authenticate("arcnix-test", &fingerprint)?;
+    let expires = Instant::now() + Duration::from_secs(12);
+    loop {
+        let observed = remote.observe_hosted_task(&id, &directory)?;
+        if !observed.should_poll() {
+            assert_eq!(observed.status(), tasks::Status::Succeeded);
+            break;
+        }
+        ensure!(Instant::now() < expires, "fixture task did not finish");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let (restored_home, page) = remote.read_task_page(None, None, 0)?;
+    assert_eq!(restored_home, home);
+    let record = page
+        .records
+        .iter()
+        .find(|record| record.id == id)
+        .context("Task record was not retained")?;
+    assert_eq!(record.metadata.as_ref().unwrap().name, "Fixture task");
+    assert!(
+        remote
+            .read_task_page(Some(&home), Some("/wrong-task-root"), 0)
+            .is_err()
+    );
+    assert_eq!(
+        remote.read_task_detail(&home, &page.root, &id)?.record.id,
+        id
+    );
+    Ok(())
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore = "requires ARCNIX_TEST_SYSTEMD_DISTRIBUTION with a running systemd manager"]

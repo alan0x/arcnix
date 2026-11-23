@@ -479,7 +479,20 @@ def windows_inventory_reply(server, channel, command):
         service_name = "FixtureService"
         service = dict(unit=service_name, display="Fixture Windows service",
                        state=server.windows_service_state, startup="Manual", pid=42, exit=0, can_stop=True)
-        if "Win32_DiskDrive" in script and "Win32_LogicalDisk" in script:
+        zones = ["UTC", "China Standard Time"]
+        if "Set-TimeZone -Id" in script:
+            target = re.search(r"FromBase64String\('([A-Za-z0-9+/=]+)'\)", script)
+            zone = base64.b64decode(target[1]).decode() if target else ""
+            if zone not in zones:
+                channel.sendall_stderr(b"Invalid time zone in fixture request\r\n")
+                return
+            server.windows_time_zone = zone
+            result = zone
+        elif "Get-TimeZone -ListAvailable" in script:
+            result = dict(name=server.windows_time_zone, choices=zones)
+        elif "ToUnixTimeSeconds" in script and "Offset.TotalMinutes" in script:
+            result = dict(seconds=1768046400, offset_minutes=480 if server.windows_time_zone == zones[1] else 0)
+        elif "Win32_DiskDrive" in script and "Win32_LogicalDisk" in script:
             result = dict(devices=[dict(path=r"\\.\PHYSICALDRIVE0", size=2000, model="Fixture disk", kind="Fixed")],
                           volumes=[dict(drive="C:", size=2000, free=1500, filesystem="NTFS", name="System")])
         elif "Get-NetIPInterface" in script and "Get-NetIPAddress" in script:

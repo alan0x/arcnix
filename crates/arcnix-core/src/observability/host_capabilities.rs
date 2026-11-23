@@ -7,22 +7,7 @@ pub use native_services::NativeServicePlan;
 use super::{darwin_host, native_logs, native_services, windows_host};
 use crate::host::{HostOs, UnsupportedHostCapability};
 use crate::remote::RemoteSession;
-use crate::{CommandOutput, disks, network, operations, processes, resource_ports, system_logs};
-
-pub(super) fn checked_command(
-    remote: &RemoteSession,
-    command: &str,
-    capability: &'static str,
-) -> Result<CommandOutput> {
-    let output = crate::server_apps::execute_lossy(remote, command, 4 * 1024 * 1024)?;
-    ensure!(
-        output.exit_code == 0,
-        "{capability} failed (exit {}). {}",
-        output.exit_code,
-        output.stderr.trim().chars().take(1024).collect::<String>()
-    );
-    Ok(output)
-}
+use crate::{disks, network, operations, processes, resource_ports, system_logs};
 
 fn unsupported<T>(os: HostOs, capability: &'static str) -> Result<T> {
     Err(UnsupportedHostCapability { os, capability }.into())

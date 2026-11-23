@@ -1,4 +1,5 @@
 //! Separate finite control flow; never occupies the operation being stopped.
+use arcnix_core::task_capabilities::HostedTaskStopInspector;
 use arcnix_core::{record_maintenance as records, remote_tasks as jobs, task_stops as stops};
 
 use super::*;
@@ -39,18 +40,8 @@ pub fn inspect_stops(
                 root,
                 ids,
             };
-            let (root, sudo) = operations::identity(&remote)?;
-            let execution =
-                stops::inspect_execution(&selection, root, sudo, !target.sudo.is_empty())?;
-            let input = Zeroizing::new(format!("{}\n", target.sudo.as_str()));
-            let text = record_text_with_input(
-                &remote,
-                &execution.command,
-                execution.use_stdin_password.then_some(input.as_bytes()),
-                Duration::from_secs(45),
-            )?;
             Ok(Box::new((
-                stops::parse_snapshot(&text, &selection)?,
+                remote.inspect_task_stops(&selection, &target.sudo)?,
                 target.clone(),
             )))
         })()
@@ -103,7 +94,7 @@ pub fn execute_stops(
                                 account == plan.selection.account,
                                 "Server account changed; inspect tasks again"
                             );
-                            jobs::preflight(&remote)?;
+                            remote.hosted_task_home()?;
                             let (root, sudo) = operations::identity(&remote)?;
                             let execution = plan.prepare_execution(
                                 &account,
@@ -131,22 +122,19 @@ pub fn execute_stops(
                                 "Submission cancelled"
                             );
                             let directory = jobs::directory(&account.home, &task)?;
-                            record_text(
-                                &remote,
-                                &arcnix_core::task_records::initialize_metadata_command(
-                                    &directory,
-                                    &arcnix_core::task_records::Metadata {
-                                        diagnostic: None,
-                                        version: 1,
-                                        id: task.clone(),
-                                        name: "Stop server tasks".into(),
-                                        revision: stops::revision(),
-                                        kind: arcnix_core::task_records::Kind::TaskStop,
-                                        created: 0,
-                                        drill: None,
-                                        stops: Some(plan.selection.description()?),
-                                    },
-                                )?,
+                            remote.initialize_task_record(
+                                &directory,
+                                &arcnix_core::task_records::Metadata {
+                                    diagnostic: None,
+                                    version: 1,
+                                    id: task.clone(),
+                                    name: "Stop server tasks".into(),
+                                    revision: stops::revision(),
+                                    kind: arcnix_core::task_records::Kind::TaskStop,
+                                    created: 0,
+                                    drill: None,
+                                    stops: Some(plan.selection.description()?),
+                                },
                             )?;
                             let script = jobs::launch_with_access(
                                 &task,
@@ -184,10 +172,9 @@ pub fn execute_stops(
                                 "Submission cancelled"
                             );
                             attempted = true;
-                            record_text_with_input(
-                                &remote,
-                                &execution.command,
-                                execution.use_stdin_password.then_some(input.as_bytes()),
+                            remote.submit_hosted_task(
+                                &execution,
+                                &target.sudo,
                                 Duration::from_secs(45),
                             )?;
                             observe_stop(
@@ -251,11 +238,7 @@ fn observe_stop(
                 let deadline = std::time::Instant::now() + Duration::from_secs(210);
                 let mut previous = None;
                 loop {
-                    let observation = jobs::parse_observation(&record_text(
-                        &remote,
-                        &jobs::query_command(&task, &directory)?,
-                    )?)?;
-                    anyhow::ensure!(observation.id == task, "Unexpected task result");
+                    let observation = remote.observe_control_task(&task, &directory)?;
                     let active = observation.should_poll();
                     if previous.as_ref() != Some(&observation) {
                         previous = Some(observation.clone());

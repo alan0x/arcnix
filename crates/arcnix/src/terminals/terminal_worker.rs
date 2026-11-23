@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use arcnix_core::ServerProfile;
 use arcnix_core::remote::PendingConnection;
-use arcnix_core::terminal::Pty;
+use arcnix_core::terminal::{Pty, TerminalMode, TerminalSessionOpener};
 use zeroize::Zeroizing;
 
 use crate::worker::{Response, Update};
@@ -193,13 +193,17 @@ fn spawn_session(
                 current(&credentials, &generation, &stop),
                 "Terminal connection was cancelled"
             );
-            let pty = if let Some(persistent) = persistent {
-                remote.into_terminal_persistent(columns, rows, &persistent, directory.as_deref())
-            } else if let Some(directory) = directory {
-                remote.into_terminal_here(columns, rows, &directory)
+            let mode = if let Some(session) = persistent.as_deref() {
+                TerminalMode::Persistent {
+                    session,
+                    directory: directory.as_deref(),
+                }
+            } else if let Some(directory) = directory.as_deref() {
+                TerminalMode::Directory(directory)
             } else {
-                remote.into_terminal(columns, rows)
-            }?;
+                TerminalMode::Interactive
+            };
+            let pty = remote.open_terminal(columns, rows, mode)?;
             Ok(Box::new(pty))
         })();
         let mut terminal = match opened {

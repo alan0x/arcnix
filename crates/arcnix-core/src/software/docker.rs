@@ -1,8 +1,11 @@
 //! Docker CLI queries and bounded actions against the remote host's local socket.
+use std::borrow::Cow;
+
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::host::{HostOs, UnsupportedHostCapability};
 use crate::remote::RemoteSession;
 use crate::server_apps::{execute, execute_lossy};
 
@@ -16,6 +19,25 @@ unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 arcnix_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [ -S "$arcnix_runtime/docker.sock" ]; then arcnix_socket="unix://$arcnix_runtime/docker.sock"; else arcnix_socket='unix:///var/run/docker.sock'; fi
 arcnix_docker() { timeout -k 2s 25s docker --host "$arcnix_socket" "$@"; }
+"#;
+
+pub(crate) const DARWIN_CLI_PATH: &str = "export PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"";
+const DARWIN_PREFIX: &str = r#"set -eu
+command -v docker >/dev/null 2>&1 || { printf 'Docker is no longer installed\n' >&2; exit 1; }
+unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+if [ -S "$HOME/.docker/run/docker.sock" ]; then
+    arcnix_socket="unix://$HOME/.docker/run/docker.sock"
+elif [ -S /var/run/docker.sock ]; then
+    arcnix_socket='unix:///var/run/docker.sock'
+else
+    printf 'The local Docker socket is unavailable\n' >&2
+    exit 1
+fi
+if command -v gtimeout >/dev/null 2>&1; then
+    arcnix_docker() { gtimeout -k 2s 25s docker --host "$arcnix_socket" "$@"; }
+else
+    arcnix_docker() { docker --host "$arcnix_socket" "$@"; }
+fi
 "#;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -127,8 +149,28 @@ fn volume_valid(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
+fn command_for_host<'a>(session: &RemoteSession, command: &'a str) -> Result<Cow<'a, str>> {
+    match session.host_os()? {
+        HostOs::Linux => Ok(Cow::Borrowed(command)),
+        HostOs::MacOs => {
+            ensure!(command.contains(PREFIX), "Missing Docker command setup");
+            Ok(Cow::Owned(command.replacen(
+                PREFIX,
+                &format!("{DARWIN_CLI_PATH}\n{DARWIN_PREFIX}"),
+                1,
+            )))
+        }
+        os => Err(UnsupportedHostCapability {
+            os,
+            capability: "Docker over SSH",
+        }
+        .into()),
+    }
+}
+
 fn run(session: &RemoteSession, command: &str) -> Result<crate::CommandOutput> {
-    check(execute(session, command, LIMIT)?, |output| {
+    let command = command_for_host(session, command)?;
+    check(execute(session, &command, LIMIT)?, |output| {
         output.stderr.trim()
     })
 }
@@ -327,10 +369,9 @@ pub fn logs(session: &RemoteSession, id: &str) -> Result<String> {
 
 /// Read one snapshot with a supported tail length from [`LOG_LINES`].
 pub fn logs_with_tail(session: &RemoteSession, id: &str, lines: u16) -> Result<String> {
-    let output = check(
-        execute_lossy(session, &logs_command_with_tail(id, lines)?, LIMIT)?,
-        merged_failure,
-    )?;
+    let command = logs_command_with_tail(id, lines)?;
+    let command = command_for_host(session, &command)?;
+    let output = check(execute_lossy(session, &command, LIMIT)?, merged_failure)?;
     Ok(output.stdout)
 }
 pub fn operation_command(id: &str, operation: &Operation) -> Result<String> {

@@ -20,6 +20,31 @@ pub struct Output {
     pub bytes: Vec<u8>,
     pub exit_code: Option<i32>,
 }
+
+pub enum TerminalMode<'a> {
+    Interactive,
+    Directory(&'a str),
+    Persistent {
+        session: &'a str,
+        directory: Option<&'a str>,
+    },
+}
+
+pub trait TerminalSessionOpener {
+    fn open_terminal(self, columns: u32, rows: u32, mode: TerminalMode<'_>) -> Result<Pty>;
+}
+
+impl TerminalSessionOpener for crate::remote::RemoteSession {
+    fn open_terminal(self, columns: u32, rows: u32, mode: TerminalMode<'_>) -> Result<Pty> {
+        match mode {
+            TerminalMode::Interactive => self.into_terminal(columns, rows),
+            TerminalMode::Directory(directory) => self.into_terminal_here(columns, rows, directory),
+            TerminalMode::Persistent { session, directory } => {
+                self.into_terminal_persistent(columns, rows, session, directory)
+            }
+        }
+    }
+}
 fn dimensions(columns: u32, rows: u32) -> Result<()> {
     ensure!(
         (2..=500).contains(&columns) && (1..=300).contains(&rows),

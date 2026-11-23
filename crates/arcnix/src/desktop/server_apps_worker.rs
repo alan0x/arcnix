@@ -2,6 +2,13 @@ use arcnix_core::host_capabilities::{
     DiskInventoryReader, NetworkInventoryReader, ProcessInventoryReader,
 };
 use arcnix_core::remote::RemoteSession;
+use arcnix_core::settings_capabilities::{
+    DesktopPreferencesReader, DesktopPreferencesWriter, HostClockReader, SystemTimeZoneReader,
+    SystemTimeZoneWriter,
+};
+use arcnix_core::software_capabilities::{
+    ComposeProjectReader, ContainerController, ContainerInventoryReader, SoftwareCatalogReader,
+};
 use arcnix_core::{desktop_customization, desktop_time_zone, docker, server_apps, sync};
 
 pub enum Action {
@@ -74,22 +81,20 @@ pub enum Reply {
 }
 pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> {
     Ok(match action {
-        Action::SoftwareInventory => {
-            Reply::SoftwareInventory(arcnix_core::software_catalog::inventory(session)?)
+        Action::SoftwareInventory => Reply::SoftwareInventory(session.read_software_catalog()?),
+        Action::SoftwareQuery { source, query } => {
+            Reply::SoftwarePackages(session.query_software_source(source, query.as_deref())?)
         }
-        Action::SoftwareQuery { source, query } => Reply::SoftwarePackages(
-            arcnix_core::software_install::query(session, source, query.as_deref())?,
-        ),
-        Action::ComposeList => Reply::ComposeProjects(arcnix_core::compose_apps::list(session)?),
+        Action::ComposeList => Reply::ComposeProjects(session.read_compose_projects()?),
         Action::Disks => Reply::Disks(session.read_disk_inventory()?),
         Action::NetworkSettings => {
             Reply::NetworkSettings(session.host_os()?, session.read_network_inventory()?)
         }
         Action::Processes => Reply::Processes(session.read_process_inventory()?),
         Action::Discover => Reply::Applications(server_apps::discover(session)?),
-        Action::Clock => Reply::Clock(server_apps::clock(session)?),
-        Action::ReadTimeZone => Reply::TimeZone(desktop_time_zone::read(session)?),
-        Action::SetTimeZone(zone) => Reply::TimeZone(desktop_time_zone::set(session, &zone)?),
+        Action::Clock => Reply::Clock(session.read_host_clock()?),
+        Action::ReadTimeZone => Reply::TimeZone(session.read_system_time_zone()?),
+        Action::SetTimeZone(zone) => Reply::TimeZone(session.change_system_time_zone(&zone)?),
         Action::FileLocations => Reply::FileLocations(session.file_locations()?),
         Action::ReadImage(path) => {
             Reply::Image(desktop_customization::read_wallpaper(session, &path)?.into())
@@ -125,18 +130,18 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::WriteCookies(client, base, data) => {
             Reply::CookiesSaved(sync::Document::Cookies(&client).commit(session, &base, &data)?)
         }
-        Action::ReadPreferences => Reply::Preferences(sync::read_desktop(session)?),
+        Action::ReadPreferences => Reply::Preferences(session.read_desktop_preferences()?),
         Action::WritePreferences(pending) => {
-            Reply::SavedPreferences(sync::sync_desktop(session, &pending)?)
+            Reply::SavedPreferences(session.save_desktop_preferences(&pending)?)
         }
-        Action::DockerSnapshot => Reply::Snapshot(docker::snapshot(session)?),
-        Action::DockerImages => Reply::Images(docker::images(session)?),
-        Action::DockerStats(id) => Reply::ContainerStats(docker::stats(session, &id)?),
-        Action::DockerInspect(id) => Reply::Container(docker::inspect(session, &id)?),
-        Action::DockerVolume(name) => Reply::Volume(docker::volume(session, &name)?),
-        Action::DockerLogs(id, lines) => Reply::Logs(docker::logs_with_tail(session, &id, lines)?),
+        Action::DockerSnapshot => Reply::Snapshot(session.read_containers()?),
+        Action::DockerImages => Reply::Images(session.read_container_images()?),
+        Action::DockerStats(id) => Reply::ContainerStats(session.read_container_stats(&id)?),
+        Action::DockerInspect(id) => Reply::Container(session.inspect_container(&id)?),
+        Action::DockerVolume(name) => Reply::Volume(session.inspect_container_volume(&name)?),
+        Action::DockerLogs(id, lines) => Reply::Logs(session.read_container_logs(&id, lines)?),
         Action::DockerOperate(id, operation) => {
-            docker::operate(session, &id, &operation)?;
+            session.apply_container_operation(&id, &operation)?;
             Reply::Operated
         }
     })
