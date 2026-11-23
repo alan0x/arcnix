@@ -14,7 +14,7 @@ pub(crate) struct MetricState {
     previous: Option<ResourceSnapshot>,
     pub usage: Option<ResourceUsage>,
     pub error: String,
-    completed: Option<Instant>,
+    pub(super) completed: Option<Instant>,
     pub updated: String,
     pub history: arcnix_core::metric_history::History,
     pub origin: Option<Instant>,

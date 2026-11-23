@@ -129,6 +129,23 @@ mod tests {
         assert_eq!(h.window(300).len(), 2);
     }
     #[test]
+    fn switching_windows_includes_the_boundary_and_preserves_longer_history() {
+        let mut h = History::default();
+        for at in [99., 100., 699., 700., 939., 940., 1000.] {
+            h.push(at, Some(&sample(at)));
+        }
+        let times = |seconds| {
+            h.window(seconds)
+                .into_iter()
+                .map(|p| p.at)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(times(900), [100., 699., 700., 939., 940., 1000.]);
+        assert_eq!(times(60), [940., 1000.]);
+        assert_eq!(times(300), [700., 939., 940., 1000.]);
+        assert_eq!(times(900), [100., 699., 700., 939., 940., 1000.]);
+    }
+    #[test]
     fn invalid_values_are_missing_and_uptime_resets_start_a_new_segment() {
         let mut h = History::default();
         let mut u = sample(100.0);

@@ -23,6 +23,8 @@ with Peer(out/'peer') as peer:
         p=app.page;app.connect();resources(app)
         expect(p.locator('.resource-trend-chart svg')).to_have_count(3)
         eventually(lambda:len(data(p)['points'])==1)
+        assert data(p)['range']==300
+        expect(p.locator('.resource-trend-windows .active')).to_have_text('5 min')
         first=data(p)['points'][0];assert first['cpu'] is None and first['receive'] is None and first['memory']==50
         expect(p.locator('.resource-trend-cpu')).to_contain_text('Unavailable')
         expect(p.locator('.resource-trend-memory .resource-trend-marker')).to_have_count(1)
@@ -34,11 +36,48 @@ with Peer(out/'peer') as peer:
         expect(p.locator('.resource-trend-cpu .resource-trend-axis')).to_contain_text(['0%','25%','50%','75%','100%'])
         passed('Actual SSH samples retain first-read unknown rates, exact CPU/network deltas and monotonic client spacing; percentage axes stay fixed at 0–100%')
 
+        memory_line=p.locator('.resource-trend-memory path.resource-trend-line')
+        assert 'C' in memory_line.get_attribute('d')
+        expect(p.locator('.resource-trend-memory path.resource-trend-area')).to_have_count(1)
+        expect(p.locator('.resource-trend-network path.resource-trend-line')).to_have_count(2)
+        p.emulate_media(reduced_motion='no-preference')
+        # Give the next manual read a normal interval. Shorter intervals also
+        # shorten the reveal so that a second read can take over promptly.
+        time.sleep(1.8)
+        refresh(p)
+        memory=p.locator('.resource-trend-memory')
+        tip=memory.locator('.resource-trend-tip')
+        expect(tip).to_have_count(1)
+        assert tip.evaluate("""async head => {
+            const svg = head.closest('svg');
+            const clip = svg.querySelector('clipPath rect');
+            const line = svg.querySelector('path.resource-trend-line');
+            const read = () => {
+                const transform = line.parentNode.transform.baseVal;
+                const anchor = transform.getItem(0).matrix.e + .5 * transform.getItem(1).matrix.a;
+                const tip = head.transform.baseVal.getItem(0).matrix.e;
+                return {anchor, tip, edge: clip.x.baseVal.value + clip.width.baseVal.value};
+            };
+            const first = read();
+            await new Promise(resolve => setTimeout(resolve, 160));
+            const next = read();
+            return next.anchor < first.anchor && next.tip-next.anchor > first.tip-first.anchor
+                && Math.abs(next.edge - next.tip) < .01;
+        }""")
+        p.emulate_media(reduced_motion='reduce')
+        expect(tip).to_have_count(0)
+        assert memory.locator('.resource-trend-series').get_attribute('clip-path') is None
+        refresh(p)
+        expect(p.locator('.resource-trend-live-tips')).to_have_count(0)
+        p.emulate_media(reduced_motion='no-preference')
+        passed('History scrolls left as the live tip draws the new segment on the same frames; reduced motion settles immediately')
+
         svg=p.locator('.resource-trend-cpu svg');p.locator('.resource-trend-toolbar button').last.focus();p.keyboard.press('Tab');expect(svg).to_be_focused()
         expect(svg).to_have_css('outline-style','solid')
         svg.press('Home')
         expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).to_contain_text('Unavailable')
         svg.press('End');expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).to_contain_text('30%')
+        assert p.locator('.resource-trend-cpu .resource-trend-tooltip').evaluate('el=>el.style.left && el.getBoundingClientRect().right <= el.parentElement.getBoundingClientRect().right')
         svg.press('ArrowLeft');expect(svg).to_have_attribute('aria-label',__import__('re').compile('CPU usage'))
         svg.press('Escape');expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).not_to_be_visible()
         svg.hover(position=dict(x=130,y=90));expect(p.locator('.resource-trend-cpu .resource-trend-tooltip')).to_be_visible()
@@ -49,6 +88,16 @@ with Peer(out/'peer') as peer:
         expect(p.locator('.resource-trend-memory .resource-trend-tooltip')).to_be_visible()
         tip=p.get_by_role('button',name='Help: Session trends',exact=True);tip.hover();expect(p.get_by_role('tooltip')).to_contain_text('monotonic clock');tip.click();p.mouse.move(1400,950);expect(p.get_by_role('tooltip')).to_be_visible();p.keyboard.press('Escape')
         passed('Charts expose samples by pointer and keyboard, outline only keyboard focus, and keep detailed guidance in hover/click help')
+
+        sidebar=p.locator('.monitor-sidebar')
+        for kind in ['cpu','memory','network']:
+            sidebar.locator('.monitor-'+kind).click()
+            expect(p.locator('.resource-trend-chart')).to_have_count(1)
+            expect(p.locator('.resource-trend-'+kind+' svg')).to_be_visible()
+            expect(p.locator('.resource-trend-'+kind+' path.resource-trend-line')).to_have_count(2 if kind=='network' else 1)
+        sidebar.locator('.monitor-overview').click()
+        expect(p.locator('.resource-trend-chart')).to_have_count(3)
+        passed('CPU, memory and network detail pages each display their own trend and return to the three-chart overview')
 
         fixture(peer,error=True);refresh(p);assert data(p)['points'][-1]['memory'] is None
         expect(p.locator('.monitor-page .software-error')).to_be_visible()
@@ -62,8 +111,13 @@ with Peer(out/'peer') as peer:
         fixture(peer);refresh(p);refresh(p)
         passed('Read failures, missing metric sections and rebooted counters produce separate gaps and recover without turning unknown data into zero or connecting across a reboot')
 
-        count=len(queries(peer));p.get_by_role('button',name='15 min',exact=True).click();eventually(lambda:data(p)['range']==900)
-        p.get_by_role('button',name='1 min',exact=True).click();eventually(lambda:data(p)['range']==60)
+        count=len(queries(peer));history=data(p)['points']
+        for seconds,label in [(900,'15 min'),(60,'1 min'),(300,'5 min'),(60,'1 min')]:
+            p.get_by_role('button',name=label,exact=True).click()
+            eventually(lambda:data(p)['range']==seconds)
+            expect(p.locator('.resource-trend-windows .active')).to_have_text(label)
+            assert data(p)['points']==[point for point in history if history[-1]['at']-point['at']<=seconds]
+        assert len(queries(peer))==count
         p.get_by_role('button',name='Clear history',exact=True).click();expect(p.locator('.resource-trend-data')).to_contain_text('"points":[]');assert len(queries(peer))==count
         refresh(p);assert len(data(p)['points'])==1 and data(p)['points'][0]['cpu'] is None
         refresh(p);refresh(p)

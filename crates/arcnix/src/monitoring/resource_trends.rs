@@ -1,17 +1,36 @@
 //! Charts consume Rust-owned, session-only samples; they never fetch data.
+mod plot;
+
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::btn;
 use crate::*;
 
-fn payload(s: &State) -> String {
+fn payload(s: &State, section: monitor_ui::Section) -> String {
     let m = &s.metrics;
     let range = match m.window {
         60 | 900 => m.window,
         _ => 300,
     };
     let label = |key| crate::i18n::translate_for(key, desktop_system_settings::language(s));
+    let points = m.history.window(range);
+    let end = points.last().map_or(0., |p| p.at);
+    let span = end.clamp(1., f64::from(range));
+    let domain = [end - span, end];
+    let mut plots = serde_json::Map::new();
+    for (kind, name) in [
+        (monitor_ui::Section::Cpu, "cpu"),
+        (monitor_ui::Section::Memory, "memory"),
+        (monitor_ui::Section::Network, "network"),
+    ] {
+        if section == monitor_ui::Section::Overview || section == kind {
+            plots.insert(
+                name.into(),
+                serde_json::json!(plot::layout(kind, &points, domain).ok()),
+            );
+        }
+    }
     serde_json::json!({
-        "range":range,"points":m.history.window(range),
+        "range":range,"points":points,"domain":domain,"plots":plots,
         "labels":{
             "cpu":label("CPU usage"),"memory":label("Memory usage"),"network":label("Network rate"),
             "receive":label("Receive"),"transmit":label("Transmit"),"missing":label("Unavailable"),
@@ -26,6 +45,27 @@ fn payload(s: &State) -> String {
 pub(crate) fn panel(ui: Ui, section: monitor_ui::Section) -> impl Widget {
     let state = ui.state;
     let resume = ui.clone();
+    // Desktop state also changes for pointer, task and window events. Only lay
+    // out the history again when its samples or presentation actually change.
+    let cache = std::cell::RefCell::new(None);
+    let chart_data = state.map(move |s| {
+        let key = (
+            s.metrics.completed,
+            s.metrics.origin,
+            s.metrics.window,
+            s.config.settings.display,
+            desktop_system_settings::language(s),
+        );
+        let mut cache = cache.borrow_mut();
+        if let Some((last, value)) = cache.as_ref()
+            && *last == key
+        {
+            return String::clone(value);
+        }
+        let value = payload(s, section);
+        *cache = Some((key, value.clone()));
+        value
+    });
     col().class("resource-trends").fill((
         row().class("resource-trend-toolbar").fill((
             row().class("help-heading").fill((text().class("section-title").content(i18n::bind("Session trends")),crate::help_ui::group("Session trends",&[
@@ -41,7 +81,7 @@ pub(crate) fn panel(ui: Ui, section: monitor_ui::Section) -> impl Widget {
                 if !paused{resume.metrics_refresh();}
             }),
         )),
-        text().class("resource-trend-data hidden").content(state.map(payload)),
+        text().class("resource-trend-data hidden").content(chart_data),
         view().class(match section {
             monitor_ui::Section::Cpu => "resource-trend-plots plot-cpu",
             monitor_ui::Section::Memory => "resource-trend-plots plot-memory",

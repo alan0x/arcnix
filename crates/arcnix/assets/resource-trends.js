@@ -2,6 +2,8 @@
 (() => {
     const NS = 'http://www.w3.org/2000/svg';
     const panels = new Map();
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let nextClipId = 0;
     const element = (tag, className, parent) => {
         const node = document.createElement(tag);
         node.className = className;
@@ -16,14 +18,6 @@
         return node;
     };
     const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-    const niceTop = maximum => {
-        if (!(maximum > 0)) return 1;
-        const raw = maximum / 4;
-        const power = 10 ** Math.floor(Math.log10(raw));
-        const step = [1, 2, 2.5, 5, 10].find(n => n * power >= raw) * power;
-        const result = Math.ceil(maximum / step) * step;
-        return Number.isFinite(result) && result >= maximum ? result : maximum;
-    };
     function rate(value, data, axis = false) {
         if (!valid(value)) return data.labels.missing;
         const base = data.base === 1024 ? 1024 : 1000;
@@ -41,8 +35,13 @@
         const svg = svgNode('svg', { tabindex: '0', role: 'img', 'aria-keyshortcuts': 'ArrowLeft ArrowRight Home End' }, figure);
         const tooltip = element('div', 'resource-trend-tooltip', figure);
         tooltip.hidden = true;
-        const state = { figure, title, legend, svg, tooltip, keys, kind, activeAt: null, data: null, points: [], width: 0 };
-        const hide = () => { state.activeAt = null; tooltip.hidden = true; state.crosshair?.setAttribute('visibility', 'hidden'); };
+        const state = { figure, title, legend, svg, tooltip, keys, kind, clipId: `resource-trend-live-${++nextClipId}`, activeAt: null, data: null, points: [], width: 0 };
+        const hide = () => {
+            state.activeAt = null;
+            tooltip.hidden = true;
+            state.crosshair?.setAttribute('visibility', 'hidden');
+            if (state.data) svg.setAttribute('aria-label', `${title.textContent} · ${legend.textContent}`);
+        };
         svg.addEventListener('pointermove', event => {
             if (!state.points.length) return;
             const rect = svg.getBoundingClientRect();
@@ -70,32 +69,132 @@
     }
     function inspect(state, point) {
         state.activeAt = point.at;
-        const x = state.x(point.at);
         const age = Math.max(0, state.end - point.at);
         const time = age < 0.01 ? state.data.labels.latest : `−${age.toLocaleString(state.data.locale, { maximumFractionDigits: 1 })} ${state.data.labels.seconds}`;
         const values = state.keys.map(key => `${state.data.labels[key]}: ${formatted(state, key, point[key])}`);
         state.tooltip.textContent = [time, ...values].join(' · ');
         state.tooltip.hidden = false;
-        state.tooltip.style.left = `${Math.max(6, Math.min(x, state.width - 250))}px`;
+        positionInspection(state);
         state.svg.setAttribute('aria-label', `${state.data.labels[state.kind]} · ${state.tooltip.textContent}`);
         state.crosshair.replaceChildren();
         state.crosshair.setAttribute('visibility', 'visible');
-        svgNode('line', { x1: x, x2: x, y1: state.top, y2: state.bottom, class: 'resource-trend-crosshair' }, state.crosshair);
-        for (const key of state.keys) if (valid(point[key])) svgNode('circle', { cx: x, cy: state.y(point[key]), r: 4, class: `resource-trend-marker ${key}` }, state.crosshair);
+        svgNode('line', { x1: 0, x2: 0, y1: state.top, y2: state.bottom, class: 'resource-trend-crosshair' }, state.crosshair);
+        for (const key of state.keys) if (valid(point[key])) svgNode('circle', { cx: 0, cy: state.y(point[key]), r: 4, class: `resource-trend-marker ${key}` }, state.crosshair);
+    }
+    function positionInspection(state) {
+        const x = Math.max(state.left, Math.min(state.left + state.plotWidth, state.x(state.activeAt)));
+        state.crosshair.setAttribute('transform', `translate(${x} 0)`);
+        const svgRect = state.svg.getBoundingClientRect();
+        const cardRect = state.figure.getBoundingClientRect();
+        const maxLeft = state.figure.clientWidth - state.tooltip.offsetWidth - 6;
+        state.tooltip.style.left = `${Math.max(6, Math.min(svgRect.left - cardRect.left + x + 8, maxLeft))}px`;
+        state.tooltip.style.top = `${svgRect.top - cardRect.top + 4}px`;
+    }
+    // Paths share one transform. Isolated samples use the same projection but
+    // keep their radius in screen pixels while a new session's time span grows.
+    function drawSeries(layer, plot, domain) {
+        const paths = svgNode('g', {}, layer);
+        const dots = [];
+        for (const mark of plot.marks) {
+            if (mark.kind === 'dot') {
+                const node = svgNode('circle', { r: 3.5, class: `resource-trend-marker ${mark.series}` }, layer);
+                dots.push({ node, mark });
+            } else {
+                svgNode('path', { d: mark.d, 'vector-effect': 'non-scaling-stroke', class: `resource-trend-${mark.kind} ${mark.series}`, 'data-series': mark.series }, paths);
+            }
+        }
+        return { layer, paths, dots, domain, maximum: plot.maximum };
+    }
+    function projectSeries(state, series) {
+        const x = state.x(series.domain[0]), width = state.x(series.domain[1]) - x;
+        const y = state.y(series.maximum), height = state.bottom - y;
+        series.paths.setAttribute('transform', `translate(${x} ${y}) scale(${width} ${height})`);
+        for (const { node, mark } of series.dots) {
+            node.setAttribute('cx', x + mark.x * width);
+            node.setAttribute('cy', y + mark.y * height);
+        }
+    }
+    function extendSample(state, previousView, plot, before, latest) {
+        if (reducedMotion.matches) return;
+        const { layer, domain } = state.series;
+        const keys = state.keys.filter(key => !latest.break_before && valid(before[key]) && valid(latest[key]));
+
+        const clip = svgNode('clipPath', { id: state.clipId, clipPathUnits: 'userSpaceOnUse' }, state.svg);
+        svgNode('rect', { x: state.left - 4, y: 0, width: state.plotWidth + 4, height: state.svg.viewBox.baseVal.height }, clip);
+        layer.setAttribute('clip-path', `url(#${state.clipId})`);
+        // Keep the expiring left edge visible while it slides out of the window.
+        const first = state.points[0].at;
+        const outgoing = previousView.first < first ? previousView.series : null;
+        let edgeClip, edgeRect;
+        if (outgoing) {
+            edgeClip = svgNode('clipPath', { id: `${state.clipId}-edge`, clipPathUnits: 'userSpaceOnUse' }, state.svg);
+            edgeRect = svgNode('rect', { x: state.left, y: state.top - 4, height: state.bottom - state.top + 8 }, edgeClip);
+            outgoing.layer.setAttribute('clip-path', `url(#${state.clipId}-edge)`);
+            outgoing.layer.setAttribute('aria-hidden', 'true');
+            layer.before(outgoing.layer);
+        }
+        const tips = svgNode('g', { class: 'resource-trend-live-tips', 'aria-hidden': 'true' }, state.svg);
+        const heads = keys.map(key => {
+            const head = svgNode('g', { class: `resource-trend-tip ${key}` }, tips);
+            svgNode('circle', { r: 8, opacity: 0.23 }, head);
+            svgNode('circle', { r: 3.5, class: 'resource-trend-tip-core' }, head);
+            const y0 = state.y(before[key]), y3 = state.y(latest[key]);
+            const controls = plot.marks.find(mark => mark.series === key && mark.tip_y)?.tip_y;
+            const [y1, y2] = controls
+                ? controls.map(y => state.top + y * (state.bottom - state.top))
+                : [y0 + (y3 - y0) / 3, y3 - (y3 - y0) / 3];
+            return { head, y0, y1, y2, y3 };
+        });
+        const duration = Math.min(1400, (latest.at - before.at) * 800);
+        const start = performance.now();
+        function frame(now) {
+            // A resize, a newer sample or a page change replaces this layer.
+            if (!layer.isConnected || state.series.layer !== layer) return;
+            const t = Math.min(1, Math.max(0, (now - start) / duration));
+            const progress = reducedMotion.matches ? 1 : t;
+            state.start = previousView.start + (domain[0] - previousView.start) * progress;
+            state.span = previousView.span + ((domain[1] - domain[0]) - previousView.span) * progress;
+            projectSeries(state, state.series);
+            if (state.activeAt !== null && state.crosshair?.isConnected) positionInspection(state);
+            if (progress === 1) {
+                layer.removeAttribute('clip-path');
+                clip.remove();
+                outgoing?.layer.remove();
+                edgeClip?.remove();
+                tips.remove();
+                return;
+            }
+            if (outgoing) {
+                projectSeries(state, outgoing);
+                edgeRect.setAttribute('width', Math.max(0, state.x(first) - state.left));
+                outgoing.layer.setAttribute('opacity', 1 - t);
+            }
+            // The moving time window draws the new segment at its right edge.
+            // A manual refresh may arrive before the previous window has settled.
+            const shown = (state.start + state.span - before.at) / (latest.at - before.at);
+            const tipT = Math.max(0, Math.min(1, shown));
+            const x = state.left + state.plotWidth;
+            tips.setAttribute('opacity', shown < 0 ? 0 : Math.min(1, (1 - t) * 6));
+            const u = 1 - tipT;
+            for (const { head, y0, y1, y2, y3 } of heads) {
+                const y = u ** 3 * y0 + 3 * u * u * tipT * y1 + 3 * u * tipT * tipT * y2 + tipT ** 3 * y3;
+                head.setAttribute('transform', `translate(${x} ${y})`);
+            }
+            requestAnimationFrame(frame);
+        }
+        frame(start);
     }
     function draw(state, data) {
         const width = Math.floor(state.svg.clientWidth);
         if (width < 100) return;
-        const height = 196, left = 72, right = 14, top = 14, bottom = 166;
-        state.data = data; state.width = width; state.left = left; state.top = top; state.bottom = bottom;
-        state.plotWidth = Math.max(1, width - left - right);
-        state.end = data.points.at(-1)?.at ?? 0;
-        state.span = Math.min(data.range, Math.max(1, state.end));
-        state.start = state.end - state.span;
-        state.points = data.points.filter(p => p.at >= state.start && p.at <= state.end);
-        const maximum = state.kind === 'network' ? niceTop(Math.max(0, ...state.points.flatMap(p => state.keys.map(key => valid(p[key]) ? p[key] : 0)))) : 100;
-        state.x = at => left + (at - state.start) / state.span * state.plotWidth;
-        state.y = value => bottom - Math.min(1, value / maximum) * (bottom - top);
+        const height = 196, right = 10, top = 12, bottom = 166;
+        const previous = state.data;
+        const previousView = { start: state.start, span: state.span, first: state.points[0]?.at, series: state.series };
+        const plot = data.plots[state.kind];
+        state.data = data; state.width = width; state.top = top; state.bottom = bottom;
+        [state.start, state.end] = data.domain;
+        state.span = state.end - state.start;
+        state.points = data.points;
         state.title.textContent = data.labels[state.kind];
         state.legend.replaceChildren();
         const latest = state.points.at(-1);
@@ -108,36 +207,46 @@
         svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
         svg.setAttribute('aria-label', `${data.labels[state.kind]} · ${state.legend.textContent}`);
         svg.replaceChildren();
-        for (let i = 0; i <= 4; i++) {
-            const value = maximum * i / 4, y = state.y(value);
+        if (!plot) {
+            svgNode('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', class: 'resource-trend-empty' }, svg, data.labels.missing);
+            state.points = [];
+            state.tooltip.hidden = true;
+            return;
+        }
+        state.y = value => bottom - value / plot.maximum * (bottom - top);
+        const labels = plot.ticks.map(value => svgNode('text', { y: state.y(value) + 4, 'text-anchor': 'end', class: 'resource-trend-axis' }, svg, state.kind === 'network' ? rate(value, data, true) : `${value}%`));
+        const left = Math.ceil(Math.max(0, ...labels.map(label => label.getComputedTextLength()))) + 10;
+        state.left = left;
+        state.plotWidth = Math.max(1, width - left - right);
+        state.x = at => left + (at - state.start) / state.span * state.plotWidth;
+        for (const [i, value] of plot.ticks.entries()) {
+            const y = state.y(value);
+            labels[i].setAttribute('x', left - 8);
             svgNode('line', { x1: left, x2: width - right, y1: y, y2: y, class: 'resource-trend-grid' }, svg);
-            svgNode('text', { x: left - 8, y: y + 4, 'text-anchor': 'end', class: 'resource-trend-axis' }, svg, state.kind === 'network' ? rate(value, data, true) : `${value}%`);
         }
         for (let i = 0; i <= 2; i++) {
+            if (i === 1 && state.plotWidth < 190) continue;
             const age = state.span * (2 - i) / 2;
             const amount = (age >= 60 ? age / 60 : age).toLocaleString(data.locale, { maximumFractionDigits: 1 });
             svgNode('text', { x: left + state.plotWidth * i / 2, y: height - 7, 'text-anchor': i === 0 ? 'start' : i === 2 ? 'end' : 'middle', class: 'resource-trend-axis' }, svg, age ? `−${amount} ${age >= 60 ? data.labels.minutes : data.labels.seconds}` : data.labels.latest);
         }
-        let hasValues = false;
-        for (const key of state.keys) {
-            let segment = [];
-            const flush = () => {
-                if (!segment.length) return;
-                hasValues = true;
-                if (segment.length === 1) svgNode('circle', { cx: state.x(segment[0].at), cy: state.y(segment[0][key]), r: 3, class: `resource-trend-marker ${key}` }, svg);
-                else svgNode('path', { d: segment.map((p, i) => `${i ? 'L' : 'M'}${state.x(p.at).toFixed(2)},${state.y(p[key]).toFixed(2)}`).join(' '), class: `resource-trend-line ${key}`, 'data-series': key }, svg);
-                segment = [];
-            };
-            for (const point of state.points) {
-                if (point.break_before || !valid(point[key])) flush();
-                if (valid(point[key])) segment.push(point);
+        const layer = svgNode('g', { class: 'resource-trend-series' }, svg);
+        state.series = drawSeries(layer, plot, data.domain);
+        projectSeries(state, state.series);
+        if (!plot.marks.length) svgNode('text', { x: left + state.plotWidth / 2, y: top + (bottom - top) / 2, 'text-anchor': 'middle', class: 'resource-trend-empty' }, svg, data.labels.empty);
+        else if (previous !== data) {
+            const before = state.points.at(-2);
+            if (before && previous?.range === data.range && previous.points.at(-1)?.at === before.at && before.at < latest.at) {
+                extendSample(state, previousView, plot, before, latest);
+            } else if (!previous?.plots[state.kind]?.marks.length || previous.range !== data.range) {
+                layer.style.setProperty('--trend-reveal-inset', `${width - left + 4}px`);
+                layer.classList.add('resource-trend-reveal');
             }
-            flush();
         }
-        if (!hasValues) svgNode('text', { x: left + state.plotWidth / 2, y: top + (bottom - top) / 2, 'text-anchor': 'middle', class: 'resource-trend-empty' }, svg, data.labels.empty);
         state.crosshair = svgNode('g', { visibility: 'hidden' }, svg);
         const selected = state.points.find(p => p.at === state.activeAt);
-        if (selected) inspect(state, selected); else state.tooltip.hidden = true;
+        if (selected) inspect(state, selected);
+        else { state.activeAt = null; state.tooltip.hidden = true; }
     }
     function update(panel) {
         const source = panel.querySelector('.resource-trend-data');

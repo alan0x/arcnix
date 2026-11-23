@@ -28,6 +28,7 @@ zeroize = { version = "1", features = ["derive"] }
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 arcnix-core = { workspace = true, features = ["bundled-wallpapers"] }
 glory = { version = "0.9.1", default-features = false, features = ["wry"] }
+kartis = "0.3.0"
 sapid = "0.9.1"
 async-channel = "2"
 sha2 = "0.10"
