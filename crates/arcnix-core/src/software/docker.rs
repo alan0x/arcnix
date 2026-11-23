@@ -1,11 +1,9 @@
 //! Docker CLI queries and bounded actions against the remote host's local socket.
-use std::borrow::Cow;
-
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::host::{HostOs, UnsupportedHostCapability};
+use crate::host::{HostOs, UnsupportedHostCapability, powershell_command};
 use crate::remote::RemoteSession;
 use crate::server_apps::{execute, execute_lossy};
 
@@ -40,6 +38,17 @@ else
 fi
 "#;
 
+pub(crate) fn windows_available(session: &RemoteSession) -> Result<bool> {
+    crate::host::powershell_json(
+        session,
+        r#"
+$cli=Get-Command docker.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$standard=Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Docker\Docker\resources\bin\docker.exe'
+$result=($null -ne $cli -or [IO.File]::Exists($standard))
+"#,
+        "Docker CLI detection",
+    )
+}
 #[derive(Clone, Debug, Deserialize)]
 pub struct Container {
     pub id: String,
@@ -149,31 +158,148 @@ fn volume_valid(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
-fn command_for_host<'a>(session: &RemoteSession, command: &'a str) -> Result<Cow<'a, str>> {
-    match session.host_os()? {
-        HostOs::Linux => Ok(Cow::Borrowed(command)),
-        HostOs::MacOs => {
-            ensure!(command.contains(PREFIX), "Missing Docker command setup");
-            Ok(Cow::Owned(command.replacen(
-                PREFIX,
-                &format!("{DARWIN_CLI_PATH}\n{DARWIN_PREFIX}"),
-                1,
-            )))
-        }
-        os => Err(UnsupportedHostCapability {
-            os,
-            capability: "Docker over SSH",
-        }
-        .into()),
+enum Step {
+    Marker(&'static str),
+    Call(Vec<String>, bool),
+}
+
+struct DockerRequest {
+    operation: &'static str,
+    steps: Vec<Step>,
+}
+
+fn call(args: &[&str]) -> Step {
+    Step::Call(args.iter().map(|arg| (*arg).into()).collect(), false)
+}
+
+fn shell_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:/+-".contains(&byte))
+    {
+        arg.into()
+    } else {
+        crate::remote_tasks::quote(arg)
     }
 }
 
-fn run(session: &RemoteSession, command: &str) -> Result<crate::CommandOutput> {
-    let command = command_for_host(session, command)?;
-    check(execute(session, &command, LIMIT)?, |output| {
-        output.stderr.trim()
-    })
+// Microsoft C-runtime quoting for ProcessStartInfo.Arguments on Windows PowerShell 5.1.
+fn windows_arg(arg: &str) -> String {
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for c in arg.chars() {
+        if c == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        quoted.extend(std::iter::repeat_n(
+            '\\',
+            if c == '"' {
+                2 * backslashes + 1
+            } else {
+                backslashes
+            },
+        ));
+        quoted.push(c);
+        backslashes = 0;
+    }
+    quoted.extend(std::iter::repeat_n('\\', 2 * backslashes));
+    quoted.push('"');
+    quoted
 }
+
+impl DockerRequest {
+    fn single(operation: &'static str, args: &[&str]) -> Self {
+        Self {
+            operation,
+            steps: vec![call(args)],
+        }
+    }
+
+    fn shell(&self, setup: &str) -> String {
+        use std::fmt::Write;
+        let mut command = format!("# arcnix:docker:{}\n{setup}", self.operation);
+        for step in &self.steps {
+            match step {
+                Step::Marker(marker) => writeln!(command, "printf '%s\\n' '{marker}'").unwrap(),
+                Step::Call(args, merge) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| shell_arg(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    writeln!(
+                        command,
+                        "arcnix_docker {args}{}",
+                        if *merge { " 2>&1" } else { "" }
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        command.trim_end().to_owned()
+    }
+
+    fn windows(&self) -> Result<String> {
+        use std::fmt::Write;
+        let mut script = format!(
+            "# arcnix:docker:{}\n{}",
+            self.operation,
+            include_str!("windows_docker.ps1")
+        );
+        for step in &self.steps {
+            match step {
+                Step::Marker(marker) => writeln!(
+                    script,
+                    "[Console]::WriteLine('{marker}'); [Console]::Out.Flush()"
+                )
+                .unwrap(),
+                Step::Call(args, merge) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| windows_arg(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .replace('\'', "''");
+                    writeln!(
+                        script,
+                        "Run-Docker '{args}' ${}",
+                        if *merge { "true" } else { "false" }
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let command = powershell_command(&script);
+        ensure!(
+            command.len() < 8191,
+            "Windows Docker command exceeds the shell limit"
+        );
+        Ok(command)
+    }
+
+    fn command(&self, session: &RemoteSession) -> Result<String> {
+        match session.host_os()? {
+            HostOs::Linux => Ok(self.shell(PREFIX)),
+            HostOs::MacOs => Ok(self.shell(&format!("{DARWIN_CLI_PATH}\n{DARWIN_PREFIX}"))),
+            HostOs::Windows => self.windows(),
+            os => Err(UnsupportedHostCapability {
+                os,
+                capability: "Docker over SSH",
+            }
+            .into()),
+        }
+    }
+
+    fn run(&self, session: &RemoteSession) -> Result<crate::CommandOutput> {
+        check(
+            execute(session, &self.command(session)?, LIMIT)?,
+            |output| output.stderr.trim(),
+        )
+    }
+}
+
 fn check(
     output: crate::CommandOutput,
     failure_message: fn(&crate::CommandOutput) -> &str,
@@ -211,19 +337,35 @@ fn merged_failure(output: &crate::CommandOutput) -> &str {
         stderr => stderr,
     }
 }
+fn snapshot_request() -> DockerRequest {
+    DockerRequest {
+        operation: "snapshot",
+        steps: vec![
+            Step::Marker("ARCNIX_DOCKER_V1"),
+            call(&["version", "--format", "{{.Server.Version}}"]),
+            Step::Marker("ARCNIX_CONTAINERS"),
+            call(&[
+                "container",
+                "ls",
+                "-a",
+                "--no-trunc",
+                "--format",
+                r#"{"id":{{json .ID}},"name":{{json .Names}},"image":{{json .Image}},"state":{{json .State}},"status":{{json .Status}},"ports":{{json .Ports}},"mounts":{{json .Mounts}},"networks":{{json .Networks}},"compose_project":{{json (.Label "com.docker.compose.project")}},"compose_service":{{json (.Label "com.docker.compose.service")}},"compose_working_dir":{{json (.Label "com.docker.compose.project.working_dir")}}}"#,
+            ]),
+            Step::Marker("ARCNIX_VOLUMES"),
+            call(&[
+                "volume",
+                "ls",
+                "--format",
+                r#"{"name":{{json .Name}},"driver":{{json .Driver}},"scope":{{json .Scope}}}"#,
+            ]),
+            Step::Marker("ARCNIX_DOCKER_END"),
+        ],
+    }
+}
+
 pub fn snapshot_command() -> String {
-    format!(
-        r#"# arcnix:docker:snapshot
-{PREFIX}
-printf 'ARCNIX_DOCKER_V1\n'
-arcnix_docker version --format '{{{{.Server.Version}}}}'
-printf 'ARCNIX_CONTAINERS\n'
-arcnix_docker container ls -a --no-trunc --format '{{"id":{{{{json .ID}}}},"name":{{{{json .Names}}}},"image":{{{{json .Image}}}},"state":{{{{json .State}}}},"status":{{{{json .Status}}}},"ports":{{{{json .Ports}}}},"mounts":{{{{json .Mounts}}}},"networks":{{{{json .Networks}}}},"compose_project":{{{{json (.Label "com.docker.compose.project")}}}},"compose_service":{{{{json (.Label "com.docker.compose.service")}}}},"compose_working_dir":{{{{json (.Label "com.docker.compose.project.working_dir")}}}}}}'
-printf 'ARCNIX_VOLUMES\n'
-arcnix_docker volume ls --format '{{"name":{{{{json .Name}}}},"driver":{{{{json .Driver}}}},"scope":{{{{json .Scope}}}}}}'
-printf 'ARCNIX_DOCKER_END\n'
-"#
-    )
+    snapshot_request().shell(PREFIX)
 }
 pub fn parse_snapshot(text: &str) -> Result<Snapshot> {
     ensure!(text.len() <= LIMIT, "Docker inventory exceeded size limit");
@@ -283,15 +425,21 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot> {
     Ok(snapshot)
 }
 pub fn snapshot(session: &RemoteSession) -> Result<Snapshot> {
-    parse_snapshot(&run(session, &snapshot_command())?.stdout)
+    parse_snapshot(&snapshot_request().run(session)?.stdout)
 }
 pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
-    let command = format!(
-        r#"# arcnix:docker:images
-{PREFIX}
-arcnix_docker image ls --no-trunc --format '{{"id":{{{{json .ID}}}},"repository":{{{{json .Repository}}}},"tag":{{{{json .Tag}}}},"size":{{{{json .Size}}}}}}'"#
+    let request = DockerRequest::single(
+        "images",
+        &[
+            "image",
+            "ls",
+            "--no-trunc",
+            "--format",
+            r#"{"id":{{json .ID}},"repository":{{json .Repository}},"tag":{{json .Tag}},"size":{{json .Size}}}"#,
+        ],
     );
-    run(session, &command)?
+    request
+        .run(session)?
         .stdout
         .lines()
         .take(ROW_LIMIT + 1)
@@ -305,39 +453,58 @@ arcnix_docker image ls --no-trunc --format '{{"id":{{{{json .ID}}}},"repository"
 
 pub fn stats(session: &RemoteSession, id: &str) -> Result<Stats> {
     ensure!(id_valid(id), "Invalid container ID");
-    let command = format!(
-        r#"# arcnix:docker:stats
-{PREFIX}
-arcnix_docker stats --no-stream --format '{{"cpu":{{{{json .CPUPerc}}}},"memory":{{{{json .MemUsage}}}},"network":{{{{json .NetIO}}}},"block":{{{{json .BlockIO}}}},"processes":{{{{json .PIDs}}}}}}' {id}"#
+    let request = DockerRequest::single(
+        "stats",
+        &[
+            "stats",
+            "--no-stream",
+            "--format",
+            r#"{"cpu":{{json .CPUPerc}},"memory":{{json .MemUsage}},"network":{{json .NetIO}},"block":{{json .BlockIO}},"processes":{{json .PIDs}}}"#,
+            id,
+        ],
     );
-    Ok(serde_json::from_str(run(session, &command)?.stdout.trim())?)
+    Ok(serde_json::from_str(request.run(session)?.stdout.trim())?)
 }
 
-pub fn inspect_command(id: &str) -> Result<String> {
+fn inspect_request(id: &str) -> Result<DockerRequest> {
     ensure!(id_valid(id), "Invalid container ID");
-    Ok(format!(
-        r#"# arcnix:docker:inspect
-{PREFIX}
-arcnix_docker container inspect --format '{{"id":{{{{json .Id}}}},"name":{{{{json .Name}}}},"image":{{{{json .Config.Image}}}},"state":{{{{json .State.Status}}}},"restart":{{{{json .HostConfig.RestartPolicy.Name}}}},"retries":{{{{json .HostConfig.RestartPolicy.MaximumRetryCount}}}},"memory":{{{{json .HostConfig.Memory}}}},"nano_cpus":{{{{json .HostConfig.NanoCpus}}}},"network":{{{{json .HostConfig.NetworkMode}}}},"ports":{{{{json .NetworkSettings.Ports}}}},"bindings":{{{{json .HostConfig.PortBindings}}}},"mounts":{{{{json .Mounts}}}}}}' {id}
-"#
+    Ok(DockerRequest::single(
+        "inspect",
+        &[
+            "container",
+            "inspect",
+            "--format",
+            r#"{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"state":{{json .State.Status}},"restart":{{json .HostConfig.RestartPolicy.Name}},"retries":{{json .HostConfig.RestartPolicy.MaximumRetryCount}},"memory":{{json .HostConfig.Memory}},"nano_cpus":{{json .HostConfig.NanoCpus}},"network":{{json .HostConfig.NetworkMode}},"ports":{{json .NetworkSettings.Ports}},"bindings":{{json .HostConfig.PortBindings}},"mounts":{{json .Mounts}}}"#,
+            id,
+        ],
     ))
 }
+pub fn inspect_command(id: &str) -> Result<String> {
+    Ok(inspect_request(id)?.shell(PREFIX))
+}
 pub fn inspect(session: &RemoteSession, id: &str) -> Result<ContainerDetails> {
-    let row: ContainerDetails = serde_json::from_str(&run(session, &inspect_command(id)?)?.stdout)?;
+    let row: ContainerDetails = serde_json::from_str(&inspect_request(id)?.run(session)?.stdout)?;
     ensure!(row.id == id, "Docker container identity changed");
     Ok(row)
 }
-pub fn volume_command(name: &str) -> Result<String> {
+fn volume_request(name: &str) -> Result<DockerRequest> {
     ensure!(volume_valid(name), "Invalid Docker volume name");
-    Ok(format!(
-        r#"# arcnix:docker:volume
-{PREFIX}
-arcnix_docker volume inspect --format '{{"name":{{{{json .Name}}}},"driver":{{{{json .Driver}}}},"scope":{{{{json .Scope}}}},"mountpoint":{{{{json .Mountpoint}}}}}}' '{name}'
-"#
+    Ok(DockerRequest::single(
+        "volume",
+        &[
+            "volume",
+            "inspect",
+            "--format",
+            r#"{"name":{{json .Name}},"driver":{{json .Driver}},"scope":{{json .Scope}},"mountpoint":{{json .Mountpoint}}}"#,
+            name,
+        ],
     ))
 }
+pub fn volume_command(name: &str) -> Result<String> {
+    Ok(volume_request(name)?.shell(PREFIX))
+}
 pub fn volume(session: &RemoteSession, name: &str) -> Result<VolumeDetails> {
-    let row: VolumeDetails = serde_json::from_str(&run(session, &volume_command(name)?)?.stdout)?;
+    let row: VolumeDetails = serde_json::from_str(&volume_request(name)?.run(session)?.stdout)?;
     ensure!(row.name == name, "Docker volume identity changed");
     Ok(row)
 }
@@ -349,16 +516,32 @@ pub fn logs_command(id: &str) -> Result<String> {
 }
 
 fn logs_command_with_tail(id: &str, lines: u16) -> Result<String> {
+    Ok(logs_request(id, lines)?.shell(PREFIX))
+}
+
+fn logs_request(id: &str, lines: u16) -> Result<DockerRequest> {
     ensure!(id_valid(id), "Invalid container ID");
     ensure!(
         LOG_LINES.contains(&lines),
         "Unsupported number of log lines"
     );
-    Ok(format!(
-        "# arcnix:docker:logs\n{PREFIX}\narcnix_docker container logs --timestamps --tail {lines} {id} 2>&1"
-    ))
+    let args = [
+        "container",
+        "logs",
+        "--timestamps",
+        "--tail",
+        &lines.to_string(),
+        id,
+    ];
+    Ok(DockerRequest {
+        operation: "logs",
+        steps: vec![Step::Call(
+            args.iter().map(|arg| (*arg).into()).collect(),
+            true,
+        )],
+    })
 }
-/// The container's stdout and stderr in the order Docker wrote them.
+/// A merged view of the container's stdout and stderr.
 ///
 /// The CLI copies both streams from the daemon one entry at a time, so sharing
 /// one pipe keeps their order. Output is shown, not parsed, so it is decoded
@@ -369,20 +552,22 @@ pub fn logs(session: &RemoteSession, id: &str) -> Result<String> {
 
 /// Read one snapshot with a supported tail length from [`LOG_LINES`].
 pub fn logs_with_tail(session: &RemoteSession, id: &str, lines: u16) -> Result<String> {
-    let command = logs_command_with_tail(id, lines)?;
-    let command = command_for_host(session, &command)?;
+    let command = logs_request(id, lines)?.command(session)?;
     let output = check(execute_lossy(session, &command, LIMIT)?, merged_failure)?;
     Ok(output.stdout)
 }
-pub fn operation_command(id: &str, operation: &Operation) -> Result<String> {
+fn operation_request(id: &str, operation: &Operation) -> Result<DockerRequest> {
     ensure!(id_valid(id), "Invalid container ID");
-    let (kind, command) = match operation {
-        Operation::Start => ("start", "start".to_owned()),
-        Operation::Stop => ("stop", "stop --time 10".to_owned()),
-        Operation::Restart => ("restart", "restart --time 10".to_owned()),
-        Operation::Pause => ("pause", "pause".to_owned()),
-        Operation::Resume => ("unpause", "unpause".to_owned()),
-        Operation::Remove => ("remove", "rm".to_owned()),
+    let (kind, mut args) = match operation {
+        Operation::Start => ("start", vec!["start".into()]),
+        Operation::Stop => ("stop", vec!["stop".into(), "--time".into(), "10".into()]),
+        Operation::Restart => (
+            "restart",
+            vec!["restart".into(), "--time".into(), "10".into()],
+        ),
+        Operation::Pause => ("pause", vec!["pause".into()]),
+        Operation::Resume => ("unpause", vec!["unpause".into()]),
+        Operation::Remove => ("remove", vec!["rm".into()]),
         Operation::Configure {
             restart,
             cpu_millis,
@@ -398,30 +583,36 @@ pub fn operation_command(id: &str, operation: &Operation) -> Result<String> {
                             && retries.parse::<u32>().is_ok()),
                 "Invalid restart policy"
             );
-            let mut command = format!("update --restart '{restart}'");
+            let mut command = vec!["update".into(), "--restart".into(), restart.clone()];
             if let Some(cpu) = cpu_millis {
                 ensure!(
                     *cpu <= 1_024_000 && (*cpu == 0 || *cpu >= 10),
                     "CPU limit must be 0 or between 0.01 and 1024"
                 );
-                command.push_str(&format!(" --cpus {}.{:03}", cpu / 1000, cpu % 1000));
+                command.extend(["--cpus".into(), format!("{}.{:03}", cpu / 1000, cpu % 1000)]);
             }
             if let Some(memory) = memory_mib {
                 ensure!(
                     *memory == 0 || (6..=16_777_216).contains(memory),
                     "Memory limit must be 0 or at least 6 MiB"
                 );
-                command.push_str(&format!(" --memory {memory}m"));
+                command.extend(["--memory".into(), format!("{memory}m")]);
             }
             ("configure", command)
         }
     };
-    Ok(format!(
-        "# arcnix:docker:{kind}\n{PREFIX}\narcnix_docker container {command} {id}"
-    ))
+    args.insert(0, "container".into());
+    args.push(id.into());
+    Ok(DockerRequest {
+        operation: kind,
+        steps: vec![Step::Call(args, false)],
+    })
+}
+pub fn operation_command(id: &str, operation: &Operation) -> Result<String> {
+    Ok(operation_request(id, operation)?.shell(PREFIX))
 }
 pub fn operate(session: &RemoteSession, id: &str, operation: &Operation) -> Result<()> {
-    run(session, &operation_command(id, operation)?)?;
+    operation_request(id, operation)?.run(session)?;
     Ok(())
 }
 

@@ -459,21 +459,96 @@ def reply(server, channel, command):
     return send(target + '\n')
 
 
+def windows_desktop_reply(server, channel):
+    with channel.makefile("rb", -1) as stream:
+        length = int.from_bytes(stream.read(4), "little")
+        if not 1 <= length <= 16384:
+            raise ValueError("Invalid fixture script length")
+        script = stream.read(length).decode("utf-8")
+        if "[IO.File]::Replace" not in script or "desktop.v1" not in script:
+            raise ValueError("Unknown desktop sync provider")
+        maximum = int(re.search(r"(?m)^\$limit=(\d+)$", script)[1])
+        target = server.fixture_root / "windows-desktop.v1"
+        with server.hosted_tasks_lock:
+            current = target.read_bytes() if target.exists() else None
+            if "$commit=$false" in script:
+                channel.sendall(b"M\n" if current is None else b"F\n" + current)
+                return
+            size = int(re.search(r"(?m)^\$length=(\d+)$", script)[1])
+            base = re.search(r"(?m)^\$base='([a-f0-9]+|missing)'$", script)[1]
+            next_revision = re.search(r"(?m)^\$next='([a-f0-9]+)'$", script)[1]
+            if not 1 <= size <= maximum:
+                raise ValueError("Invalid fixture data length")
+            data = stream.read(size)
+            if stream.read(1) or hashlib.sha256(data).hexdigest() != next_revision:
+                raise ValueError("Invalid fixture data")
+            revision = "missing" if current is None else hashlib.sha256(current).hexdigest()
+            if next_revision == revision:
+                channel.sendall(b"OK\n")
+            elif base != revision:
+                channel.sendall(b"STALE\n")
+            else:
+                target.write_bytes(data)
+                channel.sendall(b"OK\n")
+
+
+def windows_docker_reply(server, channel, script):
+    operation = script.splitlines()[0].rsplit(":", 1)[1]
+    identifier = "a" * 64
+    container = dict(id=identifier, name="fixture", image="nginx:alpine",
+                     state=getattr(server, "windows_container_state", "exited"),
+                     status="Fixture", ports="", mounts="", networks="")
+    volume = dict(name="fixture_data", driver="local", scope="local")
+    if "npipe:////./pipe/docker_engine " not in script:
+        raise ValueError("Unexpected Docker endpoint")
+    if operation == "snapshot":
+        lines = ["ARCNIX_DOCKER_V1", "29.0.0", "ARCNIX_CONTAINERS",
+                 json.dumps(container), "ARCNIX_VOLUMES", json.dumps(volume), "ARCNIX_DOCKER_END"]
+    elif operation == "images":
+        lines = [json.dumps(dict(id="sha256:" + identifier, repository="nginx", tag="alpine", size="25 MB"))]
+    elif operation == "volume" and volume["name"] in script:
+        lines = [json.dumps(dict(volume, mountpoint=r"C:\ProgramData\docker\volumes\fixture_data\_data"))]
+    elif identifier not in script:
+        raise ValueError("Unexpected Docker target")
+    elif operation == "inspect":
+        lines = [json.dumps(dict(id=identifier, name="/fixture", image=container["image"], state=container["state"],
+                                 restart="no", retries=0, memory=0, nano_cpus=0, network="nat",
+                                 ports={}, bindings={}, mounts=[]))]
+    elif operation == "stats":
+        lines = [json.dumps(dict(cpu="0.1%", memory="1 MiB", network="0 B", block="0 B", processes="2"))]
+    elif operation == "logs":
+        lines = ["fixture stdout", "fixture stderr"]
+    elif operation == "start":
+        server.windows_container_state = "running"
+        lines = [identifier]
+    else:
+        raise ValueError("Unexpected Docker operation")
+    channel.sendall(("\r\n".join(lines) + "\r\n").encode())
+
+
 def windows_inventory_reply(server, channel, command):
     """Decode only the encoded-command envelope and return synthetic Windows rows."""
-    prefix = "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "
+    prefix = command.split(" ", 1)[0] + " -NoLogo -NoProfile -NonInteractive -EncodedCommand "
     status = 1
     try:
         if command == "uname -s":
             channel.sendall_stderr(b"uname is unavailable\r\n")
             status = 127
             return
-        if not command.startswith(prefix) or len(command) >= 8191:
+        if not prefix.startswith(("powershell.exe ", "pwsh.exe ")) or not command.startswith(prefix) or len(command) >= 8191:
             channel.sendall_stderr(b"Unsupported fixture command\r\n")
             return
         script = base64.b64decode(command[len(prefix):], validate=True).decode("utf-16-le")
         if "[Environment]::OSVersion.Platform" in script:
             channel.sendall(b"ARCNIX_WINDOWS_HOST_V1\r\n")
+            status = 0
+            return
+        if script.startswith("# ARCNIX_WINDOWS_DESKTOP_SYNC_V1"):
+            windows_desktop_reply(server, channel)
+            status = 0
+            return
+        if script.startswith("# arcnix:docker:"):
+            windows_docker_reply(server, channel, script)
             status = 0
             return
         service_name = "FixtureService"
@@ -488,6 +563,16 @@ def windows_inventory_reply(server, channel, command):
                 return
             server.windows_time_zone = zone
             result = zone
+        elif "Get-Command winget.exe" in script:
+            result = dict(distribution="Windows 11", version="10.0.26100", architecture="64-bit", available=True, ps7=True)
+        elif prefix.startswith("pwsh.exe ") and "Get-Module -ListAvailable Microsoft.WinGet.Client" in script:
+            result = True
+        elif prefix.startswith("pwsh.exe ") and "Get-WinGetPackage -Source winget" in script:
+            result = [dict(name="Git.Git", version="2.52.0", summary="Git", installed=True)]
+            if "Find-WinGetPackage -Query" in script:
+                result.append(dict(name="BurntSushi.ripgrep.MSVC", version="15.1.0", summary="ripgrep", installed=False))
+        elif "Get-Command docker.exe" in script:
+            result = True
         elif "Get-TimeZone -ListAvailable" in script:
             result = dict(name=server.windows_time_zone, choices=zones)
         elif "ToUnixTimeSeconds" in script and "Offset.TotalMinutes" in script:

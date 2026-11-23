@@ -215,7 +215,6 @@ fn windows_time_zones(remote: &RemoteSession) -> Result<TimeZones> {
 
 impl DesktopPreferencesReader for RemoteSession {
     fn read_desktop_preferences(&self) -> Result<DesktopPreferences> {
-        require_desktop_preferences_sync(self)?;
         sync::read_desktop(self)
     }
 }
@@ -225,21 +224,8 @@ impl DesktopPreferencesWriter for RemoteSession {
         &self,
         pending: &Pending<DesktopPreferences>,
     ) -> Result<DesktopResult> {
-        require_desktop_preferences_sync(self)?;
         sync::sync_desktop(self, pending)
     }
-}
-
-fn require_desktop_preferences_sync(session: &RemoteSession) -> Result<()> {
-    let os = session.host_os()?;
-    if os == HostOs::Windows {
-        return Err(UnsupportedHostCapability {
-            os,
-            capability: "Remote desktop preferences sync",
-        }
-        .into());
-    }
-    Ok(())
 }
 
 impl DesktopPreferencesReader for LocalDesktopPreferences<'_> {

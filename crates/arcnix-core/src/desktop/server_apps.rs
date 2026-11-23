@@ -604,7 +604,12 @@ pub fn discover(session: &RemoteSession) -> Result<Applications> {
 
     let darwin_command;
     let command = match session.host_os()? {
-        HostOs::Windows => return Ok(Applications::default()),
+        HostOs::Windows => {
+            return Ok(Applications {
+                docker: crate::docker::windows_available(session)?,
+                ..Default::default()
+            });
+        }
         HostOs::MacOs => {
             darwin_command = format!(
                 "# arcnix:apps:darwin-discover\n{}\nprintf 'ARCNIX_APPS_V1\\n'; if command -v docker >/dev/null 2>&1; then printf 'docker\\n'; fi; if command -v tmux >/dev/null 2>&1; then printf 'tmux\\n'; fi",

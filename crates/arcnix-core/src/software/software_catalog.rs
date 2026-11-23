@@ -66,7 +66,7 @@ impl App {
             Manager::Zypper => 2,
             Manager::Apk => 3,
             Manager::Pacman => 4,
-            Manager::Unknown => return None,
+            Manager::Homebrew | Manager::WinGet | Manager::Unknown => return None,
         };
         let name = self.native[index];
         (!name.is_empty()).then_some(name)
@@ -432,6 +432,49 @@ impl Inventory {
         app.snap
             .is_some_and(|snap| self.snap_candidates.iter().any(|name| name == snap.name))
     }
+}
+
+pub(super) fn native_inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {
+    use super::software_capabilities::PackageInventoryReader;
+
+    let env = remote.read_package_environment()?;
+    let apps = crate::server_apps::discover(remote)?;
+    let mut result = Inventory {
+        manager: env.manager,
+        native: vec![],
+        snap: vec![],
+        projects: vec![],
+        containers: vec![],
+        is_root: env.is_root,
+        sudo_available: env.sudo_available,
+        hosted_tasks: false,
+        docker_cli: apps.docker,
+        compose_ready: false,
+        native_candidates: vec![],
+        snap_candidates: vec![],
+        errors: vec![],
+    };
+    if env.manager.uses_native_terminal() {
+        match remote.read_installed_packages(&env) {
+            Ok(rows) => result.native = rows,
+            Err(error) => result
+                .errors
+                .push(format!("{}: {error:#}", env.manager.label())),
+        }
+    }
+    if apps.docker {
+        match docker::snapshot(remote) {
+            Ok(snapshot) => {
+                result.containers = snapshot
+                    .containers
+                    .into_iter()
+                    .filter(|container| for_container(container).is_some())
+                    .collect()
+            }
+            Err(error) => result.errors.push(format!("Docker: {error:#}")),
+        }
+    }
+    Ok(result)
 }
 
 pub fn inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {

@@ -303,13 +303,21 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
         NativeServiceController, PortInventoryReader, ServiceReader,
     };
     use arcnix_core::operations::ServiceAction;
+    use arcnix_core::packages::PackageManager;
     use arcnix_core::resource_ports::Inventory;
     use arcnix_core::settings_capabilities::{
-        DesktopPreferencesReader, HostClockReader, SystemTimeZoneReader, SystemTimeZoneWriter,
+        DesktopPreferencesReader, DesktopPreferencesWriter, HostClockReader, SystemTimeZoneReader,
+        SystemTimeZoneWriter,
     };
-    use arcnix_core::software_capabilities::{ContainerInventoryReader, PackageInventoryReader};
+    use arcnix_core::software_capabilities::{
+        ContainerController, ContainerInventoryReader, PackageInventoryReader,
+        SoftwareCatalogReader,
+    };
+    use arcnix_core::software_install::Source;
+    use arcnix_core::sync::{DesktopResult, Document, Pending};
     use arcnix_core::system_logs::{LogQuery, LogSource};
     use arcnix_core::task_capabilities::HostedTaskSubmitter;
+    use arcnix_core::{Language, Theme, docker};
 
     let address: SocketAddr = std::env::var("ARCNIX_TEST_SSH_ADDR")?.parse()?;
     anyhow::ensure!(address.ip().is_loopback(), "fixture must be loopback");
@@ -387,14 +395,95 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
     let saved = session.change_system_time_zone("China Standard Time")?;
     assert_eq!(saved.name.as_deref(), Some("China Standard Time"));
     assert_eq!(session.read_host_clock()?.offset_minutes, 480);
-    for error in [
-        session.read_desktop_preferences().unwrap_err(),
-        session.read_package_environment().unwrap_err(),
-        session.read_containers().unwrap_err(),
-        session.hosted_task_home().unwrap_err(),
-    ] {
-        assert!(error.is::<arcnix_core::host::UnsupportedHostCapability>());
-    }
+    assert!(
+        session
+            .hosted_task_home()
+            .unwrap_err()
+            .is::<arcnix_core::host::UnsupportedHostCapability>()
+    );
+
+    let env = session.read_package_environment()?;
+    assert_eq!(env.manager, PackageManager::WinGet);
+    assert_eq!(session.read_installed_packages(&env)?[0].name, "Git.Git");
+    let search = session.search_packages(&env, "ripgrep")?;
+    assert!(
+        search
+            .iter()
+            .any(|row| row.name == "BurntSushi.ripgrep.MSVC" && !row.installed)
+    );
+    let installed = session.query_software_source(Source::Native(env.manager), None)?;
+    assert_eq!(installed.len(), 1);
+    let catalog = session.read_software_catalog()?;
+    assert!(!catalog.hosted_tasks && catalog.docker_cli);
+    assert_eq!(catalog.native[0].name, "Git.Git");
+    assert!(catalog.errors.is_empty());
+
+    let snapshot = session.read_containers()?;
+    assert_eq!(snapshot.version, "29.0.0");
+    let id = &snapshot.containers[0].id;
+    assert_eq!(session.inspect_container(id)?.state, "exited");
+    assert_eq!(session.read_container_stats(id)?.processes, "2");
+    assert_eq!(session.read_container_images()?[0].repository, "nginx");
+    assert!(
+        session
+            .inspect_container_volume(&snapshot.volumes[0].name)?
+            .mountpoint
+            .starts_with("C:")
+    );
+    assert!(
+        session
+            .read_container_logs(id, docker::LOG_LINES[0])?
+            .contains("fixture stderr")
+    );
+    session.apply_container_operation(id, &docker::Operation::Start)?;
+    assert_eq!(session.inspect_container(id)?.state, "running");
+
+    let base = session.read_desktop_preferences()?;
+    let mut theme = base.clone();
+    theme.theme = Theme::Dark;
+    let mut language = base.clone();
+    language.language = Some(Language::SimplifiedChinese);
+    assert!(matches!(
+        session.save_desktop_preferences(&Pending {
+            base: base.clone(),
+            desired: theme,
+            attempted: None,
+        })?,
+        DesktopResult::Saved(_)
+    ));
+    let document = Document::Desktop;
+    let previous = document.read(&session)?;
+    let DesktopResult::Saved(merged) = other.save_desktop_preferences(&Pending {
+        base: base.clone(),
+        desired: language,
+        attempted: None,
+    })?
+    else {
+        anyhow::bail!("Nonoverlapping desktop edits should merge");
+    };
+    assert_eq!(merged.theme, Theme::Dark);
+    assert_eq!(merged.language, Some(Language::SimplifiedChinese));
+    let current = document
+        .read(&session)?
+        .0
+        .context("Missing synchronized desktop packet")?;
+    assert!(document.commit(&session, &previous.revision(), &current)?);
+    let old = previous
+        .0
+        .clone()
+        .context("Missing previous desktop packet")?;
+    assert!(!document.commit(&session, &previous.revision(), &old)?);
+    let mut light = base.clone();
+    light.theme = Theme::Light;
+    assert!(matches!(
+        session.save_desktop_preferences(&Pending {
+            base,
+            desired: light,
+            attempted: None,
+        })?,
+        DesktopResult::Conflict { .. }
+    ));
+    assert_eq!(session.read_desktop_preferences()?, merged);
     Ok(())
 }
 
@@ -413,7 +502,7 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
     use arcnix_core::settings_capabilities::{
         HostClockReader, SystemTimeZoneReader, SystemTimeZoneWriter,
     };
-    use arcnix_core::software_capabilities::ContainerInventoryReader;
+    use arcnix_core::software_capabilities::{ContainerInventoryReader, PackageInventoryReader};
     use arcnix_core::system_logs::{JournalPeriod, LogQuery, LogSource};
 
     #[derive(serde::Deserialize)]
@@ -514,6 +603,23 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
         zones.name
     );
     assert!(session.read_host_clock()?.unix_seconds > 0);
+    if std::env::var_os("ARCNIX_TEST_DARWIN_HOMEBREW").is_some() {
+        let env = session.read_package_environment()?;
+        assert_eq!(env.manager, arcnix_core::packages::PackageManager::Homebrew);
+        let installed = session.read_installed_packages(&env)?;
+        assert!(!installed.is_empty() && installed.iter().all(|row| row.installed));
+        assert!(
+            session
+                .search_packages(&env, "ripgrep")?
+                .iter()
+                .any(|row| row.name == "ripgrep")
+        );
+        assert!(
+            session
+                .search_packages(&env, "arcnix-missing-test-formula-621d877eb")?
+                .is_empty()
+        );
+    }
     if std::env::var_os("ARCNIX_TEST_DARWIN_DOCKER").is_some() {
         assert!(arcnix_core::server_apps::discover(&session)?.docker);
         let docker = session.read_containers()?;

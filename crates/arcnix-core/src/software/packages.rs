@@ -16,6 +16,8 @@ pub enum PackageManager {
     Zypper,
     Apk,
     Pacman,
+    Homebrew,
+    WinGet,
     Unknown,
 }
 impl PackageManager {
@@ -27,11 +29,17 @@ impl PackageManager {
             Self::Zypper => "Zypper",
             Self::Apk => "APK",
             Self::Pacman => "Pacman",
+            Self::Homebrew => "Homebrew",
+            Self::WinGet => "WinGet",
             Self::Unknown => "未识别",
         }
     }
     pub fn supported(self) -> bool {
         self == Self::Apt
+    }
+
+    pub fn uses_native_terminal(self) -> bool {
+        matches!(self, Self::Homebrew | Self::WinGet)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

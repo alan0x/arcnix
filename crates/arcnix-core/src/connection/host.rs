@@ -76,10 +76,14 @@ fn probe(session: &RemoteSession, command: &str) -> Result<Option<String>> {
 }
 
 pub(crate) fn powershell_command(script: &str) -> String {
+    encoded_powershell_command("powershell.exe", script)
+}
+
+fn encoded_powershell_command(executable: &str, script: &str) -> String {
     let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
     // The command line has the same interpretation in cmd and PowerShell.
-    format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
+    format!("{executable} -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
 }
 
 /// Encode an argument as data. PowerShell also treats Unicode quotation marks as syntax.
@@ -108,9 +112,29 @@ pub(crate) fn powershell_json<T: DeserializeOwned>(
     script: &str,
     capability: &'static str,
 ) -> Result<T> {
-    let command = powershell_command(&format!(
-        "$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$WarningPreference='SilentlyContinue'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n{script}\n[Console]::WriteLine('ARCNIX_HOST_JSON_V1')\n[Console]::WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 6))"
-    ));
+    powershell_json_with(remote, script, capability, "powershell.exe")
+}
+
+pub(crate) fn powershell7_json<T: DeserializeOwned>(
+    remote: &RemoteSession,
+    script: &str,
+    capability: &'static str,
+) -> Result<T> {
+    powershell_json_with(remote, script, capability, "pwsh.exe")
+}
+
+fn powershell_json_with<T: DeserializeOwned>(
+    remote: &RemoteSession,
+    script: &str,
+    capability: &'static str,
+    executable: &str,
+) -> Result<T> {
+    let command = encoded_powershell_command(
+        executable,
+        &format!(
+            "$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$WarningPreference='SilentlyContinue'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n{script}\n[Console]::WriteLine('ARCNIX_HOST_JSON_V1')\n[Console]::WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 6))"
+        ),
+    );
     // Windows OpenSSH can pass commands through cmd.exe.
     ensure!(
         command.len() < 8191,

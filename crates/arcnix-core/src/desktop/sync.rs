@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::desktop_storage;
 pub use crate::desktop_storage::encode as encode_desktop;
+use crate::host::HostOs;
 use crate::remote::{CommandStream, RemoteSession};
 use crate::server_apps::{DESKTOP_JSON_READ_LIMIT, DesktopPreferences, parse_preferences};
 
@@ -28,7 +29,7 @@ pub struct Pending<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Revision(String);
+pub struct Revision(pub(super) String);
 
 impl Revision {
     fn of(bytes: Option<&[u8]>) -> Self {
@@ -38,7 +39,7 @@ impl Revision {
         ))
     }
 
-    fn valid(&self) -> bool {
+    pub(super) fn valid(&self) -> bool {
         self.0 == "missing" || (self.0.len() == 64 && self.0.bytes().all(|b| b.is_ascii_hexdigit()))
     }
 }
@@ -186,7 +187,11 @@ regular "$target"
     }
 
     pub fn read(self, session: &RemoteSession) -> Result<Snapshot> {
-        let output = self.run(session, &self.read_command()?, &[])?;
+        let output = if matches!(self, Self::Desktop) && session.host_os()? == HostOs::Windows {
+            super::windows_sync::exchange(session, DESKTOP_JSON_READ_LIMIT, None)?
+        } else {
+            self.run(session, &self.read_command()?, &[])?
+        };
         match output.as_slice() {
             b"M\n" => Ok(Snapshot(None)),
             [b'F', b'\n', bytes @ ..] => Ok(Snapshot(Some(bytes.to_vec()))),
@@ -208,16 +213,31 @@ regular "$target"
     }
 
     pub fn commit(self, session: &RemoteSession, base: &Revision, bytes: &[u8]) -> Result<bool> {
+        if matches!(self, Self::Desktop) && session.host_os()? == HostOs::Windows {
+            ensure!(
+                !bytes.is_empty() && bytes.len() <= DESKTOP_JSON_READ_LIMIT,
+                "Invalid sync document size"
+            );
+            let next = Revision::of(Some(bytes));
+            return commit_response(&super::windows_sync::exchange(
+                session,
+                DESKTOP_JSON_READ_LIMIT,
+                Some((base, &next, bytes)),
+            )?);
+        }
         self.send_commit(session, &self.commit_command(base, bytes)?, bytes)
     }
 
     fn send_commit(self, session: &RemoteSession, command: &str, bytes: &[u8]) -> Result<bool> {
-        let output = self.run(session, command, bytes)?;
-        match output.as_slice() {
-            b"OK\n" => Ok(true),
-            b"STALE\n" => Ok(false),
-            _ => anyhow::bail!("Invalid remote sync commit response"),
-        }
+        commit_response(&self.run(session, command, bytes)?)
+    }
+}
+
+fn commit_response(output: &[u8]) -> Result<bool> {
+    match output {
+        b"OK\n" => Ok(true),
+        b"STALE\n" => Ok(false),
+        _ => anyhow::bail!("Invalid remote sync commit response"),
     }
 }
 
@@ -294,8 +314,13 @@ pub fn sync_desktop(
         if merged == remote && !legacy {
             return Ok(DesktopResult::Saved(merged));
         }
-        let (command, bytes) = prepare_desktop_commit(&snapshot, &remote, &merged)?;
-        if Document::Desktop.send_commit(session, &command, &bytes)? {
+        let committed = if session.host_os()? == HostOs::Windows {
+            Document::Desktop.commit(session, &snapshot.revision(), &encode_desktop(&merged)?)?
+        } else {
+            let (command, bytes) = prepare_desktop_commit(&snapshot, &remote, &merged)?;
+            Document::Desktop.send_commit(session, &command, &bytes)?
+        };
+        if committed {
             return Ok(DesktopResult::Saved(merged));
         }
     }

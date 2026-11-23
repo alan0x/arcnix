@@ -219,6 +219,7 @@ SSH 连接中断，远程任务结果尚未确认。请重连并查询已安装�
 尚未识别系统	System not detected
 root 会话	Root session
 通过 sudo 执行管理员操作	Administrator operations use sudo
+使用 SSH 账号的软件包权限	Uses the SSH account’s package permissions
 无可用管理员权限	Administrator privileges unavailable
 搜索软件包	Search packages
 软件包名称，如 nginx、git、curl	Package name, e.g. nginx, git, curl

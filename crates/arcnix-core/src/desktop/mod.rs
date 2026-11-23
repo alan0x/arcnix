@@ -7,3 +7,4 @@ pub mod desktop_time_zone;
 pub mod server_apps;
 pub mod settings_capabilities;
 pub mod sync;
+mod windows_sync;

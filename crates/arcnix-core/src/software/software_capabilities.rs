@@ -1,6 +1,8 @@
 //! Package discovery and planning are separate from Docker and from task execution.
 use anyhow::Result;
 
+use super::native_packages;
+use crate::host::HostOs;
 use crate::remote::RemoteSession;
 use crate::{compose_apps, docker, packages, software_catalog, software_install};
 
@@ -54,14 +56,22 @@ pub trait ComposeProjectReader {
 
 impl PackageInventoryReader for RemoteSession {
     fn read_package_environment(&self) -> Result<packages::SystemEnvironment> {
-        self.require_linux_capability("Package inventory")?;
-        packages::detect(self)
+        match self.host_os()? {
+            os @ (HostOs::MacOs | HostOs::Windows) => native_packages::environment(self, os),
+            _ => {
+                self.require_linux_capability("Package inventory")?;
+                packages::detect(self)
+            }
+        }
     }
 
     fn read_installed_packages(
         &self,
         environment: &packages::SystemEnvironment,
     ) -> Result<Vec<packages::Package>> {
+        if environment.manager.uses_native_terminal() {
+            return native_packages::query(self, environment.manager, None);
+        }
         self.require_linux_capability("Installed packages")?;
         packages::installed(self, environment)
     }
@@ -71,6 +81,9 @@ impl PackageInventoryReader for RemoteSession {
         environment: &packages::SystemEnvironment,
         query: &str,
     ) -> Result<Vec<packages::Package>> {
+        if environment.manager.uses_native_terminal() {
+            return native_packages::query(self, environment.manager, Some(query));
+        }
         self.require_linux_capability("Package search")?;
         packages::search(self, environment, query)
     }
@@ -94,6 +107,9 @@ impl PackageChangePlanner for RemoteSession {
 
 impl SoftwareCatalogReader for RemoteSession {
     fn read_software_catalog(&self) -> Result<software_catalog::Inventory> {
+        if matches!(self.host_os()?, HostOs::MacOs | HostOs::Windows) {
+            return software_catalog::native_inventory(self);
+        }
         self.require_linux_capability("Software catalog")?;
         software_catalog::inventory(self)
     }
@@ -103,6 +119,11 @@ impl SoftwareCatalogReader for RemoteSession {
         source: software_install::Source,
         query: Option<&str>,
     ) -> Result<Vec<packages::Package>> {
+        if let software_install::Source::Native(manager) = source
+            && manager.uses_native_terminal()
+        {
+            return native_packages::query(self, manager, query);
+        }
         self.require_linux_capability("Software source")?;
         software_install::query(self, source, query)
     }

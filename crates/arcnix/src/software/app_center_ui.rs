@@ -584,7 +584,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
         text()
             .class("error app-center-error")
             .content(state.map(|s| s.software.app_center.error.clone())),
-        when(state.map(|s| s.software.app_center.inventory.as_ref().is_some_and(|inv| !inv.is_root && !inv.sudo_available)), || {
+        when(state.map(|s| s.software.app_center.inventory.as_ref().is_some_and(|inv| software_install::supported(inv.manager) && !inv.manager.uses_native_terminal() && !inv.is_root && !inv.sudo_available)), || {
             text().class("subtle").content(i18n::bind("To change system software, connect with an account that can use sudo or log in as root."))
         }),
         when(

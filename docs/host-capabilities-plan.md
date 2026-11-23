@@ -34,4 +34,6 @@ SSH 执行、SFTP 和本机调用属于传输与执行层。SSH 环境探测在�
 - 第五阶段已迁移包环境、清单、搜索、安装预览、Docker 查询与操作、Compose 查询、系统时钟与时区、桌面偏好、SSH PTY 和后台任务。包安装继续沿用 APT 审核与任务提交。任务提交、结果观察、历史读取和停止计划各自独立，保留 systemd 任务记录、操作锁和取消规则。
 - 时区由各 SSH 平台读取和应用，并回读确认结果。macOS 通过已安装的时区数据和 systemsetup，Windows 使用系统时区 ID。桌面偏好使用独立存储接口。macOS Docker 使用连接账号可以访问的本机套接字，Compose 工作流继续使用 Linux 实现。
 - 原生 macOS OpenSSH 已验证时区、服务器时钟和 Docker 清单。Windows 回环测试覆盖选择时区后的回读与时钟偏移。后台任务回环测试验证了提交、操作锁、断开后重新观察和读取历史记录。
-- 后续补齐 macOS、Windows 的软件包提供者、Windows Docker 与远端桌面偏好同步，以及这两个平台的持久后台任务。Windows 原生 OpenSSH 与 macOS 提权时区写入仍待实机验收。
+- macOS 接入 Homebrew formulae，Windows 接入 WinGet 社区源。已安装清单和仓库搜索通过软件包接口提供。安装、升级、卸载和刷新索引通过 SSH 终端执行，用户审核后按 Enter。Windows 连接账号需要能访问 WinGet、PowerShell 7 及 `Microsoft.WinGet.Client` 模块。
+- Windows Docker 通过目标主机本地命名管道读取容器、镜像、卷、资源和日志，并执行已确认的容器操作。访问取决于 SSH 账号的 Docker 权限。Windows 远端桌面偏好写入该账号的 `%LOCALAPPDATA%\Arcnix\desktop.v1`，沿用三方合并，按版本校验并原子替换文件。
+- macOS 本机通过临时原生 OpenSSH 验证 Homebrew 清单与搜索。Windows 回环 SSH 覆盖 WinGet、Docker 和桌面偏好传输。Windows 原生 OpenSSH、macOS 提权时区写入及两个平台的持久后台任务仍待完成。

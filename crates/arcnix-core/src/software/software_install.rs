@@ -50,7 +50,9 @@ pub(crate) fn repository_candidates(
         Source::Snap => {
             "snap info \"$name\" | awk '$1 == \"latest/stable:\" && NF > 1 && $2 != \"-\" && $2 != \"–\" && $2 != \"↑\" { found=1 } END { exit !found }'"
         }
-        Source::Native(Manager::Unknown) => return Ok(Vec::new()),
+        Source::Native(Manager::Homebrew | Manager::WinGet | Manager::Unknown) => {
+            return Ok(Vec::new());
+        }
     };
     let names = names
         .iter()
@@ -122,6 +124,11 @@ pub fn terminal_command(
     classic: bool,
     is_root: bool,
 ) -> Result<String> {
+    if let Source::Native(manager) = source
+        && manager.uses_native_terminal()
+    {
+        return native_terminal_command(manager, action, names);
+    }
     validate_names(source, action, names)?;
     let command = match (source, action) {
         (Source::Native(Manager::Apt), Action::Install) => "apt-get --no-remove install",
@@ -173,6 +180,54 @@ pub fn terminal_command(
     Ok(command)
 }
 
+fn native_terminal_command(manager: Manager, action: Action, names: &[String]) -> Result<String> {
+    if action == Action::RefreshIndex {
+        ensure!(names.is_empty(), "Index refresh takes no package names");
+        return Ok(match manager {
+            Manager::Homebrew => {
+                r#"env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" brew update"#.into()
+            }
+            Manager::WinGet => "winget.exe source update --name winget".into(),
+            _ => anyhow::bail!("Unsupported package operation"),
+        });
+    }
+
+    let max = if manager == Manager::WinGet { 1 } else { 32 };
+    ensure!(
+        (1..=max).contains(&names.len()),
+        "Select between 1 and {max} software packages"
+    );
+    ensure!(
+        names
+            .iter()
+            .all(|name| super::native_packages::valid_id(name)),
+        "Invalid package name"
+    );
+    let verb = match action {
+        Action::Install => "install",
+        Action::Upgrade => "upgrade",
+        Action::Remove => "uninstall",
+        Action::RefreshIndex => unreachable!(),
+    };
+    match manager {
+        Manager::Homebrew => {
+            let args = names
+                .iter()
+                .map(|name| q(name))
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(format!(
+                r#"env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 brew {verb} --formula -- {args}"#
+            ))
+        }
+        Manager::WinGet => Ok(format!(
+            "winget.exe {verb} --id {} --exact --source winget",
+            names[0]
+        )),
+        _ => anyhow::bail!("Unsupported package operation"),
+    }
+}
+
 pub fn template(
     source: Source,
     action: Action,
@@ -180,6 +235,10 @@ pub fn template(
     channel: &str,
     classic: bool,
 ) -> Result<Template> {
+    ensure!(
+        !matches!(source, Source::Native(manager) if manager.uses_native_terminal()),
+        "This package manager requires an interactive terminal"
+    );
     validate_names(source, action, &names)?;
     if source == Source::Native(Manager::Apt) {
         if action == Action::Install {
@@ -471,6 +530,49 @@ pub fn parse(source: Source, text: &str, installed: bool) -> Result<Vec<Package>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_terminal_commands_pin_the_provider_and_validate_package_ids() -> Result<()> {
+        let brew = Source::Native(Manager::Homebrew);
+        let winget = Source::Native(Manager::WinGet);
+        let formula = ["python@3.13".to_owned()];
+        let id = ["Git.Git".to_owned()];
+        assert!(
+            terminal_command(brew, Action::Install, &formula, "", false, false)?
+                .ends_with("brew install --formula -- 'python@3.13'")
+        );
+        assert_eq!(
+            terminal_command(winget, Action::Upgrade, &id, "", false, false)?,
+            "winget.exe upgrade --id Git.Git --exact --source winget"
+        );
+        assert_eq!(
+            terminal_command(winget, Action::Remove, &id, "", false, false)?,
+            "winget.exe uninstall --id Git.Git --exact --source winget"
+        );
+        assert_eq!(
+            terminal_command(winget, Action::RefreshIndex, &[], "", false, false)?,
+            "winget.exe source update --name winget"
+        );
+        for input in ["--force", "git & whoami", "git'quote", "git\nwinget"] {
+            assert!(
+                terminal_command(
+                    winget,
+                    Action::Install,
+                    &[input.to_owned()],
+                    "",
+                    false,
+                    false
+                )
+                .is_err()
+            );
+            assert!(
+                terminal_command(brew, Action::Install, &[input.to_owned()], "", false, false)
+                    .is_err()
+            );
+        }
+        assert!(template(winget, Action::Install, id.to_vec(), "", false).is_err());
+        Ok(())
+    }
+
     #[test]
     fn terminal_commands_preserve_interactive_confirmation_and_privilege_boundaries() {
         let command = |source, action, name: &str, root| {

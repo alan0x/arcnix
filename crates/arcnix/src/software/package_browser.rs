@@ -245,7 +245,9 @@ fn package_page(ui: Ui) -> impl Widget {
                             .environment
                             .as_ref()
                             .map(|e| {
-                                if e.is_root {
+                                if e.manager.uses_native_terminal() {
+                                    "使用 SSH 账号的软件包权限"
+                                } else if e.is_root {
                                     "root 会话"
                                 } else if e.sudo_available {
                                     "通过 sudo 执行管理员操作"

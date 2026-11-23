@@ -48,7 +48,8 @@ pub(super) fn can_change_software(s: &State) -> bool {
     s.connected
         && !scripts_ui::busy(s)
         && s.software.app_center.inventory.as_ref().is_some_and(|inv| {
-            (inv.is_root || inv.sudo_available) && (inv.hosted_tasks || s.terminal_available())
+            (inv.manager.uses_native_terminal() || inv.is_root || inv.sudo_available)
+                && (inv.hosted_tasks || s.terminal_available())
         })
 }
 
@@ -293,6 +294,20 @@ impl Ui {
             };
             format!("{} · {provider}", names.join(", "))
         };
+        if matches!(source, Source::Native(manager) if manager.uses_native_terminal()) {
+            match software_install::terminal_command(source, action, &names, "stable", false, false)
+            {
+                Ok(_) => {
+                    self.state.revise(|s| s.install.options = false);
+                    self.open_dialog(Dialog::SoftwareAction(action, subject, source, names));
+                }
+                Err(e) => self.state.revise(|s| {
+                    s.software.error = format!("{e:#}");
+                    s.software.app_center.error = s.software.error.clone();
+                }),
+            }
+            return;
+        }
         match software_install::template(source, action, names.clone(), "stable", false) {
             Ok(template) => {
                 self.state.revise(|s| s.install.options = false);
@@ -442,7 +457,7 @@ fn access_options(state: Cage<State>, install: bool) -> impl Widget {
 }
 fn execution_options(ui: &Ui, install: bool) -> impl Widget {
     let state = ui.state;
-    when(state.map(|s| s.software.app_center.inventory.as_ref().is_some_and(|inv| !inv.is_root && !inv.sudo_available)), || {
+    when(state.map(|s| s.software.app_center.inventory.as_ref().is_some_and(|inv| !inv.manager.uses_native_terminal() && !inv.is_root && !inv.sudo_available)), || {
         text().class("hint").content(i18n::bind("To change system software, connect with an account that can use sudo or log in as root."))
     }).otherwise(move || {
         when(state.map(needs_terminal), move || {
