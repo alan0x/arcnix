@@ -1,5 +1,6 @@
 pub(crate) mod darwin_metrics;
 pub mod disks;
+pub mod host_capabilities;
 pub mod metric_history;
 pub mod metrics;
 pub mod network;

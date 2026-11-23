@@ -1,13 +1,17 @@
 //! Requires tools/sftp_fixture.py and ARCNIX_TEST_SSH_ADDR=127.0.0.1:<port>.
 //! Run with cargo test -p arcnix-core --test sftp_integration -- --ignored.
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
-use arcnix_core::file_capabilities::{DocumentReader, DocumentWriter};
-use arcnix_core::remote::{PendingConnection, RemoteSession, TransferCancelled};
+use arcnix_core::file_capabilities::{
+    DocumentDestinationWriter, DocumentReader, DocumentWriter, FileDeleter, FileRenamer,
+    FileTransfers, FileTreeOperator, SeekableFileReader, TextPage, TextPageReader,
+};
+use arcnix_core::remote::{FileAction, PendingConnection, RemoteSession, TransferCancelled};
 use arcnix_core::{AuthMethod, ServerProfile, new_id};
 use sha2::{Digest, Sha256};
 
@@ -258,13 +262,13 @@ fn deletion_emits_scan_and_partial_progress_and_honors_cancel() -> Result<()> {
     );
     let cancel = AtomicBool::new(false);
     let mut last = 0;
-    let result = session.delete_with_progress(
+    let result = session.delete_entries(
         &[target],
-        || {
+        &|| {
             anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Canceled");
             Ok(())
         },
-        |progress| {
+        &mut |progress| {
             assert!(progress.scanned >= last);
             last = progress.scanned;
             if progress.phase == Phase::Deleting && progress.removed == 2 {
@@ -468,9 +472,9 @@ fn roundtrip_unicode_listing_rename_and_no_overwrite() -> Result<()> {
             .is_err()
     );
     assert_eq!(fs::read(&download)?, b"must survive");
-    assert!(session.rename(&remote, &remote).is_err());
+    assert!(session.rename_entry(&remote, &remote).is_err());
     let renamed = format!("{remote_dir}/renamed.bin");
-    session.rename(&remote, &renamed)?;
+    session.rename_entry(&remote, &renamed)?;
     let (_, entries) = session.list_dir(&remote_dir)?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name, "renamed.bin");
@@ -490,6 +494,69 @@ fn roundtrip_unicode_listing_rename_and_no_overwrite() -> Result<()> {
     let empty_download = temp.join("empty-download");
     session.download(&empty_remote, &empty_download, &cancel, |_, _| {})?;
     assert_eq!(fs::metadata(empty_download)?.len(), 0);
+    let moved_dir = format!("{remote_dir}/moved");
+    session.mkdir(&moved_dir)?;
+    session.apply_file_action(FileAction::Move(moved_dir.clone()), &[renamed], &|| Ok(()))?;
+    let (_, entries) = session.list_dir(&moved_dir)?;
+    assert_eq!(entries[0].name, "renamed.bin");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
+fn file_capabilities_seek_page_and_cancel_without_replacing_the_destination() -> Result<()> {
+    use arcnix_core::text_files::{PAGE_BYTES, TextSnapshot};
+
+    let mut session = connect()?;
+    let path = format!("/pages-{}.txt", new_id());
+    let mut bytes = vec![b'a'; PAGE_BYTES as usize - 1];
+    bytes.extend_from_slice("\r\n下一行\r\n".as_bytes());
+    let document = session.write_document_destination(&path, &bytes, None, &|| Ok(()))?;
+    let snapshot = TextSnapshot {
+        size: document.version.size,
+        modified: document.version.modified,
+    };
+    let page = TextPage {
+        path: &path,
+        snapshot,
+        reviewed_handle: None,
+    };
+    let (mut file, size) = session.open_seekable_file(&path)?;
+    assert_eq!(size, bytes.len() as u64);
+    file.seek(SeekFrom::Start(PAGE_BYTES + 1))?;
+    let mut suffix = String::new();
+    file.read_to_string(&mut suffix)?;
+    assert_eq!(suffix, "下一行\r\n");
+    drop(file);
+
+    let (initial, stamp) = session.sample_page_tail(page, None)?;
+    assert_eq!(initial, snapshot);
+    assert_eq!(
+        session.sample_page_tail(page, Some(stamp))?,
+        (snapshot, stamp)
+    );
+    let first = session.read_page(page, 0, Some(1), &|| Ok(()))?;
+    let second = session.read_page(page, first.next, Some(1), &|| Ok(()))?;
+    assert_eq!(second.text, "\n下一行\n");
+    assert_eq!(second.next, snapshot.size);
+    session.close_page_cursor(Some(1));
+
+    assert!(
+        session
+            .read_page(page, 0, Some(1), &|| anyhow::bail!("Canceled"))
+            .is_err()
+    );
+    assert!(
+        session
+            .write_document_destination(&path, b"canceled", Some(snapshot), &|| anyhow::bail!(
+                "Canceled"
+            ))
+            .is_err()
+    );
+    assert_eq!(
+        session.read_document(&path, &|| Ok(()))?.version.hash,
+        document.version.hash
+    );
     Ok(())
 }
 
@@ -1081,7 +1148,7 @@ fn planned_transfers_dispatch_files_on_independent_sessions_and_keep_empty_direc
     fs::write(source.join("large.bin"), vec![42; 300_000])?;
     let destination = format!("/planned-{}", new_id());
     let cancel = AtomicBool::new(false);
-    let plan = session.prepare_upload(&source, &destination, &cancel)?;
+    let plan = session.plan_transfer(TransferDirection::Upload, &source, &destination, &cancel)?;
     assert!(plan.is_directory);
     assert_eq!(plan.files.len(), 3);
     assert_eq!(plan.total_bytes, 300_014);
@@ -1103,12 +1170,12 @@ fn planned_transfers_dispatch_files_on_independent_sessions_and_keep_empty_direc
             .map(|file| {
                 scope.spawn(|| -> Result<()> {
                     let mut final_progress = (0, 0, 0);
-                    let report = connect()?.transfer_planned_file(
+                    let report = connect()?.copy_planned_file(
                         TransferDirection::Upload,
                         file,
                         &cancel,
-                        |done, total, actual| final_progress = (done, total, actual),
-                        |_| Ok(ConflictAction::Skip),
+                        &mut |done, total, actual| final_progress = (done, total, actual),
+                        &mut |_| Ok(ConflictAction::Skip),
                     )?;
                     assert_eq!(report.transferred_files, 1);
                     assert_eq!(final_progress, (file.size, file.size, file.size));
@@ -1122,18 +1189,19 @@ fn planned_transfers_dispatch_files_on_independent_sessions_and_keep_empty_direc
         Ok(())
     })?;
     let target = temp.join("download");
-    let download = session.prepare_download(&destination, &target, &cancel)?;
+    let download =
+        session.plan_transfer(TransferDirection::Download, &target, &destination, &cancel)?;
     assert!(download.is_directory);
     assert_eq!(download.files.len(), 3);
     assert_eq!(download.total_bytes, plan.total_bytes);
     assert!(target.join("nested/empty").is_dir());
     for file in &download.files {
-        connect()?.transfer_planned_file(
+        connect()?.copy_planned_file(
             TransferDirection::Download,
             file,
             &cancel,
-            |_, _, _| {},
-            |_| Ok(ConflictAction::Skip),
+            &mut |_, _, _| {},
+            &mut |_| Ok(ConflictAction::Skip),
         )?;
         assert_eq!(
             fs::read(&file.local_path)?,
@@ -1142,12 +1210,12 @@ fn planned_transfers_dispatch_files_on_independent_sessions_and_keep_empty_direc
     }
     let skipped = &download.files[0];
     fs::write(&skipped.local_path, b"retain existing destination")?;
-    let report = session.transfer_planned_file(
+    let report = session.copy_planned_file(
         TransferDirection::Download,
         skipped,
         &cancel,
-        |_, _, actual| assert_eq!(actual, 0),
-        |_| Ok(ConflictAction::Skip),
+        &mut |_, _, actual| assert_eq!(actual, 0),
+        &mut |_| Ok(ConflictAction::Skip),
     )?;
     assert_eq!(report.skipped_files, 1);
     assert_eq!(
@@ -1168,23 +1236,23 @@ fn planned_transfers_refuse_changed_sources_and_cancel_before_copy() -> Result<(
     fs::write(&source, b"original")?;
     let remote = format!("/planned-stamp-{}", new_id());
     let cancel = AtomicBool::new(false);
-    let upload = session.prepare_upload(&source, &remote, &cancel)?;
+    let upload = session.plan_transfer(TransferDirection::Upload, &source, &remote, &cancel)?;
     assert!(!upload.is_directory);
     fs::write(&source, b"changed source bytes")?;
     assert!(
         session
-            .transfer_planned_file(
+            .copy_planned_file(
                 TransferDirection::Upload,
                 &upload.files[0],
                 &cancel,
-                |_, _, _| panic!("A changed source must not begin copying"),
-                |_| Ok(ConflictAction::Overwrite),
+                &mut |_, _, _| panic!("A changed source must not begin copying"),
+                &mut |_| Ok(ConflictAction::Overwrite),
             )
             .is_err()
     );
     session.upload(&source, &remote, &cancel, |_, _| {})?;
     let local = temp.join("download");
-    let download = session.prepare_download(&remote, &local, &cancel)?;
+    let download = session.plan_transfer(TransferDirection::Download, &local, &remote, &cancel)?;
     fs::write(&source, b"new")?;
     session.upload_with_conflicts(
         &source,
@@ -1195,23 +1263,23 @@ fn planned_transfers_refuse_changed_sources_and_cancel_before_copy() -> Result<(
     )?;
     assert!(
         session
-            .transfer_planned_file(
+            .copy_planned_file(
                 TransferDirection::Download,
                 &download.files[0],
                 &cancel,
-                |_, _, _| panic!("A changed remote source must not begin copying"),
-                |_| Ok(ConflictAction::Overwrite),
+                &mut |_, _, _| panic!("A changed remote source must not begin copying"),
+                &mut |_| Ok(ConflictAction::Overwrite),
             )
             .is_err()
     );
     assert!(!local.exists());
     cancel.store(true, Ordering::Relaxed);
     let error = session
-        .prepare_upload(&source, &remote, &cancel)
+        .plan_transfer(TransferDirection::Upload, &source, &remote, &cancel)
         .unwrap_err();
     assert!(error.is::<TransferCancelled>());
     let error = session
-        .prepare_download(&remote, &local, &cancel)
+        .plan_transfer(TransferDirection::Download, &local, &remote, &cancel)
         .unwrap_err();
     assert!(error.is::<TransferCancelled>());
     Ok(())

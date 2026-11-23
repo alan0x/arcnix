@@ -5,6 +5,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
+use arcnix_core::file_capabilities::FileTransfers;
 use arcnix_core::remote::{PendingConnection, RemoteSession, TransferCancelled};
 use arcnix_core::transfer::{
     ConflictAction, FileProgress, FileStatus, TransferPlan, TransferSummary,
@@ -397,18 +398,12 @@ impl Pool {
                     let remote = &connection.as_ref().unwrap().1;
                     match task {
                         Task::Plan(run, reply) => {
-                            let result = match run.job.direction {
-                                TransferDirection::Upload => remote.prepare_upload(
-                                    &run.job.local_path,
-                                    &run.job.remote_path,
-                                    &run.stop,
-                                ),
-                                TransferDirection::Download => remote.prepare_download(
-                                    &run.job.remote_path,
-                                    &run.job.local_path,
-                                    &run.stop,
-                                ),
-                            };
+                            let result = remote.plan_transfer(
+                                run.job.direction,
+                                &run.job.local_path,
+                                &run.job.remote_path,
+                                &run.stop,
+                            );
                             if result.is_err() {
                                 connection = None;
                             }
@@ -417,11 +412,11 @@ impl Pool {
                         Task::File(run, index, reply) => {
                             run.state(index, FileStatus::Running);
                             let file = &run.plan.get().unwrap().files[index];
-                            let result = remote.transfer_planned_file(
+                            let result = remote.copy_planned_file(
                                 run.job.direction,
                                 file,
                                 &run.stop,
-                                |done, _, actual| {
+                                &mut |done, _, actual| {
                                     run.file_progress(
                                         index,
                                         done,
@@ -432,7 +427,7 @@ impl Pool {
                                     // The copy checks the stop flag before writing the next block.
                                     let _ = run.wait_if_paused();
                                 },
-                                |conflict| run.resolve(index, conflict),
+                                &mut |conflict| run.resolve(index, conflict),
                             );
                             match &result {
                                 Ok(summary) if summary.skipped_files > 0 => run.file_progress(

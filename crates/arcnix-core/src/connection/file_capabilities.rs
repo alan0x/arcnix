@@ -2,9 +2,14 @@
 use anyhow::{Context, Result, ensure};
 
 use crate::FileEntry;
-use crate::local_desktop::Target;
+use crate::local_desktop::{Target, join};
 use crate::remote::RemoteSession;
-use crate::text_files::Document;
+use crate::text_files::{Document, TextSnapshot};
+
+mod mutations;
+mod streams;
+pub use mutations::*;
+pub use streams::*;
 
 pub trait DirectoryReader {
     /// Return the resolved directory and its entries.
@@ -22,9 +27,21 @@ pub enum EntryKind {
     Directory,
 }
 
+impl EntryKind {
+    pub fn from_directory(directory: bool) -> Self {
+        if directory {
+            Self::Directory
+        } else {
+            Self::File
+        }
+    }
+}
+
 pub trait FileEntryCreator {
     /// Create a new entry without replacing an existing one.
     fn create_entry(&self, path: &str, kind: EntryKind) -> Result<()>;
+    /// Return false for a name collision so the file browser can choose another name.
+    fn try_create_named(&self, parent: &str, name: &str, kind: EntryKind) -> Result<bool>;
 }
 
 pub trait DocumentReader {
@@ -37,6 +54,17 @@ pub trait DocumentWriter {
         &self,
         original: &Document,
         content: &str,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Document>;
+}
+
+pub trait DocumentDestinationWriter {
+    /// Write a new document or replace the destination the user previously selected.
+    fn write_document_destination(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        replace: Option<TextSnapshot>,
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Document>;
 }
@@ -71,14 +99,14 @@ impl FileEntryCreator for Target {
             .rsplit_once('/')
             .context("Expected an absolute file path")?;
         ensure!(
-            self.try_create(
-                if parent.is_empty() { "/" } else { parent },
-                name,
-                kind == EntryKind::Directory
-            )?,
+            self.try_create_named(if parent.is_empty() { "/" } else { parent }, name, kind)?,
             "File already exists"
         );
         Ok(())
+    }
+
+    fn try_create_named(&self, parent: &str, name: &str, kind: EntryKind) -> Result<bool> {
+        self.try_create(parent, name, kind == EntryKind::Directory)
     }
 }
 
@@ -88,6 +116,14 @@ impl FileEntryCreator for RemoteSession {
             EntryKind::Directory => self.mkdir(path),
             EntryKind::File => self.create_file(path),
         }
+    }
+
+    fn try_create_named(&self, parent: &str, name: &str, kind: EntryKind) -> Result<bool> {
+        ensure!(
+            !name.is_empty() && !matches!(name, "." | "..") && !name.contains('/'),
+            "Invalid file name"
+        );
+        self.try_create_entry(&join(parent, name), kind == EntryKind::Directory)
     }
 }
 
@@ -125,5 +161,40 @@ impl DocumentWriter for RemoteSession {
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Document> {
         self.save_text(original, content, check)
+    }
+}
+
+impl DocumentDestinationWriter for Target {
+    fn write_document_destination(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        replace: Option<TextSnapshot>,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Document> {
+        let base = replace
+            .map(|expected| -> Result<_> {
+                let current = self.read(path)?.version;
+                ensure!(
+                    current.size == expected.size && current.modified == expected.modified,
+                    "Destination changed since selection"
+                );
+                Ok(current)
+            })
+            .transpose()?;
+        check()?;
+        self.write(path, base.as_ref(), bytes)
+    }
+}
+
+impl DocumentDestinationWriter for RemoteSession {
+    fn write_document_destination(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        replace: Option<TextSnapshot>,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Document> {
+        self.save_text_as(path, bytes, replace, check)
     }
 }

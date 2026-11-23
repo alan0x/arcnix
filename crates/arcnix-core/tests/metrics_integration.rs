@@ -3,6 +3,9 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use arcnix_core::ServerProfile;
+use arcnix_core::host_capabilities::{
+    DiskInventoryReader, NetworkInventoryReader, ProcessInventoryReader, SystemLogReader,
+};
 use arcnix_core::metrics::{self, ResourceReader, ResourceSnapshot};
 use arcnix_core::remote::PendingConnection;
 
@@ -246,6 +249,50 @@ fn samples_over_real_ssh_without_sftp() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[ignore = "requires disposable Linux loopback OpenSSH fixture with procps, iproute2 and util-linux"]
+fn native_linux_ssh_reads_metrics_and_host_inventory() -> Result<()> {
+    let address: SocketAddr = std::env::var("ARCNIX_TEST_REVIEW_SSH_ADDR")?.parse()?;
+    anyhow::ensure!(address.ip().is_loopback(), "fixture must be loopback");
+    let fingerprint = std::env::var("ARCNIX_TEST_REVIEW_SSH_FINGERPRINT")?;
+    let profile = ServerProfile {
+        host: address.ip().to_string(),
+        port: address.port(),
+        username: "arcnix".into(),
+        ..Default::default()
+    };
+    let session = PendingConnection::open_for_known_host(&profile, &fingerprint)?
+        .authenticate("arcnix-test", &fingerprint)?;
+    let sample = session.sample_resources()?;
+    assert_eq!(
+        sample.remote_platform,
+        Some(arcnix_core::host::HostOs::Linux)
+    );
+    assert!(sample.snapshot.memory.is_some());
+    assert!(
+        session
+            .read_process_inventory()?
+            .iter()
+            .any(|process| process.pid > 0)
+    );
+    assert!(
+        session
+            .read_network_inventory()?
+            .interfaces
+            .iter()
+            .any(|interface| interface.name == "lo")
+    );
+    assert!(
+        session
+            .read_disk_inventory()?
+            .filesystems
+            .iter()
+            .any(|filesystem| filesystem.target == "/")
+    );
+    session.discover_system_logs()?;
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires a loopback macOS OpenSSH instance"]
@@ -284,5 +331,10 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
     assert!(usage.snapshot.memory.is_some());
     assert!(usage.snapshot.disks.iter().any(|disk| disk.mount == "/"));
     assert!(usage.receive_bytes_per_second.is_some());
+    let error = session.discover_system_logs().unwrap_err();
+    let unsupported = error
+        .downcast_ref::<arcnix_core::host::UnsupportedHostCapability>()
+        .context("unsupported macOS log provider must be explicit")?;
+    assert_eq!(unsupported.os, arcnix_core::host::HostOs::MacOs);
     Ok(())
 }

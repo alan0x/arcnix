@@ -3,7 +3,10 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Result, ensure};
 use arcnix_core::desktop_customization::DesktopItems;
-use arcnix_core::file_capabilities::{DirectoryReader, DocumentReader, DocumentWriter};
+use arcnix_core::file_capabilities::{
+    DirectoryReader, DocumentDestinationWriter, DocumentReader, DocumentWriter, EntryKind,
+    FileEntryCreator, FileRenamer, TextPage, TextPageReader,
+};
 use arcnix_core::local_desktop::{Target, join};
 use arcnix_core::metrics::ResourceReader;
 use arcnix_core::{FileEntry, sync};
@@ -63,7 +66,7 @@ impl Session {
                 let exists = location.is_some();
                 let path = location.map_or_else(|| join(&self.home, "Desktop"), |loc| loc.path);
                 let mut entries = if exists {
-                    target.list(&path)?.1
+                    target.list_entries(&path)?.1
                 } else {
                     Vec::new()
                 };
@@ -96,7 +99,15 @@ impl Session {
                 sudo,
             } => Update::CodeFile(message((|| {
                 ensure!(sudo.is_none(), "Local editing uses the current account");
-                let (snapshot, stamp) = target.poll_text_tail(&path, snapshot, None)?;
+                let mut pages = target;
+                let (snapshot, stamp) = pages.sample_page_tail(
+                    TextPage {
+                        path: &path,
+                        snapshot,
+                        reviewed_handle: None,
+                    },
+                    None,
+                )?;
                 Ok(serde_json::json!({ "snapshot":snapshot, "stamp":stamp }))
             })())),
             Action::CodeFile(request) => Update::CodeFile(message(
@@ -123,7 +134,7 @@ impl Session {
                 directory,
             } => {
                 match create_named_entry(&default_name, |name| {
-                    target.try_create(&parent, name, directory)
+                    target.try_create_named(&parent, name, EntryKind::from_directory(directory))
                 }) {
                     Ok(name) => Update::Created {
                         remote: true,
@@ -133,7 +144,7 @@ impl Session {
                     Err(error) => Update::Error(format!("{error:#}")),
                 }
             }
-            Action::RemoteRename(from, to) => match target.rename(&from, &to) {
+            Action::RemoteRename(from, to) => match target.rename_entry(&from, &to) {
                 Ok(()) => Update::Renamed {
                     remote: true,
                     name: arcnix_core::file_associations::filename(&to).into(),
@@ -171,20 +182,15 @@ impl Session {
                 bytes,
                 replace,
                 cancel,
-            } => Update::TextFile(file_result((|| {
-                let base = if let Some(snapshot) = replace {
-                    let current = target.read(&path)?.version;
-                    ensure!(
-                        current.size == snapshot.size && current.modified == snapshot.modified,
-                        "Destination changed since selection"
-                    );
-                    Some(current)
-                } else {
-                    None
-                };
-                ensure!(!cancel.load(Ordering::Acquire), "Save cancelled");
-                target.write(&path, base.as_ref(), &bytes)
-            })())),
+            } => Update::TextFile(file_result(target.write_document_destination(
+                &path,
+                &bytes,
+                replace,
+                &|| {
+                    ensure!(!cancel.load(Ordering::Acquire), "Save cancelled");
+                    Ok(())
+                },
+            ))),
             Action::ServerApps(action) => Update::ServerApps(Box::new(message(self.apps(action)))),
             other => return std::ops::ControlFlow::Continue(other),
         })

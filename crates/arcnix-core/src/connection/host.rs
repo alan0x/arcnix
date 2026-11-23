@@ -12,6 +12,26 @@ pub enum HostOs {
     Unknown,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnsupportedHostCapability {
+    pub os: HostOs,
+    pub capability: &'static str,
+}
+
+impl std::fmt::Display for UnsupportedHostCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let platform = match self.os {
+            HostOs::Linux => "Linux",
+            HostOs::MacOs => "macOS",
+            HostOs::Windows => "Windows",
+            HostOs::Unknown => "an unrecognized SSH environment",
+        };
+        write!(f, "{} is unavailable on {platform}", self.capability)
+    }
+}
+
+impl std::error::Error for UnsupportedHostCapability {}
+
 impl RemoteSession {
     /// Probe on first use, then reuse the answer for the life of this connection.
     /// An unavailable command channel does not prevent use of SFTP.
@@ -34,6 +54,14 @@ impl RemoteSession {
             }
         };
         Ok(*self.host_os.get_or_init(|| os))
+    }
+
+    pub(crate) fn require_linux_capability(&self, capability: &'static str) -> Result<()> {
+        let os = self.host_os()?;
+        if os != HostOs::Linux {
+            return Err(UnsupportedHostCapability { os, capability }.into());
+        }
+        Ok(())
     }
 }
 

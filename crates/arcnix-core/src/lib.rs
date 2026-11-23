@@ -36,7 +36,8 @@ pub use maintenance::{
 };
 pub use model::*;
 pub use observability::{
-    disks, metric_history, metrics, network, processes, resource_ports, system_logs,
+    disks, host_capabilities, metric_history, metrics, network, processes, resource_ports,
+    system_logs,
 };
 pub use software::{
     compose_apps, docker, installation_plan, installers, packages, server_inventory,

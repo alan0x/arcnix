@@ -1,3 +1,6 @@
+use arcnix_core::host_capabilities::{
+    DiskInventoryReader, NetworkInventoryReader, ProcessInventoryReader,
+};
 use arcnix_core::remote::RemoteSession;
 use arcnix_core::{desktop_customization, desktop_time_zone, docker, server_apps, sync};
 
@@ -78,9 +81,9 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             arcnix_core::software_install::query(session, source, query.as_deref())?,
         ),
         Action::ComposeList => Reply::ComposeProjects(arcnix_core::compose_apps::list(session)?),
-        Action::Disks => Reply::Disks(arcnix_core::disks::read(session)?),
-        Action::NetworkSettings => Reply::NetworkSettings(arcnix_core::network::read(session)?),
-        Action::Processes => Reply::Processes(arcnix_core::processes::read(session)?),
+        Action::Disks => Reply::Disks(session.read_disk_inventory()?),
+        Action::NetworkSettings => Reply::NetworkSettings(session.read_network_inventory()?),
+        Action::Processes => Reply::Processes(session.read_process_inventory()?),
         Action::Discover => Reply::Applications(server_apps::discover(session)?),
         Action::Clock => Reply::Clock(server_apps::clock(session)?),
         Action::ReadTimeZone => Reply::TimeZone(desktop_time_zone::read(session)?),

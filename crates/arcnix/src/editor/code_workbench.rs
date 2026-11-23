@@ -1,7 +1,9 @@
 //! Files exposed to the embedded workbench from the active desktop.
 use std::result::Result;
 
-use arcnix_core::file_capabilities::{DirectoryReader, EntryKind, FileEntryCreator};
+use arcnix_core::file_capabilities::{
+    DirectoryReader, DocumentReader, EntryKind, FileEntryCreator, TextPage, TextPageReader,
+};
 use arcnix_core::remote::RemoteSession;
 use arcnix_core::text_files::{Document, TextSnapshot, Version};
 use serde::Deserialize;
@@ -128,32 +130,17 @@ impl Files<'_> {
     }
 
     fn create(&self, path: &str, directory: bool) -> anyhow::Result<()> {
-        let kind = if directory {
-            EntryKind::Directory
-        } else {
-            EntryKind::File
-        };
+        let kind = EntryKind::from_directory(directory);
         match self {
             Self::Remote(remote) => remote.create_entry(path, kind),
             Self::Local(target) => target.create_entry(path, kind),
         }
     }
 
-    fn range(
-        &mut self,
-        handle: Option<u64>,
-        path: &str,
-        offset: u64,
-        snapshot: arcnix_core::text_files::TextSnapshot,
-        cursor: Option<u64>,
-        check: impl Fn() -> anyhow::Result<()>,
-    ) -> anyhow::Result<arcnix_core::text_files::TextRange> {
+    fn pages(&mut self) -> &mut dyn TextPageReader {
         match self {
-            Self::Remote(remote) if let Some(handle) = handle => {
-                remote.admin_text_range(handle, path, offset, snapshot)
-            }
-            Self::Remote(remote) => remote.read_text_range(path, offset, snapshot, cursor, check),
-            Self::Local(target) => target.read_text_range(path, offset, snapshot),
+            Self::Remote(remote) => *remote,
+            Self::Local(target) => target,
         }
     }
 }
@@ -255,8 +242,8 @@ impl FileRequest {
             }
             Self::Read { path } => {
                 let d = match files {
-                    Files::Remote(remote) => remote.read_text(&path, check)?,
-                    Files::Local(target) => target.read(&path)?,
+                    Files::Remote(remote) => remote.read_document(&path, &check)?,
+                    Files::Local(target) => target.read_document(&path, &check)?,
                 };
                 Ok(json!({"content":d.content,"version":d.version,"bom":d.bom,"crlf":d.crlf}))
             }
@@ -266,22 +253,30 @@ impl FileRequest {
                 offset,
                 snapshot,
                 cursor,
-            } => Ok(serde_json::to_value(
-                files.range(handle, &path, offset, snapshot, cursor, check)?,
-            )?),
+            } => Ok(serde_json::to_value(files.pages().read_page(
+                TextPage {
+                    path: &path,
+                    snapshot,
+                    reviewed_handle: handle,
+                },
+                offset,
+                cursor,
+                &check,
+            )?)?),
             Self::PollTail {
                 handle,
                 path,
                 snapshot,
                 stamp,
             } => {
-                let (snapshot, stamp) = match files {
-                    Files::Remote(remote) if let Some(handle) = handle => {
-                        remote.poll_admin_page(handle, &path, snapshot, stamp)?
-                    }
-                    Files::Remote(remote) => remote.poll_text_tail(&path, snapshot, stamp)?,
-                    Files::Local(target) => target.poll_text_tail(&path, snapshot, stamp)?,
-                };
+                let (snapshot, stamp) = files.pages().sample_page_tail(
+                    TextPage {
+                        path: &path,
+                        snapshot,
+                        reviewed_handle: handle,
+                    },
+                    stamp,
+                )?;
                 Ok(json!({ "snapshot": snapshot, "stamp": stamp }))
             }
             Self::CountLines {
@@ -291,19 +286,24 @@ impl FileRequest {
                 snapshot,
                 cursor,
             } => {
-                let page = files.range(handle, &path, offset, snapshot, Some(cursor), check)?;
+                let page = files.pages().read_page(
+                    TextPage {
+                        path: &path,
+                        snapshot,
+                        reviewed_handle: handle,
+                    },
+                    offset,
+                    Some(cursor),
+                    &check,
+                )?;
                 Ok(json!({"next":page.next, "breaks":page.breaks}))
             }
             Self::ClosePage { handle } => {
-                if let Files::Remote(remote) = files {
-                    remote.close_admin_pages(handle);
-                }
+                files.pages().close_reviewed_page(handle);
                 Ok(Value::Null)
             }
             Self::CloseRange { cursor } => {
-                if let Files::Remote(remote) = files {
-                    remote.close_search_reader(cursor);
-                }
+                files.pages().close_page_cursor(cursor);
                 Ok(Value::Null)
             }
         }

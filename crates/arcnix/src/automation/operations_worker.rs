@@ -1,6 +1,7 @@
 //! Read-only operations on the workspace SSH worker. Mutations use server jobs.
 use anyhow::Result;
-use arcnix_core::operations::{self, Service};
+use arcnix_core::host_capabilities::ServiceReader;
+use arcnix_core::operations::Service;
 use arcnix_core::remote::RemoteSession;
 
 pub enum Action {
@@ -27,8 +28,8 @@ pub enum Event {
 }
 pub fn handle(remote: &RemoteSession, action: Action, mut send: impl FnMut(Event)) -> Result<()> {
     match action {
-        Action::List => send(Event::Services(operations::list(remote)?)),
-        Action::Inspect(unit) => send(Event::Details(operations::inspect(remote, &unit)?)),
+        Action::List => send(Event::Services(remote.list_services()?)),
+        Action::Inspect(unit) => send(Event::Details(remote.inspect_service(&unit)?)),
     }
     Ok(())
 }
@@ -36,6 +37,8 @@ pub fn handle(remote: &RemoteSession, action: Action, mut send: impl FnMut(Event
 #[cfg(test)]
 mod tests {
     use arcnix_core::ServerProfile;
+    use arcnix_core::host_capabilities::ServiceChangePlanner;
+    use arcnix_core::operations::ServiceAction;
     use arcnix_core::remote::PendingConnection;
 
     use super::*;
@@ -67,6 +70,19 @@ mod tests {
         })?;
         assert!(details.contains("ActiveState=active"));
         assert!(handle(&remote, Action::Inspect("nginx.service;id".into()), |_| {}).is_err());
+        let plan = remote.plan_service_change("nginx.service", ServiceAction::Stop, false, true)?;
+        assert!(plan.administrator);
+        assert!(plan.script.contains("stop -- 'nginx.service'"));
+        assert!(
+            remote
+                .plan_service_change("nginx.service", ServiceAction::Stop, false, false)
+                .is_err()
+        );
+        assert!(
+            remote
+                .inspect_service("nginx.service")?
+                .contains("ActiveState=active")
+        );
         Ok(())
     }
 }

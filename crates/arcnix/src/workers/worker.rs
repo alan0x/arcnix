@@ -5,12 +5,16 @@ use std::thread;
 
 use anyhow::Context;
 use arcnix_core::file_capabilities::{
-    BoundedFileReader, DirectoryReader, DocumentReader, DocumentWriter,
+    BoundedFileReader, ClientFiles, DirectoryReader, DocumentDestinationWriter, DocumentReader,
+    DocumentWriter, EntryKind, FileDeleter, FileEntryCreator, FilePermissionWriter, FileRenamer,
+    FileTreeOperator, ReviewedDocument, ReviewedFileOperations, ReviewedPageOpener,
+    SeekableFileReader, TextPage, TextPageReader, TrashAccess,
 };
+use arcnix_core::host_capabilities::{PortController, PortInventoryReader, SystemLogReader};
 use arcnix_core::metrics::{ResourceReader, ResourceReading};
 use arcnix_core::packages::{self, SystemEnvironment};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
-use arcnix_core::system_logs::{self, LogCapabilities, LogQuery, LogSnapshot};
+use arcnix_core::system_logs::{LogCapabilities, LogQuery, LogSnapshot};
 use arcnix_core::{local, *};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -583,17 +587,21 @@ pub(crate) fn start_with_limiter(
                     operation,
                 } => Ok(Update::Trash {
                     remote: false,
-                    result: recycle::local(&operation).map_err(|e| format!("{e:#}")),
+                    result: ClientFiles
+                        .access_trash(&operation, &|| Ok(()))
+                        .map_err(|e| format!("{e:#}")),
                 }),
                 Action::LocalRename(from, to) => {
-                    local::rename(&from, &to).map(|_| Update::Renamed {
-                        remote: false,
-                        name: to
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                    })
+                    ClientFiles
+                        .rename_entry(&from, &to)
+                        .map(|_| Update::Renamed {
+                            remote: false,
+                            name: to
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned(),
+                        })
                 }
                 Action::Delete {
                     remote: false,
@@ -602,15 +610,19 @@ pub(crate) fn start_with_limiter(
                     ..
                 } => Ok(Update::Deleted {
                     remote: false,
-                    result: local::delete_with_progress(
-                        &targets,
-                        || {
-                            anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Deletion canceled");
-                            Ok(())
-                        },
-                        deletion_progress(local_events.clone(), epoch, serial),
-                    )
-                    .map_err(|e| FileFailure::ordinary(format!("{e:#}"))),
+                    result: ClientFiles
+                        .delete_entries(
+                            &targets,
+                            &|| {
+                                anyhow::ensure!(
+                                    !cancel.load(Ordering::Relaxed),
+                                    "Deletion canceled"
+                                );
+                                Ok(())
+                            },
+                            &mut deletion_progress(local_events.clone(), epoch, serial),
+                        )
+                        .map_err(|e| FileFailure::ordinary(format!("{e:#}"))),
                 }),
                 #[cfg(windows)]
                 Action::WslFiles(name, op) => Ok(Update::WslFiles(
@@ -768,8 +780,8 @@ pub(crate) fn start_with_limiter(
                             prefer_content,
                             active,
                             || {
-                                let (file, snapshot) = target.open_binary(&path)?;
-                                Ok(((), file, snapshot.size))
+                                let (file, size) = target.open_seekable_file(&path)?;
+                                Ok(((), file, size))
                             },
                             ready,
                         )
@@ -787,7 +799,7 @@ pub(crate) fn start_with_limiter(
                                 let session =
                                     PendingConnection::open_for_known_host(&profile, &fingerprint)?
                                         .authenticate(&secret, &fingerprint)?;
-                                let (file, size) = session.open_media(&path)?;
+                                let (file, size) = session.open_seekable_file(&path)?;
                                 Ok((session, file, size))
                             },
                             ready,
@@ -805,7 +817,7 @@ pub(crate) fn start_with_limiter(
                     .filter(|_| epoch == active_epoch)
                     .ok_or_else(|| anyhow::anyhow!("Connect a server first"))
                     .and_then(|remote| {
-                        remote.read_text(&path, || {
+                        remote.read_document(&path, &|| {
                             anyhow::ensure!(
                                 generation.load(Ordering::Acquire) == epoch,
                                 "Connection changed"
@@ -997,8 +1009,7 @@ pub(crate) fn start_with_limiter(
                             sudo,
                             cancel,
                         } => {
-                            let snapshot = arcnix_core::resource_ports::read(
-                                remote,
+                            let snapshot = remote.read_listening_ports(
                                 administrator,
                                 (!sudo.is_empty()).then_some(sudo.as_str()),
                                 &cancel,
@@ -1011,8 +1022,7 @@ pub(crate) fn start_with_limiter(
                             sudo,
                             cancel,
                         } => {
-                            arcnix_core::resource_ports::terminate(
-                                remote,
+                            remote.terminate_port_holder(
                                 &target,
                                 administrator,
                                 (!sudo.is_empty()).then_some(sudo.as_str()),
@@ -1061,10 +1071,10 @@ pub(crate) fn start_with_limiter(
                     send(match action {
                         Action::MetricsSample => Update::Metrics(Ok(remote.sample_resources()?)),
                         Action::LogsDiscover => {
-                            Update::LogCapabilities(Ok(system_logs::discover(remote)?))
+                            Update::LogCapabilities(Ok(remote.discover_system_logs()?))
                         }
                         Action::LogsRead(query) => {
-                            Update::SystemLogs(Ok(system_logs::read(remote, &query)?))
+                            Update::SystemLogs(Ok(remote.read_system_logs(&query)?))
                         }
                         _ => unreachable!(),
                     });
@@ -1366,9 +1376,13 @@ pub(crate) fn start_with_limiter(
                                     Ok(())
                                 };
                                 let result = match &sudo {
-                                    Some((retry, password)) => {
-                                        remote.read_text_as_admin(retry, password, &cancel, check)
+                                    Some((retry, password)) => ReviewedDocument {
+                                        session: remote,
+                                        retry,
+                                        password,
+                                        cancel: &cancel,
                                     }
+                                    .read_document(&path, &check),
                                     None => remote.read_document(&path, &check),
                                 };
                                 publish_text_result(
@@ -1387,14 +1401,19 @@ pub(crate) fn start_with_limiter(
                             } => {
                                 file_completed = true;
                                 publish_elevatable_result(
-                                    remote.save_text_as(&path, &bytes, replace, || {
-                                        anyhow::ensure!(
-                                            generation.load(Ordering::Acquire) == epoch
-                                                && !cancel.load(Ordering::Relaxed),
-                                            "File save canceled or connection changed"
-                                        );
-                                        Ok(())
-                                    }),
+                                    remote.write_document_destination(
+                                        &path,
+                                        &bytes,
+                                        replace,
+                                        &|| {
+                                            anyhow::ensure!(
+                                                generation.load(Ordering::Acquire) == epoch
+                                                    && !cancel.load(Ordering::Relaxed),
+                                                "File save canceled or connection changed"
+                                            );
+                                            Ok(())
+                                        },
+                                    ),
                                     false,
                                     |result| send(Update::TextFile(result)),
                                 )?;
@@ -1416,9 +1435,13 @@ pub(crate) fn start_with_limiter(
                                     Ok(())
                                 };
                                 let result = match &sudo {
-                                    Some((retry, password)) => remote.save_text_as_admin(
-                                        retry, &document, &content, password, &cancel, check,
-                                    ),
+                                    Some((retry, password)) => ReviewedDocument {
+                                        session: remote,
+                                        retry,
+                                        password,
+                                        cancel: &cancel,
+                                    }
+                                    .save_document(&document, &content, &check),
                                     None => remote.save_document(&document, &content, &check),
                                 };
                                 publish_text_result(
@@ -1436,11 +1459,16 @@ pub(crate) fn start_with_limiter(
                             } => {
                                 file_completed = true;
                                 let handle = sudo.as_ref().map(|_| serial);
+                                let page = TextPage {
+                                    path: &path,
+                                    snapshot,
+                                    reviewed_handle: handle,
+                                };
                                 let result = match &sudo {
                                     Some((retry, password)) => {
-                                        remote.open_admin_page(serial, retry, password, snapshot)
+                                        remote.attach_reviewed_page(page, retry, password)
                                     }
-                                    None => remote.poll_text_tail(&path, snapshot, None),
+                                    None => remote.sample_page_tail(page, None),
                                 };
                                 publish_text_result(
                                     result,
@@ -1515,9 +1543,10 @@ pub(crate) fn start_with_limiter(
                                 directory,
                             } => {
                                 let name = create_named_entry(&default_name, |name| {
-                                    remote.try_create_entry(
-                                        &crate::remote_join(&parent, name),
-                                        directory,
+                                    remote.try_create_named(
+                                        &parent,
+                                        name,
+                                        EntryKind::from_directory(directory),
                                     )
                                 })?;
                                 send(Update::Created {
@@ -1532,7 +1561,7 @@ pub(crate) fn start_with_limiter(
                             } => {
                                 file_completed = true;
                                 publish_file_result(
-                                    remote.recycle(&operation, || {
+                                    remote.access_trash(&operation, &|| {
                                         anyhow::ensure!(
                                             generation.load(Ordering::Acquire) == epoch,
                                             "Connection changed"
@@ -1548,7 +1577,7 @@ pub(crate) fn start_with_limiter(
                                 )?;
                             }
                             Action::RemoteRename(from, to) => {
-                                remote.rename(&from, &to)?;
+                                remote.rename_entry(&from, &to)?;
                                 send(Update::Renamed {
                                     remote: true,
                                     name: to.rsplit('/').next().unwrap_or(&to).to_owned(),
@@ -1563,7 +1592,8 @@ pub(crate) fn start_with_limiter(
                                     );
                                     Ok(())
                                 };
-                                let result = remote.manage_files(action.clone(), &paths, check);
+                                let result =
+                                    remote.apply_file_action(action.clone(), &paths, &check);
                                 if let Err(error) = &result
                                     && let Some(remaining) = action.retry_sources(&paths, error)
                                     && check().is_ok()
@@ -1583,7 +1613,7 @@ pub(crate) fn start_with_limiter(
                             Action::ManageFilesAsAdmin(mut retry, password) => {
                                 file_completed = true;
                                 let result =
-                                    remote.manage_files_as_admin(&retry, &password, || {
+                                    remote.apply_reviewed_file_action(&retry, &password, &|| {
                                         anyhow::ensure!(
                                             generation.load(Ordering::Acquire) == epoch,
                                             "Connection changed"
@@ -1622,7 +1652,7 @@ pub(crate) fn start_with_limiter(
                             } => {
                                 file_completed = true;
                                 publish_file_result(
-                                    remote.set_permissions(&targets, mode, || {
+                                    remote.update_file_permissions(&targets, mode, &|| {
                                         anyhow::ensure!(
                                             generation.load(Ordering::Acquire) == epoch
                                                 && !cancel.load(Ordering::Relaxed),
@@ -1651,10 +1681,10 @@ pub(crate) fn start_with_limiter(
                                 let mut removed = 0;
                                 let mut progress = deletion_progress(events.clone(), epoch, serial);
                                 let result = match sudo.as_deref() {
-                                    Some(password) => {
-                                        remote.delete_as_admin(&targets, password, &cancel, check)
-                                    }
-                                    None => remote.delete_with_progress(&targets, check, |step| {
+                                    Some(password) => remote.delete_reviewed_entries(
+                                        &targets, password, &cancel, &check,
+                                    ),
+                                    None => remote.delete_entries(&targets, &check, &mut |step| {
                                         removed = step.removed;
                                         progress(step);
                                     }),

@@ -4,6 +4,7 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
 use anyhow::Result;
+use arcnix_core::host_capabilities::ServiceChangePlanner;
 use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::scripts::Template;
 use arcnix_core::tasks::Status;
@@ -879,12 +880,9 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
         )?;
         Plan::Backup(plan, text)
     } else if let Some(service) = &template.service {
-        operations::inspect(&remote, &service.unit)?;
-        Plan::Shell(operations::plan(
-            operations::Intent::Service {
-                unit: service.unit.clone(),
-                action: service.action,
-            },
+        Plan::Shell(remote.plan_service_change(
+            &service.unit,
+            service.action,
             root,
             sudo_available,
         )?)
