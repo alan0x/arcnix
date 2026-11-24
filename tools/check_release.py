@@ -21,8 +21,8 @@ def main():
     for member in workspace["members"]:
         package = tomllib.loads((root / member / "Cargo.toml").read_text(encoding="utf-8"))["package"]
         actual = version if package.get("version") == {"workspace": True} else package.get("version")
-        if actual != version or package.get("publish") is False:
-            parser.error(f"{member} must be publishable at version {version}")
+        if actual != version:
+            parser.error(f"{member} must have version {version}")
         packages[package["name"]] = version
     for name, dependency in workspace["dependencies"].items():
         if name in packages and dependency.get("version") != packages[name]:

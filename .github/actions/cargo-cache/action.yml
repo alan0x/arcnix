@@ -12,7 +12,5 @@ runs:
           ~/.cargo/git
           target/debug
           target/release
-        # Package verification stages unpublished workspace crates in a temporary registry.
-        # Reusing its sources can compile an older commit with the same package version.
         key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-v2-${{ hashFiles('Cargo.lock') }}
         restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-v2-
