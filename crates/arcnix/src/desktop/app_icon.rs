@@ -25,6 +25,7 @@ pub(crate) struct DesktopWindow {
     previous_fullscreen: Option<NativeFullscreenExit>,
     wake: Option<Waker>,
     epoch: Option<u64>,
+    office: HashMap<u64, crate::office_view::Host>,
     code: HashMap<u64, code_native::Host>,
     pgadmin: HashMap<u64, pgadmin_native::Host>,
     #[cfg(target_os = "macos")]
@@ -51,6 +52,7 @@ impl DesktopWindow {
             previous_fullscreen: None,
             wake: None,
             epoch: None,
+            office: Default::default(),
             code: HashMap::new(),
             pgadmin: HashMap::new(),
             #[cfg(target_os = "macos")]
@@ -189,6 +191,9 @@ impl NativeLifecycle for DesktopWindow {
         });
         if self.epoch != epoch {
             if let Some(old) = self.epoch {
+                if let Some(view) = self.office.get_mut(&old) {
+                    view.hide();
+                }
                 if let Some(code) = self.code.get_mut(&old) {
                     code.hide();
                 }
@@ -210,10 +215,19 @@ impl NativeLifecycle for DesktopWindow {
                         .values()
                         .any(|session| session.connected && session.epoch == id)
             };
+            self.office.retain(|&id, _| live(id));
             self.code.retain(|&id, _| live(id));
             self.pgadmin.retain(|&id, _| live(id));
         });
         if let Some(epoch) = epoch {
+            if state.with(|s| s.office.document.is_some()) {
+                self.office
+                    .entry(epoch)
+                    .or_default()
+                    .poll(window, &self.ui, self.wake.as_ref());
+            } else {
+                self.office.remove(&epoch);
+            }
             if state.with(|s| s.pgadmin.url().is_some()) {
                 self.pgadmin
                     .entry(epoch)

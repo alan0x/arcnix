@@ -14,6 +14,7 @@ pub enum FileApp {
     Player,
     ImageViewer,
     PdfReader,
+    Office,
     Browser,
 }
 

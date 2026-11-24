@@ -2373,8 +2373,9 @@ html[data-files-downloading] .files-download-drop {
 .browser-page:has(.browser-surface.loading) .browser-tabs::after { content: ''; position: absolute; inset: 0 auto auto 0; width: 32%; height: 2px; background: var(--accent); }
 
 .app-image { --tile-tint: #368478; --tile-shade: #205b59; }
-.desktop-window:is(.app-image, .app-document) > .desktop-window-content { padding: 0; overflow: hidden; }
-.image-viewer, .pdf-reader { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--surface); }
+.app-office { --tile-tint: #5c77a6; --tile-shade: #334e78; }
+.desktop-window:is(.app-image, .app-document, .app-office) > .desktop-window-content { padding: 0; overflow: hidden; }
+.office-reader, .image-viewer, .pdf-reader { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--surface); }
 .viewer-toolbar, .viewer-status { flex: none; display: flex; align-items: center; padding: 5px 10px; gap: 10px; }
 .viewer-toolbar { flex-wrap: wrap; border-bottom: 1px solid var(--line); }
 .viewer-controls { display: flex; align-items: center; gap: 3px; padding-left: 8px; border-left: 1px solid var(--line); }
@@ -2393,6 +2394,8 @@ html[data-files-downloading] .files-download-drop {
 .viewer-placeholder .action-glyph { width: 36px; height: 36px; opacity: .65; }
 .viewer-status { min-width: 0; gap: 14px; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .viewer-filename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.office-message { flex: none; padding: 5px 10px; font-size: 13px; }
+.office-reader .browser-surface { flex: 1 1 0; min-height: 0; }
 .pdf-page-number { width: 52px; min-width: 0; text-align: center; font-variant-numeric: tabular-nums; }
 .pdf-total { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pdf-stage { display: block; flex: 1 1 0; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; background: #303338; color: #e4e7e8; padding: 12px; }

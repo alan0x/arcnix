@@ -156,9 +156,11 @@ fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
 
 fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
     match app {
-        DesktopApp::Code | DesktopApp::Player | DesktopApp::ImageViewer | DesktopApp::PdfReader => {
-            s.local_desktop.is_some()
-        }
+        DesktopApp::Code
+        | DesktopApp::Player
+        | DesktopApp::ImageViewer
+        | DesktopApp::PdfReader
+        | DesktopApp::Office => s.local_desktop.is_some(),
         // Older Arcnix versions reject desktop settings that name pgAdmin,
         // so it is saved only when someone pins it.
         DesktopApp::Editor | DesktopApp::PgAdmin => false,
@@ -791,6 +793,10 @@ fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
                 })
                 .enabled(state.map(|s| s.web_browser.tabs.len() < web_browser::TAB_LIMIT))
             }
+        })),
+        WorkspacePage::Office => fragment(menu_action(&ui, "Open Office document", move |ui| {
+            ui.open_desktop_app(page);
+            office_reader::browse(ui);
         })),
         WorkspacePage::PdfReader => fragment(menu_action(&ui, "Open PDF", move |ui| {
             ui.open_desktop_app(page);

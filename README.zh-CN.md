@@ -19,6 +19,8 @@ Arcnix 是一个通过 SSH 管理 Linux 服务器的桌面应用。界面运行�
 
 Windows 终端优先使用系统自带的 Windows PowerShell，也支持安装在标准位置或加入 PATH 的 PowerShell 7。如果两者都找不到，文件管理和监控仍可使用。监控直接从 Windows 获取 CPU、内存和磁盘使用情况。
 
+在本机桌面的「文件」中双击 DOCX、XLSX 或 PPTX，或从启动器打开「Office」。支持缩放、切换工作表和幻灯片。选择本机「读写模式」后，可在 DOCX 中点击「编辑 Word 文档」，修改正文、加粗或设为斜体，再用「另存 DOCX」保存到新文件。原件保留。单个文件上限为 32 MiB，复杂版式按 Syntra 的导入能力显示。
+
 演示桌面偏好保存在 `~/.arcnix/self-demo-server/local-<os>/desktop.json`。使用自定义配置时，演示目录位于配置文件旁。首次进入时会导入原有的本机桌面偏好。
 
 ## 使用已保存的 WSL 服务器（Windows）

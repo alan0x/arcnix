@@ -231,6 +231,7 @@ pub enum DesktopApp {
     Player,
     ImageViewer,
     PdfReader,
+    Office,
     Trash,
     Browser,
     Settings,

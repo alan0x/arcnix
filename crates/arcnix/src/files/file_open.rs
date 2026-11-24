@@ -12,6 +12,7 @@ const APPS: &[FileApp] = if cfg!(windows) {
         FileApp::Player,
         FileApp::ImageViewer,
         FileApp::PdfReader,
+        FileApp::Office,
         FileApp::Browser,
     ]
 } else {
@@ -21,6 +22,7 @@ const APPS: &[FileApp] = if cfg!(windows) {
         FileApp::Player,
         FileApp::ImageViewer,
         FileApp::PdfReader,
+        FileApp::Office,
     ]
 };
 
@@ -30,6 +32,7 @@ fn label(app: FileApp) -> &'static str {
         FileApp::Code => server_desktop::app_label(WorkspacePage::Code),
         FileApp::Player => "Player",
         FileApp::PdfReader => server_desktop::app_label(WorkspacePage::PdfReader),
+        FileApp::Office => server_desktop::app_label(WorkspacePage::Office),
         FileApp::ImageViewer => server_desktop::app_label(WorkspacePage::ImageViewer),
         FileApp::Browser => server_desktop::app_label(WorkspacePage::Browser),
     }
@@ -42,6 +45,7 @@ fn icon(app: FileApp) -> Icon {
         FileApp::Player => Icon::Play,
         FileApp::ImageViewer => Icon::Image,
         FileApp::PdfReader => Icon::File,
+        FileApp::Office => Icon::File,
         FileApp::Browser => Icon::Browser,
     }
 }
@@ -52,6 +56,7 @@ const SUGGESTED_ORDER: &[FileApp] = &[
     FileApp::Browser,
     FileApp::ImageViewer,
     FileApp::PdfReader,
+    FileApp::Office,
     FileApp::TextEditor,
     FileApp::Player,
 ];
@@ -145,6 +150,11 @@ static BUILT_IN: LazyLock<BTreeMap<&'static str, BTreeSet<FileApp>>> = LazyLock:
         .copied()
         .flat_map(|ext| [(FileApp::TextEditor, ext), (FileApp::Code, ext)])
         .chain([(FileApp::PdfReader, "pdf")])
+        .chain(
+            office_reader::EXTENSIONS
+                .iter()
+                .map(|&ext| (FileApp::Office, ext)),
+        )
         .chain(image_viewer::extensions().map(|ext| (FileApp::ImageViewer, ext)))
         .chain(video_player::supported_extensions().map(|ext| (FileApp::Player, ext)))
         .chain(
@@ -189,7 +199,12 @@ fn explicit_default(settings: &AppSettings, ext: &str) -> Option<FileApp> {
 }
 
 fn available_app(s: &State, app: FileApp) -> bool {
-    APPS.contains(&app) && (s.local_desktop.is_none() || app != FileApp::Browser)
+    APPS.contains(&app)
+        && match app {
+            FileApp::Office => office_reader::available(s),
+            FileApp::Browser => s.local_desktop.is_none(),
+            _ => true,
+        }
 }
 
 fn default_app(s: &State, path: &str) -> Option<FileApp> {
@@ -392,6 +407,7 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
         FileApp::Player => ui.player.open(ui, path),
         FileApp::ImageViewer => image_viewer::open(ui, path),
         FileApp::PdfReader => pdf_reader::open(ui, path),
+        FileApp::Office => office_reader::open(ui, path),
         #[cfg(windows)]
         FileApp::Browser => ui.open_html_preview(path),
         #[cfg(not(windows))]

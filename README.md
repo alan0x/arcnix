@@ -19,6 +19,8 @@ Choose **Try the local desktop** above the server search field. Each visit lets 
 
 On Windows, Terminal uses the built-in Windows PowerShell first and can use PowerShell 7 in its standard location or on PATH if needed. If neither is available, Files and Monitor still work. Monitor reads CPU, memory and disk usage directly from Windows.
 
+In the local desktop, double-click a DOCX, XLSX or PPTX file in Files, or launch **Office**. The reader supports worksheet and slide navigation and zoom. In the read-write local desktop, choose **Edit Word document** to edit text and apply bold or italic formatting, then **Save as DOCX** to create a new file. The original is preserved. Files up to 32 MiB are supported. Layout fidelity depends on Syntra’s Office importer.
+
 Demo desktop preferences are stored in `~/.arcnix/self-demo-server/local-<os>/desktop.json`. A custom configuration keeps the demo directory beside the configuration file. Existing local desktop preferences are imported on first use.
 
 ## Previously saved WSL servers on Windows

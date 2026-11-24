@@ -2832,3 +2832,15 @@ GPU 型号	GPU model
 输入上方显示的服务器地址以确认关机	Enter the server address shown above to confirm shutdown
 已请求关闭系统	System shutdown requested
 电源请求返回了异常响应	Unexpected power response
+打开 Office 文档	Open Office document
+Office 文档	Office documents
+此文件夹中没有 Office 文档。	No Office documents in this folder.
+打开 DOCX、XLSX 或 PPTX 文件进行阅读。	Open a DOCX, XLSX or PPTX file to read it.
+正在打开 Office 文档…	Opening Office document…
+仅支持 DOCX、XLSX 和 PPTX 文件。	Supported formats are DOCX, XLSX and PPTX.
+编辑 Word 文档	Edit Word document
+请选择新的 DOCX 文件名。	Choose a new DOCX file name.
+正在保存 DOCX…	Saving DOCX…
+已另存 DOCX 副本。	Saved DOCX copy.
+请先完成编辑或返回阅读，再离开当前文档。	Finish editing or return to reading before leaving this document.
+放弃修改	Discard edits

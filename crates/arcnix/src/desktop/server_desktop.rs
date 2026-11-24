@@ -76,6 +76,7 @@ pub(crate) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Player => DesktopApp::Player,
         WorkspacePage::ImageViewer => DesktopApp::ImageViewer,
         WorkspacePage::PdfReader => DesktopApp::PdfReader,
+        WorkspacePage::Office => DesktopApp::Office,
         WorkspacePage::Browser => DesktopApp::Browser,
         WorkspacePage::Settings => DesktopApp::Settings,
         WorkspacePage::PgAdmin => DesktopApp::PgAdmin,
@@ -97,6 +98,7 @@ pub(crate) fn app_page(app: DesktopApp) -> WorkspacePage {
         DesktopApp::Player => WorkspacePage::Player,
         DesktopApp::ImageViewer => WorkspacePage::ImageViewer,
         DesktopApp::PdfReader => WorkspacePage::PdfReader,
+        DesktopApp::Office => WorkspacePage::Office,
         DesktopApp::Browser => WorkspacePage::Browser,
         DesktopApp::Settings => WorkspacePage::Settings,
         DesktopApp::PgAdmin => WorkspacePage::PgAdmin,
@@ -213,7 +215,7 @@ fn focus_window(ui: &Ui, input: &str) {
     }
 }
 
-pub(crate) const APP_LAUNCHERS: [WorkspacePage; 13] = [
+pub(crate) const APP_LAUNCHERS: [WorkspacePage; 14] = [
     WorkspacePage::Files(0),
     WorkspacePage::Terminal,
     WorkspacePage::Code,
@@ -221,6 +223,7 @@ pub(crate) const APP_LAUNCHERS: [WorkspacePage; 13] = [
     WorkspacePage::Player,
     WorkspacePage::ImageViewer,
     WorkspacePage::PdfReader,
+    WorkspacePage::Office,
     WorkspacePage::Monitor,
     WorkspacePage::Docker,
     WorkspacePage::PgAdmin,
@@ -244,6 +247,7 @@ fn local_app(s: &State, page: WorkspacePage) -> bool {
         WorkspacePage::Files(_)
             | WorkspacePage::Code
             | WorkspacePage::ImageViewer
+            | WorkspacePage::Office
             | WorkspacePage::PdfReader
             | WorkspacePage::Player
             | WorkspacePage::Editor
@@ -261,6 +265,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
             // Only this platform's component has been tested.
             WorkspacePage::PgAdmin => cfg!(target_os = "macos"),
             WorkspacePage::Docker => s.server_apps.applications.docker,
+            WorkspacePage::Office => office_reader::available(s),
             _ => true,
         })
         .collect()
@@ -275,6 +280,7 @@ pub(crate) fn app_label(page: WorkspacePage) -> &'static str {
         WorkspacePage::Player => "Player",
         WorkspacePage::ImageViewer => "Image Viewer",
         WorkspacePage::PdfReader => "PDF Reader",
+        WorkspacePage::Office => "Office",
         WorkspacePage::Browser => "Browser",
         WorkspacePage::Terminal => "终端",
         WorkspacePage::Monitor => "Monitor",
@@ -339,6 +345,7 @@ pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
         WorkspacePage::Player => "app-player",
         WorkspacePage::ImageViewer => "app-image",
         WorkspacePage::PdfReader => "app-document",
+        WorkspacePage::Office => "app-office",
         WorkspacePage::Browser => "app-browser",
         WorkspacePage::Terminal => "app-terminal",
         WorkspacePage::Monitor => "app-monitor",
@@ -368,6 +375,7 @@ pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Player => Icon::Play,
         WorkspacePage::ImageViewer => Icon::Image,
         WorkspacePage::PdfReader => Icon::File,
+        WorkspacePage::Office => Icon::File,
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         WorkspacePage::PgAdmin => Icon::Database,
@@ -631,10 +639,10 @@ impl Ui {
     }
 
     pub(crate) fn focus_desktop_app(&self, page: WorkspacePage) {
-        if self
-            .state
-            .with(|s| s.local_desktop.is_some() && !local_app(s, page))
-        {
+        if self.state.with(|s| {
+            (page == WorkspacePage::Office && !office_reader::available(s))
+                || (s.local_desktop.is_some() && !local_app(s, page))
+        }) {
             return;
         }
         if page.is_files()
@@ -747,6 +755,9 @@ impl Ui {
     }
 
     fn close_desktop_app(&self, page: WorkspacePage) {
+        if page == WorkspacePage::Office && !office_reader::can_leave(self) {
+            return;
+        }
         if page.base() == WorkspacePage::Editor && !text_editor::close_desktop(self, page) {
             return;
         }
@@ -763,6 +774,9 @@ impl Ui {
         }
         if page == WorkspacePage::PgAdmin {
             self.state.revise(pgadmin_ui::reset);
+        }
+        if page == WorkspacePage::Office {
+            self.state.revise(|s| s.office = Default::default());
         }
         if page == WorkspacePage::PdfReader {
             self.state.revise(|s| s.pdf = Default::default());
@@ -1092,6 +1106,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Player => fragment(video_player::panel(ui)),
         WorkspacePage::ImageViewer => fragment(image_viewer::panel(ui)),
         WorkspacePage::PdfReader => fragment(pdf_reader::panel(ui)),
+        WorkspacePage::Office => fragment(office_reader::panel(ui)),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::window_page(ui, id)),
         _ => fragment(()),

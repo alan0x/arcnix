@@ -6,6 +6,8 @@ pub(crate) mod mac_surface;
 #[cfg(windows)]
 pub(crate) mod mpv_native;
 pub(crate) mod native_viewport;
+pub(crate) mod office_reader;
+pub(crate) mod office_view;
 pub(crate) mod pdf_reader;
 pub(crate) mod video_player;
 #[cfg(windows)]

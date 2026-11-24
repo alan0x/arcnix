@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Word</title>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:#e8eaee;color:#20242a;font:14px system-ui,sans-serif}
+nav{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;background:#f9fafb;border-bottom:1px solid #cbd2d9}
+button{padding:4px 9px;min-height:28px;background:white;color:inherit;border:1px solid #bbc4cd;border-radius:4px;font:inherit}
+button:focus-visible{outline:2px solid #266bc1}#bold{font-weight:700}#italic{font-style:italic}#save{margin-left:auto;background:#30557f;color:white}
+main{overflow:auto;padding:12px;flex:1;min-height:0}.writer-page{background:white;color:#15191c;box-shadow:0 1px 5px #0003;margin:auto;width:min(100%,var(--writer-page-width,210mm));min-height:95%;padding:clamp(16px,5vw,64px);font:11pt Arial,'Microsoft YaHei',sans-serif}
+#body{min-height:50vh;outline:none;overflow-wrap:anywhere;white-space:pre-wrap}.writer-page img{max-width:100%;height:auto}.writer-page table{border-collapse:collapse;max-width:100%}.writer-page td{border:1px solid #9ca3af;padding:4px}.writer-page .writer-page-break{border-top:1px dashed #bac2cb;margin:14px 0}
+#message{padding:0 8px}
+</style></head>
+<body><nav><button id="bold">B</button><button id="italic">I</button><span id="message" role="status"></span><button id="save" disabled></button><button id="discard"></button></nav>
+<main><article class="writer-page"><div id="body"></div></article></main>
+<script type="module" src="./office-editor.js"></script></body></html>

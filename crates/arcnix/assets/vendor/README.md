@@ -19,3 +19,5 @@ The full workbench dependency graph, npm tarballs and integrity hashes are pinne
 `tools/monaco/package-lock.json`. Run `npm ci` and `npm run build` in that directory
 to regenerate the embedded bundle. The client serves its JavaScript, workers, fonts,
 themes and translations from a local WebView protocol.
+
+The Word editing surface in `syntra/writer-surface.js` is from [Syntra Office](https://github.com/taidge/syntra/tree/7ac8cd60e47e83fed783720c7efb36600a477778), under the included MIT license. Keep it at the same revision as the Rust Office dependencies.

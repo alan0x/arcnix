@@ -154,6 +154,7 @@ enum WorkspacePage {
     Player,
     ImageViewer,
     PdfReader,
+    Office,
     Browser,
     Settings,
     PgAdmin,
@@ -234,6 +235,7 @@ define_state! {
         code: code_workbench::Runtime = Default::default(),
         remote_editor: Option<text_editor::Editor> = None,
         desktop_editor: text_editor::Tabs = Default::default(),
+        office: office_reader::Reader = Default::default(),
         pdf: pdf_reader::Reader = Default::default(),
         pgadmin: pgadmin_ui::PgAdmin = Default::default(),
         images: image_viewer::Viewer = Default::default(),
@@ -605,6 +607,7 @@ impl Ui {
             }
             s.swap_session(&mut incoming);
             s.code.viewport = None;
+            s.office.viewport = None;
             #[cfg(windows)]
             {
                 s.web_browser.viewports.clear();
@@ -947,6 +950,8 @@ impl Ui {
             #[cfg(windows)]
             Update::WslFiles(result)=>wsl_workspace::receive(events,response.serial,result),
             Update::PgAdmin(reply)=>pgadmin_ui::reply(events,response.serial,reply),
+            Update::OfficeSaved(result)=>office_reader::saved(events,response.serial,result),
+            Update::Office(result)=>office_reader::received(events,response.serial,result),
             Update::Pdf(event)=>pdf_reader::received(events,response.serial,event),
             Update::Video(result)=>events.player.ready(events,response.serial,result),
             #[cfg(windows)]
@@ -990,6 +995,7 @@ impl Ui {
                 state.revise(|s| {
                     s.images = Default::default();
                     s.pdf = Default::default();
+                    s.office = Default::default();
                     desktop_file_picker::dismiss(s);
                     file_elevation::reset(s);
                     if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::Launcher | Dialog::SystemPower(..))) {
@@ -1267,6 +1273,7 @@ impl Ui {
             s.code = Default::default();
             s.images = Default::default();
             s.pdf = Default::default();
+            s.office = Default::default();
             text_editor::disconnect(s);
             s.operations = Default::default();
             s.metrics = Default::default();
@@ -2478,7 +2485,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     if cfg!(windows) {
                         "const nativeSurfaceRegionClipping = () => true;"
                     } else if cfg!(target_os = "macos") {
-                        "const nativeSurfaceRegionClipping = app => app === 'code' || app === 'pgadmin';"
+                        "const nativeSurfaceRegionClipping = app => ['code','pgadmin','office'].includes(app);"
                     } else {
                         "const nativeSurfaceRegionClipping = () => false;"
                     },

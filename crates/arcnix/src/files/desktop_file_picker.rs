@@ -10,8 +10,10 @@ pub(crate) enum Purpose {
     Video,
     Image,
     Pdf,
+    Office,
     TextEditor,
     SaveText(u64),
+    SaveOffice,
     Code,
 }
 
@@ -29,13 +31,20 @@ impl Purpose {
             Self::Video => "Open video",
             Self::Image => "Open image",
             Self::Pdf => "Open PDF",
-            Self::SaveText(_) => "Save as…",
+            Self::Office => "Open Office document",
+            Self::SaveText(_) | Self::SaveOffice => "Save as…",
             _ => "Open file",
         }
     }
 
     fn formats(self) -> Formats {
         match self {
+            Self::Office | Self::SaveOffice => Formats {
+                label: "Office documents",
+                empty: "No Office documents in this folder.",
+                includes: office_reader::supports,
+                extensions: || office_reader::EXTENSIONS.to_vec(),
+            },
             Self::Pdf => Formats {
                 label: "PDF documents",
                 empty: "No PDFs in this folder.",
@@ -92,7 +101,7 @@ pub(crate) fn open(ui: &Ui, purpose: Purpose, start: Option<String>) {
     if ui.state.with(current) == Some(purpose) {
         let path = start.unwrap_or_else(|| ui.state.with(|s| s.remote_path.clone()));
         read_directory(ui, path);
-        if matches!(purpose, Purpose::SaveText(_)) {
+        if matches!(purpose, Purpose::SaveText(_) | Purpose::SaveOffice) {
             ui.state.revise(|s| {
                 if let Some(d) = &mut s.desktop_file_picker {
                     d.filter = Filter::All;
@@ -116,10 +125,12 @@ fn confirm(ui: &Ui, path: &str) {
         return;
     };
     let open: fn(&Ui, &str) = match purpose {
+        Purpose::SaveOffice => return office_reader::submit_save(ui, path),
         Purpose::SaveText(id) => return submit_save(ui, id, path),
         Purpose::Video => |ui, path| ui.player.open_from_picker(ui, path),
         Purpose::Image => image_viewer::open,
         Purpose::Pdf => pdf_reader::open,
+        Purpose::Office => office_reader::open,
         Purpose::TextEditor => text_editor::open,
         Purpose::Code => code_workbench::open,
     };
@@ -148,7 +159,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                 panel(ui.clone(), formats),
                 (
                     match purpose {
-                        Purpose::SaveText(_) => fragment(
+                        Purpose::SaveText(_) | Purpose::SaveOffice => fragment(
                             row().class("file-picker-save-name").fill((
                                 text().content(i18n::bind("File name")),
                                 input()
@@ -190,7 +201,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                                     {
                                         "Replace"
                                     }
-                                    Purpose::SaveText(_) => "Save",
+                                    Purpose::SaveText(_) | Purpose::SaveOffice => "Save",
                                     _ => "Open",
                                 }
                                 .to_owned()
@@ -249,7 +260,7 @@ fn save_path(s: &State) -> Option<String> {
 }
 
 fn chosen_path(s: &State) -> Option<String> {
-    if matches!(current(s), Some(Purpose::SaveText(_))) {
+    if matches!(current(s), Some(Purpose::SaveText(_) | Purpose::SaveOffice)) {
         save_path(s)
     } else {
         selected_path(s).map(str::to_owned)
@@ -735,8 +746,10 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                         read_directory(&browse, e.path);
                                     } else {
                                         state.revise(|s| {
-                                            let saving =
-                                                matches!(current(s), Some(Purpose::SaveText(_)));
+                                            let saving = matches!(
+                                                current(s),
+                                                Some(Purpose::SaveText(_) | Purpose::SaveOffice)
+                                            );
                                             if let Some(directory) = &mut s.desktop_file_picker {
                                                 directory.selected = Some(e.path);
                                                 if saving {
@@ -763,7 +776,11 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                             )
                                         })
                                     {
-                                        confirm(&open, &file.path);
+                                        if state.with(current) == Some(Purpose::SaveOffice) {
+                                            set_save_name(&open, file.name);
+                                        } else {
+                                            confirm(&open, &file.path);
+                                        }
                                     }
                                 }),
                             text().class("file-size").content(i18n::bind(

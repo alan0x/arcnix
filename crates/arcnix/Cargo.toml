@@ -19,6 +19,9 @@ path = "src/main.rs"
 portable-pty = "0.9"
 flate2 = "1"
 hayro = "0.9"
+syntra-export = { git = "https://github.com/taidge/syntra", rev = "7ac8cd60e47e83fed783720c7efb36600a477778" }
+syntra-doc-engine = { git = "https://github.com/taidge/syntra", rev = "7ac8cd60e47e83fed783720c7efb36600a477778" }
+tempfile = "3"
 pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["html"] }
 anyhow.workspace = true
 serde.workspace = true
@@ -55,7 +58,6 @@ keyring-core = "1.0.1"
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
 libloading = "0.8.9"
 directories = "6"
-tempfile = "3"
 zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2"] }
 webview2-com = "=0.39.1"
 windows = { version = "0.62.2", features = ["Win32_Security_Cryptography", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }

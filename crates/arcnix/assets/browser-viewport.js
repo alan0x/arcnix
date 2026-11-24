@@ -97,6 +97,7 @@ function observeNativeSurface(app) {
 observeNativeSurface('browser');
 observeNativeSurface('code');
 observeNativeSurface('pgadmin');
+observeNativeSurface('office');
 observeNativeSurface('player');
 (() => {
     document.addEventListener('keydown', event => {

@@ -79,6 +79,8 @@ pub(crate) type TextAuthorization = (remote::AdminTextRetry, zeroize::Zeroizing<
 
 pub enum Action {
     LocalDesktop(local_desktop::Target, PathBuf),
+    OpenOffice(String),
+    SaveOffice(String, Arc<str>),
     OpenPdf(String, async_channel::Receiver<crate::pdf_reader::Command>),
     PlayVideo {
         path: String,
@@ -251,6 +253,8 @@ impl BrowserProxyControl {
 pub enum Update {
     LocalDesktop(Result<String, String>),
     Pdf(crate::pdf_reader::Reply),
+    Office(Result<crate::office_reader::Document, String>),
+    OfficeSaved(Result<(String, crate::office_reader::Document), String>),
     PgAdmin(crate::pgadmin_ui::Reply),
     Video(Result<Arc<crate::video_player::Source>, String>),
     #[cfg(windows)]
@@ -759,6 +763,36 @@ pub(crate) fn start_with_limiter(
                     })
                     .map_err(|e| format!("{e:#}"));
                 send(Update::LocalDesktop(result));
+                continue;
+            }
+            if let Action::SaveOffice(path, model) = action {
+                if epoch == active_epoch && epoch == generation.load(Ordering::Acquire) {
+                    let result = crate::office_reader::save_copy(
+                        local_desktop.as_ref().map(|d| &d.target),
+                        &path,
+                        &model,
+                    )
+                    .map(|document| (path, document))
+                    .map_err(|e| format!("{e:#}"));
+                    send(Update::OfficeSaved(result));
+                }
+                continue;
+            }
+            if let Action::OpenOffice(path) = action {
+                if epoch == active_epoch && epoch == generation.load(Ordering::Acquire) {
+                    let result = local_desktop
+                        .as_ref()
+                        .filter(|desktop| crate::office_reader::local_target(&desktop.target))
+                        .ok_or_else(|| "Open Office documents from the local desktop.".to_owned())
+                        .and_then(|desktop| {
+                            desktop
+                                .target
+                                .read_file_bytes(&path, crate::office_reader::LIMIT)
+                                .map_err(|error| format!("{error:#}"))
+                        })
+                        .and_then(|bytes| crate::office_reader::render(&path, &bytes));
+                    send(Update::Office(result));
+                }
                 continue;
             }
             let action = if let Some(desktop) = &local_desktop {
