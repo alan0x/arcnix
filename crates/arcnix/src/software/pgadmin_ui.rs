@@ -80,16 +80,21 @@ pub(crate) struct Download {
 
 impl Download {
     fn message(&self) -> String {
-        let name = self
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if self.success {
-            format!("Saved {name} to Downloads")
-        } else {
-            format!("Could not save {name}")
+        use crate::pgadmin_native::file_name;
+        let file = file_name(&self.path);
+        if !self.success {
+            return format!("Could not save {file}");
         }
+        // A drive or volume root has no name of its own.
+        let folder = self
+            .path
+            .parent()
+            .map(|folder| match file_name(folder) {
+                name if name.is_empty() => folder.display().to_string(),
+                name => name,
+            })
+            .unwrap_or_default();
+        format!("Saved “{file}” to “{folder}”")
     }
 }
 
@@ -432,7 +437,14 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
         let stop = ui.clone();
         row().class("desktop-app-tools").fill((
             text()
-                .class("pgadmin-download subtle")
+                .class(state.map(|s| {
+                    match &s.pgadmin.download {
+                        None => "hidden",
+                        Some(download) if download.success => "pgadmin-download",
+                        Some(_) => "pgadmin-download failed",
+                    }
+                    .to_owned()
+                }))
                 .content(i18n::bind(state.map(|s| {
                     s.pgadmin
                         .download

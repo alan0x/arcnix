@@ -1069,6 +1069,7 @@ pub(crate) fn start_with_limiter(
                                 access.context("Connect a server first")?;
                             let component =
                                 pgadmin::installed(&base).context("pgAdmin is not installed")?;
+                            let password_key = crate::ssh_credentials::pgadmin_password_key();
                             pgadmin::run(
                                 &base,
                                 &component,
@@ -1076,6 +1077,7 @@ pub(crate) fn start_with_limiter(
                                 &fingerprint,
                                 secret,
                                 &target,
+                                password_key,
                                 || {
                                     stop.load(Ordering::Acquire)
                                         || generation.load(Ordering::Acquire) != epoch

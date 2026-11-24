@@ -153,7 +153,7 @@ Ctrl+C 在有选中文字时复制，否则向远程程序发送中断；Ctrl+Sh
 
 ## pgAdmin
 
-macOS 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随 Arcnix 管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层，下载保存到「下载」。
+macOS 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随 Arcnix 管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层。下载先写入该窗口的临时目录，完成后由系统保存对话框（macOS 为附在窗口上的面板）选择位置，再在后台线程移动过去；窗口关闭时尚未询问的下载移到「下载」。保存的数据库密码由 pgAdmin 加密，密钥由 Arcnix 生成并存放在系统钥匙串（`org.arcnix.pgadmin`），启动时交给后端；pgAdmin 自己的钥匙串存储保持关闭，因为它的桌面模式探测超时会在运行中改用另一把密钥。密钥变化（例如钥匙串条目被删除）时启动器清除已保存的密码，pgAdmin 会重新询问；本次读不到钥匙串时不改动已保存的密码。更换数据库用户时清除为原用户保存的密码。
 
 `cargo test -p arcnix-core --test pgadmin_integration -- --ignored --nocapture` 使用真实组件、回环 SSH 和 PostgreSQL，需设置 `ARCNIX_TEST_PGADMIN_PACKAGE`、`ARCNIX_TEST_SSH_PORT`、`ARCNIX_TEST_SSH_USER`、`ARCNIX_TEST_SSH_KEY` 和 `ARCNIX_TEST_POSTGRES_PORT`。调试构建可用 `ARCNIX_PGADMIN_PACKAGE` 指定本地组件包。
 

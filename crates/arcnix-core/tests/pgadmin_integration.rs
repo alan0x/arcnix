@@ -100,6 +100,7 @@ fn opens_pgadmin_through_ssh_and_stops_cleanly() -> Result<()> {
                     &fingerprint,
                     Zeroizing::new(String::new()),
                     &connection,
+                    pgadmin::new_password_key().ok(),
                     || stop.load(Ordering::Acquire),
                     |event| {
                         let _ = send.send(event);

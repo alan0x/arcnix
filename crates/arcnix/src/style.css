@@ -1934,6 +1934,18 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   flex: none;
 }
 .desktop-window-titlebar:has(.desktop-app-tools) .desktop-window-actions { margin-left: 0; }
+.pgadmin-download {
+  padding: 3px 10px;
+  border: 1px solid #2f6a48;
+  border-radius: 999px;
+  background: #183324;
+  color: #a6e3bd;
+  font-size: var(--font-small);
+  white-space: nowrap;
+}
+.pgadmin-download.failed { border-color: #6a3a40; background: #38242a; color: #efb5ba; }
+.theme-light .pgadmin-download:not(:where(.desktop-dark *)) { border-color: #9fd4b3; background: #e6f6ec; color: #1d6b3d; }
+.theme-light .pgadmin-download.failed:not(:where(.desktop-dark *)) { border-color: #e4a9ae; background: #fbeaec; color: #a3303b; }
 .files-titlebar {
   container: files-toolbar / inline-size;
   position: relative;
