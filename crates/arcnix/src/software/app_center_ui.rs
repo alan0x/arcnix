@@ -16,8 +16,6 @@ pub(crate) struct AppCenterState {
     pub pending: Option<u64>,
     pub error: String,
     pub all_packages: bool,
-    /// Whether the pgAdmin component is on this computer.
-    pub local_ready: Option<bool>,
 }
 #[derive(Clone)]
 enum Item {
@@ -151,6 +149,7 @@ fn badge(app: App) -> impl Widget {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Status {
     Checking,
+    Installing,
     Unknown,
     Installed,
     Missing,
@@ -159,12 +158,13 @@ enum Status {
 impl Status {
     fn label(self, app: App) -> &'static str {
         match (self, app.local) {
+            (Self::Installing, _) => "Installing pgAdmin…",
             (Self::Checking, _) => "Checking…",
             (Self::Installed, true) => "Ready on this computer",
+            (Self::Unavailable, _) => "No available source",
             (_, true) => "Downloads when first opened",
             (Self::Installed, false) => "Installed",
             (Self::Missing, false) => "Not installed",
-            (Self::Unavailable, false) => "No available source",
             (Self::Unknown, false) => "Status unavailable",
         }
     }
@@ -179,10 +179,16 @@ impl Status {
 fn status(s: &State, app: App) -> Status {
     let app_center = &s.software.app_center;
     if app.local {
-        return if app_center.local_ready == Some(true) {
+        return if s.pgadmin_component.installing() {
+            Status::Installing
+        } else if matches!(s.pgadmin_component, pgadmin_ui::ComponentState::Ready) {
             Status::Installed
-        } else {
+        } else if arcnix_core::pgadmin::supported_platform()
+            || arcnix_core::pgadmin::local_package().is_some()
+        {
             Status::Missing
+        } else {
+            Status::Unavailable
         };
     }
     match &app_center.inventory {
@@ -274,15 +280,8 @@ impl Ui {
     }
     /// A quick check of local files, repeated whenever App Center is shown.
     pub(crate) fn app_center_local_status(&self) {
-        let ready = arcnix_core::pgadmin::base(&self.store)
-            .ok()
-            .map(|base| arcnix_core::pgadmin::installed(&base).is_some());
-        if self
-            .state
-            .with(|s| s.software.app_center.local_ready != ready)
-        {
-            self.state
-                .revise(|s| s.software.app_center.local_ready = ready);
+        if let Ok(base) = arcnix_core::pgadmin::base(&self.store) {
+            self.refresh_pgadmin_component(&base);
         }
     }
     pub(crate) fn app_center_enter(&self) {
@@ -400,7 +399,11 @@ fn status_text(state: Cage<State>, app: App, card: bool) -> impl Widget {
         .class(state.map(move |s| {
             let status = status(s, app);
             // Cards only point out what changes the button next to them.
-            let hidden = card && !matches!(status, Status::Installed | Status::Unavailable);
+            let hidden = card
+                && !matches!(
+                    status,
+                    Status::Installed | Status::Installing | Status::Unavailable
+                );
             format!("{}{}", status.class(), if hidden { " hidden" } else { "" })
         }))
         .content(i18n::bind(
@@ -710,8 +713,10 @@ fn local_installation(state: Cage<State>, app: App) -> impl Widget {
             text()
                 .class("app-center-installed-version subtle")
                 .content(i18n::bind(state.map(move |s| {
-                    match (s.software.app_center.local_ready, &size) {
-                        (Some(true), _) => "Downloaded".to_owned(),
+                    match (status(s, app), &size) {
+                        (Status::Installing, _) => "Installing pgAdmin…".to_owned(),
+                        (Status::Unavailable, _) => "No available source".to_owned(),
+                        (Status::Installed, _) => "Downloaded".to_owned(),
                         (_, Some(size)) => format!("Not downloaded · {size}"),
                         _ => "Not downloaded".to_owned(),
                     }
@@ -1143,8 +1148,17 @@ mod tests {
     fn local_apps_report_their_component_and_are_never_installed_on_the_server() {
         let pgadmin = catalog::get("pgadmin").unwrap();
         let mut s = state();
-        assert!(status(&s, pgadmin) == Status::Missing);
-        s.software.app_center.local_ready = Some(true);
+        let downloadable = arcnix_core::pgadmin::supported_platform()
+            || arcnix_core::pgadmin::local_package().is_some();
+        assert!(
+            status(&s, pgadmin)
+                == if downloadable {
+                    Status::Missing
+                } else {
+                    Status::Unavailable
+                }
+        );
+        s.pgadmin_component = pgadmin_ui::ComponentState::Ready;
         assert!(status(&s, pgadmin) == Status::Installed);
         assert!(!can_install(&s, pgadmin));
         assert!(installations(&s, pgadmin).is_empty());

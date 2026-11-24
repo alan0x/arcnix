@@ -302,6 +302,7 @@ define_state! {
     shared {
         config: AppConfig = config,
         group: Option<String> = None,
+        pgadmin_component: pgadmin_ui::ComponentState = Default::default(),
         collapsed_groups: HashSet<String> = HashSet::new(),
         search: String = String::new(),
         connected_servers_only: bool = false,

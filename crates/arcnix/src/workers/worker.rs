@@ -177,7 +177,6 @@ pub enum Action {
         sudo: zeroize::Zeroizing<String>,
     },
     PgAdminOpen(PathBuf),
-    PgAdminInstall(PathBuf, Arc<AtomicBool>),
     PgAdminStart {
         base: PathBuf,
         connection: arcnix_core::pgadmin::Connection,
@@ -338,38 +337,6 @@ pub struct Response {
     pub epoch: u64,
     pub serial: u64,
     pub update: Update,
-}
-fn pgadmin_install(base: &Path, cancel: &AtomicBool, reply: impl Fn(crate::pgadmin_ui::Reply)) {
-    use arcnix_core::{pgadmin, updates};
-
-    use crate::pgadmin_ui::Reply;
-    let check = || {
-        anyhow::ensure!(!cancel.load(Ordering::Acquire), "Installation cancelled");
-        Ok(())
-    };
-    let mut shown = 0;
-    let result = if let Some(package) = pgadmin::local_package() {
-        pgadmin::install_local(base, &package, check)
-    } else if let Some(asset) = pgadmin::package() {
-        pgadmin::install(
-            base,
-            &updates::Source::github(),
-            &asset,
-            check,
-            |done, total| {
-                let percent = done * 100 / total.max(1);
-                if percent != shown {
-                    shown = percent;
-                    reply(Reply::Progress(percent));
-                }
-            },
-        )
-    } else {
-        Err(anyhow::anyhow!("pgAdmin is not available for this system"))
-    };
-    reply(Reply::Installed(
-        result.map(|_| ()).map_err(|error| format!("{error:#}")),
-    ));
 }
 fn publish_file_result<T>(
     result: anyhow::Result<T>,
@@ -1020,26 +987,9 @@ pub(crate) fn start_with_limiter(
                             pgadmin::saved_connection(&base, profile, fingerprint)
                         })
                         .unwrap_or_default();
-                    send(Update::PgAdmin(crate::pgadmin_ui::Reply::Opened {
-                        installed: pgadmin::installed(&base).is_some(),
-                        size: pgadmin::local_package()
-                            .map(|_| 0)
-                            .or_else(|| pgadmin::package().map(|asset| asset.size)),
+                    send(Update::PgAdmin(crate::pgadmin_ui::Reply::Opened(
                         connection,
-                    }));
-                    continue;
-                }
-                Action::PgAdminInstall(base, cancel) => {
-                    let events = events.clone();
-                    thread::spawn(move || {
-                        pgadmin_install(&base, &cancel, |reply| {
-                            let _ = events.send_blocking(Response {
-                                epoch,
-                                serial,
-                                update: Update::PgAdmin(reply),
-                            });
-                        });
-                    });
+                    )));
                     continue;
                 }
                 Action::PgAdminStart {

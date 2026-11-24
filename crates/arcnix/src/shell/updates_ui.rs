@@ -89,7 +89,7 @@ pub(crate) fn applying(s: &State) -> bool {
     s.updates.phase == Phase::Applying
 }
 fn idle(s: &State) -> bool {
-    if !s.inflight_transfers.is_empty() {
+    if s.pgadmin_component.installing() || !s.inflight_transfers.is_empty() {
         return false;
     }
     !s.connected

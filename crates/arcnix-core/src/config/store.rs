@@ -35,6 +35,31 @@ impl ConfigStore {
         Ok(Self::at(dirs.config_dir().join("config.json")))
     }
 
+    /// Local application data follows the configuration for portable installs.
+    pub fn local_data_root(&self) -> Result<PathBuf> {
+        if self.path != Self::default_location()?.path {
+            return Ok(self
+                .path
+                .parent()
+                .context("Configuration directory is unavailable")?
+                .to_owned());
+        }
+        #[cfg(windows)]
+        {
+            Ok(directories::BaseDirs::new()
+                .context("Cannot find the local application data directory")?
+                .data_local_dir()
+                .join("Arcnix"))
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(ProjectDirs::from("org", "arcnix", "Arcnix")
+                .context("Cannot find the application data directory")?
+                .data_local_dir()
+                .to_owned())
+        }
+    }
+
     /// A real SSH session writes its Linux user data under ~/.arcnix. Keep
     /// this host's simulated server state in its own namespace. Portable
     /// configurations and test runs keep their demo data beside the config.

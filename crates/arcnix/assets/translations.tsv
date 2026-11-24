@@ -2828,6 +2828,8 @@ Arcnix 在本机保存自己的 pgAdmin，不会在服务器上安装任何内�
 地址由服务器解析并通过 SSH 访问。数据库密码由 pgAdmin 询问。	The address is resolved on the server and reached through SSH. pgAdmin asks for the database password.
 PostgreSQL 主机	PostgreSQL host
 PostgreSQL 端口	PostgreSQL port
+请关闭正在运行的 pgAdmin 会话，以便迁移应用目录。	Close the running pgAdmin session to move its app folder.
+请在已连接的 SSH 服务器桌面中打开 pgAdmin，通过隧道访问 PostgreSQL。	Open pgAdmin from a connected SSH server to use its PostgreSQL tunnel.
 打开 pgAdmin	Open pgAdmin
 正在启动 pgAdmin…	Starting pgAdmin…
 重新加载 pgAdmin	Reload pgAdmin
@@ -2887,3 +2889,7 @@ Office 文档	Office documents
 已另存 DOCX 副本。	Saved DOCX copy.
 请先完成编辑或返回阅读，再离开当前文档。	Finish editing or return to reading before leaving this document.
 放弃修改	Discard edits
+取消所有服务器共用的安装	Cancel installation for all servers
+在本机安装一次 pgAdmin，即可在所有服务器桌面中使用。	Install pgAdmin once on this computer to use it from all your server desktops.
+安装已取消	Installation cancelled
+安装已中断	Installation stopped
