@@ -217,10 +217,10 @@ class Desktop:
         launcher.click()
     def apps(self):
         self.workspace('Desktop')
-        self.page.locator('.desktop-dock').get_by_role('button', name='Apps', exact=True).click()
-        return self.page.get_by_role('dialog', name='Apps', exact=True)
+        self.page.locator('.desktop-dock').get_by_role('button', name='Launcher', exact=True).click()
+        return self.page.get_by_role('dialog', name='Launcher', exact=True)
     def show_desktop(self):
-        self.page.locator('.desktop-dock').get_by_role('button', name='Apps', exact=True).click(button='right')
+        self.page.locator('.desktop-dock').get_by_role('button', name='Launcher', exact=True).click(button='right')
         menu = self.page.locator('.desktop-context-menu')
         menu.get_by_role('button', name='Show desktop', exact=True).or_(
             menu.get_by_role('button', name='Restore windows', exact=True)).click()

@@ -2804,3 +2804,32 @@ SSH 服务器不允许转发到此 PostgreSQL 地址。	The SSH server does not 
 清空回收站已中断	Empty Trash interrupted
 永久删除回收站中的全部 {count} 项？此操作无法撤销。	Permanently delete all {count} items in Trash? This cannot be undone.
 搜索标记项目	Search tagged items
+设备	Device
+CPU 型号	CPU model
+物理核心数	Physical cores
+逻辑处理器数	Logical processors
+GPU 型号	GPU model
+系统信息	System information
+操作系统	Operating system
+系统版本	OS version
+架构	Architecture
+内核版本	Kernel version
+设备信息响应无效	Invalid device information response
+启动器	Launcher
+显示常用位置	Show locations
+显示重启按钮	Show restart button
+重启系统…	Restart system…
+重启系统？	Restart system?
+本机	This computer
+重启会中断当前会话。请先保存工作。	Open sessions will be interrupted. Save your work before restarting.
+已请求重启系统	System restart requested
+电源选项	Power options
+关机…	Shut down…
+关机	Shut down
+关闭系统？	Shut down system?
+关机会关闭所有应用并中断当前会话。请先保存工作。	Shutting down will close applications and end this session. Save your work first.
+远程关机会停止服务并断开 SSH。再次开机需要通过管理控制台或现场操作。	Shutting down this server will stop its services and disconnect SSH. You will need console or physical access to power it on again.
+重启会中断这台服务器的服务，并断开 SSH 连接。请先保存工作。	Restarting this server will interrupt its services and disconnect SSH. Save your work first.
+输入上方显示的服务器地址以确认关机	Enter the server address shown above to confirm shutdown
+已请求关闭系统	System shutdown requested
+电源请求返回了异常响应	Unexpected power response

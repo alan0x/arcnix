@@ -109,9 +109,63 @@ impl Target {
 
     fn run_script(&self, script: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
         let mut command = self.shell()?;
+        command.args(["-c", script, "arcnix"]).args(args);
+        Self::run_command(command, args[0], input)
+    }
+
+    pub fn system_power(&self, action: crate::host::PowerAction) -> Result<()> {
+        self.require_write()?;
+        ensure!(
+            matches!(self, Self::Native),
+            "Power controls are unavailable on this desktop"
+        );
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let root =
+                std::env::var_os("SystemRoot").context("Missing Windows system directory")?;
+            let mut command =
+                Command::new(std::path::PathBuf::from(root).join(r"System32\shutdown.exe"));
+            command
+                .creation_flags(0x08000000)
+                .args([action.windows_flag(), "/t", "0"]);
+            Self::run_command(command, action.key(), &[])?;
+        }
+        #[cfg(target_os = "linux")]
+        self.run_script(
+            &action.unix_command(crate::host::HostOs::Linux)?,
+            &[action.key()],
+            &[],
+        )?;
+        #[cfg(target_os = "macos")]
+        self.run_script(
+            &action.unix_command(crate::host::HostOs::MacOs)?,
+            &[action.key()],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    pub fn device_info(&self) -> Result<crate::device_info::DeviceInfo> {
+        #[cfg(windows)]
+        if !matches!(self, Self::Wsl(_)) {
+            use std::os::windows::process::CommandExt;
+            let mut command = Command::new(windows_host::powershell()?);
+            command.creation_flags(0x08000000).args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                crate::device_info::WINDOWS,
+            ]);
+            let output = Self::run_command(command, "device information", &[])?;
+            return crate::device_info::DeviceInfo::parse(std::str::from_utf8(&output)?);
+        }
+        let output = self.run_script(crate::device_info::UNIX, &["device information"], &[])?;
+        crate::device_info::DeviceInfo::parse(&String::from_utf8_lossy(&output))
+    }
+
+    fn run_command(mut command: Command, operation: &str, input: &[u8]) -> Result<Vec<u8>> {
         let mut child = command
-            .args(["-c", script, "arcnix"])
-            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -153,7 +207,7 @@ impl Target {
             ensure!(
                 status.success(),
                 "Local desktop {} failed: {}",
-                args[0],
+                operation,
                 String::from_utf8_lossy(&errors).trim()
             );
             writer.join().unwrap()?;

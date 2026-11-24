@@ -68,7 +68,7 @@ impl Bridge {
             fingerprint,
         })?;
         ensure!(
-            matches!(bridge.receive()?.update, Update::Connected(true)),
+            matches!(bridge.receive()?.update, Update::Connected(true, _)),
             "expected SFTP connection"
         );
         Ok(bridge)
