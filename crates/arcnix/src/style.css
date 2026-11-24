@@ -1486,9 +1486,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-settings-saving { max-width: 28%; padding-inline-end: 8px; color: var(--muted); font-size: var(--font-small); pointer-events: none; }
 .desktop-settings-saving:empty { display: none; }
 .desktop-settings-titlebar > .desktop-window-actions { margin-inline-end: 8px; }
-.app-settings[data-window-overhang] > .desktop-settings-titlebar { padding-inline: 0; }
-.app-settings[data-window-overhang] .desktop-settings-sidebar-heading { padding-inline-start: 16px; }
-.app-settings[data-window-overhang] .desktop-settings-titlebar > .desktop-window-actions { margin-inline-end: 16px; }
 .desktop-window-actions { display: flex; align-items: center; flex: none; gap: 3px; margin-left: auto; }
 .desktop-window-actions > .icon-button { height: 28px !important; width: 28px !important; min-width: 28px !important; padding: 6px !important; }
 .desktop-window-actions .window-close:hover { background: #c95e6520 !important; color: var(--danger) !important; }
@@ -1698,8 +1695,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   padding-inline: 6px; text-align: center; font-weight: 600; font-size: 13px;
 }
 .monitor-titlebar > .desktop-window-actions { grid-column: 4; justify-self: end; margin-inline-end: 8px; }
-.app-monitor[data-window-overhang] > .monitor-titlebar { padding-inline: 0; }
-.app-monitor[data-window-overhang] .monitor-titlebar > .desktop-window-actions { margin-inline-end: 16px; }
 @container monitor-window (max-width: 550px) {
   .monitor-titlebar .monitor-sampling-interval { display: none; }
   .monitor-titlebar > .desktop-window-actions { gap: 0; margin-inline-end: 2px; }
@@ -2055,8 +2050,12 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .desktop-window-titlebar { max-width: var(--desktop-work-width, 100%); user-select: none; touch-action: none; cursor: default; }
 .desktop-window-titlebar button, .desktop-window-titlebar input { cursor: auto; }
-/* Leave room to grab either end of a partially visible titlebar. */
-.desktop-window[data-window-overhang] > .desktop-window-titlebar { padding-inline: 16px; }
+.desktop-window[data-titlebar-grip] > .desktop-window-titlebar { position: relative; }
+.desktop-window[data-titlebar-grip] > .desktop-window-titlebar::after {
+  content: ''; position: absolute; inset-block: 0; width: 16px;
+}
+.desktop-window[data-titlebar-grip="left"] > .desktop-window-titlebar::after { left: 0; }
+.desktop-window[data-titlebar-grip="right"] > .desktop-window-titlebar::after { right: 0; }
 .desktop-window[data-window-dragging] { user-select: none; }
 .desktop-resize-handle { position: absolute; z-index: 1; touch-action: none; }
 .desktop-window.maximized .desktop-resize-handle { display: none; }
@@ -2353,6 +2352,7 @@ html[data-files-downloading] .files-download-drop {
   border-bottom: 1px solid var(--line);
 }
 .browser-tab-strip { display: flex; align-items: stretch; min-width: 0; overflow: auto hidden; scrollbar-width: none; }
+.browser-tabs > .icon-button { align-self: center; flex: none; }
 .browser-tab { display: flex; align-items: center; max-width: 220px; min-width: 82px; flex: 0 1 180px; border: 1px solid transparent; border-radius: 6px 6px 0 0; }
 .browser-tab.active { background: var(--panel); border-color: var(--line); border-bottom-color: transparent; }
 .browser-tab-label { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: start; font-size: var(--font-label); }

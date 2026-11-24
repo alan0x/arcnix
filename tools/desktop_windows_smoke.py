@@ -66,6 +66,7 @@ def main():
         remote.write_text(json.dumps(dict(version=1, theme='Dark', windows={'disks': {'bounds': disk_layout}})))
         with Desktop(out / 'desktop', peer.config([peer.profile('Window preferences')], local)) as app:
             p = app.page
+            p.emulate_media(reduced_motion='reduce')
             errors = []
             p.on('pageerror', lambda error: errors.append(str(error)))
 
@@ -78,6 +79,11 @@ def main():
 
             def bounds():
                 return p.locator('.desktop-window.active').bounding_box()
+
+            def close_inset():
+                return p.locator('.desktop-window.active').evaluate("""win =>
+                    win.getBoundingClientRect().right - win.querySelector('.window-close').getBoundingClientRect().right
+                """)
 
             def drag(locator, dx, dy, cancel=False, expected=None):
                 box = locator.bounding_box()
@@ -181,8 +187,10 @@ def main():
             narrow_area = work_area()
             monitor_title = p.locator('.desktop-window.active .desktop-window-mark')
             overhang = dict(narrow, x=narrow['x'] + 21, y=narrow['y'] + 11)
+            inset = close_inset()
             drag(monitor_title, 21, 11, expected=overhang)
             eventually(lambda: same(bounds(), overhang))
+            assert abs(close_inset() - inset) < 1
 
             def narrow_snapshot():
                 saved = prefs()['windows']['monitor']['bounds']
@@ -302,10 +310,13 @@ def main():
             customize.get_by_role('button', name='Done', exact=True).click()
             expect(folder_row.locator('.folder-icon-photos')).to_be_visible()
             eventually(lambda: prefs().get('files', {}).get('folder_icons', {}).get(desktop_path) == 'photos')
-            address.locator('.view-grid').click()
+            view_options = p.locator('.desktop-window.active').get_by_role('button', name='File view options', exact=True)
+            view_options.click()
+            p.locator('.file-actions-menu').get_by_role('button', name='Icon grid', exact=True).click()
             expect(pane).to_have_class(re.compile(r'\bicons-view\b'))
             expect(folder_row.locator('.folder-icon-photos')).to_be_visible()
-            address.locator('.view-list').click()
+            view_options.click()
+            p.locator('.file-actions-menu').get_by_role('button', name='Detailed list', exact=True).click()
             sidebar.get_by_role('button', name='Blue', exact=True).click()
             tags = p.locator('.files-tags-view')
             expect(pane).to_be_hidden()
@@ -327,10 +338,11 @@ def main():
             settled()
             app.application('Files')
             settled()
-            assert same(positioned, bounds())
+            eventually(lambda: same(positioned, bounds()))
             app.stop()
             app.launch()
             p = app.page
+            p.emulate_media(reduced_motion='reduce')
             p.on('pageerror', lambda error: errors.append(str(error)))
             app.connect()
             app.application('Files')
@@ -380,6 +392,7 @@ def main():
             app.stop()
             app.launch()
             p = app.page
+            p.emulate_media(reduced_motion='reduce')
             p.on('pageerror', lambda error: errors.append(str(error)))
             app.connect()
             app.application('Files')
@@ -505,6 +518,7 @@ def main():
 
                 layer = p.locator('.desktop-window-layer').bounding_box()
                 before = settings.bounding_box()
+                inset = close_inset()
                 clipped = dict(before)
                 if side == 'bottom':
                     clipped['y'] = layer['y'] + layer['height'] - 18
@@ -519,6 +533,7 @@ def main():
                 start_x = before['x'] + before['width'] - 7 if side == 'left' else grip[0] - dx
                 drag_from(start_x, grip[1] - dy, dx, dy, expected=clipped)
                 eventually(lambda: same(bounds(), clipped))
+                assert abs(close_inset() - inset) < 1
                 drag_from(*grip, -dx, -dy, expected=before)
                 eventually(lambda: same(bounds(), before))
             left_dock = p.locator('.desktop-dock-zone.dock-left.dock-panel-zone')

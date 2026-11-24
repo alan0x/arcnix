@@ -85,8 +85,12 @@ const desktopGeometry = (() => {
     }
 
     function draw(element, bounds, limits) {
-        element.toggleAttribute('data-window-overhang',
-            bounds.x < 0 || bounds.y < 0 || bounds.x + bounds.width > limits.width || bounds.y + bounds.height > limits.height);
+        // Keep a draggable end when only the minimum titlebar sliver remains.
+        // Its hit area must not reflow the controls during a drag.
+        const right = bounds.x + bounds.width;
+        if (bounds.x < 0 && right <= titlebarWidthToKeep) element.dataset.titlebarGrip = 'right';
+        else if (right > limits.width && limits.width - bounds.x <= titlebarWidthToKeep) element.dataset.titlebarGrip = 'left';
+        else element.removeAttribute('data-titlebar-grip');
         element.setAttribute('data-positioned', '');
         for (const [name, value] of Object.entries(bounds)) {
             element.style.setProperty(`--app-window-${name}`, `${value}px`);

@@ -309,6 +309,13 @@ def main():
 
             browser.get_by_role('button', name='New web tab', exact=True).last.click()
             expect(browser.locator('.browser-tab')).to_have_count(2)
+            assert browser.locator('.browser-tabs').evaluate("""tabs => {
+                const center = selector => {
+                    const rect = tabs.querySelector(selector).getBoundingClientRect();
+                    return rect.top + rect.height / 2;
+                };
+                return Math.abs(center('.glyph-plus') - center('.browser-tab.active .glyph-close')) < 1;
+            }""")
             visit(endpoint + '/cookie', 'Cookie kept')
             browser.get_by_role('button', name='Routed second page', exact=True).click()
             expect(label).to_have_text('Routed second page')
@@ -446,6 +453,7 @@ def main():
             expect(browser.get_by_role('button', name='Open in local browser', exact=True)).to_have_count(0)
             for host in ('127.0.0.1', 'localhost', '[::1]'):
                 browser.get_by_role('button', name='New web tab', exact=True).last.click()
+                expect(label).to_have_text('New web tab')
                 address.fill(f'http://{host}:{port}/loopback')
                 browser.get_by_role('button', name='Open web address', exact=True).click()
                 expect(browser.locator('.browser-error')).to_have_text(
