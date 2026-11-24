@@ -27,7 +27,10 @@ def main():
                 if back.count() and p.get_by_role('dialog').count()==0:back.click()
                 return p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name=name,exact=True))
             def install(name):
-                found=card(name);button=found.get_by_role('button',name='Install…',exact=True)
+                expect(p.get_by_role('dialog')).to_have_count(0)
+                found=card(name)
+                expect(found).to_be_visible()
+                button=found.get_by_role('button',name='Install…',exact=True)
                 if button.count():button.click()
                 else:
                     # Installed applications offer other sources on their page.
@@ -100,6 +103,7 @@ def main():
             app.servers();app.application('Docker');p.locator('.docker-toolbar').get_by_role('button',name='Install software',exact=True).click()
             expect(p.locator('.app-center-content')).to_be_visible();expect(p.locator('.app-center-app-card')).to_have_count(3);expect(p.get_by_role('dialog')).to_have_count(0)
             d=install('Nginx');expect(d.get_by_role('button',name='Docker Compose',exact=True)).to_have_attribute('aria-pressed','true');close(d)
+            p.locator('.app-center-detail .app-center-back').click()
             p.get_by_role('button',name='Show all applications',exact=True).click();expect(p.locator('.app-center-app-card')).to_have_count(9)
             checks.append('Installed inventory retains source-specific management, while Docker installation enters the same catalog with Compose-compatible apps and opens provider choice only after Install')
 
