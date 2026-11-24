@@ -14,6 +14,8 @@ use arcnix_core::{desktop_customization, desktop_time_zone, docker, server_apps,
 pub enum Action {
     Discover,
     Clock,
+    DeviceInfo,
+    SystemPower(arcnix_core::host::PowerAction),
     ReadTimeZone,
     SetTimeZone(String),
     FileLocations,
@@ -49,6 +51,7 @@ pub enum Action {
 pub enum Reply {
     Applications(server_apps::Applications),
     Clock(server_apps::ClockSample),
+    DeviceInfo(arcnix_core::device_info::DeviceInfo),
     TimeZone(desktop_time_zone::TimeZones),
     FileLocations(Vec<arcnix_core::remote::FileLocation>),
     FileItem(arcnix_core::permissions::Metadata),
@@ -81,6 +84,10 @@ pub enum Reply {
 }
 pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> {
     Ok(match action {
+        Action::SystemPower(action) => {
+            session.system_power(action)?;
+            Reply::Operated
+        }
         Action::SoftwareInventory => Reply::SoftwareInventory(session.read_software_catalog()?),
         Action::SoftwareQuery { source, query } => {
             Reply::SoftwarePackages(session.query_software_source(source, query.as_deref())?)
@@ -93,6 +100,9 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::Processes => Reply::Processes(session.read_process_inventory()?),
         Action::Discover => Reply::Applications(server_apps::discover(session)?),
         Action::Clock => Reply::Clock(session.read_host_clock()?),
+        Action::DeviceInfo => {
+            Reply::DeviceInfo(arcnix_core::device_info::DeviceInfo::read_remote(session)?)
+        }
         Action::ReadTimeZone => Reply::TimeZone(session.read_system_time_zone()?),
         Action::SetTimeZone(zone) => Reply::TimeZone(session.change_system_time_zone(&zone)?),
         Action::FileLocations => Reply::FileLocations(session.file_locations()?),

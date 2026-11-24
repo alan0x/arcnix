@@ -422,7 +422,8 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::OpenDesktopFile(_)
                     | Dialog::DesktopTimeZone
                     | Dialog::DesktopIcons
-                    | Dialog::DesktopApps
+                    | Dialog::Launcher
+                    | Dialog::SystemPower(..)
                     | Dialog::DockShortcuts
                     | Dialog::FileAssociation { .. }
                     | Dialog::OpenWith { .. }
@@ -605,6 +606,7 @@ impl Ui {
         }
         trash_ui::enter(self);
         network_ui::enter(self);
+        device_info_ui::enter(self);
         if self.state.with(|s| {
             navigation::workspace_visible(s)
                 && s.workspace_page == WorkspacePage::AppCenter
@@ -1252,13 +1254,7 @@ fn desktop_address(s: &State) -> String {
     else {
         return String::new();
     };
-    if profile.port == 22 {
-        profile.host.clone()
-    } else if profile.host.contains(':') {
-        format!("[{}]:{}", profile.host, profile.port)
-    } else {
-        format!("{}:{}", profile.host, profile.port)
-    }
+    profile.endpoint()
 }
 
 fn dock_clock() -> impl Widget {
@@ -1420,20 +1416,17 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                                     row().class("desktop-dock-leading").fill((
                                         sapid::button()
                                             .class("desktop-dock-home")
-                                            .name(i18n::desktop::bind("Apps"))
+                                            .name(i18n::desktop::bind("Launcher"))
                                             .pressed(
-                                                state
-                                                    .map(|s| s.dialog == Some(Dialog::DesktopApps)),
+                                                state.map(|s| s.dialog == Some(Dialog::Launcher)),
                                             )
                                             .fill((
                                                 icons::glyph(Icon::Grid),
                                                 text()
                                                     .class("desktop-app-label")
-                                                    .content(i18n::desktop::bind("Apps")),
+                                                    .content(i18n::desktop::bind("Launcher")),
                                             ))
-                                            .on_press(move || {
-                                                apps.open_dialog(Dialog::DesktopApps)
-                                            }),
+                                            .on_press(move || apps.open_dialog(Dialog::Launcher)),
                                         text().class("desktop-dock-divider").content(""),
                                     )),
                                     row().class("desktop-dock-apps").fill(

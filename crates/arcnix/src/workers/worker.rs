@@ -271,7 +271,7 @@ pub enum Update {
     Operations(crate::operations_worker::Event),
     Terminal(crate::terminal_worker::Event),
     Fingerprint(String),
-    Connected(bool),
+    Connected(bool, String),
     Disconnected,
     Local(PathBuf, Vec<FileEntry>),
     Remote(String, Vec<FileEntry>),
@@ -1459,6 +1459,7 @@ pub(crate) fn start_with_limiter(
                         }
                         send(Update::Connected(
                             session.as_ref().is_some_and(|s| s.sftp_available()),
+                            profile.endpoint(),
                         ));
                     }
                     Action::Disconnect => {
@@ -2091,7 +2092,7 @@ mod tests {
                 fingerprint,
             },
         )?;
-        assert!(matches!(receive(&rx)?.update, Update::Connected(false)));
+        assert!(matches!(receive(&rx)?.update, Update::Connected(false, _)));
         send(88, 3, Action::MetricsSample)?;
         let first = match receive(&rx)?.update {
             Update::Metrics(Ok(snapshot)) => snapshot,
@@ -2168,7 +2169,7 @@ mod tests {
                 fingerprint,
             },
         )?;
-        assert!(matches!(receive(&rx)?.update, Update::Connected(true)));
+        assert!(matches!(receive(&rx)?.update, Update::Connected(true, _)));
         send(77, Action::Remote("/".into()))?;
         match receive(&rx)?.update {
             Update::Remote(path, entries) => {
@@ -2366,7 +2367,7 @@ mod tests {
                 fingerprint,
             },
         )?;
-        assert!(matches!(receive(&rx)?.update, Update::Connected(true)));
+        assert!(matches!(receive(&rx)?.update, Update::Connected(true, _)));
         send(3, Action::PackageDetect)?;
         assert!(matches!(
             receive(&rx)?.update,

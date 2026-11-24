@@ -206,6 +206,11 @@ def reply(server, channel, command):
         return send('ARCNIX_BROWSER_FORWARDING_READY_V1\n')
 
     seed = root / 'docker-fixture.json'
+    if marker in ('# arcnix:desktop:restart', '# arcnix:desktop:shutdown'):
+        return send()
+    if marker == '# arcnix:desktop:device-info':
+        return send('os\tFixture Linux\nversion\t42\narch\taarch64\nkernel\t6.12\n'
+                    'cpu\tFixture CPU\ncores\t4\nlogical\t8\nmemory\t8589934592\n')
     if marker == '# arcnix:processes:read':
         if (root / 'processes-unavailable').exists():
             return send(status=127, error='ps is unavailable')

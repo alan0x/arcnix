@@ -179,6 +179,10 @@ pub struct Dock {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub panel_centered: bool,
     pub floating_status: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub launcher_locations: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub launcher_restart: bool,
     #[serde(
         rename = "magnify",
         skip_serializing,
@@ -200,6 +204,8 @@ impl Default for Dock {
             panel_mode: false,
             panel_centered: false,
             floating_status: true,
+            launcher_locations: false,
+            launcher_restart: false,
             legacy_magnify: (),
             auto_hide: false,
         }

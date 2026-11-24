@@ -291,7 +291,7 @@ def main():
             expect(settings().get_by_role('button', name='Desktop', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings().get_by_role('button', name='Dock', exact=True).click()
             expect(settings().locator('.desktop-settings-card .section-title')).to_have_text(
-                ['Dock layout', 'Dock icons', 'Status bar'])
+                ['Dock layout', 'Dock icons', 'Status bar', 'Launcher'])
             settings().get_by_text('Dock layout', exact=True).dblclick(position={'x': 8, 'y': 8})
             assert not p.evaluate('window.getSelection().toString()')
             position = settings().get_by_role('radiogroup', name='Dock position')
@@ -455,7 +455,7 @@ def main():
             assert panel.evaluate('''el => Math.abs(parseFloat(getComputedStyle(el).paddingBlockStart)
                 / el.querySelector('.desktop-app-icon').getBoundingClientRect().width - .045) < .01''')
             check_centered_dock(apps)
-            assert abs(panel.get_by_role('button', name='Apps', exact=True).bounding_box()['x'] - panel_box['x']) < 15
+            assert abs(panel.get_by_role('button', name='Launcher', exact=True).bounding_box()['x'] - panel_box['x']) < 15
             p.set_viewport_size(dict(width=760, height=660))
             expect(settings()).to_have_css('flex-direction', 'row')
             assert apps.bounding_box()['x'] + apps.bounding_box()['width'] < clock.bounding_box()['x']

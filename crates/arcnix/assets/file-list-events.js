@@ -2,8 +2,6 @@
 (() => {
     let sequence = 0;
     let lastPane = null;
-    document.addEventListener("pointerdown", () => document.documentElement.classList.remove("keyboard-navigation"), true);
-    document.addEventListener("keydown", () => document.documentElement.classList.add("keyboard-navigation"), true);
     const additive = event => /Mac|iPhone|iPad/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
     function send(pane, kind, row, event = {}, extra = {}) {
         const bridge = pane?.querySelector(".file-gesture-input");

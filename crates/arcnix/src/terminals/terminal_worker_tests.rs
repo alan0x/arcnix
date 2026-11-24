@@ -60,7 +60,7 @@ fn terminal_remains_responsive_during_sftp_and_rejects_old_epochs() -> anyhow::R
             fingerprint,
         },
     )?;
-    assert!(matches!(receive(&rx, 5)?.update, Update::Connected(_)));
+    assert!(matches!(receive(&rx, 5)?.update, Update::Connected(..)));
     send(
         77,
         Action::Terminal(Term::Open {
@@ -192,7 +192,7 @@ fn terminal_here_preserves_other_sessions_and_literal_working_directories() -> a
             fingerprint,
         },
     )?;
-    assert!(matches!(receive(&rx, 5)?.update, Update::Connected(_)));
+    assert!(matches!(receive(&rx, 5)?.update, Update::Connected(..)));
     let mut output = HashMap::<u64, Vec<u8>>::new();
     let mut wait_for = |id,
                         needle: &str,

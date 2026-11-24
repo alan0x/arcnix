@@ -85,6 +85,16 @@ pub struct ServerProfile {
 }
 
 impl ServerProfile {
+    pub fn endpoint(&self) -> String {
+        if self.port == 22 {
+            self.host.clone()
+        } else if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+
     /// A saved Windows profile stays in portable configuration on other hosts.
     pub fn available_on_this_platform(&self) -> bool {
         cfg!(windows) || self.wsl_distribution.is_none()

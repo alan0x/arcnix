@@ -34,7 +34,72 @@ impl std::fmt::Display for UnsupportedHostCapability {
 
 impl std::error::Error for UnsupportedHostCapability {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerAction {
+    Restart,
+    ShutDown,
+}
+
+impl PowerAction {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Restart => "restart",
+            Self::ShutDown => "shutdown",
+        }
+    }
+
+    pub(crate) fn windows_flag(self) -> &'static str {
+        match self {
+            Self::Restart => "/r",
+            Self::ShutDown => "/s",
+        }
+    }
+
+    pub(crate) fn unix_command(self, os: HostOs) -> Result<String> {
+        let (bsd_flag, linux_flag, verb) = match self {
+            Self::Restart => ("-r", "-r", "reboot"),
+            Self::ShutDown => ("-h", "-P", "poweroff"),
+        };
+        match os {
+            HostOs::Linux => Ok(format!(
+                r#"if [ "$(id -u)" != 0 ] && sudo -n -l /sbin/shutdown {linux_flag} now >/dev/null 2>&1; then
+    exec sudo -n /sbin/shutdown {linux_flag} now
+fi
+if command -v systemctl >/dev/null 2>&1; then exec systemctl --no-ask-password {verb}; fi
+exec /sbin/{verb}"#
+            )),
+            HostOs::MacOs => Ok(format!(
+                "exec /usr/bin/sudo -n /sbin/shutdown {bsd_flag} now"
+            )),
+            os => Err(UnsupportedHostCapability {
+                os,
+                capability: "Power controls",
+            }
+            .into()),
+        }
+    }
+}
+
 impl RemoteSession {
+    pub fn system_power(&self, action: PowerAction) -> Result<()> {
+        let os = self.host_os()?;
+        let command = if os == HostOs::Windows {
+            powershell_command(&format!(
+                r#"& "$env:SystemRoot\System32\shutdown.exe" {} /t 0
+exit $LASTEXITCODE"#,
+                action.windows_flag()
+            ))
+        } else {
+            format!(
+                "# arcnix:desktop:{}\n/bin/sh -c {}",
+                action.key(),
+                crate::remote_tasks::quote(&action.unix_command(os)?)
+            )
+        };
+        checked_host_command(self, &command, action.key())?;
+        Ok(())
+    }
+
     /// Probe on first use, then reuse the answer for the life of this connection.
     /// An unavailable command channel does not prevent use of SFTP.
     pub fn host_os(&self) -> Result<HostOs> {

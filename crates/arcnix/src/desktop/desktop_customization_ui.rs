@@ -1066,6 +1066,17 @@ const SETTINGS_SECTIONS: [(SettingsPage, &str, Icon, &[&str]); 10] = [
             "Resource refresh interval",
             "Server desktop",
             "Detect applications",
+            "Device",
+            "CPU model",
+            "Physical cores",
+            "Logical processors",
+            "Memory",
+            "GPU model",
+            "System information",
+            "Operating system",
+            "OS version",
+            "Architecture",
+            "Kernel version",
         ],
     ),
     (
@@ -1091,6 +1102,9 @@ const SETTINGS_SECTIONS: [(SettingsPage, &str, Icon, &[&str]); 10] = [
         Icon::Sidebar,
         &[
             "Dock layout",
+            "Launcher",
+            "Show locations",
+            "Show restart button",
             "Dock position",
             "Dock style",
             "Status bar",
@@ -1292,6 +1306,7 @@ pub(crate) fn settings_tabs(ui: Ui) -> impl Widget {
                                     s.server_apps.customization.settings_page = page;
                                 });
                                 network_ui::enter(&choose);
+                                device_info_ui::enter(&choose);
                                 if page == SettingsPage::DateTime {
                                     choose.read_desktop_time_zone();
                                     choose.tick_desktop_clock();
@@ -1626,7 +1641,39 @@ pub(crate) fn dock_settings(ui: Ui) -> impl Widget {
     col().class("desktop-settings-pane").fill((
         dock_layout(ui.clone()),
         dock_icons_settings(ui.clone()),
-        dock_status_settings(ui),
+        dock_status_settings(ui.clone()),
+        col()
+            .class("desktop-settings-card desktop-settings-rows")
+            .fill((
+                settings::section_heading(
+                    "Launcher",
+                    true,
+                    settings::desktop_reset(&ui, |prefs| {
+                        prefs.appearance.dock.launcher_locations = false;
+                        prefs.appearance.dock.launcher_restart = false;
+                    }),
+                ),
+                settings_row(
+                    "Show locations",
+                    toggle(
+                        &ui,
+                        "Show locations",
+                        |p| p.dock.launcher_locations,
+                        |p, show| p.dock.launcher_locations = show,
+                    ),
+                ),
+                when(ui.state.map(desktop_power::supported), move || {
+                    settings_row(
+                        "Show restart button",
+                        toggle(
+                            &ui,
+                            "Show restart button",
+                            |p| p.dock.launcher_restart,
+                            |p, show| p.dock.launcher_restart = show,
+                        ),
+                    )
+                }),
+            )),
     ))
 }
 
