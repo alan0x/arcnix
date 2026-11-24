@@ -719,6 +719,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .pgadmin-error:empty { display: none; }
 .pgadmin-download { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .app-pgadmin { --tile-tint: #4580b4; --tile-shade: #274f78; }
+.app-nginx { --tile-tint: #2b9a5a; --tile-shade: #1d6b3f; }
 .desktop-app-label { font-size: 13px; line-height: 1.35; font-weight: 500; white-space: normal; text-align: center; }
 .desktop-dock-zone {
   --dock-edge-gap: 4px;
@@ -2902,3 +2903,67 @@ button,
 .local-demo-heading { display: flex; align-items: center; gap: 10px; font-weight: 650; }
 .local-demo-heading > .icon { color: var(--accent); }
 .local-demo-advice { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border-inline-start: 3px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* Nginx app. */
+.desktop-window-content:has(>.nginx-page) { padding: 0; }
+.nginx-page { display: flex; flex: 1; flex-direction: row !important; min-height: 0; min-width: 0; overflow: hidden; container: nginx / inline-size; font-size: 14px; }
+.nginx-nav { display: flex; flex-direction: column; flex: 0 0 134px; gap: 3px; padding: 14px 7px; background: var(--bg); border-right: 1px solid var(--line); }
+.nginx-nav .nginx-nav-item { display: flex; justify-content: flex-start; gap: 8px; width: 100%; border: 0 !important; background: transparent !important; padding: 8px !important; text-align: left; }
+.nginx-nav .nginx-nav-item[aria-pressed=true] { color: var(--accent) !important; background: var(--accent-bg) !important; box-shadow: inset 3px 0 var(--accent); }
+.nginx-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; gap: 14px; overflow: auto; padding: 18px 20px; background: var(--surface); }
+.nginx-overview, .nginx-sites-view, .nginx-editor { display: flex !important; flex-direction: column; gap: 16px; min-width: 0; }
+.nginx-header { gap: 6px; min-width: 0; }
+.nginx-title-row { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.nginx-title { font-size: 21px; font-weight: 650; overflow-wrap: anywhere; }
+.nginx-title-row>.icon-button { margin-left: auto; }
+.nginx-details { font-size: 13px; overflow-wrap: anywhere; }
+.nginx-status { font-size: 12px; font-weight: 500; padding: 2px 9px; border-radius: 999px; color: var(--muted); background: var(--raised); white-space: nowrap; }
+.nginx-status.running { color: #7fd3a1; background: color-mix(in srgb, #2fa463 16%, transparent); }
+.nginx-status.running::before { content: "● "; }
+.nginx-status.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.nginx-actions { display: flex !important; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.nginx-stats { display: grid !important; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.nginx-stat { gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
+.nginx-stat-label { font-size: 12px; color: var(--muted); }
+.nginx-stat-value { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.nginx-section { gap: 8px; min-width: 0; }
+.nginx-section>.section-heading>.button { margin-left: auto; }
+.nginx-sites { display: flex !important; flex-direction: column; gap: 8px; min-width: 0; }
+.nginx-site-row { display: flex !important; align-items: center; gap: 12px; min-width: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.nginx-site-open { display: flex !important; flex-direction: column; align-items: flex-start !important; gap: 2px; flex: 1; min-width: 0; padding: 0 !important; border: 0 !important; background: transparent !important; text-align: left !important; white-space: normal !important; color: var(--text) !important; }
+.nginx-site-name { font-weight: 600; overflow-wrap: anywhere; }
+.nginx-site-open:not(:disabled):hover>.nginx-site-name { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.nginx-site-detail { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.nginx-site-note { font-size: 12px; color: var(--muted); font-style: italic; }
+.nginx-badge { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .03em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.nginx-switch { flex: none; color: var(--text) !important; font-size: 13px; }
+.nginx-search { display: flex !important; align-items: center; gap: 6px; flex: 1 1 160px; max-width: 260px; margin-left: auto; }
+.nginx-search>.nginx-filter { flex: 1; min-width: 0; }
+.nginx-back { align-self: flex-start; padding: 0 !important; border: 0 !important; background: transparent !important; color: var(--muted) !important; font-size: 13px !important; }
+.nginx-back:hover { color: var(--accent) !important; }
+.nginx-editor-title { flex: 1; gap: 2px; min-width: 0; }
+.nginx-path { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow-wrap: anywhere; }
+.nginx-segments { display: flex !important; gap: 2px; padding: 3px; border-radius: 8px; background: var(--raised); flex: none; }
+.nginx-segment { min-height: 28px; padding: 4px 14px !important; border: 0 !important; border-radius: 6px !important; background: transparent !important; color: var(--muted) !important; }
+.nginx-segment[aria-pressed=true] { background: var(--surface) !important; color: var(--text) !important; box-shadow: 0 1px 2px rgb(0 0 0 / 25%); }
+.nginx-form { display: flex !important; flex-direction: column; gap: 12px; min-width: 0; }
+.nginx-form-section { gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
+.nginx-form-grid { display: grid !important; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.nginx-form-section .preference-check { color: var(--text) !important; font-size: 13px; }
+.nginx-form-summary { font-size: 12px; overflow-wrap: anywhere; }
+.nginx-file { min-height: 360px; font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace !important; white-space: pre; tab-size: 4; }
+.nginx-publish { gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.nginx-health { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.nginx-publish-row { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nginx-change { flex: 1; font-size: 12px; min-width: 180px; }
+.nginx-error { font-size: 13px; color: var(--danger); padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 10%, transparent); overflow-wrap: anywhere; white-space: pre-wrap; }
+.nginx-new-site { display: flex !important; flex-direction: column; gap: 10px; min-width: min(480px, 80vw); }
+.nginx-new-site>.nginx-segments { align-self: flex-start; }
+@container nginx (max-width: 560px) {
+  .nginx-nav { flex-basis: 72px; padding: 10px 3px; }
+  .nginx-nav-item .action-glyph { display: none; }
+  .nginx-main { padding: 12px; }
+  .nginx-search { max-width: none; margin-left: 0; }
+}
+.theme-light .nginx-status.running:not(:where(.desktop-dark *)) { color: #1b6e40; }
+.theme-light .nginx-segment[aria-pressed=true]:not(:where(.desktop-dark *)) { background: #fff !important; box-shadow: 0 1px 2px rgb(30 43 59 / 18%); }

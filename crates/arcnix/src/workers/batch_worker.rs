@@ -91,6 +91,12 @@ pub enum Event {
         id: String,
         diff: String,
     },
+    /// Why a configuration preview failed; kept in session memory only.
+    ConfigurationFailure {
+        task: String,
+        id: String,
+        detail: String,
+    },
     Observed {
         task: String,
         id: String,
@@ -119,6 +125,16 @@ pub enum Event {
     Prepared(String),
     Complete(String),
 }
+/// A configuration preview that failed. Task history keeps only the generic
+/// message; the server's reason stays in this session.
+#[derive(Debug)]
+pub struct ConfigurationFailure(pub String);
+impl std::fmt::Display for ConfigurationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Configuration preparation failed; inspect its private server record")
+    }
+}
+impl std::error::Error for ConfigurationFailure {}
 pub enum StorageResponse {
     Inventory(Box<arcnix_core::record_maintenance::Inventory>),
     Preview(Box<arcnix_core::record_maintenance::Preview>),
@@ -806,10 +822,12 @@ fn prepare(target: Target, template: &Template, task: &str) -> Result<Prepared> 
                 }
             },
         )?;
-        anyhow::ensure!(
-            result.exit_code == 0 && !oversized,
-            "Configuration preparation failed; inspect its private server record"
-        );
+        if result.exit_code != 0 || oversized {
+            let detail =
+                arcnix_core::configurations::preview_failure(&String::from_utf8_lossy(&response))
+                    .unwrap_or_default();
+            return Err(ConfigurationFailure(detail).into());
+        }
         let checked =
             arcnix_core::configurations::Preview::parse(&String::from_utf8(response)?, job, task)?;
         let command = job.execute_command(task)?;
@@ -1291,6 +1309,17 @@ pub fn start(
                                     Some(p)
                                 }
                                 Err(e) => {
+                                    if let Some(failure) = e
+                                        .chain()
+                                        .find_map(|c| c.downcast_ref::<ConfigurationFailure>())
+                                        && !failure.0.is_empty()
+                                    {
+                                        let _ = events.send_blocking(Event::ConfigurationFailure {
+                                            task: task.into(),
+                                            id: id.clone(),
+                                            detail: failure.0.clone(),
+                                        });
+                                    }
                                     report(
                                         events,
                                         task,

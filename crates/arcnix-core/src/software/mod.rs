@@ -3,6 +3,8 @@ pub mod docker;
 pub mod installation_plan;
 pub mod installers;
 mod native_packages;
+pub mod nginx;
+pub mod nginx_config;
 pub mod packages;
 pub mod pgadmin;
 pub mod server_inventory;

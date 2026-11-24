@@ -80,6 +80,7 @@ icons! {
     Pin => "pin";
     Docker => "docker", "docker";
     Database => "database", "pgadmin";
+    WebServer => "web-server", "nginx";
     Disks => "disks", "disks";
     Monitor => "monitor", "monitor";
     AppCenter => "app-center", "center";

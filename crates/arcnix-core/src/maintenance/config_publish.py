@@ -6,6 +6,8 @@ ROOT = pathlib.Path('/var/lib/arcnix/configurations')
 LIMIT = 128 * 1024
 LOG_LIMIT = 256 * 1024
 class ServerInterrupted(BaseException): pass
+# The log of a failed check, which a preview reports to the operator.
+FAILED_LOG = None
 
 HTTP_PROBE = """import sys,urllib.request
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -111,17 +113,89 @@ def run_tool(argv, logfile, timeout=30):
         try: process.wait(timeout=2)
         except subprocess.TimeoutExpired: pass
 
+def nginx_main(tool):
+    # The main file Nginx was built to read, for telling it apart from files
+    # that it includes.
+    try:
+        output = subprocess.run([tool, '-V'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10).stdout.decode('utf-8', 'replace')
+    except (OSError, subprocess.SubprocessError): output = ''
+    conf = re.search(r'--conf-path=(\S+)', output); prefix = re.search(r'--prefix=(\S+)', output)
+    path = pathlib.Path(conf.group(1) if conf else '/etc/nginx/nginx.conf')
+    if not path.is_absolute(): path = pathlib.Path(prefix.group(1) if prefix else '/usr/local/nginx') / path
+    return pathlib.Path(os.path.realpath(path))
+
+def check_included(tool, path, candidate, record):
+    # Test the complete configuration as if the candidate replaced the file,
+    # inside a private mount namespace: the running server and every other
+    # process keep seeing the live directory.
+    unshare = shutil.which('unshare')
+    require(unshare, 'Checking an included Nginx file requires unshare from util-linux')
+    work = pathlib.Path(tempfile.mkdtemp(prefix='arcnix-nginx-check-'))
+    try:
+        view = work / 'view'; original = work / 'original'
+        view.mkdir(mode=0o700); original.mkdir(mode=0o700)
+        for name in os.listdir(path.parent):
+            if name != path.name and not name.startswith('.arcnix-config-'):
+                os.symlink(original / name, view / name)
+        shutil.copyfile(candidate, view / path.name)
+        script = 'mount --bind -- "$1" "$2" && mount --bind -- "$3" "$1" && exec "$4" -t -e stderr'
+        argv = [unshare, '--mount', '--propagation', 'private', '--', '/bin/sh', '-c', script, 'arcnix', str(path.parent), str(original), str(view), tool]
+        validation_tool(argv, record)
+    finally: shutil.rmtree(work, ignore_errors=True)
+
+def validation_tool(argv, record):
+    global FAILED_LOG
+    if not run_tool(argv, record / 'validation.log'):
+        FAILED_LOG = record / 'validation.log'
+        raise RuntimeError('Candidate validation failed; inspect the private server validation log')
+
 def validate(spec, candidate, record):
     if spec['kind'] == 'Nginx':
         tool = shutil.which('nginx') or '/usr/sbin/nginx'
+        path = pathlib.Path(spec['path'])
+        if path != nginx_main(tool):
+            check_included(tool, path, candidate, record)
+            return
         argv = [tool, '-t', '-e', 'stderr', '-c', str(candidate)]
     else: argv = ['/bin/sh', '-c', spec['validation'], 'arcnix', str(candidate)]
-    require(run_tool(argv, record / 'validation.log'), 'Candidate validation failed; inspect the private server validation log')
+    validation_tool(argv, record)
+
+def nginx_processes(service):
+    # The Nginx master and its children (workers, cache processes).
+    try:
+        shown = subprocess.run(['systemctl','--no-pager','show','--property=MainPID','--value','--',service],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
+        master = int(shown.stdout.decode().strip() or 0)
+    except (OSError, ValueError, subprocess.TimeoutExpired): return None
+    if master <= 0: return None
+    children = set()
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit(): continue
+        try:
+            with open('/proc/' + entry + '/stat', 'rb') as stream: fields = stream.read().rsplit(b')', 1)[1].split()
+        except (OSError, IndexError): continue
+        if len(fields) > 1 and fields[1] == str(master).encode(): children.add(int(entry))
+    return master, children
 
 def reload_service(spec, record):
-    if spec['kind'] == 'Nginx': argv = ['systemctl', '--no-ask-password', 'reload', '--', spec['service']]
-    else: argv = ['/bin/sh', '-c', spec['reload'], 'arcnix', spec['path']]
-    return run_tool(argv, record / 'reload.log')
+    if spec['kind'] != 'Nginx':
+        return run_tool(['/bin/sh', '-c', spec['reload'], 'arcnix', spec['path']], record / 'reload.log')
+    before = nginx_processes(spec['service'])
+    if not run_tool(['systemctl', '--no-ask-password', 'reload', '--', spec['service']], record / 'reload.log'): return False
+    if not before or not before[1]: return True
+    # systemctl returns once Nginx has the signal, and the old workers keep
+    # answering until the master has loaded the new configuration and started
+    # new ones. A health check before then would test the old configuration.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        now = nginx_processes(spec['service'])
+        if now and (now[0] != before[0] or now[1] - before[1]):
+            # Give the old workers a moment to close their listening sockets.
+            time.sleep(.5)
+            return True
+        time.sleep(.1)
+    with (record / 'reload.log').open('ab') as log:
+        log.write(b'\nNginx did not start workers with the new configuration within 10 seconds\n')
+    return False
 
 def health(spec, record, previous=False):
     deadline = time.monotonic() + spec['health_seconds']
@@ -129,6 +203,9 @@ def health(spec, record, previous=False):
         try:
             if spec['kind'] == 'Custom':
                 if run_tool(['/bin/sh','-c',spec['health'],'arcnix',spec['path']], record / 'health.log', min(10, max(1,deadline-time.monotonic()))): return True
+            elif not spec['health_url']:
+                # Without an address, the service still running is the check.
+                if run_tool(['systemctl','--no-ask-password','is-active','--quiet','--',spec['service']],record/'health.log',min(5,max(.01,deadline-time.monotonic()))): return True
             else:
                 # Bound the whole child process, including DNS, TLS and a slow
                 # streaming body. A socket timeout alone does not cover these.
@@ -196,11 +273,16 @@ def preview(identifier, staging, request_sha):
     try: fd=lock(path)
     except BaseException: os.close(registry); raise
     record = ROOT / identifier; candidate = None
+    create = request.get('create') is True
     try:
-        if request['restore_from'] and is_missing(path):
+        require(not (create and request['restore_from']), 'Invalid configuration settings')
+        if create:
+            require(is_missing(path), 'A file already exists at this path; creation was refused')
+            before={'missing':True,'identity':None,'sha256':digest(b'')};original=b''
+        elif request['restore_from'] and is_missing(path):
             before={'missing':True,'identity':None,'sha256':digest(b'')};original=b''
         else: before, original = identity(path)
-        metadata_source=path
+        metadata_source=None if create else path
         if request['restore_from']:
             source, prior = checked_record(request['restore_from'])
             status = subprocess.run(['systemctl','--no-pager','show','--property=LoadState,ActiveState','--','arcnix-'+request['restore_from']+'.service'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
@@ -228,7 +310,11 @@ def preview(identifier, staging, request_sha):
             with (record / 'original').open('rb') as stream: os.fsync(stream.fileno())
             require(digest((record / 'original').read_bytes()) == before['sha256'], 'Configuration changed during backup')
         durable(record / 'candidate',desired)
-        copy_metadata(metadata_source,record/'candidate')
+        if metadata_source is None:
+            # A new file is owned by root and readable by everyone, like the
+            # files a package installs.
+            os.chown(record/'candidate',0,0); os.chmod(record/'candidate',0o644)
+        else: copy_metadata(metadata_source,record/'candidate')
         with (record/'candidate').open('rb') as stream: os.fsync(stream.fileno())
         candidate = candidate_file(path,desired)
         validate(spec,candidate,record)
@@ -353,5 +439,14 @@ if __name__ == '__main__':
                 fd=os.open(record/'error.log',os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_NOFOLLOW,0o600)
                 with os.fdopen(fd,'w') as log: log.write(traceback.format_exc())
             except Exception: pass
+        if len(sys.argv)>1 and sys.argv[1]=='preview':
+            # A preview's output stays in the operator's session and is not
+            # saved in task history, so it can say why the check failed.
+            failure=sys.exc_info()[1]
+            detail=''
+            if FAILED_LOG is not None:
+                try: detail=FAILED_LOG.read_bytes()[-4096:].decode('utf-8','replace')
+                except Exception: pass
+            print(json.dumps({'error':str(failure) if isinstance(failure,RuntimeError) else 'Unexpected server error','detail':detail},ensure_ascii=False),flush=True)
         print('Configuration operation failed; inspect /var/lib/arcnix/configurations/'+identifier,file=sys.stderr)
         sys.exit(1)

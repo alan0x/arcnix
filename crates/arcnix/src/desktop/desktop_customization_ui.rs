@@ -161,9 +161,9 @@ fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
         | DesktopApp::ImageViewer
         | DesktopApp::PdfReader
         | DesktopApp::Office => s.local_desktop.is_some(),
-        // Older Arcnix versions reject desktop settings that name pgAdmin,
-        // so it is saved only when someone pins it.
-        DesktopApp::Editor | DesktopApp::PgAdmin => false,
+        // Older Arcnix versions reject desktop settings that name pgAdmin
+        // or Nginx, so they are saved only when someone pins them.
+        DesktopApp::Editor | DesktopApp::PgAdmin | DesktopApp::Nginx => false,
         _ => true,
     }
 }

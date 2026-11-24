@@ -80,6 +80,7 @@ pub(crate) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Browser => DesktopApp::Browser,
         WorkspacePage::Settings => DesktopApp::Settings,
         WorkspacePage::PgAdmin => DesktopApp::PgAdmin,
+        WorkspacePage::Nginx => DesktopApp::Nginx,
         _ => return None,
     })
 }
@@ -102,6 +103,7 @@ pub(crate) fn app_page(app: DesktopApp) -> WorkspacePage {
         DesktopApp::Browser => WorkspacePage::Browser,
         DesktopApp::Settings => WorkspacePage::Settings,
         DesktopApp::PgAdmin => WorkspacePage::PgAdmin,
+        DesktopApp::Nginx => WorkspacePage::Nginx,
     }
 }
 
@@ -215,7 +217,7 @@ fn focus_window(ui: &Ui, input: &str) {
     }
 }
 
-pub(crate) const APP_LAUNCHERS: [WorkspacePage; 14] = [
+pub(crate) const APP_LAUNCHERS: [WorkspacePage; 15] = [
     WorkspacePage::Files(0),
     WorkspacePage::Terminal,
     WorkspacePage::Code,
@@ -226,6 +228,7 @@ pub(crate) const APP_LAUNCHERS: [WorkspacePage; 14] = [
     WorkspacePage::Office,
     WorkspacePage::Monitor,
     WorkspacePage::Docker,
+    WorkspacePage::Nginx,
     WorkspacePage::PgAdmin,
     WorkspacePage::AppCenter,
     WorkspacePage::Settings,
@@ -264,6 +267,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
             WorkspacePage::Browser => cfg!(windows),
             WorkspacePage::PgAdmin => arcnix_core::pgadmin::supported_platform(),
             WorkspacePage::Docker => s.server_apps.applications.docker,
+            WorkspacePage::Nginx => s.server_apps.applications.nginx,
             WorkspacePage::Office => office_reader::available(s),
             _ => true,
         })
@@ -272,6 +276,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
 pub(crate) fn app_label(page: WorkspacePage) -> &'static str {
     match page.base() {
         WorkspacePage::Docker => "Docker",
+        WorkspacePage::Nginx => "Nginx",
         WorkspacePage::PgAdmin => "pgAdmin",
         WorkspacePage::Files(_) => "文件管理",
         WorkspacePage::Code => "Code Editor",
@@ -337,6 +342,7 @@ fn window_mut(s: &mut State, page: WorkspacePage, app: DesktopApp) -> &mut Deskt
 pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
     match page.base() {
         WorkspacePage::Docker => "app-docker",
+        WorkspacePage::Nginx => "app-nginx",
         WorkspacePage::PgAdmin => "app-pgadmin",
         WorkspacePage::Files(_) => "app-files",
         WorkspacePage::Code => "app-code",
@@ -378,6 +384,7 @@ pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         WorkspacePage::PgAdmin => Icon::Database,
+        WorkspacePage::Nginx => Icon::WebServer,
         _ => Icon::Grid,
     }
 }
@@ -443,6 +450,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::ScriptRun
                     | Dialog::DockerAction
                     | Dialog::DockerConfigure
+                    | Dialog::NginxNewSite
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess
                     | Dialog::CustomizeFolder { .. }
@@ -596,6 +604,7 @@ impl Ui {
             self.refresh_desktop_items(false);
         }
         self.docker_enter();
+        self.nginx_enter();
         self.pgadmin_enter();
         self.terminal_enter();
         self.observability_enter();
@@ -1100,6 +1109,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Settings => fragment(server_apps_ui::settings(ui)),
         WorkspacePage::Docker => fragment(docker_ui::page(ui)),
         WorkspacePage::PgAdmin => fragment(pgadmin_ui::page(ui)),
+        WorkspacePage::Nginx => fragment(nginx_ui::page(ui)),
         WorkspacePage::Code => fragment(code_workbench::page(ui)),
         WorkspacePage::Editor => fragment(text_editor::page(ui, id)),
         WorkspacePage::Player => fragment(video_player::panel(ui)),

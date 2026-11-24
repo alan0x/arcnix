@@ -2887,3 +2887,120 @@ Office 文档	Office documents
 已另存 DOCX 副本。	Saved DOCX copy.
 请先完成编辑或返回阅读，再离开当前文档。	Finish editing or return to reading before leaving this document.
 放弃修改	Discard edits
+服务状态不可用	Service status unavailable
+正在重新加载	Reloading
+正在启动	Starting
+没有 nginx 服务	No nginx service
+运行不到一分钟	up less than a minute
+已运行 {} 分钟	up {} min
+已运行 {} 小时	up {} h
+已运行 {} 天	up {} days
+此服务器上未找到 Nginx	Nginx was not found on this server
+开机启动	starts at boot
+不开机启动	does not start at boot
+请等待 Nginx 加载完成	Wait for Nginx to load
+无法将此文件读取为 Nginx 配置：{error:#}	The file cannot be read as Nginx configuration: {error:#}
+Nginx 响应无效	Invalid Nginx response
+站点	Sites
+刷新 Nginx	Refresh Nginx
+测试配置…	Test configuration…
+重新加载…	Reload…
+无	None
+已启用 {} / {} 个	{} of {} on
+{} 个站点	{} sites
+已启用的站点	Sites that are on
+全部站点	All sites
+没有已启用的站点	No sites are on
+所有更改都以管理员权限的服务器任务运行。每项更改在运行前都需要你确认，并会保留在任务历史中。	Changes run as server tasks with administrator rights. You review each one before it runs, and it is kept in task history.
+Arcnix 无法以当前 SSH 账户读取此文件	Arcnix cannot read this file as the SSH account
+不是有效的 Nginx 配置	Not valid Nginx configuration
+已复制到 sites-enabled，因此始终启用	Copied into sites-enabled, so it stays on
+筛选站点	Filter sites
+主配置	Main configuration
+新建站点…	New site…
+没有匹配的站点	No matching sites
+sites-available 中的站点通过 sites-enabled 中的链接启用。启用或停用站点时会检查配置并重新加载 Nginx，任一步失败都会撤销更改。	Sites in sites-available are turned on with a link in sites-enabled. Turning a site on or off checks the configuration and reloads Nginx, and is undone if either fails.
+conf.d 中的站点通过重命名为 .conf.disabled 来停用。启用或停用站点时会检查配置并重新加载 Nginx，任一步失败都会撤销更改。	Sites in conf.d are turned off by renaming them to .conf.disabled. Turning a site on or off checks the configuration and reloads Nginx, and is undone if either fails.
+仅显示前 200 个站点文件。	Only the first 200 site files are shown.
+域名	Domain
+域名列表	Domains
+监听 {ports} · 证书 {certificate}	Listens on {ports} · certificate {certificate}
+监听 {ports}	Listens on {ports}
+反向代理	Reverse proxy
+转发到	Forward to
+超时	Timeout
+WebSocket 连接	WebSocket connections
+传递访客地址（X-Forwarded-For）	Pass the visitor’s address (X-Forwarded-For)
+静态文件	Static files
+请求	Requests
+最大上传大小	Largest upload
+使用 Nginx 单位：时间如 60s 或 5m，大小如 50m 或 1g。留空则使用 Nginx 默认值。	Use Nginx units: 60s or 5m for times, 50m or 1g for sizes. Leave empty to use the Nginx default.
+设置页涵盖常用指令。文件中的其他内容保持原样；切换到“文件”可查看或修改。	Settings covers common directives. Anything else in the file is kept as written; switch to File to see or change it.
+‹ 站点	‹ Sites
+重新加载后检查此地址	After reloading, check this address
+Arcnix 会在替换文件前检查完整配置。重新加载后，此地址必须在 30 秒内返回 2xx 状态，否则会恢复之前的文件。留空则只检查 Nginx 是否仍在运行。	Arcnix checks the complete configuration before replacing the file. After the reload, the address must answer with a 2xx status within 30 seconds, or the previous file is put back. Leave it empty to check only that Nginx keeps running.
+新文件。发布前服务器上不会有任何变化。	New file. Nothing changes on the server until you publish.
+已修改。发布前线上文件保持不变。	Changed. The live file is unchanged until you publish.
+没有更改	No changes
+放弃更改	Discard
+检查并发布…	Check and publish…
+新建站点	New site
+静态站点	Static site
+重定向	Redirect
+多个域名用空格分隔，例如 example.com www.example.com。	Separate several domains with spaces, for example example.com www.example.com.
+重定向到	Redirect to
+目标	Target
+此服务器上应用的地址，例如 http://127.0.0.1:3000。	The address of the application on this server, for example http://127.0.0.1:3000.
+站点文件所在的文件夹，例如 /var/www/example。	The folder with the site's files, for example /var/www/example.
+访客会被带到此地址并保留原路径，例如 https://example.com。	Visitors are sent to this address with the same path, for example https://example.com.
+新站点默认处于停用状态。检查文件并发布后，再到“站点”中启用。之后可以添加 HTTPS，例如使用 Certbot。	New sites start off. Review the file, publish it, then turn the site on in Sites. Add HTTPS afterwards, for example with Certbot.
+检查文件并发布；发布后站点立即生效。之后可以添加 HTTPS，例如使用 Certbot。	Review the file and publish it; the site is on as soon as it is published. Add HTTPS afterwards, for example with Certbot.
+Nginx 文件路径无效	Invalid Nginx file path
+不支持的 Nginx 响应	Unsupported Nginx response
+Nginx 站点过多	Too many Nginx sites
+无法读取 Nginx（退出码 {}）：{}	Could not read Nginx (exit {}): {}
+测试 Nginx 配置	Test Nginx configuration
+检查完整配置，不做任何更改。	Checks the complete configuration without changing anything.
+重新加载 Nginx	Reload Nginx
+先检查配置，再重新加载。已有连接会在旧配置上完成。	Checks the configuration, then reloads it. Open connections finish on the old configuration.
+重启 Nginx	Restart Nginx
+先检查配置，再重启 Nginx。已有连接会被断开。	Checks the configuration, then restarts Nginx. Open connections are dropped.
+启动 Nginx	Start Nginx
+启动 nginx 服务。	Starts the nginx service.
+停止 Nginx	Stop Nginx
+停止 nginx 服务。在重新启动前，所有站点都无法访问。	Stops the nginx service. Every site stops answering until it is started again.
+启用 Nginx 站点	Turn on Nginx site
+停用 Nginx 站点	Turn off Nginx site
+{title} · 如果 Nginx 拒绝配置或重新加载失败，更改会被撤销。	{title} · If Nginx rejects the configuration or does not reload, the change is undone.
+此站点是 sites-enabled 中的文件；请编辑文件来修改它	This site is a file in sites-enabled; edit it to change it
+站点不在 sites-available 中	The site is not in sites-available
+站点的链接不在 sites-enabled 中	The site's link is not in sites-enabled
+重定向地址必须以 http:// 或 https:// 开头	Redirect to an address starting with http:// or https://
+请输入站点的域名	Enter a domain for the site
+此服务器既没有 sites-available 也没有 conf.d	This server has neither sites-available nor conf.d
+已存在名为 {name} 的站点文件	A site file named {name} already exists
+{what}不能包含空格、引号、分号、大括号或 #	{what} cannot contain spaces, quotes, semicolons, braces or #
+地址	The address
+文件夹路径	The folder
+请至少输入一个域名	Enter at least one domain
+域名只能包含字母、数字、点、连字符和开头的 *	Domains may contain letters, digits, dots, hyphens and a leading *
+转发地址必须以 http:// 或 https:// 开头	Forward to an address starting with http:// or https://
+请输入文件夹的完整路径	Enter the folder's full path
+请输入时间，例如 60s 或 5m	Enter a time such as 60s or 5m
+请输入大小，例如 50m 或 1g	Enter a size such as 50m or 1g
+这些设置在文件中相互重叠，请改为编辑文本	These settings overlap in the file; edit it as text instead
+打开 Nginx	Open Nginx
+继续	Continue
+正在检查…	Checking…
+读取 Nginx 需要服务器上安装 Python 3	Reading Nginx needs Python 3 on the server
+未监听	Not listening
+检查未通过，服务器上的内容没有改动。	The check failed, so nothing on the server changed.
+{}失败	{} failed
+服务器详情，仅在本次会话中显示	Server details, shown for this session only
+已发布。服务已重新加载，健康检查通过。	Published. The service reloaded and the health check passed.
+已恢复。服务已重新加载，健康检查通过。	Restored. The service reloaded and the health check passed.
+重新加载后健康检查未通过，已放回之前的文件并重新加载服务。	The health check failed after the reload, so the previous file was put back and the service reloaded.
+服务未能以新版本重新加载，已放回之前的文件。	The service did not reload with the new version, so the previous file was put back.
+已放回之前的文件，但服务未确认恢复。请立即检查服务。	The previous file was put back, but the service did not confirm that it recovered. Check the service now.
+放回之前的文件失败。请立即检查文件和服务；服务器记录中有详细信息。	Putting the previous file back failed. Check the file and the service now; the server record has the details.
+执行时检查未通过，生效文件没有改动。	The check failed when the task ran, so the live file was not changed.

@@ -203,6 +203,7 @@ fn window(s: &State, app: App) -> Option<WorkspacePage> {
     let page = match app.id {
         "pgadmin" => WorkspacePage::PgAdmin,
         "docker" => WorkspacePage::Docker,
+        "nginx" => WorkspacePage::Nginx,
         _ => return None,
     };
     (s.connected && server_desktop::available_apps(s).contains(&page)).then_some(page)
@@ -521,6 +522,9 @@ fn discover(ui: Ui) -> impl Widget {
         }),
     ))
 }
+fn nginx_window(s: &State) -> bool {
+    s.connected && server_desktop::available_apps(s).contains(&WorkspacePage::Nginx)
+}
 fn pgadmin_available(s: &State) -> bool {
     server_desktop::available_apps(s).contains(&WorkspacePage::PgAdmin)
 }
@@ -545,9 +549,25 @@ fn item_actions(ui: Ui, value: Cage<Item>) -> impl Widget {
                         let service = service.clone();
                         move || {
                             let service = service.clone();
-                            btn("Manage service", move || {
-                                service.open_system_service("nginx.service")
-                            })
+                            // The Nginx app manages the service once it has
+                            // been detected; until then, Monitor does.
+                            sapid::button()
+                                .class("button")
+                                .label(i18n::bind(state.map(|s| {
+                                    if nginx_window(s) {
+                                        "Open Nginx"
+                                    } else {
+                                        "Manage service"
+                                    }
+                                    .to_owned()
+                                })))
+                                .on_press(move || {
+                                    if service.state.with(nginx_window) {
+                                        service.open_desktop_app(WorkspacePage::Nginx);
+                                    } else {
+                                        service.open_system_service("nginx.service");
+                                    }
+                                })
                         }
                     },
                 ),
