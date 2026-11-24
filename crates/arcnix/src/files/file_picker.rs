@@ -266,16 +266,17 @@ pub(crate) fn folder(current: Option<&Path>, title: &str) -> anyhow::Result<Opti
 }
 #[cfg(windows)]
 pub(crate) fn save(title: &str, name: &str) -> anyhow::Result<Option<PathBuf>> {
-    save_in(title, name, None)
+    save_in(title, name, None, None)
 }
 
-/// `folder` is where the dialog starts when Windows has no recent folder
-/// for Arcnix.
+/// `folder` is where the dialog starts. `owner` is the window it belongs
+/// to; without one it uses the active window.
 #[cfg(windows)]
 pub(crate) fn save_in(
     title: &str,
     name: &str,
     folder: Option<&Path>,
+    owner: Option<isize>,
 ) -> anyhow::Result<Option<PathBuf>> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -314,7 +315,7 @@ pub(crate) fn save_in(
                 None,
             )
         {
-            let _ = dialog.SetDefaultFolder(&item);
+            let _ = dialog.SetFolder(&item);
         }
         dialog.SetOptions(
             dialog.GetOptions()?
@@ -323,7 +324,11 @@ pub(crate) fn save_in(
                 | FOS_NOCHANGEDIR
                 | FOS_OVERWRITEPROMPT,
         )?;
-        match dialog.Show(Some(GetActiveWindow())) {
+        let owner = owner.map_or_else(
+            || GetActiveWindow(),
+            |owner| windows::Win32::Foundation::HWND(owner as *mut _),
+        );
+        match dialog.Show(Some(owner)) {
             Ok(()) => {}
             Err(e) if e.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => return Ok(None),
             Err(e) => return Err(e.into()),
