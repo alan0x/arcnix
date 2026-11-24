@@ -164,6 +164,10 @@ fn source_available(s: &State, source: u8) -> bool {
 }
 impl Ui {
     pub(crate) fn install_catalog_app(&self, id: &'static str) {
+        self.install_catalog_app_avoiding(id, &[]);
+    }
+    /// Prefer sources other than `used`, which already provide an installation.
+    pub(crate) fn install_catalog_app_avoiding(&self, id: &'static str, used: &[u8]) {
         let Some(app) = arcnix_core::software_catalog::get(id) else {
             return;
         };
@@ -177,7 +181,8 @@ impl Ui {
                 2
             } else {
                 (0..3)
-                    .find(|source| source_available(s, *source))
+                    .find(|source| source_available(s, *source) && !used.contains(source))
+                    .or_else(|| (0..3).find(|source| source_available(s, *source)))
                     .unwrap_or(0)
             };
             set_source(s, source);
@@ -497,17 +502,26 @@ fn compose_form(ui: Ui) -> impl Widget {
   when(state.map(|s|s.install.preview),move||text().class("compose-preview").selectable(true).content(state.map(|s|{let mut d=s.install.compose.clone();d.port=s.install.port.parse().unwrap_or(0);d.yaml().unwrap_or_else(|e|e.to_string())}))),
  ))
 }
-fn source_note(s: &State, source: u8) -> String {
-    let app = selected_app(s);
+/// Where `source` would install `app` from, or why it can't.
+pub(crate) fn source_note(
+    s: &State,
+    app: Option<arcnix_core::software_catalog::App>,
+    source: u8,
+) -> String {
+    // Availability comes from the inventory, so its package manager names the source.
+    let manager = s
+        .software
+        .app_center
+        .inventory
+        .as_ref()
+        .map(|inv| inv.manager)
+        .or_else(|| s.software.environment.as_ref().map(|e| e.manager));
     match source {
-        0 => s
-            .software
-            .environment
-            .as_ref()
-            .map(|e| {
+        0 => manager
+            .map(|manager| {
                 format!(
                     "{} · {}",
-                    e.manager.label(),
+                    manager.label(),
                     app.and_then(|a| native_catalog_package(s, a))
                         .map(str::to_owned)
                         .unwrap_or_else(|| {
@@ -563,7 +577,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                 let app=item.value.get();row().class("install-app-heading").fill((text().class(format!("app-center-app-icon app-center-color-{}",app.color)).content(app.mark),col().fill((text().class("install-app-name").content(app.name),text().class("subtle").content(i18n::bind(app.summary))))))
             }),
             text().class("install-method-heading").content(i18n::bind("Installation method")),
-            row().class("install-sources").fill([(0,"System packages",Icon::Server),(1,"Snap",Icon::Grid),(2,"Docker Compose",Icon::Docker)].into_iter().map(move|(source,label,icon)|sapid::button().class("button install-source-card").name(i18n::bind(label)).label("").pressed(state.map(move|s|s.install.source==source)).enabled(state.map(move|s|source_available(s,source))).fill((icons::glyph(icon),text().class("install-source-name").content(i18n::bind(label)),text().class("install-source-note").content(state.map(move|s|source_note(s,source))))).on_press(move||state.revise(|s|set_source(s,source)))).collect::<Vec<_>>()),
+            row().class("install-sources").fill([(0,"System packages",Icon::Server),(1,"Snap",Icon::Grid),(2,"Docker Compose",Icon::Docker)].into_iter().map(move|(source,label,icon)|sapid::button().class("button install-source-card").name(i18n::bind(label)).label("").pressed(state.map(move|s|s.install.source==source)).enabled(state.map(move|s|source_available(s,source))).fill((icons::glyph(icon),text().class("install-source-name").content(i18n::bind(label)),text().class("install-source-note").content(state.map(move|s|source_note(s,selected_app(s),source))))).on_press(move||state.revise(|s|set_source(s,source)))).collect::<Vec<_>>()),
             text().class("install-provider subtle").content(i18n::bind(state.map(|s|match s.install.source{0=>s.software.environment.as_ref().map(|e|format!("{} · {}",e.distribution,e.manager.label())).unwrap_or_else(||"Detecting system…".into()),1=>"Snap Store".into(),_=>"Docker Compose v2".into()}))),
             when(state.map(|s|s.install.source==2),{let ui=ui.clone();move||compose_form(ui.clone())}).otherwise(move||col().class("native-install-fields").fill((
                 when(state.map(|s|s.install.catalog_id.is_none()),{let fields=fields.clone();move||field("Package names",&fields,|s|s.install.names.clone(),|s,v|s.install.names=v)}).otherwise(move||text().class("install-package-name").selectable(true).content(state.map(|s|selected_app(s).and_then(|a|if s.install.source==1{a.snap.map(|v|v.name)}else{native_catalog_package(s,a)}).unwrap_or_default().to_owned()))),

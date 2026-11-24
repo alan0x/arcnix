@@ -21,9 +21,18 @@ def main():
         config['config']['trusted_hosts']+=fedora.config([],local)['config']['trusted_hosts']
         with Desktop(out/'desktop',config) as app:
             p=app.page;errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
-            def card(name):return p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name=name,exact=True))
+            def card(name):
+                # Cards live on Discover; leave an application page first.
+                back=p.locator('.app-center-detail .app-center-back')
+                if back.count() and p.get_by_role('dialog').count()==0:back.click()
+                return p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name=name,exact=True))
             def install(name):
-                card(name).get_by_role('button',name='Install…',exact=True).click()
+                found=card(name);button=found.get_by_role('button',name='Install…',exact=True)
+                if button.count():button.click()
+                else:
+                    # Installed applications offer other sources on their page.
+                    found.get_by_role('button',name=name,exact=True).click()
+                    p.locator('.app-center-detail').get_by_role('button',name='Install another way…',exact=True).click()
                 return p.get_by_role('dialog',name='Install software',exact=True)
             def close(d):d.get_by_role('button',name='Close dialog',exact=True).click();expect(d).not_to_be_visible()
             app.connect();app.application('App Center')
