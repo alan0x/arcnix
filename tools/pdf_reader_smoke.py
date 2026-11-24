@@ -34,6 +34,10 @@ def main():
     with Peer(out / 'peer') as peer:
         docs = peer.root / 'Documents'
         docs.mkdir()
+        from docx import Document
+        word = Document()
+        word.add_paragraph('Same Office window')
+        word.save(docs / 'Switch.docx')
         fixture(docs / name)
         fixture(docs / 'Protected.pdf', 'reader-test')
         (docs / 'Invalid.pdf').write_bytes(b'not a PDF')
@@ -45,7 +49,7 @@ def main():
             p = app.page
             app.connect()
             app.file(name).dblclick()
-            win = p.locator('.desktop-window.app-document.active')
+            win = p.locator('.desktop-window.app-office.active')
             reader = win.locator('.pdf-reader')
             page = reader.get_by_role('textbox', name='Page number')
             image = reader.locator('.pdf-sheet img')
@@ -63,8 +67,8 @@ def main():
                 }""")
 
             def pick(filename):
-                reader.get_by_role('button', name='Open PDF').click()
-                picker = p.get_by_role('dialog', name='Open PDF')
+                reader.get_by_role('button', name='Open Office document').click()
+                picker = p.get_by_role('dialog', name='Open Office document')
                 expect(picker.get_by_role('button', name='notes.txt')).to_have_count(0)
                 picker.get_by_role('button', name=filename, exact=True).click()
                 picker.get_by_role('button', name='Open', exact=True).click()
@@ -99,7 +103,19 @@ def main():
             assert p.evaluate('document.fullscreenElement === null')
             p.keyboard.press('Escape')
             expect(reader.get_by_role('button', name='View fullscreen in Desktop')).to_be_visible()
-            pick('Invalid.pdf')
+            pick('Switch.docx')
+            def word_view():
+                p.wait_for_timeout(75)
+                return next((doc for ctx in app.browser.contexts for doc in ctx.pages
+                             if doc.url.endswith('/document') and doc.locator('.reader-paper').count()), None)
+            document = eventually(word_view)
+            expect(document.locator('.reader-paper')).to_contain_text('Same Office window')
+            expect(p.locator('.desktop-window.app-office')).to_have_count(1)
+            expect(reader).to_have_count(0)
+            document.get_by_role('button', name='Open Office document', exact=True).click()
+            picker = p.get_by_role('dialog', name='Open Office document')
+            picker.get_by_role('button', name='Invalid.pdf', exact=True).click()
+            picker.get_by_role('button', name='Open', exact=True).click()
             expect(reader.locator('.viewer-placeholder')).to_contain_text('Could not read this PDF.')
             pick('Huge.pdf')
             expect(reader.locator('.viewer-placeholder')).to_contain_text('64 MiB')
@@ -112,8 +128,9 @@ def main():
             secret.press('Enter')
             expect(image).to_have_attribute('alt', 'Protected.pdf · 1', timeout=30000)
             win.locator('.window-close').click()
-            app.application('PDF Reader')
-            expect(reader.locator('.viewer-placeholder')).to_contain_text('Open a PDF to read it.')
+            app.application('Office')
+            expect(win.locator('.viewer-placeholder')).to_contain_text('PPTX or PDF')
+            expect(win.locator('.pdf-reader')).to_have_count(0)
 
     with tempfile.TemporaryDirectory(dir=Path.home()) as d:
         fixture(Path(d) / name)

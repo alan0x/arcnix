@@ -299,7 +299,7 @@ def main():
             expect(settings().locator('.dock-icons-settings').get_by_role('slider', name='Dock icon size', exact=True)).to_be_visible()
             pinned = shortcut_options('App icons')
             pinned_order = ['Home', 'Files', 'Terminal', 'Code Editor', 'Browser', 'Player',
-                            'Image Viewer', 'PDF Reader', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings', 'Text Editor', 'Trash']
+                            'Image Viewer', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings', 'Text Editor', 'Trash']
             expect(pinned.locator('.preference-check')).to_have_text(pinned_order)
             for label in ('Player', 'Text Editor', 'Code Editor'):
                 expect(pinned.get_by_role('checkbox', name=label, exact=True)).not_to_be_checked()

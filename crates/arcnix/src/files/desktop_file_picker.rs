@@ -9,7 +9,6 @@ use crate::*;
 pub(crate) enum Purpose {
     Video,
     Image,
-    Pdf,
     Office,
     TextEditor,
     SaveText(u64),
@@ -30,7 +29,6 @@ impl Purpose {
         match self {
             Self::Video => "Open video",
             Self::Image => "Open image",
-            Self::Pdf => "Open PDF",
             Self::Office => "Open Office document",
             Self::SaveText(_) | Self::SaveOffice => "Save as…",
             _ => "Open file",
@@ -39,19 +37,19 @@ impl Purpose {
 
     fn formats(self) -> Formats {
         match self {
-            Self::Office | Self::SaveOffice => Formats {
+            Self::Office => Formats {
                 label: "Office documents",
                 empty: "No Office documents in this folder.",
                 includes: office_reader::supports,
                 extensions: || office_reader::EXTENSIONS.to_vec(),
             },
-            Self::Pdf => Formats {
-                label: "PDF documents",
-                empty: "No PDFs in this folder.",
+            Self::SaveOffice => Formats {
+                label: "Word documents",
+                empty: "No Word documents in this folder.",
                 includes: |path| {
-                    arcnix_core::file_associations::extension(path).as_deref() == Some("pdf")
+                    arcnix_core::file_associations::extension(path).as_deref() == Some("docx")
                 },
-                extensions: || vec!["pdf"],
+                extensions: || vec!["docx"],
             },
             Self::Image => Formats {
                 label: "All supported images",
@@ -129,7 +127,6 @@ fn confirm(ui: &Ui, path: &str) {
         Purpose::SaveText(id) => return submit_save(ui, id, path),
         Purpose::Video => |ui, path| ui.player.open_from_picker(ui, path),
         Purpose::Image => image_viewer::open,
-        Purpose::Pdf => pdf_reader::open,
         Purpose::Office => office_reader::open,
         Purpose::TextEditor => text_editor::open,
         Purpose::Code => code_workbench::open,
@@ -150,7 +147,21 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
         .key(|purpose| *purpose)
         .children(move |item| {
             let purpose = item.value.get();
-            let formats = purpose.formats();
+            let formats = if purpose == Purpose::Office
+                && state.with(|s| {
+                    s.local_desktop
+                        .as_ref()
+                        .is_some_and(|t| !office_reader::local_target(t))
+                }) {
+                Formats {
+                    label: "PDF documents",
+                    empty: "No PDFs in this folder.",
+                    includes: office_reader::is_pdf,
+                    extensions: || vec!["pdf"],
+                }
+            } else {
+                purpose.formats()
+            };
             let cancel = ui.clone();
             let choose = ui.clone();
             modal(

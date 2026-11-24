@@ -47,7 +47,7 @@ pub(crate) fn viewer_fullscreen_button(state: Cage<State>, page: WorkspacePage) 
         .on_press(move || {
             state.revise(|s| match page {
                 WorkspacePage::ImageViewer => s.images.fullscreen = !s.images.fullscreen,
-                WorkspacePage::PdfReader => s.pdf.fullscreen = !s.pdf.fullscreen,
+                WorkspacePage::Office => s.office.pdf.fullscreen = !s.office.pdf.fullscreen,
                 _ => {}
             })
         })

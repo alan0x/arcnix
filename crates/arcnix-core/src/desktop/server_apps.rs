@@ -55,7 +55,10 @@ pub struct DesktopPreferences {
     pub shortcuts: Shortcuts,
     #[serde(skip_serializing_if = "TerminalLayout::is_empty")]
     pub terminal: TerminalLayout,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "desktop_windows"
+    )]
     pub windows: BTreeMap<DesktopApp, DesktopWindow>,
     #[serde(
         alias = "explorer",
@@ -230,12 +233,24 @@ pub enum DesktopApp {
     #[serde(alias = "video")]
     Player,
     ImageViewer,
-    PdfReader,
+    #[serde(alias = "pdf_reader")]
     Office,
     Trash,
     Browser,
     Settings,
     PgAdmin,
+}
+
+fn desktop_windows<'de, D: serde::Deserializer<'de>>(
+    input: D,
+) -> Result<BTreeMap<DesktopApp, DesktopWindow>, D::Error> {
+    let mut value = serde_json::Value::deserialize(input)?;
+    if let Some(windows) = value.as_object_mut()
+        && let Some(legacy) = windows.remove("pdf_reader")
+    {
+        windows.entry("office").or_insert(legacy);
+    }
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 impl DesktopApp {
@@ -657,6 +672,40 @@ pub fn parse_preferences(text: &str) -> Result<DesktopPreferences> {
 mod tests {
     use super::*;
     use crate::desktop_customization::DockItem;
+
+    #[test]
+    fn legacy_pdf_reader_preferences_merge_into_office() -> Result<()> {
+        use crate::desktop_customization::Shortcut;
+        let prefs = parse_preferences(
+            r#"{"version":1,
+            "windows":{"office":{"maximized":true},"pdf_reader":{"maximized":false}},
+            "appearance":{"order":[{"kind":"app","id":"pdf_reader"},{"kind":"app","id":"files"},{"kind":"app","id":"office"}],
+            "dock":{"extra_pins":["pdf_reader"],"order":["office","pdf_reader"]}}}"#,
+        )?;
+        assert!(prefs.windows[&DesktopApp::Office].maximized);
+        assert_eq!(
+            prefs.appearance.order,
+            [
+                Shortcut::App(DesktopApp::Files),
+                Shortcut::App(DesktopApp::Office)
+            ]
+        );
+        assert_eq!(prefs.appearance.dock.extra_pins, [DesktopApp::Office]);
+        assert_eq!(
+            prefs.appearance.dock.order,
+            [DockItem::App(DesktopApp::Office)]
+        );
+        let assoc: crate::file_associations::Association = serde_json::from_str(
+            r#"{"default":"pdf_reader","opened_with":["pdf_reader","office"]}"#,
+        )?;
+        assert_eq!(
+            assoc.default,
+            Some(crate::file_associations::FileApp::Office)
+        );
+        assert_eq!(assoc.opened_with.len(), 1);
+        assert!(!serde_json::to_string(&prefs)?.contains("pdf_reader"));
+        Ok(())
+    }
 
     #[test]
     fn settings_naming_newer_apps_still_load() -> Result<()> {

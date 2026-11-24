@@ -13,7 +13,7 @@ pub enum FileApp {
     Code,
     Player,
     ImageViewer,
-    PdfReader,
+    #[serde(alias = "pdf_reader")]
     Office,
     Browser,
 }

@@ -2887,9 +2887,11 @@ GPU 型号	GPU model
 已请求关闭系统	System shutdown requested
 电源请求返回了异常响应	Unexpected power response
 打开 Office 文档	Open Office document
+Word 文档	Word documents
+此文件夹中没有 Word 文档。	No Word documents in this folder.
 Office 文档	Office documents
 此文件夹中没有 Office 文档。	No Office documents in this folder.
-打开 DOCX、XLSX 或 PPTX 文件进行阅读。	Open a DOCX, XLSX or PPTX file to read it.
+打开 DOCX、XLSX、PPTX 或 PDF 文件进行阅读。	Open a DOCX, XLSX, PPTX or PDF file to read it.
 要阅读本机文件，请在服务器列表中选择“体验本机桌面”，再打开 Office。	To read a file on this computer, select “Try the local desktop” in the server list, then open Office.
 正在打开 Office 文档…	Opening Office document…
 待上传文件	Pending uploads
@@ -2903,7 +2905,7 @@ Office 文档	Office documents
 本地修改尚未上传。	Local changes are waiting to sync.
 服务器文件已更改。已保留本地缓存副本。	The server file changed. Your cached copy was kept.
 请连接支持 SFTP 的服务器以打开远程 Office 文件。	Connect to a server with SFTP to open remote Office files.
-仅支持 DOCX、XLSX 和 PPTX 文件。	Supported formats are DOCX, XLSX and PPTX.
+支持 DOCX、XLSX、PPTX 和 PDF 文件。	Supported formats are DOCX, XLSX, PPTX and PDF.
 编辑 Word 文档	Edit Word document
 请选择新的 DOCX 文件名。	Choose a new DOCX file name.
 正在保存 DOCX…	Saving DOCX…
