@@ -2088,8 +2088,6 @@ Web 与网络	Web & networking
 安全	Security
 支持 Compose 的应用	Compose-compatible applications
 显示全部应用	Show all applications
-常见用途	Common uses
-项目网站	Project website
 应用目录	Application catalog
 已安装的应用	Installed applications
 显示全部系统软件包	Show all system packages
@@ -2168,6 +2166,44 @@ CPU · 内存 · 磁盘与网络	CPU · Memory · Disks and network
 SSH 防护 · 日志规则 · 临时封禁	SSH protection · Log rules · Temporary bans
 无需常驻守护进程的容器管理工具	Daemonless container management
 OCI 容器 · 镜像 · Pod	OCI containers · Images · Pods
+在本机运行的 PostgreSQL 管理工具	PostgreSQL administration on this computer
+数据库浏览 · 查询工具 · 备份与恢复	Database browser · Query tool · Backup and restore
+本机可用	Ready on this computer
+首次打开时下载	Downloads when first opened
+未安装	Not installed
+状态未知	Status unavailable
+管理	Manage
+已在服务器上找到，但不是通过软件包管理器安装的。	Found on this server outside its package manager.
+可用	Available
+已下载	Downloaded
+未下载	Not downloaded
+未下载 · {size}	Not downloaded · {size}
+在本机上	On this computer
+在此服务器上	On this server
+可选安装方式	Ways to install
+其他安装方式	Other ways to install
+以其他方式安装…	Install another way…
+相关应用	Related apps
+Docker Engine 以镜像为基础，在隔离的容器中运行应用。安装后，可在 Arcnix 的 Docker 应用中管理容器、镜像、网络和卷。	Docker Engine runs applications in isolated containers built from images. Once it is installed, the Docker app in Arcnix manages its containers, images, networks and volumes.
+Nginx 可托管静态网站，也可作为反向代理或负载均衡器，把请求转发给应用。系统软件包以 nginx 服务运行；Compose 模板则在容器中运行。	Nginx serves static websites and forwards requests to applications as a reverse proxy or load balancer. The system package runs as the nginx service; the Compose template runs it in a container.
+Caddy 是一款能自动申请和续期 HTTPS 证书的 Web 服务器。它的 Caddyfile 配置简洁，适合网站和反向代理。	Caddy is a web server that obtains and renews HTTPS certificates automatically. Its short Caddyfile configuration suits websites and reverse proxies.
+Redis 将数据保存在内存中以便快速访问，常用于缓存、会话和任务队列，也可以把数据保存到磁盘。	Redis keeps data in memory for fast access, which makes it a common choice for caches, sessions and job queues. It can also save its data to disk.
+PostgreSQL 是开源关系数据库，对 SQL、事务和扩展有完善的支持。系统软件包以服务运行，默认端口为 5432；可用 pgAdmin 管理其中的数据库。	PostgreSQL is an open-source relational database with thorough SQL support, transactions and extensions. The system package runs as a service, on port 5432 by default; pgAdmin manages its databases.
+pgAdmin 是 PostgreSQL 的常用管理工具，可浏览数据库对象、执行查询以及备份和恢复数据库。Arcnix 在本机运行 pgAdmin，并通过当前 SSH 连接访问服务器上的 PostgreSQL，无需在服务器上安装任何软件。	pgAdmin is the standard administration tool for PostgreSQL: browse database objects, run queries, and back up or restore databases. Arcnix runs it on this computer and reaches the server's PostgreSQL through this SSH connection, so nothing is installed on the server.
+MariaDB 是由 MySQL 原开发者打造的关系数据库，兼容大多数 MySQL 客户端和应用。	MariaDB is a relational database made by the original developers of MySQL. It works with most MySQL clients and applications.
+SQLite 将整个数据库保存在单个文件中，无需服务器进程。sqlite3 命令行工具可以打开和查询这些文件。	SQLite keeps a whole database in a single file and needs no server process. The sqlite3 command-line shell opens and queries these files.
+Git 记录项目文件的历史，让多人可以并行协作。在服务器上克隆和更新代码仓库也需要它。	Git records the history of a project's files and lets several people work on them in parallel. It is also needed to clone and update repositories on the server.
+Node.js 在浏览器之外运行 JavaScript，用于 Web 服务器、API 和构建工具。发行版软件包的版本通常比 Node.js 最新版本旧。	Node.js runs JavaScript outside the browser, for web servers, APIs and build tools. Distribution packages are often older than the current Node.js release.
+Python 是一门通用编程语言，广泛用于脚本、自动化和 Web 应用。许多系统工具已经依赖发行版自带的 Python。	Python is a general-purpose language widely used for scripts, automation and web applications. Many system tools already depend on the distribution's Python.
+Go 是一门编译型语言，工具链简洁，常用于网络服务和命令行工具，程序可编译为单个可执行文件。	Go is a compiled language with a small toolchain, used for network services and command-line tools. Programs build into a single executable file.
+tmux 让终端会话在断开连接后继续在服务器上运行，并可把一个终端分成多个窗口和窗格。重新连接后即可从上次的位置继续。	tmux keeps terminal sessions running on the server after you disconnect, and splits one terminal into windows and panes. Reconnect later to continue where you left off.
+htop 实时列出正在运行的进程及其 CPU 和内存占用，可在终端中排序、搜索进程并向其发送信号。	htop lists running processes with live CPU and memory usage, and lets you sort, search and signal them from the terminal.
+btop 以全屏终端仪表盘显示 CPU、内存、磁盘和网络活动，并附有进程列表。	btop shows CPU, memory, disk and network activity as a full-screen terminal dashboard, next to a list of processes.
+restic 为文件创建经过加密和去重的快照，保存到本地磁盘或 S3、SFTP 等远程存储，并可在需要时恢复。	restic makes encrypted, deduplicated snapshots of files on local disks or remote storage such as S3 and SFTP, and restores them when needed.
+rclone 在服务器与数十种云存储服务之间复制和同步文件，还可以把远程存储挂载为文件夹。	rclone copies and synchronizes files between the server and dozens of cloud storage services, and can mount remote storage as a folder.
+Certbot 从 Let's Encrypt 免费申请 HTTPS 证书并自动续期，还可以替你更新 Nginx 或 Apache 配置。	Certbot obtains free HTTPS certificates from Let's Encrypt and renews them automatically. It can also update Nginx or Apache configuration for you.
+Fail2ban 监视日志中反复失败的登录，并用防火墙规则临时封禁相应地址，常用于保护 SSH。	Fail2ban watches logs for repeated failed logins and temporarily blocks those addresses with firewall rules. It is commonly used to protect SSH.
+Podman 无需后台守护进程即可运行 OCI 容器，也可以以普通用户身份运行。其命令与 Docker 基本兼容。	Podman runs OCI containers without a background daemon, including as a regular user. Its commands are largely compatible with Docker.
 内置应用介绍可以离线浏览。安装使用服务器已启用的软件仓库，或所选发布者的 Snap／镜像；可用版本和包名因环境而异，系统包可能还需要初始化服务。不会自动添加第三方软件源。	Built-in application descriptions are available offline. Installation uses the server's enabled repositories or the selected publisher's snap/image. Versions and package availability vary; package installation may require additional service initialization. No third-party repository is added automatically.
 系统软件包使用已启用的发行版仓库，包名与版本会有差异。Snap 和 Compose 属于独立安装，更新、服务和数据继续按原来源管理。	System packages use enabled distribution repositories; package names and versions differ. Snap and Compose are separate installations. Updates, services and data remain with their original source.
 主目录	Home

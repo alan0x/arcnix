@@ -280,6 +280,8 @@ pub(crate) fn reply(ui: &Ui, serial: u64, reply: Reply) {
         false
     });
     if reopen {
+        // App Center shows whether the component is downloaded.
+        ui.app_center_local_status();
         ui.pgadmin_enter();
     }
 }
