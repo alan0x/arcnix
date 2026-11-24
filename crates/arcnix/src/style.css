@@ -1943,6 +1943,8 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   white-space: nowrap;
 }
 .pgadmin-download.failed { border-color: #6a3a40; background: #38242a; color: #efb5ba; }
+.theme-light .pgadmin-download:not(:where(.desktop-dark *)) { border-color: #9fd4b3; background: #e6f6ec; color: #1d6b3d; }
+.theme-light .pgadmin-download.failed:not(:where(.desktop-dark *)) { border-color: #e4a9ae; background: #fbeaec; color: #a3303b; }
 .files-titlebar {
   container: files-toolbar / inline-size;
   position: relative;

@@ -80,18 +80,21 @@ pub(crate) struct Download {
 
 impl Download {
     fn message(&self) -> String {
-        let name = |path: Option<&std::path::Path>| {
-            path.and_then(std::path::Path::file_name)
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
-        let file = name(Some(&self.path));
-        if self.success {
-            let folder = name(self.path.parent());
-            format!("Saved {file} to {folder}")
-        } else {
-            format!("Could not save {file}")
+        use crate::pgadmin_native::file_name;
+        let file = file_name(&self.path);
+        if !self.success {
+            return format!("Could not save {file}");
         }
+        // A drive or volume root has no name of its own.
+        let folder = self
+            .path
+            .parent()
+            .map(|folder| match file_name(folder) {
+                name if name.is_empty() => folder.display().to_string(),
+                name => name,
+            })
+            .unwrap_or_default();
+        format!("Saved “{file}” to “{folder}”")
     }
 }
 

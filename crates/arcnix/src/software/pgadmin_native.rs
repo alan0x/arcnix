@@ -70,7 +70,7 @@ fn downloadable(origin: &str, url: &str) -> bool {
 
 /// Keep only the name the WebView suggested, inside `folder`, without
 /// replacing an existing file.
-fn destination(folder: &Path, suggested: &Path, pending: &[(String, PathBuf)]) -> Option<PathBuf> {
+fn destination(folder: &Path, suggested: &Path) -> Option<PathBuf> {
     let name = suggested.file_name()?.to_str()?;
     if name.starts_with('.') || name.chars().any(|c| c.is_control() || c == ':') {
         return None;
@@ -84,7 +84,6 @@ fn destination(folder: &Path, suggested: &Path, pending: &[(String, PathBuf)]) -
         if path
             .symlink_metadata()
             .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-            && !pending.iter().any(|(_, other)| *other == path)
         {
             return Some(path);
         }
@@ -105,27 +104,45 @@ pub(crate) fn downloads_folder() -> Option<PathBuf> {
 }
 
 /// Move a finished download to where the person chose. The staging folder
-/// may be on another volume.
+/// may be on another volume; a staged copy left behind is removed with it.
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     if std::fs::rename(from, to).is_ok() {
         return Ok(());
     }
     std::fs::copy(from, to)?;
-    std::fs::remove_file(from)
+    let _ = std::fs::remove_file(from);
+    Ok(())
+}
+
+/// Put a download nobody could be asked about in Downloads, as before.
+fn keep_in_downloads(staged: &Path) -> Option<PathBuf> {
+    let target = destination(&downloads_folder()?, staged)?;
+    move_file(staged, &target).ok()?;
+    Some(target)
 }
 
 /// The person's answer to "save as": a path, cancelled, or no dialog.
 type Choice = Result<Option<PathBuf>>;
 /// A staged download and where the person chose to put it.
 type Answer = (PathBuf, Choice);
+/// A staged download, where it went, and whether it got there.
+type Moved = (PathBuf, PathBuf, bool);
 
 /// Ask where to save `name`. Windows runs its dialog to completion here.
 #[cfg(windows)]
-fn ask(_: &NativeWindow, name: &str, folder: Option<&Path>, reply: impl FnOnce(Choice) + 'static) {
+fn ask(
+    window: &NativeWindow,
+    name: &str,
+    folder: Option<&Path>,
+    reply: impl FnOnce(Choice) + 'static,
+) {
+    use glory::wry::shell::NativeWindowExtWindows;
+    // Owned by Arcnix's window even when another app is in front.
     reply(file_picker::save_in(
         &i18n::desktop::translate("Save file"),
         name,
         folder,
+        Some(window.hwnd()),
     ));
 }
 
@@ -175,7 +192,7 @@ fn ask(_: &NativeWindow, _: &str, _: Option<&Path>, reply: impl FnOnce(Choice) +
     reply(Err(anyhow::anyhow!("No save dialog on this platform")));
 }
 
-fn file_name(path: &Path) -> String {
+pub(crate) fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -199,8 +216,12 @@ pub(crate) struct Host {
     downloads: mpsc::Receiver<(PathBuf, bool)>,
     /// Downloads waiting for the person to choose where they go.
     waiting: VecDeque<PathBuf>,
-    asking: bool,
+    /// The download a save dialog is open for.
+    asking: Option<PathBuf>,
     choices: (mpsc::Sender<Answer>, mpsc::Receiver<Answer>),
+    /// Copies to another volume run off the UI thread.
+    moves: (mpsc::Sender<Moved>, mpsc::Receiver<Moved>),
+    moving: usize,
     /// The folder of the last saved file, where the next dialog starts.
     folder: Option<PathBuf>,
     staging: PathBuf,
@@ -208,8 +229,26 @@ pub(crate) struct Host {
 }
 
 impl Drop for Host {
+    /// pgAdmin closed before every download was saved: keep those files in
+    /// Downloads rather than losing them with the staging folder.
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.staging);
+        let finished = self.downloads.try_iter().filter(|(_, success)| *success);
+        let answered = self.choices.1.try_iter().map(|(staged, _)| staged);
+        let staged: Vec<_> = self
+            .waiting
+            .drain(..)
+            .chain(self.asking.take())
+            .chain(finished.map(|(staged, _)| staged))
+            .chain(answered)
+            .collect();
+        for staged in staged {
+            let _ = keep_in_downloads(&staged);
+        }
+        // A copy still running owns its staged file; the system cleans the
+        // temporary folder later.
+        if self.moving == 0 {
+            let _ = std::fs::remove_dir_all(&self.staging);
+        }
     }
 }
 
@@ -223,8 +262,10 @@ impl Host {
             focus: mpsc::channel().1,
             downloads: mpsc::channel().1,
             waiting: VecDeque::new(),
-            asking: false,
+            asking: None,
             choices: mpsc::channel(),
+            moves: mpsc::channel(),
+            moving: 0,
             folder: None,
             staging: std::env::temp_dir().join(format!(
                 "arcnix-pgadmin-downloads-{}",
@@ -242,7 +283,14 @@ impl Host {
         let allowed = origin.clone();
         let source = origin.clone();
         let (saved, downloads) = mpsc::channel();
-        self.downloads = downloads;
+        // A replaced view may have finished downloads not yet asked about.
+        let earlier = std::mem::replace(&mut self.downloads, downloads);
+        self.waiting.extend(
+            earlier
+                .try_iter()
+                .filter(|(_, success)| *success)
+                .map(|(staged, _)| staged),
+        );
         let started: Rc<RefCell<Vec<(String, PathBuf)>>> = Rc::default();
         let finished = started.clone();
         let completed_wake = wake.clone();
@@ -266,7 +314,7 @@ impl Host {
                 let folder = staging.join(arcnix_core::new_id());
                 let Some(target) = std::fs::create_dir_all(&folder)
                     .ok()
-                    .and_then(|()| destination(&folder, path, &[]))
+                    .and_then(|()| destination(&folder, path))
                 else {
                     let _ = std::fs::remove_dir(&folder);
                     return false;
@@ -327,18 +375,25 @@ impl Host {
                 self.saved(&staged, path, false);
             }
         }
+        while let Ok((staged, target, success)) = self.moves.1.try_recv() {
+            self.moving -= 1;
+            if success {
+                self.folder = target.parent().map(Path::to_path_buf);
+            }
+            self.saved(&staged, target, success);
+        }
         loop {
             while let Ok((staged, choice)) = self.choices.1.try_recv() {
-                self.asking = false;
+                self.asking = None;
                 self.chosen(staged, choice);
             }
-            if self.asking {
+            if self.asking.is_some() {
                 return;
             }
             let Some(staged) = self.waiting.pop_front() else {
                 return;
             };
-            self.asking = true;
+            self.asking = Some(staged.clone());
             let folder = self.folder.clone().or_else(downloads_folder);
             let reply = self.choices.0.clone();
             let wake = self.wake.clone();
@@ -363,18 +418,23 @@ impl Host {
             Ok(Some(target)) => Some(target),
             Ok(None) => None,
             // Without a dialog, keep the earlier behaviour.
-            Err(_) => downloads_folder().and_then(|folder| destination(&folder, &staged, &[])),
+            Err(_) => downloads_folder().and_then(|folder| destination(&folder, &staged)),
         };
-        match target {
-            Some(target) => {
-                let success = staged.exists() && move_file(&staged, &target).is_ok();
-                if success {
-                    self.folder = target.parent().map(Path::to_path_buf);
-                }
-                self.saved(&staged, target, success);
+        let Some(target) = target else {
+            self.discard(&staged);
+            return;
+        };
+        self.moving += 1;
+        let moved = self.moves.0.clone();
+        let wake = self.wake.clone();
+        std::thread::spawn(move || {
+            let success = staged.exists() && move_file(&staged, &target).is_ok();
+            if moved.send((staged, target, success)).is_ok()
+                && let Some(wake) = wake
+            {
+                wake.wake();
             }
-            None => self.discard(&staged),
-        }
+        });
     }
 
     /// Remove a download's staging folder, and the window's when empty.
@@ -516,31 +576,23 @@ mod tests {
         let folder =
             std::env::temp_dir().join(format!("arcnix-downloads-{}", arcnix_core::new_id()));
         std::fs::create_dir(&folder).unwrap();
-        let first = destination(&folder, Path::new("/elsewhere/orders.csv"), &[]).unwrap();
+        let first = destination(&folder, Path::new("/elsewhere/orders.csv")).unwrap();
         assert_eq!(first, folder.join("orders.csv"));
         assert_eq!(
-            destination(
-                &folder,
-                Path::new("orders.csv"),
-                &[(String::new(), first.clone())]
-            )
-            .unwrap(),
-            folder.join("orders (1).csv")
+            destination(&folder, Path::new("orders.csv")).unwrap(),
+            folder.join("orders.csv")
         );
         std::fs::write(&first, "").unwrap();
         assert_eq!(
-            destination(&folder, Path::new("orders.csv"), &[]).unwrap(),
+            destination(&folder, Path::new("orders.csv")).unwrap(),
             folder.join("orders (1).csv")
         );
         assert_eq!(
-            destination(&folder, Path::new("README"), &[]).unwrap(),
+            destination(&folder, Path::new("README")).unwrap(),
             folder.join("README")
         );
         for name in [".profile", "..", "a\nb.csv"] {
-            assert!(
-                destination(&folder, Path::new(name), &[]).is_none(),
-                "{name}"
-            );
+            assert!(destination(&folder, Path::new(name)).is_none(), "{name}");
         }
         std::fs::remove_dir_all(folder).unwrap();
     }

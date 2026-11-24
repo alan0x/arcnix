@@ -55,23 +55,29 @@ def update_server(database, server):
             "SELECT name FROM sqlite_master WHERE type = 'table'")}
         if not {'server', 'servergroup'} <= tables:
             return False
+        # A password saved for another database user does not apply.
         changed = connection.execute(
-            'UPDATE server SET host = ?, port = ?, maintenance_db = ?, username = ? '
+            'UPDATE server SET host = ?, port = ?, maintenance_db = ?, '
+            'password = CASE WHEN username = ? THEN password END, '
+            'save_password = CASE WHEN username = ? THEN save_password ELSE 0 END, '
+            'username = ? '
             'WHERE id = (SELECT server.id FROM server JOIN servergroup '
             'ON servergroup.id = server.servergroup_id '
             'WHERE servergroup.name = ? AND server.name = ? ORDER BY server.id LIMIT 1)',
-            ('127.0.0.1', server['port'], server['database'], server['user'],
-             GROUP, server['name']))
+            ('127.0.0.1', server['port'], server['database'], server['user'], server['user'],
+             server['user'], GROUP, server['name']))
         return changed.rowcount == 1
 
 
 def forget_other_passwords(database, data, key):
     """Saved passwords only decrypt with the key that saved them. When the
-    key changed (a new keychain item, another computer, or no keychain),
-    forget them so pgAdmin asks again instead of failing to decrypt."""
+    key changed (a new keychain item or another computer), forget them so
+    pgAdmin asks again instead of failing to decrypt. Without a key (the
+    keychain could not be read this time) nothing is changed."""
+    if not key:
+        return
     path = os.path.join(data, 'password-key')
-    check = hashlib.sha256(b'arcnix pgadmin password key\0' + key.encode()).hexdigest() \
-        if key else 'none'
+    check = hashlib.sha256(b'arcnix pgadmin password key\0' + key.encode()).hexdigest()
     try:
         with open(path, encoding='ascii') as file:
             if file.read() == check:
