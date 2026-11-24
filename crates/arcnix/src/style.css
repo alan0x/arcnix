@@ -1907,6 +1907,16 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   flex: none;
 }
 .desktop-window-titlebar:has(.desktop-app-tools) .desktop-window-actions { margin-left: 0; }
+.pgadmin-download {
+  padding: 3px 10px;
+  border: 1px solid #2f6a48;
+  border-radius: 999px;
+  background: #183324;
+  color: #a6e3bd;
+  font-size: var(--font-small);
+  white-space: nowrap;
+}
+.pgadmin-download.failed { border-color: #6a3a40; background: #38242a; color: #efb5ba; }
 .files-titlebar {
   container: files-toolbar / inline-size;
   position: relative;

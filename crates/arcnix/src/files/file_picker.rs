@@ -266,6 +266,17 @@ pub(crate) fn folder(current: Option<&Path>, title: &str) -> anyhow::Result<Opti
 }
 #[cfg(windows)]
 pub(crate) fn save(title: &str, name: &str) -> anyhow::Result<Option<PathBuf>> {
+    save_in(title, name, None)
+}
+
+/// `folder` is where the dialog starts when Windows has no recent folder
+/// for Arcnix.
+#[cfg(windows)]
+pub(crate) fn save_in(
+    title: &str,
+    name: &str,
+    folder: Option<&Path>,
+) -> anyhow::Result<Option<PathBuf>> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
 
@@ -277,7 +288,8 @@ pub(crate) fn save(title: &str, name: &str) -> anyhow::Result<Option<PathBuf>> {
     use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
     use windows::Win32::UI::Shell::{
         FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-        FileSaveDialog, IFileSaveDialog, SIGDN_FILESYSPATH,
+        FileSaveDialog, IFileSaveDialog, IShellItem, SHCreateItemFromParsingName,
+        SIGDN_FILESYSPATH,
     };
     use windows::core::{HRESULT, HSTRING};
     // The dialog owns its native modal loop; no shell command is constructed.
@@ -296,6 +308,14 @@ pub(crate) fn save(title: &str, name: &str) -> anyhow::Result<Option<PathBuf>> {
             CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)?;
         dialog.SetTitle(&HSTRING::from(title))?;
         dialog.SetFileName(&HSTRING::from(name))?;
+        if let Some(folder) = folder
+            && let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(
+                &HSTRING::from(folder.as_os_str()),
+                None,
+            )
+        {
+            let _ = dialog.SetDefaultFolder(&item);
+        }
         dialog.SetOptions(
             dialog.GetOptions()?
                 | FOS_FORCEFILESYSTEM

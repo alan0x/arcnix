@@ -80,15 +80,17 @@ pub(crate) struct Download {
 
 impl Download {
     fn message(&self) -> String {
-        let name = self
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let name = |path: Option<&std::path::Path>| {
+            path.and_then(std::path::Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let file = name(Some(&self.path));
         if self.success {
-            format!("Saved {name} to Downloads")
+            let folder = name(self.path.parent());
+            format!("Saved {file} to {folder}")
         } else {
-            format!("Could not save {name}")
+            format!("Could not save {file}")
         }
     }
 }
@@ -432,7 +434,14 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
         let stop = ui.clone();
         row().class("desktop-app-tools").fill((
             text()
-                .class("pgadmin-download subtle")
+                .class(state.map(|s| {
+                    match &s.pgadmin.download {
+                        None => "hidden",
+                        Some(download) if download.success => "pgadmin-download",
+                        Some(_) => "pgadmin-download failed",
+                    }
+                    .to_owned()
+                }))
                 .content(i18n::bind(state.map(|s| {
                     s.pgadmin
                         .download
