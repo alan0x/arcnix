@@ -48,26 +48,55 @@ impl Key {
     }
 }
 
+/// A system keychain item: Keychain on macOS, Credential Manager on Windows.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn keychain_entry(service: &str, account: &str) -> keyring::Result<keyring::Entry> {
+    keyring::Entry::new(service, account)
+}
+
+#[cfg(windows)]
+pub(crate) fn keychain_entry(service: &str, account: &str) -> keyring::Result<keyring::Entry> {
+    use std::collections::HashMap;
+
+    use keyring::api::CredentialStoreApi;
+
+    // Keep the item available across logins on this computer only.
+    let store = windows_native_keyring_store::Store::new()?;
+    store.build(
+        service,
+        account,
+        Some(&HashMap::from([("persistence", "Local")])),
+    )
+}
+
+/// The key for passwords pgAdmin saves, created on first use. `None` when
+/// the keychain is unavailable; pgAdmin then does not offer to save them.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) fn pgadmin_password_key() -> Option<Zeroizing<String>> {
+    // Two windows starting together must not each store a different key.
+    static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _creating = CREATING.lock().ok()?;
+    let entry = keychain_entry("org.arcnix.pgadmin", "password-key").ok()?;
+    match entry.get_password() {
+        Ok(key) if !key.is_empty() => Some(Zeroizing::new(key)),
+        Ok(_) | Err(keyring::Error::NoEntry) => {
+            let key = arcnix_core::pgadmin::new_password_key().ok()?;
+            entry.set_password(&key).ok()?;
+            Some(key)
+        }
+        Err(_) => None,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub(crate) fn pgadmin_password_key() -> Option<Zeroizing<String>> {
+    None
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 impl Key {
-    #[cfg(not(windows))]
     fn entry(&self) -> keyring::Result<keyring::Entry> {
-        keyring::Entry::new("org.arcnix.ssh", &self.0)
-    }
-
-    #[cfg(windows)]
-    fn entry(&self) -> keyring::Result<keyring::Entry> {
-        use std::collections::HashMap;
-
-        use keyring::api::CredentialStoreApi;
-
-        // Keep the item available across logins on this computer only.
-        let store = windows_native_keyring_store::Store::new()?;
-        store.build(
-            "org.arcnix.ssh",
-            &self.0,
-            Some(&HashMap::from([("persistence", "Local")])),
-        )
+        keychain_entry("org.arcnix.ssh", &self.0)
     }
 
     pub fn load(&self) -> Result<Option<Zeroizing<String>>, ()> {

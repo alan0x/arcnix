@@ -400,6 +400,21 @@ pub enum Event {
     Unreachable(Diagnosis),
 }
 
+fn random_hex() -> Result<Zeroizing<String>> {
+    let mut random = Zeroizing::new([0u8; 32]);
+    getrandom::fill(random.as_mut())
+        .map_err(|error| anyhow::anyhow!("Cannot create a private key: {error}"))?;
+    Ok(Zeroizing::new(
+        random.iter().map(|b| format!("{b:02x}")).collect(),
+    ))
+}
+
+/// A new key for the passwords pgAdmin saves. The caller keeps it in the
+/// system keychain; [`run`] hands it to pgAdmin.
+pub fn new_password_key() -> Result<Zeroizing<String>> {
+    random_hex()
+}
+
 /// Run one pgAdmin backend and its tunnel until stopped or either ends.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -409,6 +424,7 @@ pub fn run(
     fingerprint: &str,
     secret: Zeroizing<String>,
     connection: &Connection,
+    password_key: Option<Zeroizing<String>>,
     stopped: impl Fn() -> bool + Sync,
     event: impl Fn(Event) + Sync,
 ) -> Result<()> {
@@ -462,6 +478,7 @@ pub fn run(
                 component,
                 &data,
                 connection,
+                password_key.as_ref().map(|key| key.as_str()),
                 tunnel_port,
                 &finished,
                 |url| event(Event::Ready(url)),
@@ -516,25 +533,20 @@ fn backend(
     component: &Component,
     data: &Path,
     connection: &Connection,
+    password_key: Option<&str>,
     tunnel_port: u16,
     finished: &impl Fn() -> bool,
     ready: impl FnOnce(String),
 ) -> Result<()> {
-    let mut random = [0u8; 32];
-    getrandom::fill(&mut random)
-        .map_err(|error| anyhow::anyhow!("Cannot create a private window key: {error}"))?;
-    let key = Zeroizing::new(
-        random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>(),
-    );
+    let key = random_hex()?;
     let launch = crate::new_id();
     let request = Zeroizing::new(serde_json::to_vec(&serde_json::json!({
         "root": component.root,
         "data": data,
         "launch": launch,
         "key": key.as_str(),
+        // Without a keychain pgAdmin does not offer to save passwords.
+        "password_key": password_key,
         "server": {
             "name": connection.name(),
             "port": tunnel_port,
