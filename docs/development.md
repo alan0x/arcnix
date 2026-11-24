@@ -261,9 +261,9 @@ Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口�
 
 **Image Viewer** 是 PNG、JPEG、WebP、GIF、BMP、AVIF 和 SVG 的建议默认应用。可以从 Files 双击图片，或在查看器中选择「打开图片」。单张上限为 8 MiB。左右方向键切换同目录图片，滚轮缩放，放大后可以拖动。按 0 适应窗口，按 1 恢复实际大小，R 和 Shift+R 分别向右和向左旋转。按 F 在 Desktop 区域内全屏查看，点击退出全屏按钮或按 Esc 可恢复原窗口。
 
-**Office 的 PDF 阅读视图** 从 Files、传输页的远端列表或桌面文件选择器打开 PDF。单个文件上限为 64 MiB。使用左右方向键或 Page Up / Page Down 翻页，输入页码并按 Enter 可直接跳转。支持缩放、适应整页或页宽、密码解锁，以及 Desktop 内全屏。本机只读桌面也可使用。
+**PDF Reader** 从 Files、传输页的远端列表或桌面文件选择器打开 PDF。单个文件上限为 64 MiB。使用左右方向键或 Page Up / Page Down 翻页，输入页码并按 Enter 可直接跳转。支持缩放、适应整页或页宽、密码解锁，以及 Desktop 内全屏。本机只读桌面也可使用。
 
-**Text Editor** 是已识别文本格式的建议默认应用。用户设置的文件关联优先。编辑器支持独立标签页、Markdown 预览、保存时检查远程版本和关闭前确认未保存修改。从 Files 或桌面拖入文件会直接用 Text Editor 打开。Text Editor、Code、Player、Image Viewer 和 Office 使用同一个 Desktop 文件选择器。每个应用提供自己的类型筛选和打开方式。选择器可拖右下角调整宽高，侧栏读取 Files 的位置、收藏、标签及回收站。
+**Text Editor** 是已识别文本格式的建议默认应用。用户设置的文件关联优先。编辑器支持独立标签页、Markdown 预览、保存时检查远程版本和关闭前确认未保存修改。从 Files 或桌面拖入文件会直接用 Text Editor 打开。Text Editor、Code、Player、Image Viewer 和 PDF Reader 使用同一个 Desktop 文件选择器。每个应用提供自己的类型筛选和打开方式。选择器可拖右下角调整宽高，侧栏读取 Files 的位置、收藏、标签及回收站。
 
 **Appearance** 在预置主题和命名主题中选中一套，所选主题和命名主题均保存在 `preferences/desktop.json` 的 `themes`。从 **Customize** 创建主题时，选择浅色或深色方案、图标风格和强调色。新主题继承所选主题的壁纸，可在壁纸选项中更改当前配色方案的壁纸。浅色与深色壁纸不同时，缩略图并排显示。保存时记录选择的颜色参数，显示时使用对应的基础色板生成背景、面板、输入框、边框和文字色，强调色用于高亮和交互状态，并根据背景调整对比度。旧主题的色值覆盖仍可读取。文件夹只保存图案 ID，并按当前主题的风格渲染。
 

@@ -141,6 +141,7 @@ pub(crate) struct Reader {
     pub fullscreen: bool,
     serial: Option<u64>,
     commands: Option<async_channel::Sender<Command>>,
+    path: String,
     page: usize,
     total: usize,
     page_input: String,
@@ -152,10 +153,6 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
-    pub(super) fn is_open(&self) -> bool {
-        self.serial.is_some()
-    }
-
     fn send(&mut self, command: Command) {
         self.busy = self
             .commands
@@ -185,20 +182,35 @@ impl Reader {
     }
 }
 
-pub(super) fn load(ui: &Ui, path: &str) -> Reader {
+pub(crate) fn browse(ui: &Ui) {
+    desktop_file_picker::open(
+        ui,
+        desktop_file_picker::Purpose::Pdf,
+        ui.state.with(|s| desktop_file_picker::parent(&s.pdf.path)),
+    );
+}
+
+pub(crate) fn open(ui: &Ui, path: &str) {
+    if !ui.state.with(code_workbench::available) {
+        return;
+    }
+    ui.open_desktop_app(WorkspacePage::PdfReader);
     let (tx, rx) = async_channel::bounded(1);
     let serial = ui.send(Action::OpenPdf(path.into(), rx));
-    Reader {
-        serial: Some(serial),
-        commands: Some(tx),
-        busy: true,
-        ..Default::default()
-    }
+    ui.state.revise(|s| {
+        s.pdf = Reader {
+            serial: Some(serial),
+            commands: Some(tx),
+            path: path.into(),
+            busy: true,
+            ..Default::default()
+        }
+    });
 }
 
 pub(crate) fn received(ui: &Ui, serial: u64, reply: Reply) {
     let path = ui.state.revise(|s| {
-        let r = &mut s.office.pdf;
+        let r = &mut s.pdf;
         if r.serial != Some(serial) {
             return None;
         }
@@ -216,7 +228,7 @@ pub(crate) fn received(ui: &Ui, serial: u64, reply: Reply) {
                 r.total = total;
                 r.locked = false;
                 r.show(1);
-                return Some(s.office.path.clone());
+                return Some(r.path.clone());
             }
             Reply::Page(Ok(page)) => r.rendered = Some(page),
             Reply::Page(Err(error)) => r.error = error,
@@ -232,57 +244,49 @@ pub(crate) fn received(ui: &Ui, serial: u64, reply: Reply) {
         None
     });
     if let Some(path) = path {
-        file_open::remember(ui, &path, FileApp::Office);
+        file_open::remember(ui, &path, FileApp::PdfReader);
     }
 }
 
 pub(crate) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let open = ui.clone();
-    let loaded = state.map(|s| s.office.pdf.rendered.is_some());
+    let loaded = state.map(|s| s.pdf.rendered.is_some());
     col().class("pdf-reader").fill((
         row().class("viewer-toolbar").fill((
-            i18n::icon_action("Open Office document", Icon::Folder)
-                .class("icon-button pdf-open")
+            i18n::text_action("Open PDF", Icon::Folder)
+                .class("button with-icon pdf-open")
                 .enabled(state.map(|s| s.connected && s.sftp_available))
-                .on_press(move || office_reader::browse(&open)),
+                .on_press(move || browse(&open)),
             row().class("viewer-controls").fill((
                 reader_control("Previous page", "previous", Icon::ChevronRight)
-                    .enabled(state.map(|s| {
-                        !s.office.pdf.busy && s.office.pdf.total > 0 && s.office.pdf.page > 1
-                    }))
-                    .on_press(move || {
-                        state.revise(|s| s.office.pdf.show(s.office.pdf.page.saturating_sub(1)))
-                    }),
+                    .enabled(state.map(|s| !s.pdf.busy && s.pdf.total > 0 && s.pdf.page > 1))
+                    .on_press(move || state.revise(|s| s.pdf.show(s.pdf.page.saturating_sub(1)))),
                 input()
                     .class("pdf-page-number")
                     .name(i18n::bind("Page number"))
-                    .enabled(state.map(|s| s.office.pdf.total > 0 && !s.office.pdf.busy))
-                    .value(state.map(|s| s.office.pdf.page_input.clone()))
+                    .enabled(state.map(|s| s.pdf.total > 0 && !s.pdf.busy))
+                    .value(state.map(|s| s.pdf.page_input.clone()))
                     .on(value_changed, move |e| {
                         if let Event::ValueChanged { value, .. } = e {
-                            state.revise(|s| s.office.pdf.page_input = value);
+                            state.revise(|s| s.pdf.page_input = value);
                         }
                     })
                     .on(commit, move |e| {
                         if let Event::Commit { value, .. } = e {
-                            state.revise(|s| {
-                                s.office.pdf.show(value.trim().parse().unwrap_or_default())
-                            });
+                            state.revise(|s| s.pdf.show(value.trim().parse().unwrap_or_default()));
                         }
                     }),
                 text().class("pdf-total").content(state.map(|s| {
-                    if s.office.pdf.total > 0 {
-                        format!("/ {}", s.office.pdf.total)
+                    if s.pdf.total > 0 {
+                        format!("/ {}", s.pdf.total)
                     } else {
                         String::new()
                     }
                 })),
                 reader_control("Next page", "next", Icon::ChevronRight)
-                    .enabled(
-                        state.map(|s| !s.office.pdf.busy && s.office.pdf.page < s.office.pdf.total),
-                    )
-                    .on_press(move || state.revise(|s| s.office.pdf.show(s.office.pdf.page + 1))),
+                    .enabled(state.map(|s| !s.pdf.busy && s.pdf.page < s.pdf.total))
+                    .on_press(move || state.revise(|s| s.pdf.show(s.pdf.page + 1))),
             )),
             row().class("viewer-controls").fill((
                 reader_control("Zoom out", "out", Icon::Minus).enabled(loaded),
@@ -298,27 +302,26 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
             )),
             row()
                 .class("viewer-controls")
-                .fill(viewer_fullscreen_button(state, WorkspacePage::Office)),
+                .fill(viewer_fullscreen_button(state, WorkspacePage::PdfReader)),
         )),
         col().class("pdf-stage").fill((
             each(state.map(|s| {
-                s.office
-                    .pdf
+                s.pdf
                     .rendered
                     .as_ref()
-                    .map(|_| (s.office.pdf.serial, s.office.pdf.page))
+                    .map(|_| (s.pdf.serial, s.pdf.page))
                     .into_iter()
                     .collect::<Vec<_>>()
             }))
             .key(|key| *key)
             .children(move |_| {
                 let (src, width, alt) = state.with(|s| {
-                    let r = &s.office.pdf;
+                    let r = &s.pdf;
                     let p = r.rendered.as_ref().unwrap();
                     (
                         p.source.to_string(),
                         p.width.to_string(),
-                        format!("{} · {}", filename(&s.office.path), r.page),
+                        format!("{} · {}", filename(&r.path), r.page),
                     )
                 });
                 col().class("pdf-sheet").fill((
@@ -326,40 +329,36 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
                     glory::ui::image().source(src).alt(alt),
                 ))
             }),
-            when(state.map(|s| s.office.pdf.rendered.is_none()), move || {
+            when(state.map(|s| s.pdf.rendered.is_none()), move || {
                 col().class("viewer-placeholder").fill((
                     icons::glyph(Icon::File),
                     text().content(i18n::bind(state.map(|s| {
-                        if !s.office.pdf.error.is_empty() {
-                            return s.office.pdf.error.clone();
+                        if !s.pdf.error.is_empty() {
+                            return s.pdf.error.clone();
                         }
-                        if s.office.pdf.locked {
+                        if s.pdf.locked {
                             "Enter the PDF password."
-                        } else if s.office.pdf.busy {
+                        } else if s.pdf.busy {
                             "Loading PDF…"
                         } else {
                             "Open a PDF to read it."
                         }
                         .into()
                     }))),
-                    when(state.map(|s| s.office.pdf.locked), move || {
+                    when(state.map(|s| s.pdf.locked), move || {
                         row().class("pdf-unlock").fill((
                             input()
                                 .purpose(Purpose::Password)
                                 .name(i18n::bind("PDF password"))
-                                .value(state.map(|s| s.office.pdf.password.to_string()))
+                                .value(state.map(|s| s.pdf.password.to_string()))
                                 .on(value_changed, move |e| {
                                     if let Event::ValueChanged { value, .. } = e {
-                                        state.revise(|s| {
-                                            s.office.pdf.password = Zeroizing::new(value)
-                                        });
+                                        state.revise(|s| s.pdf.password = Zeroizing::new(value));
                                     }
                                 })
-                                .on(commit, move |_| state.revise(|s| s.office.pdf.unlock())),
-                            i18n::btn("Unlock PDF", move || {
-                                state.revise(|s| s.office.pdf.unlock())
-                            })
-                            .enabled(state.map(|s| !s.office.pdf.busy)),
+                                .on(commit, move |_| state.revise(|s| s.pdf.unlock())),
+                            i18n::btn("Unlock PDF", move || state.revise(|s| s.pdf.unlock()))
+                                .enabled(state.map(|s| !s.pdf.busy)),
                         ))
                     }),
                 ))
@@ -367,14 +366,11 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
         )),
         row().class("viewer-status").fill((
             text()
+                .class("viewer-filename")
+                .content(state.map(|s| filename(&s.pdf.path).to_owned())),
+            text()
                 .class("hidden pdf-document-id")
-                .content(state.map(|s| {
-                    s.office
-                        .pdf
-                        .serial
-                        .map(|n| n.to_string())
-                        .unwrap_or_default()
-                })),
+                .content(state.map(|s| s.pdf.serial.map(|n| n.to_string()).unwrap_or_default())),
             text().class("pdf-scale"),
         )),
     ))

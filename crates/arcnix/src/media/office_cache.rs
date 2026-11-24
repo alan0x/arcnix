@@ -86,7 +86,7 @@ pub fn pending_paths(store: &ConfigStore, server: &str) -> Result<Vec<String>> {
 impl Cache {
     pub fn lock(store: &ConfigStore, server: &str, path: &str) -> Result<Self> {
         ensure!(
-            office_reader::supports(path) && !office_reader::is_pdf(path) && path.starts_with('/'),
+            office_reader::supports(path) && path.starts_with('/'),
             "Invalid remote Office path."
         );
         let directory =

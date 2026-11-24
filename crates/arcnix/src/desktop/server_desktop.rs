@@ -75,6 +75,7 @@ pub(crate) fn app_id(page: WorkspacePage) -> Option<DesktopApp> {
         WorkspacePage::Code => DesktopApp::Code,
         WorkspacePage::Player => DesktopApp::Player,
         WorkspacePage::ImageViewer => DesktopApp::ImageViewer,
+        WorkspacePage::PdfReader => DesktopApp::PdfReader,
         WorkspacePage::Office => DesktopApp::Office,
         WorkspacePage::Browser => DesktopApp::Browser,
         WorkspacePage::Settings => DesktopApp::Settings,
@@ -96,6 +97,7 @@ pub(crate) fn app_page(app: DesktopApp) -> WorkspacePage {
         DesktopApp::Code => WorkspacePage::Code,
         DesktopApp::Player => WorkspacePage::Player,
         DesktopApp::ImageViewer => WorkspacePage::ImageViewer,
+        DesktopApp::PdfReader => WorkspacePage::PdfReader,
         DesktopApp::Office => WorkspacePage::Office,
         DesktopApp::Browser => WorkspacePage::Browser,
         DesktopApp::Settings => WorkspacePage::Settings,
@@ -213,13 +215,14 @@ fn focus_window(ui: &Ui, input: &str) {
     }
 }
 
-pub(crate) const APP_LAUNCHERS: [WorkspacePage; 13] = [
+pub(crate) const APP_LAUNCHERS: [WorkspacePage; 14] = [
     WorkspacePage::Files(0),
     WorkspacePage::Terminal,
     WorkspacePage::Code,
     WorkspacePage::Browser,
     WorkspacePage::Player,
     WorkspacePage::ImageViewer,
+    WorkspacePage::PdfReader,
     WorkspacePage::Office,
     WorkspacePage::Monitor,
     WorkspacePage::Docker,
@@ -246,6 +249,7 @@ fn local_app(s: &State, page: WorkspacePage) -> bool {
             | WorkspacePage::ImageViewer
             | WorkspacePage::Office
             | WorkspacePage::PgAdmin
+            | WorkspacePage::PdfReader
             | WorkspacePage::Player
             | WorkspacePage::Editor
             | WorkspacePage::Terminal
@@ -273,6 +277,7 @@ pub(crate) fn app_label(page: WorkspacePage) -> &'static str {
         WorkspacePage::Editor => "Text Editor",
         WorkspacePage::Player => "Player",
         WorkspacePage::ImageViewer => "Image Viewer",
+        WorkspacePage::PdfReader => "PDF Reader",
         WorkspacePage::Office => "Office",
         WorkspacePage::Browser => "Browser",
         WorkspacePage::Terminal => "终端",
@@ -337,6 +342,7 @@ pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
         WorkspacePage::Editor => "app-editor",
         WorkspacePage::Player => "app-player",
         WorkspacePage::ImageViewer => "app-image",
+        WorkspacePage::PdfReader => "app-document",
         WorkspacePage::Office => "app-office",
         WorkspacePage::Browser => "app-browser",
         WorkspacePage::Terminal => "app-terminal",
@@ -349,7 +355,7 @@ pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
 
 pub(crate) fn reader_fullscreen(s: &State, page: WorkspacePage) -> bool {
     match page {
-        WorkspacePage::Office => s.office.pdf.fullscreen,
+        WorkspacePage::PdfReader => s.pdf.fullscreen,
         WorkspacePage::ImageViewer => s.images.fullscreen,
         _ => false,
     }
@@ -366,6 +372,7 @@ pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Editor => Icon::Edit,
         WorkspacePage::Player => Icon::Play,
         WorkspacePage::ImageViewer => Icon::Image,
+        WorkspacePage::PdfReader => Icon::File,
         WorkspacePage::Office => Icon::Syntra,
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
@@ -769,6 +776,9 @@ impl Ui {
         if page == WorkspacePage::Office {
             self.state.revise(|s| s.office = Default::default());
         }
+        if page == WorkspacePage::PdfReader {
+            self.state.revise(|s| s.pdf = Default::default());
+        }
         if page == WorkspacePage::ImageViewer {
             self.state.revise(|s| s.images = Default::default());
         }
@@ -1093,6 +1103,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Editor => fragment(text_editor::page(ui, id)),
         WorkspacePage::Player => fragment(video_player::panel(ui)),
         WorkspacePage::ImageViewer => fragment(image_viewer::panel(ui)),
+        WorkspacePage::PdfReader => fragment(pdf_reader::panel(ui)),
         WorkspacePage::Office => fragment(office_reader::panel(ui)),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::window_page(ui, id)),

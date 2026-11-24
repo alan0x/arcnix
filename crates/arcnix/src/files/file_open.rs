@@ -11,6 +11,7 @@ const APPS: &[FileApp] = if cfg!(windows) {
         FileApp::Code,
         FileApp::Player,
         FileApp::ImageViewer,
+        FileApp::PdfReader,
         FileApp::Office,
         FileApp::Browser,
     ]
@@ -20,6 +21,7 @@ const APPS: &[FileApp] = if cfg!(windows) {
         FileApp::Code,
         FileApp::Player,
         FileApp::ImageViewer,
+        FileApp::PdfReader,
         FileApp::Office,
     ]
 };
@@ -29,6 +31,7 @@ fn label(app: FileApp) -> &'static str {
         FileApp::TextEditor => "Text Editor",
         FileApp::Code => server_desktop::app_label(WorkspacePage::Code),
         FileApp::Player => "Player",
+        FileApp::PdfReader => server_desktop::app_label(WorkspacePage::PdfReader),
         FileApp::Office => server_desktop::app_label(WorkspacePage::Office),
         FileApp::ImageViewer => server_desktop::app_label(WorkspacePage::ImageViewer),
         FileApp::Browser => server_desktop::app_label(WorkspacePage::Browser),
@@ -41,6 +44,7 @@ fn icon(app: FileApp) -> Icon {
         FileApp::Code => Icon::Code,
         FileApp::Player => Icon::Play,
         FileApp::ImageViewer => Icon::Image,
+        FileApp::PdfReader => Icon::File,
         FileApp::Office => server_desktop::app_icon(WorkspacePage::Office),
         FileApp::Browser => Icon::Browser,
     }
@@ -51,6 +55,7 @@ const BROWSER_EXTENSIONS: &[&str] = &["htm", "html", "xhtml"];
 const SUGGESTED_ORDER: &[FileApp] = &[
     FileApp::Browser,
     FileApp::ImageViewer,
+    FileApp::PdfReader,
     FileApp::Office,
     FileApp::TextEditor,
     FileApp::Player,
@@ -144,6 +149,7 @@ static BUILT_IN: LazyLock<BTreeMap<&'static str, BTreeSet<FileApp>>> = LazyLock:
         .chain(SOURCE_EXTENSIONS)
         .copied()
         .flat_map(|ext| [(FileApp::TextEditor, ext), (FileApp::Code, ext)])
+        .chain([(FileApp::PdfReader, "pdf")])
         .chain(
             office_reader::EXTENSIONS
                 .iter()
@@ -400,6 +406,7 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
         FileApp::Code => code_workbench::open(ui, path),
         FileApp::Player => ui.player.open(ui, path),
         FileApp::ImageViewer => image_viewer::open(ui, path),
+        FileApp::PdfReader => pdf_reader::open(ui, path),
         FileApp::Office => office_reader::open(ui, path),
         #[cfg(windows)]
         FileApp::Browser => ui.open_html_preview(path),

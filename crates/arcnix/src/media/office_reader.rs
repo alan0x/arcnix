@@ -7,14 +7,10 @@ use crate::i18n::desktop as i18n;
 use crate::*;
 
 pub(crate) const LIMIT: usize = 32 * 1024 * 1024;
-pub(crate) const EXTENSIONS: &[&str] = &["docx", "xlsx", "pptx", "pdf"];
+pub(crate) const EXTENSIONS: &[&str] = &["docx", "xlsx", "pptx"];
 
 pub(crate) fn supports(path: &str) -> bool {
     extension(path).is_some_and(|ext| EXTENSIONS.contains(&ext.as_str()))
-}
-
-pub(crate) fn is_pdf(path: &str) -> bool {
-    extension(path).as_deref() == Some("pdf")
 }
 
 pub(crate) fn local_target(target: &local_desktop::Target) -> bool {
@@ -25,7 +21,9 @@ pub(crate) fn local_target(target: &local_desktop::Target) -> bool {
 }
 
 pub(crate) fn available(s: &State) -> bool {
-    s.connected && s.sftp_available
+    s.local_desktop
+        .as_ref()
+        .map_or(s.connected && s.sftp_available, local_target)
 }
 
 pub(crate) struct Document {
@@ -45,7 +43,7 @@ pub(crate) fn render(path: &str, bytes: &[u8]) -> Result<Document, String> {
             "slides",
             serde_json::to_value(pptx::pptx_to_presentation(bytes)?),
         ),
-        _ => return Err("Supported formats are DOCX, XLSX, PPTX and PDF.".into()),
+        _ => return Err("Supported formats are DOCX, XLSX and PPTX.".into()),
     };
     let model = model.map_err(|error| error.to_string())?;
     let writer = (kind == "writer").then(|| Arc::from(model.to_string()));
@@ -61,7 +59,6 @@ pub(crate) fn render(path: &str, bytes: &[u8]) -> Result<Document, String> {
 
 #[derive(Clone, Default)]
 pub(crate) struct Reader {
-    pub pdf: pdf_reader::Reader,
     remote: Option<office_cache::Copy>,
     pub document: Option<Arc<Document>>,
     pub viewport: Option<native_viewport::Viewport>,
@@ -72,7 +69,7 @@ pub(crate) struct Reader {
     request: Option<u64>,
     list_request: Option<u64>,
     pending_paths: Vec<String>,
-    pub(super) path: String,
+    path: String,
 }
 
 pub(crate) fn browse(ui: &Ui) {
@@ -99,17 +96,6 @@ fn load(ui: &Ui, path: &str, replace: Option<office_cache::Record>) {
     if !can_leave(ui) {
         return;
     }
-    if is_pdf(path) {
-        let pdf = pdf_reader::load(ui, path);
-        ui.state.revise(|s| {
-            s.office = Reader {
-                pdf,
-                path: path.into(),
-                ..Default::default()
-            }
-        });
-        return;
-    }
     let supported = supports(path);
     let request = supported.then(|| {
         ui.send(Action::OpenOffice(
@@ -126,7 +112,7 @@ fn load(ui: &Ui, path: &str, replace: Option<office_cache::Record>) {
             error: if supported {
                 String::new()
             } else {
-                "Supported formats are DOCX, XLSX, PPTX and PDF.".into()
+                "Supported formats are DOCX, XLSX and PPTX.".into()
             },
             ..Default::default()
         };
@@ -350,12 +336,7 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
         text()
             .class("browser-epoch hidden")
             .content(state.map(|s| s.epoch.to_string())),
-        when(state.map(|s| s.office.pdf.is_open()), {
-            let ui = ui.clone();
-            move || pdf_reader::panel(ui.clone())
-        }).otherwise(move || {
-            let browse_ui = browse_ui.clone();
-            col().class("browser-surface").fill(when(
+        col().class("browser-surface").fill(when(
             state.map(|s| s.office.document.is_none()),
             move || {
                 let browse_ui = browse_ui.clone();
@@ -373,19 +354,16 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
                             "Opening Office document…"
                         } else if s.local_desktop.is_none() && !s.sftp_available {
                             "Connect to a server with SFTP to open remote Office files."
-                        } else if s.local_desktop.as_ref().is_some_and(|t| !local_target(t)) {
-                            "Open a PDF to read it."
                         } else if !available(s) {
                             "To read a file on this computer, select “Try the local desktop” in the server list, then open Office."
                         } else {
-                            "Open a DOCX, XLSX, PPTX or PDF file to read it."
+                            "Open a DOCX, XLSX or PPTX file to read it."
                         }
                         .into()
                     }))),
                 ))
             },
-        ))
-        }),
+        )),
     ))
 }
 

@@ -87,7 +87,7 @@ def main():
             launch('Office')
             office = page.locator('.desktop-window.active.app-office')
             expect(office.locator('.viewer-placeholder')).to_contain_text(
-                'Open a DOCX, XLSX, PPTX or PDF file to read it.'
+                'Open a DOCX, XLSX or PPTX file to read it.'
             )
             expect(office.get_by_role('button', name='Open Office document')).to_be_enabled()
             office.locator('.window-close').click()
@@ -428,7 +428,7 @@ def main():
             page.keyboard.press('Escape')
             launch('Office')
             expect(office.locator('.viewer-placeholder')).to_contain_text(
-                '打开 DOCX、XLSX、PPTX 或 PDF 文件进行阅读。'
+                '打开 DOCX、XLSX 或 PPTX 文件进行阅读。'
             )
             office.locator('.window-close').click()
             checks.append('Light/dark themes, live Chinese localization and 900/1100px layouts render without overflow')

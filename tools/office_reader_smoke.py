@@ -51,7 +51,6 @@ def run():
     with tempfile.TemporaryDirectory(dir=Path.home()) as tmp:
         folder = Path(tmp)
         fixtures(folder)
-        (folder / 'Notes.pdf').write_bytes(b'%PDF-1.7')
         originals = {p: sha256(p.read_bytes()).digest() for p in folder.iterdir()}
         with Desktop(out, config) as app:
             p = app.page
@@ -160,11 +159,6 @@ def run():
             run.click()
             editor.keyboard.press('End')
             editor.keyboard.insert_text(' · 已修改')
-            app.application('Files')
-            app.file('Notes.pdf').dblclick()
-            expect(host.locator('.office-message')).to_contain_text('Finish editing')
-            expect(host.locator('.pdf-reader')).to_have_count(0)
-
             expect(editor.locator('#body')).to_contain_text('Offline document preview · 已修改')
             run = editor.locator('.writer-surface-run').filter(has_text='Offline document preview').first
             run.evaluate("""el => { const r = document.createRange(); r.selectNodeContents(el);

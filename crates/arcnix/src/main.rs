@@ -154,6 +154,7 @@ enum WorkspacePage {
     Code,
     Player,
     ImageViewer,
+    PdfReader,
     Office,
     Browser,
     Settings,
@@ -236,6 +237,7 @@ define_state! {
         remote_editor: Option<text_editor::Editor> = None,
         desktop_editor: text_editor::Tabs = Default::default(),
         office: office_reader::Reader = Default::default(),
+        pdf: pdf_reader::Reader = Default::default(),
         pgadmin: pgadmin_ui::PgAdmin = Default::default(),
         images: image_viewer::Viewer = Default::default(),
         video: Option<video_player::Playback> = None,
@@ -996,6 +998,7 @@ impl Ui {
             Update::ConnectionLost(message)=>{
                 state.revise(|s| {
                     s.images = Default::default();
+                    s.pdf = Default::default();
                     s.office = Default::default();
                     desktop_file_picker::dismiss(s);
                     file_elevation::reset(s);
@@ -1273,6 +1276,7 @@ impl Ui {
             s.install = Default::default();
             s.code = Default::default();
             s.images = Default::default();
+            s.pdf = Default::default();
             s.office = Default::default();
             text_editor::disconnect(s);
             s.operations = Default::default();

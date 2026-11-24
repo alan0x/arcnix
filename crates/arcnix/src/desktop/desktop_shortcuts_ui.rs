@@ -126,7 +126,7 @@ pub(super) fn run(ui: &Ui, action: Shortcut) {
                 .with(|s| server_desktop::reader_fullscreen(s, s.workspace_page)) =>
         {
             ui.state.revise(|s| match s.workspace_page {
-                WorkspacePage::Office => s.office.pdf.fullscreen = false,
+                WorkspacePage::PdfReader => s.pdf.fullscreen = false,
                 WorkspacePage::ImageViewer => s.images.fullscreen = false,
                 _ => {}
             });

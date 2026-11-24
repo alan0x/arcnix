@@ -144,15 +144,8 @@ where
     D: Deserializer<'de>,
     T: serde::de::DeserializeOwned,
 {
-    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
-    // An explicit Office position wins when both former launchers were saved.
-    let app_id = |value: &serde_json::Value, id: &str| {
-        value.as_str() == Some(id) || (value["kind"] == "app" && value["id"] == id)
-    };
-    let has_office = values.iter().any(|value| app_id(value, "office"));
-    values
+    Vec::<serde_json::Value>::deserialize(deserializer)?
         .into_iter()
-        .filter(|value| !(has_office && app_id(value, "pdf_reader")))
         .filter(|value| !skip(value))
         .map(|value| serde_json::from_value(value).map_err(serde::de::Error::custom))
         .collect()
