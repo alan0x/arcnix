@@ -37,8 +37,14 @@ fn position(view: &View, viewport: &native_viewport::Viewport) -> Result<()> {
     view.surface.position(&view.web.webview(), viewport)
 }
 
-/// pgAdmin is offered on macOS only. Elsewhere a covered view is hidden.
-#[cfg(not(target_os = "macos"))]
+/// Windows clips the view to the exposed region, as for Code.
+#[cfg(windows)]
+fn position(view: &View, viewport: &native_viewport::Viewport) -> Result<()> {
+    crate::web_browser_native::position(&view.web, viewport)
+}
+
+/// pgAdmin is not offered here yet. A covered view is hidden.
+#[cfg(not(any(target_os = "macos", windows)))]
 fn position(view: &View, viewport: &native_viewport::Viewport) -> Result<()> {
     use wry::dpi::{PhysicalPosition, PhysicalSize};
     let Some(area) = viewport
@@ -87,6 +93,13 @@ fn destination(folder: &Path, suggested: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn downloads_folder() -> Option<PathBuf> {
+    // Windows lets people move Downloads; ask for its known folder.
+    #[cfg(windows)]
+    if let Some(folder) =
+        directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(Path::to_path_buf))
+    {
+        return Some(folder);
+    }
     std::env::home_dir().map(|home| home.join("Downloads"))
 }
 

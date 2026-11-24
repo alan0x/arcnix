@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- Windows 新增 pgAdmin 窗口，功能与 macOS 相同。
 - pgAdmin 保存查询结果和导出文件时弹出保存对话框，可选择位置，标题栏提示保存到的文件夹。
 - pgAdmin 可记住数据库密码。密码由 pgAdmin 加密保存，密钥由 Arcnix 存放在系统钥匙串。
 

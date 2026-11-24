@@ -110,9 +110,29 @@ fn reveal(download: &Download) {
         }
         let _ = command.spawn();
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("explorer.exe");
+        if download.success && download.path.exists() {
+            // Explorer parses its own command line; the path must follow
+            // /select, inside quotes.
+            command.raw_arg(format!("/select,\"{}\"", download.path.display()));
+        } else if let Some(folder) = download.path.parent() {
+            command.arg(folder);
+        }
+        let _ = command.spawn();
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = download;
 }
+
+/// The file manager's own name for the reveal button.
+const REVEAL_LABEL: &str = if cfg!(windows) {
+    "Show in File Explorer"
+} else {
+    "Show in Finder"
+};
 
 pub(crate) enum Reply {
     Opened {
@@ -453,7 +473,7 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
                         .unwrap_or_default()
                 }))),
             when(state.map(|s| s.pgadmin.download.is_some()), move || {
-                icon_action("Show in Finder", Icon::Folder).on_press(move || {
+                icon_action(REVEAL_LABEL, Icon::Folder).on_press(move || {
                     if let Some(download) = state.with(|s| s.pgadmin.download.clone()) {
                         reveal(&download);
                     }
