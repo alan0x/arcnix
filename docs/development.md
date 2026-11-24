@@ -82,7 +82,7 @@ cargo run --locked -p arcnix --bin arcnix -- --config ./my-config.json
 - **Connection**：连接超时与 SSH 保活，支持站点覆盖，下次连接生效；连接中断不会自动重放命令或文件修改。
 - **Transfers**：上传／下载分别配置询问、覆盖或跳过；文件操作菜单的 **Transfer defaults** 可以按服务器覆盖或恢复继承。
 - **Logging / Operation log、Log files**：操作日志的时间戳／导出与文件持久化分开。默认关闭写文件，开启后才显示目录、容量和轮转数量，默认目录位于配置旁的 `logs`；空错误不渲染，真实 I/O 错误仍显示。队列拥塞时提示丢弃记录，不能充当完整审计日志。
-- **About / Application、Updates**：当前程序版本、稳定版检查、后台下载与空闲自动安装；正式版默认开启，开发版保留手动检查。更新通知的入口也跳转此页，仅在相应状态显示下载或重启操作。见[更新通道](releasing.md#desktop-update-channel)。
+- **About / Application、Updates**：显示当前版本和更新设置。新配置默认每 6 小时检查稳定版。发现更新后，左侧设置上方显示下载图标，点击可查看版本、发行说明和进度。Windows x64 默认后台下载并校验，用户确认后重启安装；可另行开启空闲自动安装。见[更新通道](releasing.md#desktop-update-channel)。
 
 设置自动保存在当前本地配置中，重新启动后恢复；每台服务器的文件栏比例和已记忆的传输冲突选择仍独立保存。
 

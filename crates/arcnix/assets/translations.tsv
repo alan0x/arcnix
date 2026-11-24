@@ -710,6 +710,15 @@ Shell 命令	Shell command
 自定义值	Custom
 日期格式	Date format
 更新检查间隔	Update check interval
+有可用更新	Update available
+更新 Arcnix	Software update
+每 3 小时	Every 3 hours
+每 6 小时	Every 6 hours
+每 12 小时	Every 12 hours
+自动下载并校验更新	Download verified updates automatically
+空闲时自动重启并安装	Restart and install automatically when idle
+请前往发布页下载适用于此平台的更新。	Download the update for this platform from the releases page.
+Arcnix 将重启以安装此次更新。	Arcnix will restart to install this update.
 文件大小	File sizes
 二进制单位 · KiB / MiB	IEC · KiB / MiB
 十进制单位 · KB / MB	Decimal · KB / MB

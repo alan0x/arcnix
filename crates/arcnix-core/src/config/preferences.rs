@@ -137,20 +137,79 @@ impl Default for FileLocations {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(from = "StoredUpdateSettings")]
 pub struct UpdateSettings {
     pub automatic_checks: bool,
-    pub automatic_install: bool,
-    pub interval_days: u8,
+    pub automatic_download: bool,
+    pub install_when_idle: bool,
+    pub interval_hours: u16,
     pub last_check: Option<u64>,
 }
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct StoredUpdateSettings {
+    automatic_checks: Option<bool>,
+    #[serde(alias = "automatic_install")]
+    automatic_download: Option<bool>,
+    install_when_idle: bool,
+    interval_hours: Option<u16>,
+    interval_days: Option<u8>,
+    last_check: Option<u64>,
+}
+
+impl From<StoredUpdateSettings> for UpdateSettings {
+    fn from(old: StoredUpdateSettings) -> Self {
+        let defaults = Self::default();
+        Self {
+            automatic_checks: old.automatic_checks.unwrap_or(defaults.automatic_checks),
+            automatic_download: old
+                .automatic_download
+                .unwrap_or(defaults.automatic_download),
+            install_when_idle: old.install_when_idle,
+            interval_hours: old
+                .interval_hours
+                .or_else(|| old.interval_days.map(|d| u16::from(d) * 24))
+                .unwrap_or(defaults.interval_hours),
+            last_check: old.last_check,
+        }
+    }
+}
+
 impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
             automatic_checks: true,
-            automatic_install: true,
-            interval_days: 1,
+            automatic_download: true,
+            install_when_idle: false,
+            interval_hours: 6,
             last_check: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use serde_json::{from_value, json, to_value};
+
+    use super::UpdateSettings;
+
+    #[test]
+    fn new_settings_require_confirmation_and_legacy_intervals_survive() {
+        let fresh: UpdateSettings = from_value(json!({})).unwrap();
+        assert!(fresh.automatic_checks && fresh.automatic_download && !fresh.install_when_idle);
+        assert_eq!(fresh.interval_hours, 6);
+        for (days, hours) in [(1, 24), (7, 168), (30, 720)] {
+            let old: UpdateSettings = from_value(json!({"automatic_checks": false,
+                "automatic_install": true, "interval_days": days, "last_check": 123}))
+            .unwrap();
+            assert_eq!((old.interval_hours, old.last_check), (hours, Some(123)));
+            assert!(!old.automatic_checks && old.automatic_download && !old.install_when_idle);
+            assert!(to_value(old).unwrap().get("interval_days").is_none());
+        }
+        let opt_in: UpdateSettings = from_value(json!({"install_when_idle": true,
+            "automatic_download": false, "interval_hours": 3}))
+        .unwrap();
+        assert!(opt_in.install_when_idle && !opt_in.automatic_download);
+        assert_eq!(opt_in.interval_hours, 3);
     }
 }

@@ -113,6 +113,13 @@ pub(crate) struct Editor {
     rendered: Option<Arc<str>>,
 }
 
+pub(crate) fn has_pending_work(tabs: &Tabs, remote: Option<&Editor>) -> bool {
+    tabs.documents
+        .values()
+        .chain(remote)
+        .any(|e| e.dirty || e.pending.is_some())
+}
+
 fn markdown(path: &str) -> bool {
     path.rsplit('/')
         .next()

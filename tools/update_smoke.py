@@ -91,9 +91,12 @@ def main():
     good=build_stub(out, 'healthy'); failed=build_stub(out, 'failed', fail=True); wrong=build_stub(out, 'wrong', version='9.9.8')
     version=subprocess.check_output([str(source), '--version'],text=True).strip().split()[-1]
     with Peer(out) as peer, ReleaseServer(portable(good),version) as server:
-        def desktop(name, automatic=False, query=False):
+        def desktop(name, automatic=False, query=False, defaults=False):
             case=out/name; case.mkdir(); binary=case/'arcnix.exe'; shutil.copy2(source,binary)
-            config=peer.config([peer.profile('Update fixture')], case, updates=dict(automatic_checks=False, automatic_install=automatic, interval_days=1))
+            preferences = {} if defaults else dict(automatic_checks=False, automatic_download=automatic, install_when_idle=automatic)
+            config=peer.config([peer.profile('Update fixture')], case, updates=preferences)
+            if defaults:
+                config['config']['settings']['language'] = 'SimplifiedChinese'
             if query:config['config']['snippets']=[dict(id='update-query',name='Read before update',description='',command='fixture-command',administrator=False)]
             return Desktop(case, config, binary=binary, extra_env={'ARCNIX_TEST_UPDATE_URL':server.base+'/latest'})
         def settings(app):
@@ -102,13 +105,23 @@ def main():
         def download(panel):
             panel.get_by_role('button', name='Download update', exact=True).click()
             expect(panel.locator('.update-status')).to_have_text('Update verified and ready to install', timeout=20000)
-        def install(panel): panel.get_by_role('button', name='Restart and install', exact=True).click()
+        def install(panel):
+            panel.get_by_role('button', name='Restart and install', exact=True).click()
+            dialog = panel.page.get_by_role('dialog', name='Software update', exact=True)
+            dialog.get_by_role('button', name='Restart and install', exact=True).click()
         try:
             with desktop('checks') as app:
                 panel=settings(app)
                 server.mode='none'; check(panel); expect(panel.locator('.update-status')).to_have_text('No published release is available yet')
                 server.mode='current'; check(panel); expect(panel.locator('.update-status')).to_have_text('You are using the latest stable version')
+                expect(app.page.locator('.rail-update')).to_have_count(0)
                 server.mode='missing'; check(panel); expect(panel.locator('.update-status')).to_have_text('A new version is available'); expect(panel.get_by_role('button',name='Download update',exact=True)).not_to_be_visible()
+                icon = app.page.get_by_role('button', name='Update available', exact=True)
+                icon.click()
+                dialog = app.page.get_by_role('dialog', name='Software update', exact=True)
+                expect(dialog.get_by_role('button', name='Open releases', exact=True)).to_be_visible()
+                expect(dialog.get_by_role('button', name='Restart and install', exact=True)).to_have_count(0)
+                dialog.get_by_role('button', name='Later', exact=True).click()
                 server.mode='corrupt'; check(panel); expect(panel.get_by_role('button',name='Download update',exact=True)).to_be_enabled()
                 panel.get_by_role('button',name='Download update',exact=True).click(); expect(panel.locator('.update-error')).to_contain_text('checksum mismatch')
                 assert sha(app.binary)==original and not (app.out/'updates/ready.json').exists()
@@ -123,6 +136,31 @@ def main():
                 assert app.process.poll() is None and sha(app.binary)==original
                 checks.append('Rejects a verified executable whose reported version differs from the release before shutting down the application')
             server.payload=portable(good)
+            with desktop('confirmation', defaults=True) as app:
+                page = app.page
+                rail = page.locator('.rail-bottom')
+                icon = rail.get_by_role('button', name='有可用更新', exact=True)
+                expect(icon).to_be_visible(timeout=25000)
+                eventually(lambda: (app.out/'updates/ready.json').is_file(), timeout=20)
+                page.wait_for_timeout(31000)
+                assert app.process.poll() is None and sha(app.binary) == original
+                expect(page.locator('.update-banner')).not_to_be_visible()
+                assert icon.bounding_box()['y'] < rail.locator('.settings-link').bounding_box()['y']
+                icon.click()
+                dialog = page.get_by_role('dialog', name='更新 Arcnix', exact=True)
+                expect(dialog).to_contain_text('Arcnix 9.9.9')
+                expect(dialog).to_contain_text('Owned update fixture')
+                expect(dialog.locator('.update-status')).to_have_text('更新已校验，等待安装', timeout=20000)
+                dialog.get_by_role('button', name='稍后', exact=True).click()
+                expect(dialog).not_to_be_visible()
+                expect(icon).to_be_visible()
+                icon.click()
+                app.screenshot('update-confirmation.png')
+                dialog.get_by_role('button', name='重启并安装', exact=True).click()
+                receipt = eventually(lambda: json.loads((app.out/'updates/installed.json').read_text()), timeout=30)
+                assert receipt['version'] == '9.9.9' and sha(app.binary) == hashlib.sha256(good).hexdigest()
+                owned_processes(app.out,True)
+                checks.append('Default preferences check and download in the background, display the rail icon above Settings, defer without restarting, and install on confirmation')
             with desktop('result-query',automatic=True,query=True) as app:
                 p=app.page;p.locator('.rail-scripts').click()
                 p.locator('.context-links').get_by_role('button',name='My scripts',exact=True).click()

@@ -323,8 +323,8 @@ impl AppConfig {
             "Use 0–2 decimal places"
         );
         ensure!(
-            [1, 7, 30].contains(&self.settings.updates.interval_days),
-            "Update interval must be 1, 7 or 30 days"
+            [3, 6, 12, 24, 168, 720].contains(&self.settings.updates.interval_hours),
+            "Invalid update check interval"
         );
         ensure!(
             crate::AppSettings::RESOURCE_INTERVALS
@@ -1079,7 +1079,7 @@ mod tests {
         config.settings.display.timezone = DisplayTimezone::Utc;
         config.settings.logging.timestamps = false;
         config.settings.logging.max_size_mib = 50;
-        config.settings.updates.interval_days = 7;
+        config.settings.updates.interval_hours = 168;
         config.settings.upload_conflict = Some(crate::ExistingFileAction::Skip);
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();

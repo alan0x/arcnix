@@ -61,16 +61,24 @@ ZIP-aware version manually once using the installer or portable ZIP. Subsequent
 updates use the portable ZIP in-app. Historical releases keep their assets.
 
 Only Windows x64 supports automatic replacement. Other platforms expose the
-release page. Background checks/installation are enabled in release builds and
-paused in development builds. The loopback fixture override is compiled into
-debug builds only. Check intervals are daily (default), weekly or monthly;
-automatic installation can be disabled independently.
+release page. The desktop checks for stable releases while running, starting
+after five seconds if a check is due. New configurations check every six hours.
+Settings also offers three or twelve hours, daily, weekly and monthly intervals.
+Existing configurations retain their saved interval. The loopback fixture
+override is compiled into debug builds only.
+
+When a newer release is found, a download icon appears above Settings in the
+left navigation rail. On Windows x64 the default is to download and verify it
+in the background. Clicking the icon shows the release notes and progress.
+Once ready, choose **Restart and install** to confirm, or **Later** to defer.
+Automatic download and unattended installation have separate preferences.
 
 Verified files are staged beside the configuration under `updates`. A trusted
 copy of the current program validates the plan and acknowledges readiness before
 the current process exits. Installation requires a writable application folder,
-no SSH connection, no queued/running tasks and no open dialogs. After a deferrable
-30-second countdown it replaces the executable, preserves `arcnix.exe.previous`,
+no SSH connection, no pending transfers or tasks, and no unsaved editor work.
+If unattended installation is enabled, a deferrable 30-second countdown starts
+when the app is idle. On confirmation or expiry, the helper replaces the executable, preserves `arcnix.exe.previous`,
 starts the new program with the same configuration, and requires a startup
 acknowledgement within 30 seconds. An early exit or missing acknowledgement
 restores/restarts the old program. Failure details survive restart and suppress

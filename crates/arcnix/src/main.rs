@@ -45,6 +45,7 @@ use workers::*;
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
+    Update,
     OpenDesktopFile(desktop_file_picker::Purpose),
     TextEditor,
     DesktopTimeZone,
@@ -2201,9 +2202,12 @@ fn app(ui: Ui) -> impl Widget {
                     })
                 }),
             fragment((
-                updates_ui::banner(ui.clone()),
+                fragment((
+                    updates_ui::banner(ui.clone()),
+                    updates_ui::dialog(ui.clone()),
+                    updates_ui::overlay(ui.clone()),
+                )),
                 servers::dialogs(ui.clone()),
-                updates_ui::overlay(ui.clone()),
                 settings::files_dialog(ui.clone()),
                 desktop_file_picker::dialog(ui.clone()),
                 files_ui::folder_icon_dialog(ui.clone()),
