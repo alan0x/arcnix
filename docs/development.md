@@ -153,7 +153,7 @@ Ctrl+C 在有选中文字时复制，否则向远程程序发送中断；Ctrl+Sh
 
 ## pgAdmin
 
-macOS 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随 Arcnix 管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层，下载保存到「下载」。
+macOS 和 Windows 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随 Arcnix 管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层。下载先写入该窗口的临时目录，完成后由系统保存对话框（macOS 为附在窗口上的面板）选择位置，再在后台线程移动过去；窗口关闭时尚未询问的下载移到「下载」。保存的数据库密码由 pgAdmin 加密，密钥由 Arcnix 生成并存放在系统钥匙串（`org.arcnix.pgadmin`），启动时交给后端；pgAdmin 自己的钥匙串存储保持关闭，因为它的桌面模式探测超时会在运行中改用另一把密钥。密钥变化（例如钥匙串条目被删除）时启动器清除已保存的密码，pgAdmin 会重新询问；本次读不到钥匙串时不改动已保存的密码。更换数据库用户时清除为原用户保存的密码。
 
 `cargo test -p arcnix-core --test pgadmin_integration -- --ignored --nocapture` 使用真实组件、回环 SSH 和 PostgreSQL，需设置 `ARCNIX_TEST_PGADMIN_PACKAGE`、`ARCNIX_TEST_SSH_PORT`、`ARCNIX_TEST_SSH_USER`、`ARCNIX_TEST_SSH_KEY` 和 `ARCNIX_TEST_POSTGRES_PORT`。调试构建可用 `ARCNIX_PGADMIN_PACKAGE` 指定本地组件包。
 
@@ -253,7 +253,9 @@ Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口�
 
 新版读取旧配置或缺少配置文件的服务器时，保留已有设置，缺失项使用当前客户端的默认值。没有可用的主题时沿用旧配置中的壁纸和明暗模式，缺失的明暗模式跟随客户端。默认值在读取时生效，配置在用户保存修改时写入服务器。
 
-App Center 目录包括 Docker、Nginx、Caddy、Redis、PostgreSQL、Git、htop 和 Certbot。连接目标服务器后，检查服务器任务的运行条件、系统包仓库、Snap 稳定渠道和 Docker Compose 可用性。普通用户可以浏览和搜索整个目录，卡片按本机仓库和运行环境显示可用来源。APT 候选还经过依赖模拟。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。按名称安装和仓库搜索保留为辅助入口。
+App Center 目录包括 Docker、Nginx、Caddy、Redis、PostgreSQL、pgAdmin、Git、htop 和 Certbot。pgAdmin 是本机应用（目录中的 `local`），只在提供 pgAdmin 窗口的平台列出，状态取自本机组件是否已下载，不参与服务器清单。连接目标服务器后，检查服务器任务的运行条件、系统包仓库、Snap 稳定渠道和 Docker Compose 可用性。普通用户可以浏览和搜索整个目录，卡片按本机仓库和运行环境显示可用来源。APT 候选还经过依赖模拟。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。按名称安装和仓库搜索保留为辅助入口。
+
+卡片和应用页使用同一套状态：检查中、已安装、未安装、暂无可用安装来源；本机应用显示「本机可用」或「首次打开时下载」。卡片按钮随状态变化：未安装为「安装…」，已安装且有对应窗口（Docker、pgAdmin）为「打开」，其余已安装应用为「管理」，进入应用页。应用页依次显示标题区的状态和主要操作、「在此服务器上」的每份安装及其升级、卸载等操作（本机应用为「在本机上」）、各安装方式的可用性（已安装时为「其他安装方式」，可另选来源安装）、介绍、常见用途和网站，以及「相关应用」。相关应用在目录中双向声明，例如 PostgreSQL 与 pgAdmin。
 
 已安装页合并系统包、Snap、Arcnix Compose 项目和通过已知镜像引用识别的外部 Nginx 容器，显示来源和版本或容器状态。已安装的 Nginx 系统包链接到服务管理，各外部容器按完整 ID 打开详情。Compose 项目和独立容器分别提供移除操作，保留数据卷。安装和移除任务完成后重新检测服务器能力并刷新清单。查询失败时仍展示其他来源的结果和对应错误。
 

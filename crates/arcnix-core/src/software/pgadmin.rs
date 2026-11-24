@@ -31,27 +31,44 @@ const LOG_TAIL: u64 = 2048;
 
 /// Components are built from official pgAdmin releases in this repository's
 /// `arcnix-build` branch and published as release `pgadmin-<version>-<build>`.
-const PACKAGES: &str = "https://github.com/arcnix-org/pgadmin4/releases/download/pgadmin-9.19-2";
+const PACKAGES: &str = "https://github.com/arcnix-org/pgadmin4/releases/download/pgadmin-9.19-3";
 
 /// (OS, architecture, file, size, SHA-256) for each published platform.
-const PLATFORMS: &[(&str, &str, &str, u64, &str)] = &[(
-    "macos",
-    "aarch64",
-    "pgadmin-9.19-2-macos-arm64.zip",
-    94_755_232,
-    "cf725ea7a4e21b606cb65564f175adc03d897ec2109ae096104c98c268cf882f",
-)];
+type PlatformPackage = (&'static str, &'static str, &'static str, u64, &'static str);
+const PLATFORMS: &[PlatformPackage] = &[
+    (
+        "macos",
+        "aarch64",
+        "pgadmin-9.19-3-macos-arm64.zip",
+        92_309_841,
+        "78f2dbfd72f301a2330d636838c0fea485d1a32b8d4fc204d1484475e35f170f",
+    ),
+    (
+        "windows",
+        "x86_64",
+        "pgadmin-9.19-3-windows-x64.zip",
+        84_540_871,
+        "da90498ae697b2e0a99fa9636679c4eb2a7a753394db886374a35e2d9c5a6b15",
+    ),
+];
 
-/// The published package for this platform, if one has been built.
-pub fn package() -> Option<Asset> {
+fn platform_package() -> Option<&'static PlatformPackage> {
     PLATFORMS
         .iter()
         .find(|(os, arch, ..)| *os == std::env::consts::OS && *arch == std::env::consts::ARCH)
-        .map(|(_, _, file, size, digest)| Asset {
-            url: format!("{PACKAGES}/{file}"),
-            size: *size,
-            digest: (*digest).to_owned(),
-        })
+}
+
+pub fn supported_platform() -> bool {
+    platform_package().is_some()
+}
+
+/// The published package for this platform, if one has been built.
+pub fn package() -> Option<Asset> {
+    platform_package().map(|(_, _, file, size, digest)| Asset {
+        url: format!("{PACKAGES}/{file}"),
+        size: *size,
+        digest: (*digest).to_owned(),
+    })
 }
 
 /// A package on this computer, for testing before one is published.
@@ -400,6 +417,21 @@ pub enum Event {
     Unreachable(Diagnosis),
 }
 
+fn random_hex() -> Result<Zeroizing<String>> {
+    let mut random = Zeroizing::new([0u8; 32]);
+    getrandom::fill(random.as_mut())
+        .map_err(|error| anyhow::anyhow!("Cannot create a private key: {error}"))?;
+    Ok(Zeroizing::new(
+        random.iter().map(|b| format!("{b:02x}")).collect(),
+    ))
+}
+
+/// A new key for the passwords pgAdmin saves. The caller keeps it in the
+/// system keychain; [`run`] hands it to pgAdmin.
+pub fn new_password_key() -> Result<Zeroizing<String>> {
+    random_hex()
+}
+
 /// Run one pgAdmin backend and its tunnel until stopped or either ends.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -409,6 +441,7 @@ pub fn run(
     fingerprint: &str,
     secret: Zeroizing<String>,
     connection: &Connection,
+    password_key: Option<Zeroizing<String>>,
     stopped: impl Fn() -> bool + Sync,
     event: impl Fn(Event) + Sync,
 ) -> Result<()> {
@@ -462,6 +495,7 @@ pub fn run(
                 component,
                 &data,
                 connection,
+                password_key.as_ref().map(|key| key.as_str()),
                 tunnel_port,
                 &finished,
                 |url| event(Event::Ready(url)),
@@ -516,25 +550,20 @@ fn backend(
     component: &Component,
     data: &Path,
     connection: &Connection,
+    password_key: Option<&str>,
     tunnel_port: u16,
     finished: &impl Fn() -> bool,
     ready: impl FnOnce(String),
 ) -> Result<()> {
-    let mut random = [0u8; 32];
-    getrandom::fill(&mut random)
-        .map_err(|error| anyhow::anyhow!("Cannot create a private window key: {error}"))?;
-    let key = Zeroizing::new(
-        random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>(),
-    );
+    let key = random_hex()?;
     let launch = crate::new_id();
     let request = Zeroizing::new(serde_json::to_vec(&serde_json::json!({
         "root": component.root,
         "data": data,
         "launch": launch,
         "key": key.as_str(),
+        // Without a keychain pgAdmin does not offer to save passwords.
+        "password_key": password_key,
         "server": {
             "name": connection.name(),
             "port": tunnel_port,
@@ -568,6 +597,9 @@ fn backend(
         "APPDATA",
         "LOCALAPPDATA",
         "CommonProgramFiles",
+        // pgAdmin looks up local PostgreSQL servers in the Windows registry.
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432",
     ] {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);

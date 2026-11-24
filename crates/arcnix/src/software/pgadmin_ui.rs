@@ -80,16 +80,21 @@ pub(crate) struct Download {
 
 impl Download {
     fn message(&self) -> String {
-        let name = self
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if self.success {
-            format!("Saved {name} to Downloads")
-        } else {
-            format!("Could not save {name}")
+        use crate::pgadmin_native::file_name;
+        let file = file_name(&self.path);
+        if !self.success {
+            return format!("Could not save {file}");
         }
+        // A drive or volume root has no name of its own.
+        let folder = self
+            .path
+            .parent()
+            .map(|folder| match file_name(folder) {
+                name if name.is_empty() => folder.display().to_string(),
+                name => name,
+            })
+            .unwrap_or_default();
+        format!("Saved “{file}” to “{folder}”")
     }
 }
 
@@ -105,9 +110,29 @@ fn reveal(download: &Download) {
         }
         let _ = command.spawn();
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("explorer.exe");
+        if download.success && download.path.exists() {
+            // Explorer parses its own command line; the path must follow
+            // /select, inside quotes.
+            command.raw_arg(format!("/select,\"{}\"", download.path.display()));
+        } else if let Some(folder) = download.path.parent() {
+            command.arg(folder);
+        }
+        let _ = command.spawn();
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = download;
 }
+
+/// The file manager's own name for the reveal button.
+const REVEAL_LABEL: &str = if cfg!(windows) {
+    "Show in File Explorer"
+} else {
+    "Show in Finder"
+};
 
 pub(crate) enum Reply {
     Opened {
@@ -280,6 +305,8 @@ pub(crate) fn reply(ui: &Ui, serial: u64, reply: Reply) {
         false
     });
     if reopen {
+        // App Center shows whether the component is downloaded.
+        ui.app_center_local_status();
         ui.pgadmin_enter();
     }
 }
@@ -432,7 +459,14 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
         let stop = ui.clone();
         row().class("desktop-app-tools").fill((
             text()
-                .class("pgadmin-download subtle")
+                .class(state.map(|s| {
+                    match &s.pgadmin.download {
+                        None => "hidden",
+                        Some(download) if download.success => "pgadmin-download",
+                        Some(_) => "pgadmin-download failed",
+                    }
+                    .to_owned()
+                }))
                 .content(i18n::bind(state.map(|s| {
                     s.pgadmin
                         .download
@@ -441,7 +475,7 @@ pub(crate) fn title_tools(ui: Ui) -> impl Widget {
                         .unwrap_or_default()
                 }))),
             when(state.map(|s| s.pgadmin.download.is_some()), move || {
-                icon_action("Show in Finder", Icon::Folder).on_press(move || {
+                icon_action(REVEAL_LABEL, Icon::Folder).on_press(move || {
                     if let Some(download) = state.with(|s| s.pgadmin.download.clone()) {
                         reveal(&download);
                     }

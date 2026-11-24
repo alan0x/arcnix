@@ -1842,28 +1842,25 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .app-center-card-category{font-size:12px!important;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .app-center-card-summary{font-size:13px!important;font-weight:400;line-height:1.6;min-height:42px;color:var(--muted)}
 .app-center-card-footer{display:flex!important;align-items:center;justify-content:space-between;gap:10px;padding:0 18px 16px;flex-shrink:0}
-.app-center-installed-badge{font-size:12px;color:var(--muted)}
+.app-center-card-footer>.app-center-install-button{margin-left:auto}
 .app-center-install-button{color:var(--accent)!important;background:var(--accent-bg)!important;border-color:transparent!important;min-width:76px}
-.app-center-detail-header>.app-center-install-button{align-self:center}
 .app-center-empty{padding:16px;color:var(--muted);text-align:center;font-size:14px}
 .app-center-context-filter{display:flex!important;align-items:center;justify-content:space-between;gap:12px;background:var(--accent-bg);border-radius:8px;padding:8px 12px;flex-shrink:0}
 .app-center-back{align-self:flex-start;background:transparent!important;border-color:transparent!important;color:var(--muted)!important}
 .app-center-back .glyph-chevron-right{transform:rotate(180deg)}
-.app-center-detail-header{display:flex!important;align-items:flex-start;gap:20px;padding:18px 0 24px;border-bottom:1px solid var(--line);flex-shrink:0}
+.app-center-detail-header{display:flex!important;align-items:center;gap:20px;padding:14px 0 22px;border-bottom:1px solid var(--line);flex-shrink:0}
 .app-center-detail-header>.app-center-app-icon{flex-basis:80px!important;width:80px;height:80px;font-size:38px!important;border-radius:19px}
 .app-center-detail-identity{flex:1;gap:5px;min-width:0}
 .app-center-detail-name{font-size:28px;font-weight:600;line-height:1.2}
-.app-center-detail-summary{font-size:15px;margin-top:8px}
-.app-center-detail-section{gap:12px;padding:12px 0;flex-shrink:0}
-.app-center-detail-uses{font-size:15px;line-height:1.8}
-.app-center-website{font-size:14px;color:var(--accent);overflow-wrap:anywhere}
+.app-center-detail-summary{font-size:15px;color:var(--muted)}
+.app-center-detail-section{gap:12px;padding:6px 0;flex-shrink:0;min-width:0}
+.app-center-detail-section>.section-heading{display:flex!important;align-items:center;gap:6px}
+.app-center-detail-section>.section-heading>.button{margin-left:auto}
 .app-center-inventory-toolbar{display:flex!important;align-items:center;gap:14px;flex-wrap:wrap;flex-shrink:0}
 .app-center-inventory-toolbar>.section-title{flex:1}
 .app-center-inventory-toolbar>.icon-button{display:none!important}
 .app-center-inventory-list{display:flex!important;min-height:0;gap:8px}
 .app-center-installed-row{display:flex!important;align-items:center;gap:14px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;flex-shrink:0;min-width:0;flex-wrap:wrap;background:var(--surface)}
-.app-center-installed-name{gap:3px;min-width:150px;flex:1;font-weight:500}
-.app-center-installed-name>.subtle{font-size:12px;font-weight:400}
 .app-center-source-badge{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:6px;white-space:nowrap}
 .app-center-installed-version{font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .app-center-installed-actions{display:flex!important;gap:6px;flex-shrink:0}
@@ -1884,6 +1881,64 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 
 .app-center-card-open{display:grid!important;grid-template-columns:48px minmax(0,1fr);grid-template-rows:auto auto auto;column-gap:12px!important;row-gap:4px!important}
 .app-center-card-open>.app-center-app-icon{grid-column:1;grid-row:1/3}.app-center-card-name{grid-column:2;grid-row:1;align-self:end}.app-center-card-category{grid-column:2;grid-row:2;align-self:start}.app-center-card-summary{grid-column:1/-1;grid-row:3;margin-top:9px}
+
+/* Status, installations and related applications on cards and app pages. */
+.app-center-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.app-center-status.installed {
+  color: #7fd3a1; background: color-mix(in srgb, #2fa463 16%, transparent);
+  padding: 2px 9px; border-radius: 999px; font-weight: 500;
+}
+.app-center-status.installed::before { content: "✓ "; }
+.app-center-status.unavailable { font-style: italic; }
+.app-center-detail-meta { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.app-center-detail-meta>.subtle { font-size: 12px; }
+.app-center-primary { flex: none; align-self: center; min-width: 96px; }
+.app-center-installations, .app-center-sources, .app-center-related { display: flex !important; flex-direction: column; gap: 8px; min-width: 0; }
+.app-center-installation, .app-center-source, .app-center-related-card {
+  display: flex !important; align-items: center; gap: 14px; min-width: 0; flex-wrap: wrap;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.app-center-installation-name { flex: 1; gap: 3px; min-width: 140px; }
+.app-center-package-name { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.app-center-installation .app-center-installed-version { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+.app-center-source>.action-glyph, .app-center-source>.action-icon { width: 18px; height: 18px; flex: none; color: var(--muted); }
+.app-center-source-text { flex: 1; gap: 3px; min-width: 0; }
+.app-center-source-name { font-size: 13px; font-weight: 600; }
+.app-center-source-note { font-size: 12px; overflow-wrap: anywhere; }
+.app-center-source-state { font-size: 12px; color: var(--muted); }
+.app-center-source.available>.app-center-source-state, .app-center-source.installed>.app-center-source-state { color: #7fd3a1; font-weight: 500; }
+.app-center-source.installed>.app-center-source-state::before { content: "✓ "; }
+.app-center-source:not(.available, .installed) { background: transparent; }
+.app-center-source:not(.available, .installed)>.app-center-source-text { opacity: .7; }
+.app-center-about { gap: 14px; min-width: 0; }
+.app-center-description { font-size: 14px; line-height: 1.7; max-width: 72ch; }
+.app-center-uses { display: flex !important; flex-wrap: wrap; gap: 6px; }
+.app-center-use { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line); }
+.app-center-website { align-self: flex-start; font-size: 13px !important; color: var(--accent) !important; padding: 0 !important; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; white-space: normal !important; }
+.app-center-related-open, .app-center-installed-open {
+  display: grid !important; grid-template-columns: 38px minmax(0, 1fr); grid-template-rows: auto auto;
+  column-gap: 12px; row-gap: 3px; align-items: center; flex: 1; min-width: 150px;
+  text-align: left !important; white-space: normal !important; padding: 0 !important;
+}
+.app-center-related-open>.app-center-app-icon, .app-center-installed-open>.app-center-app-icon { grid-row: 1 / 3; }
+.app-center-entry-name { font-weight: 500; align-self: end; overflow-wrap: anywhere; }
+.app-center-related-open>.app-center-entry-name { font-weight: 600; }
+.app-center-entry-detail { font-size: 12px; align-self: start; overflow-wrap: anywhere; }
+.app-center-related-open:hover>.app-center-entry-name, .app-center-installed-open:not(.plain):hover>.app-center-entry-name { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.app-center-installed-open.plain { cursor: default; }
+.app-center-remove:hover:not(:disabled) { color: var(--danger) !important; }
+.app-center-inventory-toolbar>.preference-check { color: var(--text) !important; font-size: 13px; }
+.app-center-installed-row { flex-wrap: nowrap; }
+.app-center-installed-row>.app-center-installed-actions { margin-left: auto; }
+.app-center-installed-row>.app-center-installed-version { flex: 0 1 auto; min-width: 0; }
+@container app-center (max-width: 720px) {
+  .app-center-installed-row { flex-wrap: wrap; }
+  .app-center-detail-header>.app-center-app-icon { flex-basis: 60px !important; width: 60px; height: 60px; font-size: 28px !important; border-radius: 15px; }
+  .app-center-detail-name { font-size: 22px; }
+}
+.theme-light .app-center-status.installed:not(:where(.desktop-dark *)),
+.theme-light .app-center-source.available>.app-center-source-state:not(:where(.desktop-dark *)),
+.theme-light .app-center-source.installed>.app-center-source-state:not(:where(.desktop-dark *)) { color: #1b6e40; }
 
 /* One shared workspace header and one address row for desktop Files. */
 .page-header.workspace-header {
@@ -1934,6 +1989,18 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   flex: none;
 }
 .desktop-window-titlebar:has(.desktop-app-tools) .desktop-window-actions { margin-left: 0; }
+.pgadmin-download {
+  padding: 3px 10px;
+  border: 1px solid #2f6a48;
+  border-radius: 999px;
+  background: #183324;
+  color: #a6e3bd;
+  font-size: var(--font-small);
+  white-space: nowrap;
+}
+.pgadmin-download.failed { border-color: #6a3a40; background: #38242a; color: #efb5ba; }
+.theme-light .pgadmin-download:not(:where(.desktop-dark *)) { border-color: #9fd4b3; background: #e6f6ec; color: #1d6b3d; }
+.theme-light .pgadmin-download.failed:not(:where(.desktop-dark *)) { border-color: #e4a9ae; background: #fbeaec; color: #a3303b; }
 .files-titlebar {
   container: files-toolbar / inline-size;
   position: relative;

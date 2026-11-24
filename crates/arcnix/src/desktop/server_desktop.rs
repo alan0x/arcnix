@@ -262,8 +262,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
         .filter(|page| s.local_desktop.is_none() || local_app(s, *page))
         .filter(|page| match page {
             WorkspacePage::Browser => cfg!(windows),
-            // Only this platform's component has been tested.
-            WorkspacePage::PgAdmin => cfg!(target_os = "macos"),
+            WorkspacePage::PgAdmin => arcnix_core::pgadmin::supported_platform(),
             WorkspacePage::Docker => s.server_apps.applications.docker,
             WorkspacePage::Office => office_reader::available(s),
             _ => true,

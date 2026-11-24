@@ -1,8 +1,10 @@
 //! Offline Office imports and the local desktop reader.
+use std::result::Result;
+
+use arcnix_core::file_associations::{FileApp, extension, filename};
+
 use crate::i18n::desktop as i18n;
 use crate::*;
-use arcnix_core::file_associations::{FileApp, extension, filename};
-use std::result::Result;
 
 pub(crate) const LIMIT: usize = 32 * 1024 * 1024;
 pub(crate) const EXTENSIONS: &[&str] = &["docx", "xlsx", "pptx"];
@@ -291,8 +293,9 @@ pub(crate) fn save_copy(
     path: &str,
     model: &str,
 ) -> anyhow::Result<Document> {
-    use anyhow::{Context, ensure};
     use std::io::Write;
+
+    use anyhow::{Context, ensure};
     ensure!(
         target == Some(&local_desktop::Target::Native),
         "Saving requires the read-write local desktop."

@@ -21,16 +21,29 @@ def main():
         config['config']['trusted_hosts']+=fedora.config([],local)['config']['trusted_hosts']
         with Desktop(out/'desktop',config) as app:
             p=app.page;errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
-            def card(name):return p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name=name,exact=True))
+            def card(name):
+                # Cards live on Discover; leave an application page first.
+                back=p.locator('.app-center-detail .app-center-back')
+                if back.count() and p.get_by_role('dialog').count()==0:back.click()
+                return p.locator('.app-center-app-card').filter(has=p.get_by_role('button',name=name,exact=True))
             def install(name):
-                card(name).get_by_role('button',name='Install…',exact=True).click()
+                expect(p.get_by_role('dialog')).to_have_count(0)
+                found=card(name)
+                expect(found).to_be_visible()
+                button=found.get_by_role('button',name='Install…',exact=True)
+                if button.count():button.click()
+                else:
+                    # Installed applications offer other sources on their page.
+                    found.get_by_role('button',name=name,exact=True).click()
+                    p.locator('.app-center-detail').get_by_role('button',name='Install another way…',exact=True).click()
                 return p.get_by_role('dialog',name='Install software',exact=True)
             def close(d):d.get_by_role('button',name='Close dialog',exact=True).click();expect(d).not_to_be_visible()
             app.connect();app.application('App Center')
-            expect(p.locator('.app-center-app-card')).to_have_count(8)
+            expect(p.locator('.app-center-app-card')).to_have_count(9)
             dock = p.locator('.desktop-dock:visible')
             assert dock.evaluate("el => parseFloat(getComputedStyle(el).paddingTop) <= 3 && parseFloat(getComputedStyle(el).paddingBottom) <= 3")
             expect(card('Docker')).to_have_count(1)
+            expect(card('pgAdmin').get_by_role('button',name='Open',exact=True)).to_be_enabled()
             expect(p.locator('.install-sources')).to_have_count(0)
             expect(p.locator('.software-sources')).to_have_count(0)
             expect(p.locator('.app-center-featured')).to_have_count(0)
@@ -44,7 +57,7 @@ def main():
             }''')
             app.screenshot('app-center-light.png')
             databases=sidebar.get_by_role('button',name='Databases',exact=True)
-            databases.click();expect(p.locator('.app-center-app-card')).to_have_count(2)
+            databases.click();expect(p.locator('.app-center-app-card')).to_have_count(3)
             expect(databases).to_have_attribute('aria-pressed','true')
             expect(card('Nginx')).to_have_count(0)
             p.set_viewport_size(dict(width=500,height=680))
@@ -65,7 +78,7 @@ def main():
             expect(p.locator('.install-sources')).to_have_count(0)
             p.get_by_role('textbox',name='Search applications',exact=True).fill('unfindable-application');expect(p.locator('.app-center-empty')).to_be_visible()
             p.get_by_role('textbox',name='Search applications',exact=True).fill('')
-            checks.append('Catalog shows a curated set of eight installable applications including Docker, with search, details and an empty state')
+            checks.append('Catalog shows a curated set of eight server applications plus the local pgAdmin client, with search, details and an empty state')
 
             d=install('Caddy');expect(d.locator('.install-app-name')).to_have_text('Caddy')
             expect(d.get_by_text('Administrator password (if required by sudo)', exact=True)).to_be_visible()
@@ -90,7 +103,8 @@ def main():
             app.servers();app.application('Docker');p.locator('.docker-toolbar').get_by_role('button',name='Install software',exact=True).click()
             expect(p.locator('.app-center-content')).to_be_visible();expect(p.locator('.app-center-app-card')).to_have_count(3);expect(p.get_by_role('dialog')).to_have_count(0)
             d=install('Nginx');expect(d.get_by_role('button',name='Docker Compose',exact=True)).to_have_attribute('aria-pressed','true');close(d)
-            p.get_by_role('button',name='Show all applications',exact=True).click();expect(p.locator('.app-center-app-card')).to_have_count(8)
+            p.locator('.app-center-detail .app-center-back').click()
+            p.get_by_role('button',name='Show all applications',exact=True).click();expect(p.locator('.app-center-app-card')).to_have_count(9)
             checks.append('Installed inventory retains source-specific management, while Docker installation enters the same catalog with Compose-compatible apps and opens provider choice only after Install')
 
             result=p.get_by_role('dialog',name='Operation status',exact=True)
@@ -159,7 +173,7 @@ def main():
             checks.append('Native Nginx, a running Docker container and a stopped external Compose container coexist and route by container ID; removal refreshes Installed')
 
             p.locator('.host-select').nth(2).click();app.connect(2);app.application('App Center')
-            expect(p.locator('.app-center-app-card')).to_have_count(8)
+            expect(p.locator('.app-center-app-card')).to_have_count(9)
             d = install('PostgreSQL')
             expect(d.locator('.package-terminal-command')).to_have_text("sudo apt-get --no-remove install -- 'postgresql'")
             expect(d.get_by_role('button', name='Open in terminal')).to_be_enabled()
@@ -220,7 +234,7 @@ def main():
                 app.screenshot(f'app-center-dark-{width}.png')
             p.set_viewport_size(dict(width=1440,height=980))
             app.settings('General');p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();app.servers()
-            p.get_by_role('textbox',name='搜索应用',exact=True).fill('数据库');expect(p.locator('.app-center-app-card')).to_have_count(2)
+            p.get_by_role('textbox',name='搜索应用',exact=True).fill('数据库');expect(p.locator('.app-center-app-card')).to_have_count(3)
             p.get_by_role('textbox',name='搜索应用',exact=True).fill('');app.screenshot('app-center-chinese.png')
             assert not errors,errors
             checks.append('Fedora uses distro-specific package identities, missing runtimes remain unavailable, and light/dark, Chinese search and narrow layouts preserve desktop theme boundaries')
