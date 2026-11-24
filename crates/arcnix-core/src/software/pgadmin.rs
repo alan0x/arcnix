@@ -34,7 +34,8 @@ const LOG_TAIL: u64 = 2048;
 const PACKAGES: &str = "https://github.com/arcnix-org/pgadmin4/releases/download/pgadmin-9.19-3";
 
 /// (OS, architecture, file, size, SHA-256) for each published platform.
-const PLATFORMS: &[(&str, &str, &str, u64, &str)] = &[
+type PlatformPackage = (&'static str, &'static str, &'static str, u64, &'static str);
+const PLATFORMS: &[PlatformPackage] = &[
     (
         "macos",
         "aarch64",
@@ -51,16 +52,23 @@ const PLATFORMS: &[(&str, &str, &str, u64, &str)] = &[
     ),
 ];
 
-/// The published package for this platform, if one has been built.
-pub fn package() -> Option<Asset> {
+fn platform_package() -> Option<&'static PlatformPackage> {
     PLATFORMS
         .iter()
         .find(|(os, arch, ..)| *os == std::env::consts::OS && *arch == std::env::consts::ARCH)
-        .map(|(_, _, file, size, digest)| Asset {
-            url: format!("{PACKAGES}/{file}"),
-            size: *size,
-            digest: (*digest).to_owned(),
-        })
+}
+
+pub fn supported_platform() -> bool {
+    platform_package().is_some()
+}
+
+/// The published package for this platform, if one has been built.
+pub fn package() -> Option<Asset> {
+    platform_package().map(|(_, _, file, size, digest)| Asset {
+        url: format!("{PACKAGES}/{file}"),
+        size: *size,
+        digest: (*digest).to_owned(),
+    })
 }
 
 /// A package on this computer, for testing before one is published.

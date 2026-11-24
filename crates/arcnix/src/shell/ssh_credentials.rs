@@ -73,9 +73,17 @@ pub(crate) fn keychain_entry(service: &str, account: &str) -> keyring::Result<ke
 /// the keychain is unavailable; pgAdmin then does not offer to save them.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) fn pgadmin_password_key() -> Option<Zeroizing<String>> {
-    // Two windows starting together must not each store a different key.
-    static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _creating = CREATING.lock().ok()?;
+    // The keychain entry is shared by all windows, processes and portable profiles.
+    let store = arcnix_core::store::ConfigStore::default_location().ok()?;
+    let folder = store.path().parent()?;
+    std::fs::create_dir_all(folder).ok()?;
+    let lock = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(folder.join("pgadmin-password-key.lock"))
+        .ok()?;
+    lock.lock().ok()?;
     let entry = keychain_entry("org.arcnix.pgadmin", "password-key").ok()?;
     match entry.get_password() {
         Ok(key) if !key.is_empty() => Some(Zeroizing::new(key)),

@@ -929,6 +929,17 @@ fn installed_identity(ui: Ui, value: Cage<Item>) -> impl Widget {
             }
         })
 }
+fn installed_local_apps(s: &State) -> impl Iterator<Item = App> + '_ {
+    catalog::APPS.iter().copied().filter(|app| {
+        app.local
+            && offered(s, *app)
+            && status(s, *app) == Status::Installed
+            && format!("{} {}", app.name, i18n::translate(app.summary))
+                .to_lowercase()
+                .contains(&s.software.app_center.query.to_lowercase())
+    })
+}
+
 fn installed_page(ui: Ui) -> impl Widget {
     let state = ui.state;
     let refresh = ui.clone();
@@ -971,59 +982,47 @@ fn installed_page(ui: Ui) -> impl Widget {
                 }
             }),
             // Applications that run on this computer are listed once downloaded.
-            each(state.map(|s| {
-                catalog::APPS
-                    .iter()
-                    .copied()
-                    .filter(|app| {
-                        app.local
-                            && offered(s, *app)
-                            && status(s, *app) == Status::Installed
-                            && format!("{} {}", app.name, i18n::translate(app.summary))
-                                .to_lowercase()
-                                .contains(&s.software.app_center.query.to_lowercase())
-                    })
-                    .collect::<Vec<_>>()
-            }))
-            .key(|a| a.id)
-            .children(move |item| {
-                let app = item.value.get();
-                let details = local.clone();
-                row().class("app-center-installed-row").fill((
-                    sapid::button()
-                        .class("app-center-installed-open")
-                        .name(app.name)
-                        .label("")
-                        .fill((
-                            text()
-                                .class(format!(
-                                    "app-center-app-icon small app-center-color-{}",
-                                    app.color
-                                ))
-                                .content(app.mark),
-                            text().class("app-center-entry-name").content(app.name),
-                            text()
-                                .class("app-center-entry-detail subtle")
-                                .content(i18n::bind(app.summary)),
-                        ))
-                        .on_press(move || details.app_center_details(app.id)),
-                    text()
-                        .class("app-center-source-badge")
-                        .content(i18n::bind("This computer")),
-                    text()
-                        .class("app-center-installed-version subtle")
-                        .content(arcnix_core::pgadmin::VERSION),
-                    row()
-                        .class("app-center-installed-actions")
-                        .fill(primary_button(local.clone(), app, "button")),
-                ))
-            }),
+            each(state.map(|s| installed_local_apps(s).collect::<Vec<_>>()))
+                .key(|a| a.id)
+                .children(move |item| {
+                    let app = item.value.get();
+                    let details = local.clone();
+                    row().class("app-center-installed-row").fill((
+                        sapid::button()
+                            .class("app-center-installed-open")
+                            .name(app.name)
+                            .label("")
+                            .fill((
+                                text()
+                                    .class(format!(
+                                        "app-center-app-icon small app-center-color-{}",
+                                        app.color
+                                    ))
+                                    .content(app.mark),
+                                text().class("app-center-entry-name").content(app.name),
+                                text()
+                                    .class("app-center-entry-detail subtle")
+                                    .content(i18n::bind(app.summary)),
+                            ))
+                            .on_press(move || details.app_center_details(app.id)),
+                        text()
+                            .class("app-center-source-badge")
+                            .content(i18n::bind("This computer")),
+                        text()
+                            .class("app-center-installed-version subtle")
+                            .content(arcnix_core::pgadmin::VERSION),
+                        row()
+                            .class("app-center-installed-actions")
+                            .fill(primary_button(local.clone(), app, "button")),
+                    ))
+                }),
         )),
         when(
             state.map(|s| {
                 s.software.app_center.pending.is_none()
                     && s.software.app_center.inventory.is_some()
                     && items(s).is_empty()
+                    && installed_local_apps(s).next().is_none()
             }),
             move || {
                 text()

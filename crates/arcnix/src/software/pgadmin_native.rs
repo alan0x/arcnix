@@ -106,27 +106,91 @@ pub(crate) fn downloads_folder() -> Option<PathBuf> {
 /// Move a finished download to where the person chose. The staging folder
 /// may be on another volume; a staged copy left behind is removed with it.
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    if std::fs::rename(from, to).is_ok() {
-        return Ok(());
+    match std::fs::rename(from, to) {
+        Ok(()) => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {}
+        Err(err) => return Err(err),
     }
-    std::fs::copy(from, to)?;
-    let _ = std::fs::remove_file(from);
+    let folder = to.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+    let tmp = copy_into(from, folder)?;
+    tmp.persist(to)?;
     Ok(())
 }
 
-/// Put a download nobody could be asked about in Downloads, as before.
-fn keep_in_downloads(staged: &Path) -> Option<PathBuf> {
-    let target = destination(&downloads_folder()?, staged)?;
-    move_file(staged, &target).ok()?;
-    Some(target)
+fn copy_into(from: &Path, folder: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    let mut tmp = tempfile::NamedTempFile::new_in(folder)?;
+    std::io::copy(&mut std::fs::File::open(from)?, tmp.as_file_mut())?;
+    Ok(tmp)
 }
 
-/// The person's answer to "save as": a path, cancelled, or no dialog.
+/// An unattended save must never replace an existing export, even when two
+/// windows finish downloads with the same name at the same time.
+fn keep_in_folder(staged: &Path, folder: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    let mut tmp = copy_into(staged, folder)?;
+    loop {
+        let target = destination(folder, staged).ok_or(std::io::ErrorKind::AlreadyExists)?;
+        match tmp.persist_noclobber(&target) {
+            Ok(_) => return Ok(target),
+            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => tmp = err.file,
+            Err(err) => return Err(err.error),
+        }
+    }
+}
+
+struct Staged {
+    folder: tempfile::TempDir,
+    path: PathBuf,
+}
+
+impl Staged {
+    fn new(suggested: &Path) -> Option<Self> {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("arcnix-pgadmin-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let folder = builder.tempdir().ok()?;
+        let path = destination(folder.path(), suggested)?;
+        Some(Self { folder, path })
+    }
+
+    fn finish(self, choice: Choice) -> Option<pgadmin_ui::Download> {
+        let saved = match choice {
+            Ok(None) => return None,
+            Ok(Some(target)) => move_file(&self.path, &target).map(|()| target),
+            Err(_) => downloads_folder()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+                .and_then(|folder| keep_in_folder(&self.path, &folder)),
+        };
+        Some(match saved {
+            Ok(path) => pgadmin_ui::Download {
+                path,
+                success: true,
+            },
+            Err(_) => {
+                // Keep the completed export recoverable via the title bar.
+                let _ = self.folder.keep();
+                pgadmin_ui::Download {
+                    path: self.path,
+                    success: false,
+                }
+            }
+        })
+    }
+}
+
 type Choice = Result<Option<PathBuf>>;
-/// A staged download and where the person chose to put it.
-type Answer = (PathBuf, Choice);
-/// A staged download, where it went, and whether it got there.
-type Moved = (PathBuf, PathBuf, bool);
+type Answer = (Staged, Choice);
+
+fn completed_index(pending: &[(String, Staged)], url: &str, path: Option<&Path>) -> Option<usize> {
+    match path {
+        Some(path) => pending.iter().position(|(_, staged)| staged.path == path),
+        None => pending.iter().position(|(address, _)| address == url),
+    }
+}
 
 /// Ask where to save `name`. Windows runs its dialog to completion here.
 #[cfg(windows)]
@@ -211,20 +275,21 @@ pub(crate) struct Host {
     url: Option<String>,
     view: Option<View>,
     focus: mpsc::Receiver<()>,
-    /// Finished downloads in this window's staging folder, and whether
-    /// they succeeded.
-    downloads: mpsc::Receiver<(PathBuf, bool)>,
+    /// Completed downloads retain their own staging directories.
+    downloads: mpsc::Receiver<(Staged, bool)>,
     /// Downloads waiting for the person to choose where they go.
-    waiting: VecDeque<PathBuf>,
-    /// The download a save dialog is open for.
-    asking: Option<PathBuf>,
+    waiting: VecDeque<Staged>,
+    /// A save dialog owns its staged file until it replies.
+    asking: bool,
     choices: (mpsc::Sender<Answer>, mpsc::Receiver<Answer>),
     /// Copies to another volume run off the UI thread.
-    moves: (mpsc::Sender<Moved>, mpsc::Receiver<Moved>),
-    moving: usize,
+    moves: (
+        mpsc::Sender<Option<pgadmin_ui::Download>>,
+        mpsc::Receiver<Option<pgadmin_ui::Download>>,
+    ),
+    moving: bool,
     /// The folder of the last saved file, where the next dialog starts.
     folder: Option<PathBuf>,
-    staging: PathBuf,
     bounds: Option<native_viewport::Viewport>,
 }
 
@@ -232,22 +297,28 @@ impl Drop for Host {
     /// pgAdmin closed before every download was saved: keep those files in
     /// Downloads rather than losing them with the staging folder.
     fn drop(&mut self) {
-        let finished = self.downloads.try_iter().filter(|(_, success)| *success);
-        let answered = self.choices.1.try_iter().map(|(staged, _)| staged);
-        let staged: Vec<_> = self
-            .waiting
-            .drain(..)
-            .chain(self.asking.take())
-            .chain(finished.map(|(staged, _)| staged))
-            .chain(answered)
+        let finished = self
+            .downloads
+            .try_iter()
+            .filter(|(_, ok)| *ok)
+            .map(|(file, _)| file);
+        let pending: Vec<_> = self
+            .choices
+            .1
+            .try_iter()
+            .chain(
+                self.waiting
+                    .drain(..)
+                    .chain(finished)
+                    .map(|file| (file, Err(anyhow::anyhow!("Window closed")))),
+            )
             .collect();
-        for staged in staged {
-            let _ = keep_in_downloads(&staged);
-        }
-        // A copy still running owns its staged file; the system cleans the
-        // temporary folder later.
-        if self.moving == 0 {
-            let _ = std::fs::remove_dir_all(&self.staging);
+        if !pending.is_empty() {
+            std::thread::spawn(move || {
+                for (file, choice) in pending {
+                    let _ = file.finish(choice);
+                }
+            });
         }
     }
 }
@@ -262,15 +333,11 @@ impl Host {
             focus: mpsc::channel().1,
             downloads: mpsc::channel().1,
             waiting: VecDeque::new(),
-            asking: None,
+            asking: false,
             choices: mpsc::channel(),
             moves: mpsc::channel(),
-            moving: 0,
+            moving: false,
             folder: None,
-            staging: std::env::temp_dir().join(format!(
-                "arcnix-pgadmin-downloads-{}",
-                arcnix_core::new_id()
-            )),
             bounds: None,
         }
     }
@@ -291,10 +358,9 @@ impl Host {
                 .filter(|(_, success)| *success)
                 .map(|(staged, _)| staged),
         );
-        let started: Rc<RefCell<Vec<(String, PathBuf)>>> = Rc::default();
+        let started: Rc<RefCell<Vec<(String, Staged)>>> = Rc::default();
         let finished = started.clone();
         let completed_wake = wake.clone();
-        let staging = self.staging.clone();
         let web = WebViewBuilder::new()
             .with_visible(false)
             .with_focused(false)
@@ -311,30 +377,18 @@ impl Host {
                 if !downloadable(&source, &url) {
                     return false;
                 }
-                let folder = staging.join(arcnix_core::new_id());
-                let Some(target) = std::fs::create_dir_all(&folder)
-                    .ok()
-                    .and_then(|()| destination(&folder, path))
-                else {
-                    let _ = std::fs::remove_dir(&folder);
+                let Some(staged) = Staged::new(path) else {
                     return false;
                 };
-                *path = target.clone();
-                started.borrow_mut().push((url, target));
+                *path = staged.path.clone();
+                started.borrow_mut().push((url, staged));
                 true
             })
             .with_download_completed_handler(move |url, reported, success| {
-                // macOS reports no path, so match the request first.
-                // WebView2 may report a different address; its path is ours.
+                // WebView2 reports the exact staged file, even for duplicate URLs.
+                // WebKit only reports the request address.
                 let mut started = finished.borrow_mut();
-                let index = started
-                    .iter()
-                    .position(|(started, _)| *started == url)
-                    .or_else(|| {
-                        let reported = reported.as_ref()?;
-                        started.iter().position(|(_, path)| path == reported)
-                    });
-                if let Some(index) = index {
+                if let Some(index) = completed_index(&started, &url, reported.as_deref()) {
                     let (_, path) = started.remove(index);
                     if saved.send((path, success)).is_ok() {
                         completed_wake.wake_by_ref();
@@ -371,85 +425,64 @@ impl Host {
                 self.waiting.push_back(staged);
             } else {
                 let folder = self.folder.clone().or_else(downloads_folder);
-                let path = folder.unwrap_or_default().join(file_name(&staged));
-                self.saved(&staged, path, false);
+                let path = folder.unwrap_or_default().join(file_name(&staged.path));
+                self.report(pgadmin_ui::Download {
+                    path,
+                    success: false,
+                });
             }
         }
-        while let Ok((staged, target, success)) = self.moves.1.try_recv() {
-            self.moving -= 1;
-            if success {
-                self.folder = target.parent().map(Path::to_path_buf);
+        while let Ok(result) = self.moves.1.try_recv() {
+            self.moving = false;
+            if let Some(download) = result {
+                if download.success {
+                    self.folder = download.path.parent().map(Path::to_path_buf);
+                }
+                self.report(download);
             }
-            self.saved(&staged, target, success);
         }
-        loop {
-            while let Ok((staged, choice)) = self.choices.1.try_recv() {
-                self.asking = None;
-                self.chosen(staged, choice);
-            }
-            if self.asking.is_some() {
-                return;
-            }
-            let Some(staged) = self.waiting.pop_front() else {
-                return;
-            };
-            self.asking = Some(staged.clone());
-            let folder = self.folder.clone().or_else(downloads_folder);
-            let reply = self.choices.0.clone();
+        if let Ok((file, choice)) = self.choices.1.try_recv() {
+            self.asking = false;
+            self.moving = true;
+            let moved = self.moves.0.clone();
             let wake = self.wake.clone();
-            let answer = staged.clone();
-            ask(
-                window,
-                &file_name(&staged),
-                folder.as_deref(),
-                move |choice| {
-                    if reply.send((answer, choice)).is_ok()
-                        && let Some(wake) = wake
-                    {
-                        wake.wake();
-                    }
-                },
-            );
+            std::thread::spawn(move || {
+                if moved.send(file.finish(choice)).is_ok()
+                    && let Some(wake) = wake
+                {
+                    wake.wake();
+                }
+            });
         }
-    }
-
-    fn chosen(&mut self, staged: PathBuf, choice: Choice) {
-        let target = match choice {
-            Ok(Some(target)) => Some(target),
-            Ok(None) => None,
-            // Without a dialog, keep the earlier behaviour.
-            Err(_) => downloads_folder().and_then(|folder| destination(&folder, &staged)),
-        };
-        let Some(target) = target else {
-            self.discard(&staged);
+        if self.asking || self.moving {
+            return;
+        }
+        let Some(file) = self.waiting.pop_front() else {
             return;
         };
-        self.moving += 1;
-        let moved = self.moves.0.clone();
+        self.asking = true;
+        let folder = self.folder.clone().or_else(downloads_folder);
+        let reply = self.choices.0.clone();
         let wake = self.wake.clone();
-        std::thread::spawn(move || {
-            let success = staged.exists() && move_file(&staged, &target).is_ok();
-            if moved.send((staged, target, success)).is_ok()
-                && let Some(wake) = wake
-            {
-                wake.wake();
-            }
-        });
+        ask(
+            window,
+            &file_name(&file.path),
+            folder.as_deref(),
+            move |choice| {
+                if let Err(err) = reply.send((file, choice)) {
+                    let (file, choice) = err.0;
+                    std::thread::spawn(move || file.finish(choice));
+                } else if let Some(wake) = wake {
+                    wake.wake();
+                }
+            },
+        );
     }
 
-    /// Remove a download's staging folder, and the window's when empty.
-    fn discard(&self, staged: &Path) {
-        if let Some(folder) = staged.parent() {
-            let _ = std::fs::remove_dir_all(folder);
-        }
-        let _ = std::fs::remove_dir(&self.staging);
-    }
-
-    fn saved(&self, staged: &Path, path: PathBuf, success: bool) {
-        self.discard(staged);
+    fn report(&self, download: pgadmin_ui::Download) {
         self.ui
             .state
-            .revise(|s| s.pgadmin.download = Some(pgadmin_ui::Download { path, success }));
+            .revise(|s| s.pgadmin.download = Some(download));
     }
 
     pub fn hide(&mut self) {
@@ -595,6 +628,30 @@ mod tests {
             assert!(destination(&folder, Path::new(name)).is_none(), "{name}");
         }
         std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn overlapping_exports_match_the_reported_file_and_keep_both_fallback_copies() {
+        let folder = tempfile::tempdir().unwrap();
+        let first = Staged::new(Path::new("orders.csv")).unwrap();
+        let second = Staged::new(Path::new("orders.csv")).unwrap();
+        std::fs::write(&first.path, "first").unwrap();
+        std::fs::write(&second.path, "second").unwrap();
+        let pending = vec![("same".into(), first), ("same".into(), second)];
+        assert_eq!(
+            completed_index(&pending, "same", Some(&pending[1].1.path)),
+            Some(1)
+        );
+        assert_eq!(completed_index(&pending, "same", None), Some(0));
+        let paths = std::thread::scope(|scope| {
+            let save = |i: usize| keep_in_folder(&pending[i].1.path, folder.path()).unwrap();
+            let first = scope.spawn(move || save(0));
+            let second = save(1);
+            (first.join().unwrap(), second)
+        });
+        assert_ne!(paths.0, paths.1);
+        assert_eq!(std::fs::read_to_string(paths.0).unwrap(), "first");
+        assert_eq!(std::fs::read_to_string(paths.1).unwrap(), "second");
     }
 
     #[test]
