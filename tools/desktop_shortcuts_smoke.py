@@ -141,6 +141,18 @@ def main():
         expect(about).to_contain_text(re.compile(r'Version \d+\.\d+\.\d+'))
         expect(about.get_by_role('button', name='Project on GitHub', exact=True)).to_be_visible()
         expect(page.locator('.desktop-settings-page .update-panel')).to_have_count(0)
+        expect(page.locator('.desktop-settings-page .device-info-value')).to_have_count(0)
+        tabs.get_by_role('button', name='General', exact=True).click()
+        def detail(label):
+            return page.locator('.desktop-settings-page .desktop-setting-row').filter(
+                has=page.get_by_text(label, exact=True)).locator('.device-info-value')
+        expect(detail('Operating system')).to_have_text('Fixture Linux')
+        expect(detail('OS version')).to_have_text('42')
+        expect(detail('CPU model')).to_have_text('Fixture CPU')
+        expect(detail('Physical cores')).to_have_text('4')
+        expect(detail('Logical processors')).to_have_text('8')
+        expect(detail('Memory')).to_have_text('8.6 GB')
+        expect(detail('GPU model')).to_have_text('Unavailable')
         tabs.get_by_role('button', name='Dock', exact=True).click()
         page.get_by_role('slider', name='Dock icon size').focus()
         page.keyboard.press('Control+Tab')

@@ -445,7 +445,22 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .modal-footer:empty { display: none !important; }
 .desktop-modal-backdrop .modal-body { overscroll-behavior: contain; }
 .desktop-modal-backdrop .desktop-apps-dialog { width: 640px; --modal-initial-height-limit: 580px; }
+@media (prefers-reduced-motion: no-preference) {
+  .desktop-modal-backdrop:has(> .desktop-apps-dialog) { animation: desktop-window-fade-in 140ms ease-out; }
+  .desktop-apps-dialog { animation: desktop-apps-enter 140ms ease-out; }
+}
+@keyframes desktop-apps-enter {
+  from { transform: translateY(4px); }
+  to { transform: none; }
+}
 .desktop-apps-dialog .modal-body { padding: 0; overflow: hidden; }
+.desktop-apps-dialog .desktop-app-catalog { overflow-y: auto; }
+.desktop-apps-dialog .desktop-app-catalog-scroll { flex: none; overflow: visible; }
+.launcher-locations, .launcher-actions {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+  padding-top: 8px; border-top: 1px solid var(--line);
+}
+.launcher-locations .files-sidebar-heading { flex-basis: 100%; }
 .desktop-apps-dialog .modal-header { gap: clamp(8px, 2vw, 16px); }
 .desktop-apps-dialog .modal-header > .desktop-app-catalog-search { flex: 1; min-width: 0; }
 .desktop-apps-dialog .modal-header > .sapid-close-button { flex: none; }
@@ -916,6 +931,9 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   box-shadow: 0 3px 10px #0003;
   pointer-events: none;
 }
+.pointer-navigation :is(.server-desktop, .desktop-modal-backdrop) button:focus {
+  outline: none !important;
+}
 .desktop-dock :is(.desktop-dock-app, .desktop-dock-home):focus {
   outline: none;
 }
@@ -1086,6 +1104,14 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-canvas:has(.dock-side-zone > [data-small-clock]) .desktop-setting-row:has(.dock-clock-seconds),
 .desktop-canvas:has(.desktop-dock-zone:not(.dock-side-zone) > [data-small-clock]) .desktop-setting-row:has(.dock-clock-weekday) { display: none !important; }
 .desktop-settings-page .desktop-settings-rows { gap: 4px; }
+.device-power-menu { margin-inline-start: auto; }
+.device-power-menu .sapid-menu-trigger {
+  display: grid; place-items: center; width: 32px; height: 32px;
+  min-height: 0 !important; padding: 0 !important;
+  border-radius: 6px; color: var(--text); background: transparent;
+}
+.device-power-menu .sapid-menu-trigger:is(:hover, :focus-visible, [aria-expanded=true]) { background: var(--raised); }
+.device-info-value { white-space: pre-line; overflow-wrap: anywhere; }
 .desktop-setting-label { font-size: var(--font-label); }
 .desktop-settings-pane .desktop-setting-controls {
   justify-content: flex-end; align-items: center; max-width: 100%;
@@ -1201,7 +1227,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-appearance .theme-preview-choice:has([aria-pressed=true]) {
   border-color: var(--accent); background: var(--choice-tint);
 }
-.desktop-appearance .theme-preview-choice:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+:root:not(.pointer-navigation) .desktop-appearance .theme-preview-choice:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .desktop-appearance .theme-preview-choice > .theme-preset-select,
 .desktop-appearance .theme-preview-choice > .theme-preset-select:is(:hover, [aria-pressed=true]):not(:disabled) {
   min-width: 0; padding: 6px 24px 4px 7px !important; text-align: start; line-height: 1.45;
@@ -2501,7 +2527,7 @@ html[data-files-downloading] .files-download-drop {
 .window-tab-select { touch-action: none; }
 .window-tab-item[data-tab-dragging] { opacity: .55; }
 .window-tab-item .window-tab-select:focus { outline: none !important; }
-.window-tab-item:has(.window-tab-select:focus-visible) {
+:root:not(.pointer-navigation) .window-tab-item:has(.window-tab-select:focus-visible) {
   outline: 2px solid var(--accent); outline-offset: -2px;
 }
 .window-tab-strip:has(> .window-tab-slot) > [data-tab-dragging] { display: none; }

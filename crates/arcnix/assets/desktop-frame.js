@@ -84,6 +84,24 @@ const desktopFrame = (() => {
     return {boundsFor, workArea};
 })();
 
+// The renderer focuses buttons programmatically on press, so :focus-visible
+// alone cannot distinguish pointer activation from keyboard navigation.
+function setKeyboardNavigation(keyboard) {
+    const classes = document.documentElement.classList;
+    classes.toggle('keyboard-navigation', keyboard);
+    classes.toggle('pointer-navigation', !keyboard);
+}
+window.addEventListener('pointerdown', () => setKeyboardNavigation(false), true);
+window.addEventListener('keydown', event => {
+    if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) setKeyboardNavigation(true);
+}, true);
+// A popup can consume navigation keydown before the app receives it.
+window.addEventListener('keyup', event => {
+    if (['Escape', 'Tab', 'Home', 'End'].includes(event.key) || event.key.startsWith('Arrow')) {
+        setKeyboardNavigation(true);
+    }
+}, true);
+
 // Let a mouse click retract the unpinned bar even while it is still hovered.
 document.addEventListener('pointerdown', event => {
     if (!event.isPrimary || event.button !== 0) return;

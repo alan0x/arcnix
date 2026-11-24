@@ -49,7 +49,8 @@ enum Dialog {
     TextEditor,
     DesktopTimeZone,
     DesktopIcons,
-    DesktopApps,
+    Launcher,
+    SystemPower(u64, arcnix_core::host::PowerAction),
     DockShortcuts,
     FileAssociation {
         extension: String,
@@ -964,7 +965,7 @@ impl Ui {
                 Ok(home)=>{state.revise(|s| {s.connected=true;s.connecting=false;s.sftp_available=true;s.remote_path=home;});events.server_apps_connected();events.refresh(true);events.desktop_enter();}
                 Err(message)=>{state.revise(|s|{s.connecting=false;s.notice=message;});}
             },
-            Update::Connected(sftp)=>{state.revise(|s|{s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
+            Update::Connected(sftp,address)=>{state.revise(|s|{s.server_apps.connected_address=address;s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
                 #[cfg(windows)]
                 if state.with(|s| server_desktop::launcher_running(s, WorkspacePage::Browser)) { events.open_web_browser(); }
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.pgadmin_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
@@ -991,7 +992,7 @@ impl Ui {
                     s.pdf = Default::default();
                     desktop_file_picker::dismiss(s);
                     file_elevation::reset(s);
-                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::DesktopApps)) {
+                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::Launcher | Dialog::SystemPower(..))) {
                         s.dialog = None;
                     }
                 });
@@ -1865,6 +1866,8 @@ fn modal_with_header(
                     Some(
                         Dialog::DesktopTimeZone
                             | Dialog::AppSettings(_)
+                            | Dialog::Launcher
+                            | Dialog::SystemPower(..)
                             | Dialog::OpenDesktopFile(_)
                             | Dialog::DesktopIcons
                             | Dialog::DockShortcuts
@@ -1879,7 +1882,7 @@ fn modal_with_header(
             if ui.state.with(|s| {
                 matches!(
                     s.dialog,
-                    Some(Dialog::DesktopApps | Dialog::DesktopIcons | Dialog::DockShortcuts)
+                    Some(Dialog::Launcher | Dialog::DesktopIcons | Dialog::DockShortcuts)
                 )
             }) {
                 backdrop = backdrop
@@ -1926,7 +1929,7 @@ fn modal_with_header(
                                 Some(Dialog::DesktopIcons) => {
                                     "modal-card settings-surface shortcut-settings-dialog"
                                 }
-                                Some(Dialog::DesktopApps) => "modal-card desktop-apps-dialog",
+                                Some(Dialog::Launcher) => "modal-card desktop-apps-dialog",
                                 Some(Dialog::DockShortcuts) => {
                                     "modal-card settings-surface shortcut-settings-dialog dock-shortcut-dialog"
                                 }
@@ -2202,6 +2205,7 @@ fn app(ui: Ui) -> impl Widget {
                         app_settings::dialog(ui.clone()),
                         desktop_customization_ui::shortcut_settings_dialog(ui.clone()),
                         desktop_apps::dialog(ui.clone()),
+                        desktop_power::dialog(ui.clone()),
                         text_editor::dialogs(ui.clone()),
                         file_context::dialogs(ui.clone()),
                         file_elevation::dialog(ui.clone()),

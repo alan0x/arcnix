@@ -58,6 +58,7 @@ icons! {
     Up => "arrow-up" as "up";
     Go => "arrow-right" as "go";
     Refresh => "refresh";
+    Power => "power";
     Save => "save";
     Filter => "filter";
     Collapse => "chevron-down" as "collapse";

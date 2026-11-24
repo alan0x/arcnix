@@ -19,6 +19,9 @@ pub(crate) struct DesktopState {
     clock_pending: Option<u64>,
     clock_checked_at: Option<Instant>,
     pub time_zone: desktop_system_settings::TimeZoneState,
+    pub device: device_info_ui::Runtime,
+    pub power_pending: Option<(u64, arcnix_core::host::PowerAction)>,
+    pub connected_address: String,
     pub discover_pending: Option<u64>,
     pub discover_error: String,
     pub preferences: DesktopPreferences,
@@ -365,6 +368,21 @@ pub(crate) fn settings_visible(s: &State) -> bool {
     server_desktop::visible(s) && s.workspace_page == WorkspacePage::Settings
 }
 pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, String>) {
+    if let Some((_, action)) = ui
+        .state
+        .with(|s| s.server_apps.power_pending.filter(|(id, _)| *id == serial))
+    {
+        ui.state.revise(|s| s.server_apps.power_pending = None);
+        match result {
+            Ok(Reply::Operated) => ui.log(i18n::translate(match action {
+                arcnix_core::host::PowerAction::Restart => "System restart requested",
+                arcnix_core::host::PowerAction::ShutDown => "System shutdown requested",
+            })),
+            Err(error) => ui.error(error),
+            _ => ui.error(i18n::translate("Unexpected power response")),
+        }
+        return;
+    }
     if ui.state.with(|s| s.images.request == Some(serial)) {
         image_viewer::received(ui, serial, result);
         return;
@@ -384,6 +402,13 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         .with(|s| s.server_apps.time_zone.pending == Some(serial))
     {
         desktop_system_settings::time_zone_reply(ui, result);
+        return;
+    }
+    if ui
+        .state
+        .with(|s| s.server_apps.device.pending == Some(serial))
+    {
+        device_info_ui::received(ui, result);
         return;
     }
     #[cfg(windows)]
@@ -619,7 +644,10 @@ pub(crate) fn settings(ui: Ui) -> impl Widget {
             .children(move |item| {
                 let page = item.value.get();
                 let content = match page {
-                    SettingsPage::General => fragment(general_settings(ui.clone())),
+                    SettingsPage::General => fragment((
+                        device_info_ui::details(ui.clone()),
+                        general_settings(ui.clone()),
+                    )),
                     SettingsPage::Network => fragment(network_ui::page(ui.clone())),
                     SettingsPage::DefaultApps => fragment(
                         col().class("desktop-settings-pane").fill(

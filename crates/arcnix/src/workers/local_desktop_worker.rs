@@ -31,8 +31,13 @@ impl Session {
     fn apps(&self, action: AppAction) -> Result<Reply> {
         let target = &self.target;
         Ok(match action {
+            AppAction::SystemPower(action) => {
+                target.system_power(action)?;
+                Reply::Operated
+            }
             AppAction::Discover => Reply::Applications(Default::default()),
             AppAction::Clock => Reply::Clock(target.read_host_clock()?),
+            AppAction::DeviceInfo => Reply::DeviceInfo(target.device_info()?),
             AppAction::ReadTimeZone => Reply::TimeZone(arcnix_core::desktop_time_zone::TimeZones {
                 system: false,
                 name: None,

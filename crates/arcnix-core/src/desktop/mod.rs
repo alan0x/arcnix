@@ -4,6 +4,7 @@ pub mod desktop_shortcuts;
 pub(crate) mod desktop_storage;
 pub mod desktop_theme;
 pub mod desktop_time_zone;
+pub mod device_info;
 pub mod server_apps;
 pub mod settings_capabilities;
 pub mod sync;
