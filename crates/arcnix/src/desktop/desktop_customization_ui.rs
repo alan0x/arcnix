@@ -156,14 +156,10 @@ fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
 
 fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
     match app {
-        DesktopApp::Code
-        | DesktopApp::Player
-        | DesktopApp::ImageViewer
-        | DesktopApp::PdfReader
-        | DesktopApp::Office => s.local_desktop.is_some(),
-        // Older Arcnix versions reject desktop settings that name pgAdmin,
-        // so it is saved only when someone pins it.
-        DesktopApp::Editor | DesktopApp::PgAdmin => false,
+        DesktopApp::Code | DesktopApp::Player | DesktopApp::ImageViewer | DesktopApp::PdfReader => {
+            s.local_desktop.is_some()
+        }
+        DesktopApp::Editor => false,
         _ => true,
     }
 }

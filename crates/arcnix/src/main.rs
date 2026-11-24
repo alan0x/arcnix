@@ -302,8 +302,8 @@ define_state! {
     }
     shared {
         config: AppConfig = config,
-        group: Option<String> = None,
         pgadmin_component: pgadmin_ui::ComponentState = Default::default(),
+        group: Option<String> = None,
         collapsed_groups: HashSet<String> = HashSet::new(),
         search: String = String::new(),
         connected_servers_only: bool = false,
@@ -953,6 +953,7 @@ impl Ui {
             #[cfg(windows)]
             Update::WslFiles(result)=>wsl_workspace::receive(events,response.serial,result),
             Update::PgAdmin(reply)=>pgadmin_ui::reply(events,response.serial,reply),
+            Update::OfficePending(result)=>office_reader::pending_received(events,response.serial,result),
             Update::OfficeSaved(result)=>office_reader::saved(events,response.serial,result),
             Update::Office(result)=>office_reader::received(events,response.serial,result),
             Update::Pdf(event)=>pdf_reader::received(events,response.serial,event),
@@ -2530,6 +2531,24 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn office_and_pgadmin_are_listed_on_every_desktop() {
+        use local_desktop::Target;
+        let mut state = State::new(AppConfig::default(), String::new(), String::new());
+        for target in [
+            None,
+            Some(Target::Native),
+            Some(Target::ReadOnlyHost),
+            #[cfg(windows)]
+            Some(Target::Wsl("Ubuntu".into())),
+        ] {
+            state.local_desktop = target;
+            let apps = server_desktop::available_apps(&state);
+            assert!(apps.contains(&WorkspacePage::Office));
+            assert!(apps.contains(&WorkspacePage::PgAdmin));
+        }
+    }
+
     #[test]
     fn terminal_launchers_follow_the_session_capability() {
         let mut state = State::new(AppConfig::default(), String::new(), String::new());

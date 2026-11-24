@@ -783,6 +783,82 @@ impl RemoteSession {
         self.publish_text(path, bytes, existing.as_ref(), check)
     }
 
+    /// Read a bounded regular file together with the revision used for optimistic saves.
+    pub fn read_versioned_file(
+        &self,
+        path: &str,
+        limit: usize,
+    ) -> Result<(Vec<u8>, crate::text_files::Version)> {
+        let checked = self.text_path(path)?;
+        let stat = || self.sftp()?.lstat(&checked).map_err(anyhow::Error::from);
+        let before = stat()?;
+        let bytes = self.read_bounded_file(path, limit)?;
+        let after = stat()?;
+        ensure!(
+            before.size == after.size
+                && before.perm == after.perm
+                && before.uid == after.uid
+                && before.gid == after.gid
+                && before.mtime == after.mtime,
+            "Remote file changed while reading; reopen it."
+        );
+        ensure!(
+            after.is_file() && after.size == Some(bytes.len() as u64),
+            "Remote file changed while reading; reopen it."
+        );
+        let version = crate::text_files::Version {
+            hash: Sha256::digest(&bytes).into(),
+            size: bytes.len() as u64,
+            modified: after.mtime,
+            mode: after.perm.context("Remote permissions unavailable")? & 0o7777,
+            uid: after.uid,
+            gid: after.gid,
+        };
+        Ok((bytes, version))
+    }
+
+    pub fn sync_versioned_file(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        baseline: &crate::text_files::Version,
+        limit: usize,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<crate::text_files::Version> {
+        ensure!(bytes.len() <= limit, "Document exceeds the upload limit.");
+        let verify = || -> Result<_> {
+            check()?;
+            Ok(self.read_versioned_file(path, limit)?.1)
+        };
+        let current = verify()?;
+        let hash: [u8; 32] = Sha256::digest(bytes).into();
+        if current.hash == hash {
+            // Also acknowledges a completed upload whose reply was lost.
+            return Ok(current);
+        }
+        let unchanged = |current: &crate::text_files::Version| {
+            ensure!(
+                current == baseline,
+                "The server file changed. Your cached copy was kept."
+            );
+            Ok(())
+        };
+        unchanged(&current)?;
+        self.publish_bytes(
+            path,
+            bytes,
+            Some(baseline),
+            &check,
+            || unchanged(&verify()?),
+        )?;
+        let published = verify()?;
+        ensure!(
+            published.hash == hash,
+            "The server file changed. Your cached copy was kept."
+        );
+        Ok(published)
+    }
+
     fn publish_text(
         &self,
         path: &str,
@@ -790,6 +866,26 @@ impl RemoteSession {
         existing: Option<&crate::text_files::Version>,
         check: impl Fn() -> Result<()>,
     ) -> Result<crate::text_files::Document> {
+        self.publish_bytes(path, bytes, existing, &check, || {
+            if let Some(version) = existing {
+                let latest = self.read_text(path, &check)?;
+                ensure!(&latest.version == version,
+                    "Remote file changed during upload. Reload before saving; the file was not overwritten.");
+            }
+            Ok(())
+        })?;
+        self.read_text(path, &check)
+            .context(file_admin::SavePublished)
+    }
+
+    fn publish_bytes(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        existing: Option<&crate::text_files::Version>,
+        check: &impl Fn() -> Result<()>,
+        verify: impl Fn() -> Result<()>,
+    ) -> Result<()> {
         let partial = remote_partial(path)?;
         let mut output = self.sftp()?.open_mode(
             Path::new(&partial),
@@ -822,17 +918,11 @@ impl RemoteSession {
                         "Cannot preserve remote file ownership; original file was not replaced",
                     )?;
                 check()?;
-                let latest = self.read_text(path, &check)?;
-                ensure!(
-                    &latest.version == version,
-                    "Remote file changed during upload. Reload before saving; the file was not overwritten."
-                );
-                self.replace_remote(&partial, path)?;
+                self.replace_remote_checked(&partial, path, verify)?;
             } else {
                 self.rename(&partial, path)?;
             }
-            self.read_text(path, &check)
-                .context(file_admin::SavePublished)
+            Ok(())
         })();
         drop(output);
         if result.is_err() {
@@ -1942,6 +2032,15 @@ impl RemoteSession {
         cleanup.context("Download succeeded but partial file cleanup failed")
     }
     fn replace_remote(&self, partial: &str, destination: &str) -> Result<()> {
+        self.replace_remote_checked(partial, destination, || Ok(()))
+    }
+
+    fn replace_remote_checked(
+        &self,
+        partial: &str,
+        destination: &str,
+        verify: impl Fn() -> Result<()>,
+    ) -> Result<()> {
         // Replacement publishes a new inode. Retain the destination's access
         // permissions rather than publishing the temporary file's private mode.
         // Fail before publishing if chmod is unavailable or denied.
@@ -1968,6 +2067,7 @@ impl RemoteSession {
         // replacement. The Rust ssh2 wrapper lacks the posix-rename binding.
         // Try the protocol operation first, then use one guarded same-directory
         // Linux mv; never unlink the existing file or copy directly into it.
+        verify()?;
         match self.sftp()?.rename(
             Path::new(partial),
             Path::new(destination),
@@ -1977,6 +2077,7 @@ impl RemoteSession {
             Err(error) if matches!(error.code(), ErrorCode::SFTP(4 | 8 | 11)) => {}
             Err(error) => return Err(error).context("无法发布覆盖文件"),
         }
+        verify()?;
         let from = shell_path(partial);
         let to = shell_path(destination);
         let command = format!(

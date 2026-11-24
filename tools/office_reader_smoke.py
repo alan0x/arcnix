@@ -34,6 +34,16 @@ def fixtures(folder):
         f.truncate(32 * 1024 * 1024 + 1)
 
 
+def office_page(app, suffix, selector):
+    def ready():
+        app.page.wait_for_timeout(75)
+        for ctx in app.browser.contexts:
+            for page in ctx.pages:
+                if page.url.endswith(suffix) and page.locator(selector).count():
+                    return page
+    return eventually(ready, timeout=30)
+
+
 def run():
     out = ROOT / 'artifacts' / 'office-reader' / str(time.time_ns())
     config = dict(version=1, config=dict(servers=[], groups=[], trusted_hosts=[],
@@ -47,6 +57,10 @@ def run():
             p.get_by_role('button', name='Try the local desktop', exact=True).click()
             p.get_by_role('button', name='Read-only mode', exact=True).click()
             expect(p.locator('.connection-state')).to_have_text('Connected locally')
+            p.locator('.desktop-shortcuts').get_by_role('button', name='pgAdmin', exact=True).click()
+            pgadmin = p.locator('.desktop-window.active.app-pgadmin')
+            expect(pgadmin).to_contain_text('Open pgAdmin from a connected SSH server')
+            pgadmin.locator('.window-close').click()
             app.application('Office')
             host = p.locator('.desktop-window.app-office')
             expect(host.locator('.viewer-placeholder')).to_contain_text('DOCX')
@@ -56,26 +70,38 @@ def run():
             app.file('报告.DOCX').dblclick()
 
             def child(kind):
-                def ready():
-                    p.wait_for_timeout(75)
-                    for context in app.browser.contexts:
-                        for page in context.pages:
-                            if page.url.endswith('/document') and page.locator(
-                                    f'.reader-paper[data-kind="{kind}"]').count():
-                                return page
-                return eventually(ready, timeout=30)
+                return office_page(app, '/document', f'.reader-paper[data-kind="{kind}"]')
 
             def pick(name):
-                host.get_by_role('button', name='Open Office document').click()
+                if host.locator('.viewer-placeholder').is_visible():
+                    host.get_by_role('button', name='Open Office document', exact=True).click()
+                else:
+                    reader = office_page(app, '/document', '.reader-paper')
+                    reader.get_by_role('menuitem', name='File', exact=True).click()
+                    reader.get_by_role('menuitem', name='Open Office document', exact=True).click()
                 picker = p.get_by_role('dialog', name='Open Office document')
                 picker.get_by_role('button', name=name, exact=True).click()
                 picker.get_by_role('button', name='Open', exact=True).click()
 
             word = child('writer')
-            expect(host.get_by_role('button', name='Edit Word document')).to_have_count(0)
+            expect(word.get_by_role('button', name='Edit Word document')).to_have_count(0)
             expect(word.locator('.reader-paper')).to_contain_text('本机阅读测试')
             expect(word.locator('.reader-paper td')).to_contain_text('表格内容')
-            zoom = word.locator('output')
+            word.keyboard.press('Control+f')
+            find = word.get_by_role('searchbox', name='Find text')
+            find.fill('preview')
+            expect(word.locator('.syntra-find output')).to_have_text('1 / 1')
+            find.fill('[absent]')
+            expect(word.locator('.syntra-find output')).to_have_text('No matches')
+            find.press('Escape')
+            word.evaluate('window.print = () => {window.printRequested = true}')
+            word.get_by_role('button', name='Print…').click()
+            assert word.evaluate('window.printRequested')
+            word.emulate_media(media='print')
+            expect(word.get_by_role('menubar')).to_be_hidden()
+            expect(word.locator('.reader-paper')).to_be_visible()
+            word.emulate_media(media='screen')
+            zoom = word.locator('.syntra-toolbar output')
             before = zoom.text_content()
             word.get_by_role('button', name='Zoom in').click()
             expect(zoom).not_to_have_text(before)
@@ -119,7 +145,9 @@ def run():
             app.file(folder.name).dblclick()
             app.file('报告.DOCX').dblclick()
             host = p.locator('.desktop-window.app-office')
-            host.get_by_role('button', name='Edit Word document').click()
+            reader = office_page(app, '/document', '.reader-paper')
+            reader.get_by_role('menuitem', name='Edit', exact=True).click()
+            reader.get_by_role('menuitem', name='Edit Word document', exact=True).click()
 
             def editor_ready():
                 p.wait_for_timeout(75)
@@ -137,7 +165,22 @@ def run():
                 const s = getSelection(); s.removeAllRanges(); s.addRange(r);
                 document.dispatchEvent(new Event('selectionchange')); }""")
             editor.get_by_role('button', name='Bold', exact=True).click()
+            editor.get_by_role('button', name='Undo', exact=True).click()
+            expect(editor.get_by_role('button', name='Redo', exact=True)).to_be_enabled()
+            editor.keyboard.press('Control+y')
+            editor.get_by_role('menuitem', name='Format', exact=True).focus()
+            editor.keyboard.press('ArrowDown')
+            expect(editor.get_by_role('menuitem', name='Bold', exact=True)).to_be_focused()
+            editor.keyboard.press('Escape')
+            editor.get_by_role('button', name='Return to reading', exact=True).click()
+            editor.get_by_role('button', name='Keep editing', exact=True).click()
+            run = editor.locator('.writer-surface-run').filter(has_text='Offline document preview').first
+            run.click()
+            editor.get_by_role('combobox', name='Paragraph style').select_option('h2')
+            expect(editor.locator('#body h2')).to_contain_text('已修改')
+            editor.get_by_role('menuitem', name='Format', exact=True).click()
             editor.screenshot(path=str(out / 'word-editing.png'))
+            editor.keyboard.press('Escape')
             editor.get_by_role('button', name='Save as DOCX…').click()
             picker = p.get_by_role('dialog', name='Save as…')
             name = picker.get_by_role('textbox', name='File name')
@@ -155,6 +198,7 @@ def run():
             copy = Document(folder / '修订版.docx')
             assert copy.paragraphs[0].text == '本机阅读测试'
             assert copy.paragraphs[1].text == 'Offline document preview · 已修改'
+            assert copy.paragraphs[1].style.name == 'Heading 2'
             assert any(r.bold for r in copy.paragraphs[1].runs)
             assert copy.tables[0].cell(0, 0).text == '表格内容'
         assert all(sha256(p.read_bytes()).digest() == digest for p, digest in originals.items())

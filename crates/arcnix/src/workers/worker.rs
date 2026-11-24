@@ -79,7 +79,17 @@ pub(crate) type TextAuthorization = (remote::AdminTextRetry, zeroize::Zeroizing<
 
 pub enum Action {
     LocalDesktop(local_desktop::Target, PathBuf),
-    OpenOffice(String),
+    OpenOffice(
+        String,
+        arcnix_core::store::ConfigStore,
+        Option<crate::office_cache::Record>,
+    ),
+    PendingOffice(arcnix_core::store::ConfigStore),
+    SyncOffice(
+        arcnix_core::store::ConfigStore,
+        crate::office_cache::Record,
+        Option<Arc<str>>,
+    ),
     SaveOffice(String, Arc<str>),
     OpenPdf(String, async_channel::Receiver<crate::pdf_reader::Command>),
     PlayVideo {
@@ -253,6 +263,7 @@ pub enum Update {
     LocalDesktop(Result<String, String>),
     Pdf(crate::pdf_reader::Reply),
     Office(Result<crate::office_reader::Document, String>),
+    OfficePending(Result<Vec<String>, String>),
     OfficeSaved(Result<(String, crate::office_reader::Document), String>),
     PgAdmin(crate::pgadmin_ui::Reply),
     Video(Result<Arc<crate::video_player::Source>, String>),
@@ -745,20 +756,87 @@ pub(crate) fn start_with_limiter(
                 }
                 continue;
             }
-            if let Action::OpenOffice(path) = action {
-                if epoch == active_epoch && epoch == generation.load(Ordering::Acquire) {
-                    let result = local_desktop
-                        .as_ref()
-                        .filter(|desktop| crate::office_reader::local_target(&desktop.target))
-                        .ok_or_else(|| "Open Office documents from the local desktop.".to_owned())
-                        .and_then(|desktop| {
-                            desktop
-                                .target
-                                .read_file_bytes(&path, crate::office_reader::LIMIT)
-                                .map_err(|error| format!("{error:#}"))
-                        })
-                        .and_then(|bytes| crate::office_reader::render(&path, &bytes));
-                    send(Update::Office(result));
+            if matches!(
+                &action,
+                Action::OpenOffice(..) | Action::SyncOffice(..) | Action::PendingOffice(..)
+            ) {
+                let check = || {
+                    anyhow::ensure!(
+                        epoch == active_epoch && epoch == generation.load(Ordering::Acquire),
+                        "Session disconnected."
+                    );
+                    Ok(())
+                };
+                let remote = || {
+                    check()?;
+                    let ssh = session.as_ref().context("SSH is disconnected.")?;
+                    let profile = active_profile.as_ref().context("Missing server profile.")?;
+                    let (fingerprint, _) =
+                        session_access.as_ref().context("Missing SSH identity.")?;
+                    Ok::<_, anyhow::Error>((
+                        ssh,
+                        arcnix_core::browser::profile_key(profile, fingerprint),
+                    ))
+                };
+                match action {
+                    Action::PendingOffice(store) => {
+                        let result = remote().and_then(|(_, server)| {
+                            crate::office_cache::pending_paths(&store, &server)
+                        });
+                        send(Update::OfficePending(result.map_err(|e| format!("{e:#}"))));
+                    }
+                    Action::OpenOffice(path, store, replace) => {
+                        let result = check().and_then(|()| {
+                            if let Some(desktop) = &local_desktop {
+                                anyhow::ensure!(
+                                    crate::office_reader::local_target(&desktop.target),
+                                    "This desktop cannot open Office files."
+                                );
+                                let bytes = desktop
+                                    .target
+                                    .read_file_bytes(&path, crate::office_reader::LIMIT)?;
+                                crate::office_reader::render(&path, &bytes)
+                                    .map_err(anyhow::Error::msg)
+                            } else {
+                                let (ssh, server) = remote()?;
+                                let cache =
+                                    crate::office_cache::Cache::lock(&store, &server, &path)?;
+                                cache.open(ssh, replace.as_ref())
+                            }
+                        });
+                        send(Update::Office(result.map_err(|e| format!("{e:#}"))));
+                    }
+                    Action::SyncOffice(store, expected, model) => {
+                        // Persist the edit even if a disconnect invalidated this request's SSH
+                        // epoch.
+                        let result = crate::office_cache::Cache::lock(
+                            &store,
+                            &expected.server,
+                            &expected.path,
+                        )
+                        .and_then(|cache| {
+                            cache.save(&expected, model.as_deref(), |bytes, baseline| {
+                                let (ssh, server) = remote()?;
+                                anyhow::ensure!(
+                                    server == expected.server,
+                                    "The SSH server changed. Your cached copy was kept."
+                                );
+                                ssh.sync_versioned_file(
+                                    &expected.path,
+                                    bytes,
+                                    baseline,
+                                    crate::office_reader::LIMIT,
+                                    check,
+                                )
+                            })
+                        });
+                        send(Update::OfficeSaved(
+                            result
+                                .map(|d| (expected.path, d))
+                                .map_err(|e| format!("{e:#}")),
+                        ));
+                    }
+                    _ => unreachable!(),
                 }
                 continue;
             }

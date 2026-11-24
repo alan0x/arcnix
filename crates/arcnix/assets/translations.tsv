@@ -2828,6 +2828,8 @@ PDF 密码	PDF password
 服务器将计算 SHA-256。重新连接后可在服务器记录中查看结果。	The server computes SHA-256. Find the result in Server records after reconnecting.
 确认停止服务器上的本次校验。	Confirm stopping this verification on the server.
 正在检查 pgAdmin…	Checking pgAdmin…
+请关闭正在运行的 pgAdmin 会话，以便迁移应用目录。	Close the running pgAdmin session to move its app folder.
+请在已连接的 SSH 服务器桌面中打开 pgAdmin，通过隧道访问 PostgreSQL。	Open pgAdmin from a connected SSH server to use its PostgreSQL tunnel.
 尚未安装 pgAdmin	pgAdmin is not installed
 Arcnix 在本机保存自己的 pgAdmin，不会在服务器上安装任何内容。	Arcnix keeps its own copy of pgAdmin on this computer. Nothing is installed on the server.
 此版本的 Arcnix 尚未提供适用于本系统的 pgAdmin 下载。	This version of Arcnix has no pgAdmin download for this system yet.
@@ -2837,8 +2839,6 @@ Arcnix 在本机保存自己的 pgAdmin，不会在服务器上安装任何内�
 地址由服务器解析并通过 SSH 访问。数据库密码由 pgAdmin 询问。	The address is resolved on the server and reached through SSH. pgAdmin asks for the database password.
 PostgreSQL 主机	PostgreSQL host
 PostgreSQL 端口	PostgreSQL port
-请关闭正在运行的 pgAdmin 会话，以便迁移应用目录。	Close the running pgAdmin session to move its app folder.
-请在已连接的 SSH 服务器桌面中打开 pgAdmin，通过隧道访问 PostgreSQL。	Open pgAdmin from a connected SSH server to use its PostgreSQL tunnel.
 打开 pgAdmin	Open pgAdmin
 正在启动 pgAdmin…	Starting pgAdmin…
 重新加载 pgAdmin	Reload pgAdmin
@@ -2890,7 +2890,19 @@ GPU 型号	GPU model
 Office 文档	Office documents
 此文件夹中没有 Office 文档。	No Office documents in this folder.
 打开 DOCX、XLSX 或 PPTX 文件进行阅读。	Open a DOCX, XLSX or PPTX file to read it.
+要阅读本机文件，请在服务器列表中选择“体验本机桌面”，再打开 Office。	To read a file on this computer, select “Try the local desktop” in the server list, then open Office.
 正在打开 Office 文档…	Opening Office document…
+待上传文件	Pending uploads
+没有待上传的文件。	No pending uploads.
+待上传的本地副本	Local copy pending upload
+已保留的本地副本	Preserved local copy
+重新上传	Retry upload
+打开服务器版本	Open server version
+已保存到服务器。	Saved to server.
+正在保存并上传…	Saving and uploading…
+本地修改尚未上传。	Local changes are waiting to sync.
+服务器文件已更改。已保留本地缓存副本。	The server file changed. Your cached copy was kept.
+请连接支持 SFTP 的服务器以打开远程 Office 文件。	Connect to a server with SFTP to open remote Office files.
 仅支持 DOCX、XLSX 和 PPTX 文件。	Supported formats are DOCX, XLSX and PPTX.
 编辑 Word 文档	Edit Word document
 请选择新的 DOCX 文件名。	Choose a new DOCX file name.

@@ -99,7 +99,7 @@ def main():
             expect(search).to_be_focused()
             app_tiles = catalog.locator('.desktop-app-catalog-grid').get_by_role('button')
             expected_apps = ['Files', 'Terminal', 'Code Editor', 'Browser', 'Player', 'Image Viewer', 'PDF Reader',
-                             'Monitor', 'App Center', 'Settings', 'Text Editor']
+                             'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings', 'Text Editor']
             expect(app_tiles).to_have_text(expected_apps)
             search.fill('not an app')
             expect(catalog.get_by_text('No matching apps')).to_be_visible()

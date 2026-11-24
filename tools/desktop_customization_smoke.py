@@ -219,7 +219,7 @@ def main():
 
             app.connect()
             app.workspace('Desktop')
-            default_apps = ['Files', 'Terminal', 'Browser', 'Monitor', 'App Center', 'Settings']
+            default_apps = ['Files', 'Terminal', 'Browser', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings']
             expect(p.locator('.desktop-shortcuts .desktop-app-label').filter(
                 has_text=re.compile('^(' + '|'.join(default_apps) + ')$'),
             )).to_have_text(default_apps)
@@ -299,7 +299,7 @@ def main():
             expect(settings().locator('.dock-icons-settings').get_by_role('slider', name='Dock icon size', exact=True)).to_be_visible()
             pinned = shortcut_options('App icons')
             pinned_order = ['Home', 'Files', 'Terminal', 'Code Editor', 'Browser', 'Player',
-                            'Monitor', 'App Center', 'Settings', 'Text Editor', 'Trash']
+                            'Image Viewer', 'PDF Reader', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings', 'Text Editor', 'Trash']
             expect(pinned.locator('.preference-check')).to_have_text(pinned_order)
             for label in ('Player', 'Text Editor', 'Code Editor'):
                 expect(pinned.get_by_role('checkbox', name=label, exact=True)).not_to_be_checked()
@@ -637,7 +637,7 @@ def main():
                 tab = tabs.get_by_role('button', name=label, exact=True)
                 tab.click()
                 expect(tab).to_have_attribute('aria-pressed', 'true')
-                expect(preferences_pane.locator('.desktop-settings-pane')).to_be_visible()
+                expect(preferences_pane.locator('.desktop-settings-pane:visible').first).to_be_visible()
                 assert preferences_pane.evaluate('el => el.scrollWidth <= el.clientWidth'), label
                 assert preferences_pane.evaluate('el => el.scrollTop === 0'), label
                 if label == 'Appearance':

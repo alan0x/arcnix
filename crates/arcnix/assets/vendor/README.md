@@ -20,4 +20,4 @@ The full workbench dependency graph, npm tarballs and integrity hashes are pinne
 to regenerate the embedded bundle. The client serves its JavaScript, workers, fonts,
 themes and translations from a local WebView protocol.
 
-The Word editing surface in `syntra/writer-surface.js` is from [Syntra Office](https://github.com/taidge/syntra/tree/7ac8cd60e47e83fed783720c7efb36600a477778), under the included MIT license. Keep it at the same revision as the Rust Office dependencies.
+The Office command bar and Writer editing surface are supplied by the pinned syntra-office-ui dependency.

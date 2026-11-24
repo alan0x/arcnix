@@ -248,6 +248,7 @@ fn local_app(s: &State, page: WorkspacePage) -> bool {
             | WorkspacePage::Code
             | WorkspacePage::ImageViewer
             | WorkspacePage::Office
+            | WorkspacePage::PgAdmin
             | WorkspacePage::PdfReader
             | WorkspacePage::Player
             | WorkspacePage::Editor
@@ -262,9 +263,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
         .filter(|page| s.local_desktop.is_none() || local_app(s, *page))
         .filter(|page| match page {
             WorkspacePage::Browser => cfg!(windows),
-            WorkspacePage::PgAdmin => arcnix_core::pgadmin::supported_platform(),
             WorkspacePage::Docker => s.server_apps.applications.docker,
-            WorkspacePage::Office => office_reader::available(s),
             _ => true,
         })
         .collect()
@@ -374,7 +373,7 @@ pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
         WorkspacePage::Player => Icon::Play,
         WorkspacePage::ImageViewer => Icon::Image,
         WorkspacePage::PdfReader => Icon::File,
-        WorkspacePage::Office => Icon::File,
+        WorkspacePage::Office => Icon::Syntra,
         WorkspacePage::Browser => Icon::Browser,
         WorkspacePage::Docker => Icon::Docker,
         WorkspacePage::PgAdmin => Icon::Database,
@@ -638,10 +637,10 @@ impl Ui {
     }
 
     pub(crate) fn focus_desktop_app(&self, page: WorkspacePage) {
-        if self.state.with(|s| {
-            (page == WorkspacePage::Office && !office_reader::available(s))
-                || (s.local_desktop.is_some() && !local_app(s, page))
-        }) {
+        if self
+            .state
+            .with(|s| s.local_desktop.is_some() && !local_app(s, page))
+        {
             return;
         }
         if page.is_files()

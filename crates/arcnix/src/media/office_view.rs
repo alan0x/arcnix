@@ -1,4 +1,4 @@
-//! A read-only child WebView serving one already-rendered document.
+//! Isolated Office document WebView with Syntra menus, reader and Writer surface.
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 use std::task::Waker;
@@ -8,7 +8,7 @@ use glory::wry::shell::NativeWindow;
 use wry::{WebView, WebViewBuilder};
 
 use crate::native_viewport::Viewport;
-use crate::office_reader::Document;
+use crate::office_reader::{self, Document};
 use crate::{Ui, WorkspacePage, desktop_system_settings, server_desktop};
 
 #[cfg(windows)]
@@ -40,9 +40,11 @@ fn resource(
             ),
             ("GET", "/writer-surface.js", Some(_)) => (
                 "text/javascript",
-                Cow::Borrowed(include_bytes!(
-                    "../../assets/vendor/syntra/writer-surface.js"
-                )),
+                Cow::Borrowed(syntra_office_ui::WRITER_SURFACE_JS),
+            ),
+            ("GET", "/embedded-writer.js", Some(_)) => (
+                "text/javascript",
+                Cow::Borrowed(syntra_office_ui::EMBEDDED_WRITER_JS),
             ),
             ("GET", "/model.json", Some(model)) => {
                 ("application/json", Cow::Owned(model.as_bytes().to_vec()))
@@ -78,28 +80,40 @@ impl View {
     fn new(
         window: &NativeWindow,
         document: Arc<Document>,
-        chinese: bool,
+        ui: &Ui,
         draft: Option<Arc<str>>,
-        dirty: bool,
         wake: Option<Waker>,
     ) -> Result<Self> {
         let source = document.clone();
         let (send, messages) = mpsc::channel();
         let editing = draft.is_some();
         let limit = syntra_doc_engine::MAX_DOCUMENT_CONTENT_BYTES;
-        let script = if editing {
-            format!(
-                "window.officeEditor = {};",
-                serde_json::json!({"zh":chinese,"limit":limit,"dirty":dirty})
+        let menus = syntra_office_ui::embedded_menus(document.kind);
+        let (chinese, dirty, remote, editable) = ui.state.with(|s| {
+            (
+                desktop_system_settings::language(s) == arcnix_core::Language::SimplifiedChinese,
+                s.office.dirty,
+                s.office.remote().is_some(),
+                office_reader::can_edit(s),
             )
+        });
+        let options = serde_json::json!({"zh":chinese,"menus":menus,"kind":document.kind,"width":document.width_px,
+            "editable":editable,"limit":limit,"dirty":dirty,"remote":remote});
+        let css = serde_json::to_string(syntra_office_ui::COMMAND_BAR_CSS)?;
+        let reader = if editing {
+            ""
         } else {
-            let options =
-                serde_json::json!({"kind":document.kind,"width":document.width_px,"zh":chinese});
-            format!(
-                "const officeOptions = {options};\n{}",
-                include_str!("../../assets/office-reader.js")
-            )
+            syntra_office_ui::READER_JS
         };
+        let script = format!(
+            "window.officeOptions = {options};\n{}\n{reader}\naddEventListener('DOMContentLoaded', () => {{
+                const style = document.createElement('style'); style.textContent = {css}; document.head.append(style);
+                if (window.SyntraOffice.mountReader) window.SyntraOffice.mountReader({{...officeOptions,
+                    open: () => window.ipc.postMessage('open'),
+                    edit: officeOptions.editable ? () => window.ipc.postMessage('edit') : null}});
+            }}); addEventListener('pointerdown', () => window.ipc.postMessage('focus'), true);",
+            syntra_office_ui::COMMAND_BAR_JS
+        );
         let entry = if editing { "/edit" } else { "/document" };
         let url = format!("{ORIGIN}{entry}");
         let allowed = url.clone();
@@ -117,7 +131,7 @@ impl View {
             .with_download_started_handler(|_, _| false)
             .with_ipc_handler(move |req| {
                 if req.body().len() <= limit + 64
-                    && (req.body() == "focus" || editing)
+                    && (matches!(req.body().as_str(), "focus" | "open" | "edit") || editing)
                     && send.send(req.into_body()).is_ok()
                     && let Some(wake) = &wake
                 {
@@ -195,17 +209,7 @@ impl Host {
             .is_none_or(|v| !Arc::ptr_eq(&v.document, &document) || v.editing != draft.is_some())
         {
             self.view = None;
-            let chinese = ui.state.with(|s| {
-                desktop_system_settings::language(s) == arcnix_core::Language::SimplifiedChinese
-            });
-            match View::new(
-                window,
-                document,
-                chinese,
-                draft,
-                ui.state.with(|s| s.office.dirty),
-                wake.cloned(),
-            ) {
+            match View::new(window, document, ui, draft, wake.cloned()) {
                 Ok(view) => self.view = Some(view),
                 Err(e) => {
                     ui.state.revise(|s| {
@@ -232,6 +236,12 @@ impl Host {
                 if bounds.is_some() && ui.state.with(|s| s.workspace_page != WorkspacePage::Office)
                 {
                     ui.open_desktop_app(WorkspacePage::Office);
+                }
+            } else if !view.editing && bounds.is_some() {
+                match message.as_str() {
+                    "open" if ui.state.with(office_reader::available) => office_reader::browse(ui),
+                    "edit" => office_reader::begin_edit(ui),
+                    _ => {}
                 }
             } else if view.editing
                 && ui

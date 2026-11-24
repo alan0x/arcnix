@@ -45,6 +45,7 @@ icons! {
     Home => "home", "home";
     Folder => "folder", "files";
     File => "file", "document";
+    Syntra => "syntra", "office";
     Grid => "grid", "grid";
     List => "list";
     Sidebar => "sidebar";
