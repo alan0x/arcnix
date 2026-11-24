@@ -110,9 +110,12 @@ def add_server(root, data, server):
             'Username': server['user'],
             'ConnectionParameters': {'sslmode': 'prefer', 'connect_timeout': 15},
         }}}, file)
+    # The backend has no console on Windows; without this flag each setup
+    # step would open a console window.
+    hidden = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     for command in (['setup-db'], ['load-servers', path]):
         subprocess.run([sys.executable, '-s', '-B', os.path.join(root, 'setup.py'), *command],
-                       stdin=subprocess.DEVNULL, check=True, cwd=data)
+                       stdin=subprocess.DEVNULL, check=True, cwd=data, creationflags=hidden)
 
 
 def watch_parent():

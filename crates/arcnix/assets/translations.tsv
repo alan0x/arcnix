@@ -2799,6 +2799,7 @@ SSH 服务器不允许转发到此 PostgreSQL 地址。	The SSH server does not 
 保存文件	Save file
 无法保存 {name}	Could not save {name}
 在访达中显示	Show in Finder
+在文件资源管理器中显示	Show in File Explorer
 搜索回收站	Search Trash
 清空回收站	Empty Trash
 清空回收站已中断	Empty Trash interrupted

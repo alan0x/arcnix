@@ -31,16 +31,25 @@ const LOG_TAIL: u64 = 2048;
 
 /// Components are built from official pgAdmin releases in this repository's
 /// `arcnix-build` branch and published as release `pgadmin-<version>-<build>`.
-const PACKAGES: &str = "https://github.com/arcnix-org/pgadmin4/releases/download/pgadmin-9.19-2";
+const PACKAGES: &str = "https://github.com/arcnix-org/pgadmin4/releases/download/pgadmin-9.19-3";
 
 /// (OS, architecture, file, size, SHA-256) for each published platform.
-const PLATFORMS: &[(&str, &str, &str, u64, &str)] = &[(
-    "macos",
-    "aarch64",
-    "pgadmin-9.19-2-macos-arm64.zip",
-    94_755_232,
-    "cf725ea7a4e21b606cb65564f175adc03d897ec2109ae096104c98c268cf882f",
-)];
+const PLATFORMS: &[(&str, &str, &str, u64, &str)] = &[
+    (
+        "macos",
+        "aarch64",
+        "pgadmin-9.19-3-macos-arm64.zip",
+        92_309_841,
+        "78f2dbfd72f301a2330d636838c0fea485d1a32b8d4fc204d1484475e35f170f",
+    ),
+    (
+        "windows",
+        "x86_64",
+        "pgadmin-9.19-3-windows-x64.zip",
+        84_540_871,
+        "da90498ae697b2e0a99fa9636679c4eb2a7a753394db886374a35e2d9c5a6b15",
+    ),
+];
 
 /// The published package for this platform, if one has been built.
 pub fn package() -> Option<Asset> {
@@ -580,6 +589,9 @@ fn backend(
         "APPDATA",
         "LOCALAPPDATA",
         "CommonProgramFiles",
+        // pgAdmin looks up local PostgreSQL servers in the Windows registry.
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432",
     ] {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
