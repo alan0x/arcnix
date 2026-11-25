@@ -8,6 +8,7 @@ use arcnix_core::file_capabilities::{
     DirectoryReader, DocumentDestinationWriter, DocumentReader, DocumentWriter, EntryKind,
     FileEntryCreator, FileRenamer, TextPage, TextPageReader,
 };
+use arcnix_core::host_capabilities::DiskInventoryReader;
 use arcnix_core::local_desktop::{Target, join};
 use arcnix_core::metrics::ResourceReader;
 use arcnix_core::settings_capabilities::{
@@ -38,6 +39,7 @@ impl Session {
             AppAction::Discover => Reply::Applications(Default::default()),
             AppAction::Clock => Reply::Clock(target.read_host_clock()?),
             AppAction::DeviceInfo => Reply::DeviceInfo(target.device_info()?),
+            AppAction::Disks => Reply::Disks(target.read_disk_inventory()?),
             AppAction::ReadTimeZone => Reply::TimeZone(arcnix_core::desktop_time_zone::TimeZones {
                 system: false,
                 name: None,

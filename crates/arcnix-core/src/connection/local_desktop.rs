@@ -93,6 +93,45 @@ impl crate::metrics::ResourceReader for Target {
     }
 }
 
+impl crate::host_capabilities::DiskInventoryReader for Target {
+    fn read_disk_inventory(&self) -> Result<crate::disks::Snapshot> {
+        const OPERATION: &str = "Disk inventory";
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+
+            use crate::host::{parse_powershell_json, powershell_json_script};
+            use crate::observability::windows_host::{DISKS, DiskReply};
+            if matches!(self, Self::Wsl(_)) {
+                let bytes = self.run_script(crate::disks::command(), &[OPERATION], &[])?;
+                return crate::disks::parse(std::str::from_utf8(&bytes)?);
+            }
+            let mut command = Command::new(windows_host::powershell()?);
+            command.creation_flags(0x08000000).args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &powershell_json_script(DISKS),
+            ]);
+            let bytes = Self::run_command(command, OPERATION, &[])?;
+            parse_powershell_json::<DiskReply>(std::str::from_utf8(&bytes)?, OPERATION)?.snapshot()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let bytes = self.run_script(crate::disks::command(), &[OPERATION], &[])?;
+            crate::disks::parse(std::str::from_utf8(&bytes)?)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use crate::observability::darwin_host::{DISKS, parse_disks};
+            let bytes = self.run_script(DISKS, &[OPERATION], &[])?;
+            parse_disks(std::str::from_utf8(&bytes)?)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        anyhow::bail!("{OPERATION} is unavailable on this desktop")
+    }
+}
+
 impl Target {
     pub fn read_only(&self) -> bool {
         matches!(self, Self::ReadOnlyHost)
