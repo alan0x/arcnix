@@ -100,6 +100,7 @@ impl Ui {
             Err(error) => self.state.revise(|s| {
                 if let Some(editor) = &mut s.nginx.editor {
                     editor.error = i18n::translate(&format!("{error:#}"));
+                    editor.error_at = None;
                 }
             }),
         }
@@ -165,12 +166,34 @@ pub(super) fn event(
     None
 }
 
-fn renewal(reading: &Certificates) -> String {
+/// A folder other than Arcnix's that a site serves Let's Encrypt challenge
+/// files from: some other ACME client gets those certificates.
+fn challenge_folder(s: &State) -> Option<String> {
+    let snapshot = s.nginx.snapshot.as_ref()?;
+    snapshot
+        .sites
+        .iter()
+        .filter(|site| site.enabled)
+        .find_map(|site| {
+            let text = site.file.text.as_deref()?;
+            nginx_site::read_in(text, site.scope.as_deref())
+                .ok()?
+                .acme
+                .filter(|root| root != nginx_site::ACME_ROOT)
+        })
+}
+
+fn renewal(reading: &Certificates, folder: Option<String>) -> String {
     let certbot = matches!(reading.renewal.as_str(), "timer" | "cron");
     if !reading.others.is_empty() && !certbot {
         let tools = reading.others.join(", ");
         return i18n::translate(&format!(
             "Found automatic renewal by {tools}. Arcnix shows when each certificate expires, but does not manage that renewal."
+        ));
+    }
+    if let Some(folder) = folder.filter(|_| !certbot) {
+        return i18n::translate(&format!(
+            "The sites serve Let's Encrypt challenge files from {folder}, so an ACME client such as acme.sh probably renews these certificates. Arcnix cannot see it: it reads the server as the SSH account, which cannot read root's crontab. Check that each date stays more than a month away; a certificate due within 14 days is marked."
         ));
     }
     i18n::translate(match (reading.certbot, reading.renewal.as_str()) {
@@ -199,6 +222,14 @@ pub(super) fn overview(ui: &Ui) -> impl Widget + use<> {
                 text()
                     .class("section-title")
                     .content(i18n::bind("Certificates")),
+                text().class("hint").content(state.map(|s| {
+                    s.nginx
+                        .certificates
+                        .reading
+                        .as_ref()
+                        .map(|r| renewal(r, challenge_folder(s)))
+                        .unwrap_or_default()
+                })),
                 col().class("nginx-sites").fill(
                     each(state.map(|s| {
                         s.nginx
@@ -230,14 +261,6 @@ pub(super) fn overview(ui: &Ui) -> impl Widget + use<> {
                         ))
                     }),
                 ),
-                text().class("hint").content(state.map(|s| {
-                    s.nginx
-                        .certificates
-                        .reading
-                        .as_ref()
-                        .map(renewal)
-                        .unwrap_or_default()
-                })),
             ))
         },
     )
@@ -358,13 +381,16 @@ pub(super) fn lets_encrypt(ui: &Ui) -> impl Widget + use<> {
         text().class("nginx-path").content(state.map(move |s| site(s).certificate_names.join("  "))),
         when(state.map(move |s| { let site = site(s); site.plain_http && site.acme.is_none() && !site.certificate_names.is_empty() }), move || {
             let ui = prepare.clone();
-            row().class("nginx-form-actions").fill(
-                sapid::button()
-                    .class("button")
-                    .label(i18n::bind("Serve challenge files"))
-                    .enabled(state.map(writable))
-                    .on_press(move || ui.nginx_change(Change::Acme(Some(nginx_site::ACME_ROOT.into())))),
-            )
+            col().class("form-stack").fill((
+                row().class("nginx-form-actions").fill(
+                    sapid::button()
+                        .class("button")
+                        .label(i18n::bind("Serve challenge files"))
+                        .enabled(state.map(writable))
+                        .on_press(move || ui.nginx_change_at(Some("acme".into()), Change::Acme(Some(nginx_site::ACME_ROOT.into())))),
+                ),
+                super::form::error_at(state, "acme"),
+            ))
         }),
         when(state.map(move |s| site(s).acme.is_some() && !elsewhere(s)), move || {
             let ui = issue.clone();

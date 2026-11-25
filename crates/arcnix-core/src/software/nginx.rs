@@ -1302,6 +1302,9 @@ pub fn publish(
         container,
         check_as: check_place(snapshot, target, create),
         local_probe: true,
+        // Keep a file's Windows line endings, so the diff shows only what
+        // changed and the rest of the file stays as written.
+        crlf: !create && content.contains("\r\n"),
         ..Default::default()
     };
     let job = if create {

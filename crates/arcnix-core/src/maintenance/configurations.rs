@@ -39,6 +39,10 @@ pub struct Spec {
     /// name resolves to, and accept any answer except a server error.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local_probe: bool,
+    /// The Nginx file uses Windows line endings (CRLF), which the candidate
+    /// keeps so only the lines that change differ.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub crlf: bool,
 }
 impl Default for Spec {
     fn default() -> Self {
@@ -56,6 +60,7 @@ impl Default for Spec {
             container: String::new(),
             check_as: String::new(),
             local_probe: false,
+            crlf: false,
         }
     }
 }
@@ -111,7 +116,7 @@ impl Spec {
             "Invalid configuration check path"
         );
         ensure!(
-            !self.local_probe || self.kind == Kind::Nginx,
+            (!self.local_probe && !self.crlf) || self.kind == Kind::Nginx,
             "Invalid health check settings"
         );
         match self.kind {
@@ -183,9 +188,20 @@ pub fn runner() -> String {
 }
 impl Job {
     pub fn publish(mut spec: Spec, content: &str) -> Result<Self> {
-        let content = content.replace("\r\n", "\n");
+        let lf = content.replace("\r\n", "\n");
+        // Every line ends the way the file's lines do.
+        let content = if spec.crlf {
+            lf.replace('\n', "\r\n")
+        } else {
+            lf
+        };
+        let lone_cr = if spec.crlf {
+            content.replace("\r\n", "").contains('\r')
+        } else {
+            content.contains('\r')
+        };
         ensure!(
-            !content.is_empty() && content.len() <= LIMIT && !content.contains(['\0', '\r']),
+            !content.is_empty() && content.len() <= LIMIT && !content.contains('\0') && !lone_cr,
             "Enter UTF-8 configuration text up to 128 KiB with LF line endings"
         );
         spec.sha256 = hash(content.as_bytes());
@@ -496,6 +512,23 @@ mod tests {
             "nginx: [emerg] unknown directive \"oops\""
         );
         assert_eq!(preview_failure("not json"), None);
+    }
+    #[test]
+    fn a_file_with_windows_line_endings_keeps_them() {
+        let content = |j: &Job| j.content.clone().unwrap();
+        // Lines added in LF get the file's CRLF too.
+        let crlf = Spec {
+            crlf: true,
+            ..Default::default()
+        };
+        let j = Job::publish(crlf.clone(), "events {}\r\nhttp {\n}\r\n").unwrap();
+        assert_eq!(content(&j), "events {}\r\nhttp {\r\n}\r\n");
+        assert_eq!(j.record.spec.sha256, hash(content(&j).as_bytes()));
+        assert!(Job::publish(crlf.clone(), "a\rb\r\n").is_err());
+        // Other files are published with LF, as before.
+        let j = Job::publish(Spec::default(), "events {}\r\n").unwrap();
+        assert_eq!(content(&j), "events {}\n");
+        assert!(Job::publish(Spec::default(), "a\rb\n").is_err());
     }
     #[test]
     fn contents_remain_outside_persisted_metadata() {

@@ -84,6 +84,12 @@ impl Ui {
     /// Applies one change to the file. A change that adds or removes parts
     /// moves the positions fields are known by, so typed values are dropped.
     pub(super) fn nginx_change(&self, change: Change) {
+        self.nginx_change_at(None, change);
+    }
+
+    /// Applies a change from a control; if it is refused, the reason is
+    /// shown under that control (see [`error_below`]).
+    pub(super) fn nginx_change_at(&self, at: Option<String>, change: Change) {
         let structural = matches!(
             change,
             Change::AddLocation(..)
@@ -127,25 +133,73 @@ impl Ui {
                     editor.site = site;
                     editor.main = main;
                     editor.error.clear();
+                    editor.error_at = None;
                     if structural {
                         editor.drafts.clear();
                         editor.adding = Adding::default();
                     }
                 }
-                Err(error) => editor.error = i18n::translate(&format!("{error:#}")),
+                Err(error) => {
+                    editor.error = i18n::translate(&format!("{error:#}"));
+                    editor.error_at = at;
+                }
             }
         });
     }
 
     /// A typed value: kept as typed, and written into the file when valid.
     fn nginx_typed(&self, field: String, value: String, change: Change) {
+        let at = Some(field.clone());
         self.state.revise(|s| {
             if let Some(editor) = &mut s.nginx.editor {
                 editor.drafts.insert(field, value);
             }
         });
-        self.nginx_change(change);
+        self.nginx_change_at(at, change);
     }
+}
+
+/// Whether the editor's error came from the control at `at`.
+fn error_here(s: &State, at: &str) -> bool {
+    s.nginx
+        .editor
+        .as_ref()
+        .is_some_and(|e| !e.error.is_empty() && e.error_at.as_deref() == Some(at))
+}
+
+/// Why a change from the control at `at` was refused, right under it.
+pub(super) fn error_below(
+    state: Cage<State>,
+    at: impl Fn(&State) -> String + 'static,
+) -> impl Widget {
+    let at = Rc::new(at);
+    let shown = at.clone();
+    text()
+        .class(state.map(move |s| {
+            if error_here(s, &shown(s)) {
+                "nginx-field-error"
+            } else {
+                "hidden"
+            }
+            .to_owned()
+        }))
+        .selectable(true)
+        .content(state.map(move |s| {
+            if error_here(s, &at(s)) {
+                s.nginx
+                    .editor
+                    .as_ref()
+                    .map(|e| e.error.clone())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            }
+        }))
+}
+
+/// [`error_below`] for a fixed control.
+pub(super) fn error_at(state: Cage<State>, at: &'static str) -> impl Widget {
+    error_below(state, move |_| at.to_owned())
 }
 
 fn input_field<F, V, C>(
@@ -162,8 +216,10 @@ where
 {
     let state = ui.state;
     let ui = ui.clone();
-    super::field(
-        label,
+    let field = Rc::new(field);
+    let anchor = field.clone();
+    col().class("field").fill((
+        text().class("field-label").content(i18n::bind(label)),
         input()
             .name(i18n::bind(label))
             .enabled(state.map(writable))
@@ -176,7 +232,8 @@ where
                     }
                 }
             }),
-    )
+        error_below(state, move |s| anchor(s)),
+    ))
 }
 
 fn check<K, C>(ui: &Ui, label: &'static str, checked: K, change: C) -> impl Widget + use<K, C>
@@ -186,16 +243,19 @@ where
 {
     let state = ui.state;
     let ui = ui.clone();
-    sapid::checkbox()
-        .class("preference-check")
-        .label(i18n::bind(label))
-        .enabled(state.map(writable))
-        .checked(state.map(checked))
-        .on_checked_change(move |value| {
-            if let Some(change) = state.with(|s| change(s, value)) {
-                ui.nginx_change(change);
-            }
-        })
+    col().class("nginx-check").fill((
+        sapid::checkbox()
+            .class("preference-check")
+            .label(i18n::bind(label))
+            .enabled(state.map(writable))
+            .checked(state.map(checked))
+            .on_checked_change(move |value| {
+                if let Some(change) = state.with(|s| change(s, value)) {
+                    ui.nginx_change_at(Some(label.to_owned()), change);
+                }
+            }),
+        error_at(state, label),
+    ))
 }
 
 /// A typed value for something not added yet.
@@ -340,7 +400,7 @@ fn www_choice(ui: &Ui) -> impl Widget + use<> {
                             _ => false,
                         }
                     }))
-                    .on_press(move || ui.nginx_change(Change::Www(choice)))
+                    .on_press(move || ui.nginx_change_at(Some("www".into()), Change::Www(choice)))
             };
             col().class("form-stack").fill((
                 text().class("field-label").content(i18n::bind("With or without www")),
@@ -349,6 +409,7 @@ fn www_choice(ui: &Ui) -> impl Widget + use<> {
                     option(|b| i18n::translate(&format!("Use {b}")), Some(true)),
                     option(|b| i18n::translate(&format!("Use www.{b}")), Some(false)),
                 )),
+                error_at(state, "www"),
                 text().class("hint").content(i18n::bind(
                     "Using one name sends visitors of the other to it with a permanent redirect, so search engines see one site.",
                 )),
@@ -490,10 +551,11 @@ fn https(ui: &Ui) -> impl Widget + use<> {
                                             })
                                         });
                                         if let Some(change) = change {
-                                            ui.nginx_change(change);
+                                            ui.nginx_change_at(Some("enable-https".into()), change);
                                         }
                                     }
                                 })),
+                            error_at(state, "enable-https"),
                         ))
                     }),
                     super::certificates::lets_encrypt(&ui),
@@ -649,6 +711,8 @@ fn convert_row(ui: &Ui, path: Path) -> impl Widget + use<> {
             };
             let (label_path, value_path, input_path, apply_path) =
                 (path.clone(), path.clone(), path.clone(), path.clone());
+            let convert_at = format!("convert:{}", key(&path));
+            let apply_at = convert_at.clone();
             let apply = ui.clone();
             let cancel = ui.clone();
             col().class("nginx-convert form-stack").fill((
@@ -705,10 +769,14 @@ fn convert_row(ui: &Ui, path: Path) -> impl Widget + use<> {
                         .label(i18n::bind("Change"))
                         .on_press(move || {
                             if let Some((kind, value)) = apply.state.with(|s| converting(s, &apply_path)) {
-                                apply.nginx_change(Change::LocationKind(apply_path.clone(), kind, value));
+                                apply.nginx_change_at(
+                                    Some(apply_at.clone()),
+                                    Change::LocationKind(apply_path.clone(), kind, value),
+                                );
                             }
                         }),
                 )),
+                error_below(state, move |_| convert_at.clone()),
             ))
         }
     })
@@ -862,7 +930,10 @@ fn redirect_fields(ui: &Ui, path: Path) -> impl Widget + use<> {
             .pressed(state.map(move |s| get(s, &pressed).is_some_and(|v| v.0 == code)))
             .on_press(move || {
                 if let Some((_, target)) = ui.state.with(|s| get(s, &path)) {
-                    ui.nginx_change(Change::Redirect(path.clone(), code.into(), target));
+                    ui.nginx_change_at(
+                        Some(format!("redirect:{}", key(&path))),
+                        Change::Redirect(path.clone(), code.into(), target),
+                    );
                 }
             })
     });
@@ -1013,8 +1084,10 @@ fn rows_editor(ui: Ui, block: Path) -> impl Widget {
                     let remove = ui.clone();
                     let path = r.path.clone();
                     let field = format!("row:{}", key(&r.path));
+                    let anchor = field.clone();
+                    let error = error_below(state, move |_| anchor.clone());
                     if r.block {
-                        return row().class("nginx-row").fill((
+                        return col().class("nginx-row-item").fill((row().class("nginx-row").fill((
                             text().class("nginx-row-name").content(r.name.clone()),
                             text()
                                 .class("nginx-row-block subtle")
@@ -1022,13 +1095,13 @@ fn rows_editor(ui: Ui, block: Path) -> impl Widget {
                             text()
                                 .class("hint")
                                 .content(i18n::bind("Edit this block in File")),
-                        ));
+                        )), error));
                     }
                     let typed = ui.clone();
                     let (value_field, change_field) = (field.clone(), field);
                     let (value_path, change_path) = (path.clone(), path.clone());
                     let block = block.clone();
-                    row().class("nginx-row").fill((
+                    col().class("nginx-row-item").fill((row().class("nginx-row").fill((
                         text().class("nginx-row-name").content(r.name.clone()),
                         input()
                             .class("nginx-row-args")
@@ -1054,7 +1127,7 @@ fn rows_editor(ui: Ui, block: Path) -> impl Widget {
                             .class("icon-button")
                             .enabled(state.map(writable))
                             .on_press(move || remove.nginx_change(Change::RemoveRow(path.clone()))),
-                    ))
+                    )), error))
                 }
             }),
         when(state.map(adding.clone()), {
@@ -1066,42 +1139,47 @@ fn rows_editor(ui: Ui, block: Path) -> impl Widget {
                 let cancel = ui.clone();
                 let block = block.clone();
                 let (k1, k2) = (block_key.clone(), block_key.clone());
-                row().class("nginx-row nginx-row-new").fill((
-                    new_row(&ui, &block_key, "New directive", "directive", true),
-                    new_row(&ui, &block_key, "Arguments", "arguments", false),
-                    sapid::button()
-                        .class("button")
-                        .label(i18n::bind("Add"))
-                        .enabled(state.map(move |s| {
-                            writable(s)
-                                && s.nginx
-                                    .editor
-                                    .as_ref()
-                                    .and_then(|e| e.adding.rows.get(&k1))
-                                    .is_some_and(|r| !r.0.trim().is_empty())
-                        }))
-                        .on_press(move || {
-                            let change = add.state.with(|s| {
-                                let (name, args) =
-                                    s.nginx.editor.as_ref()?.adding.rows.get(&k2)?.clone();
-                                Some(Change::AddRow(block.clone(), name, args))
-                            });
-                            if let Some(change) = change {
-                                add.nginx_change(change);
-                            }
-                        }),
-                    icon_action("Cancel", Icon::Close)
-                        .class("icon-button")
-                        .on_press({
-                            let key = block_key.clone();
-                            move || {
-                                cancel.state.revise(|s| {
-                                    if let Some(editor) = &mut s.nginx.editor {
-                                        editor.adding.rows.remove(&key);
-                                    }
-                                })
-                            }
-                        }),
+                let add_at = format!("add-row:{block_key}");
+                let shown_at = add_at.clone();
+                col().class("nginx-row-item").fill((
+                    row().class("nginx-row nginx-row-new").fill((
+                        new_row(&ui, &block_key, "New directive", "directive", true),
+                        new_row(&ui, &block_key, "Arguments", "arguments", false),
+                        sapid::button()
+                            .class("button")
+                            .label(i18n::bind("Add"))
+                            .enabled(state.map(move |s| {
+                                writable(s)
+                                    && s.nginx
+                                        .editor
+                                        .as_ref()
+                                        .and_then(|e| e.adding.rows.get(&k1))
+                                        .is_some_and(|r| !r.0.trim().is_empty())
+                            }))
+                            .on_press(move || {
+                                let change = add.state.with(|s| {
+                                    let (name, args) =
+                                        s.nginx.editor.as_ref()?.adding.rows.get(&k2)?.clone();
+                                    Some(Change::AddRow(block.clone(), name, args))
+                                });
+                                if let Some(change) = change {
+                                    add.nginx_change_at(Some(add_at.clone()), change);
+                                }
+                            }),
+                        icon_action("Cancel", Icon::Close)
+                            .class("icon-button")
+                            .on_press({
+                                let key = block_key.clone();
+                                move || {
+                                    cancel.state.revise(|s| {
+                                        if let Some(editor) = &mut s.nginx.editor {
+                                            editor.adding.rows.remove(&key);
+                                        }
+                                    })
+                                }
+                            }),
+                    )),
+                    error_below(state, move |_| shown_at.clone()),
                 ))
             }
         }),
@@ -1219,9 +1297,10 @@ fn locations(ui: &Ui) -> impl Widget + use<> {
                                     })
                                 });
                                 if let Some(change) = change {
-                                    add.nginx_change(change);
+                                    add.nginx_change_at(Some("add-location".into()), change);
                                 }
                             })),
+                        error_at(state, "add-location"),
                     )),
                 )),
             )
@@ -1270,8 +1349,9 @@ fn access(ui: &Ui) -> impl Widget + use<> {
                                     .enabled(state.map(writable))
                                     .on_press({
                                         let ui = off.clone();
-                                        move || ui.nginx_change(Change::Auth(None))
+                                        move || ui.nginx_change_at(Some("auth".into()), Change::Auth(None))
                                     })),
+                                error_at(state, "auth"),
                             ))
                         }
                     }),
@@ -1299,10 +1379,11 @@ fn access(ui: &Ui) -> impl Widget + use<> {
                                             s.nginx.editor.as_ref().map(|e| Change::Auth(Some((e.adding.realm.clone(), e.adding.file.clone()))))
                                         });
                                         if let Some(change) = change {
-                                            ui.nginx_change(change);
+                                            ui.nginx_change_at(Some("auth".into()), change);
                                         }
                                     }
                                 })),
+                            error_at(state, "auth"),
                         ))
                     }),
                 )),
@@ -1389,10 +1470,11 @@ fn rules(ui: &Ui) -> impl Widget + use<> {
                         .state
                         .with(|s| s.nginx.editor.as_ref().map(|e| Change::AddRule(!e.adding.rule_deny, e.adding.rule_address.clone())));
                     if let Some(change) = change {
-                        add.nginx_change(change);
+                        add.nginx_change_at(Some("add-rule".into()), change);
                     }
                 }),
         )),
+        error_at(state, "add-rule"),
         check(
             ui,
             "Refuse every other address",
@@ -1445,7 +1527,7 @@ fn rate_limit(ui: &Ui) -> impl Widget + use<> {
                     .label(i18n::bind("No limit"))
                     .enabled(state.map(writable))
                     .pressed(state.map(move |s| current(s).is_none()))
-                    .on_press(move || ui.nginx_change(Change::Limit(None)))
+                    .on_press(move || ui.nginx_change_at(Some("limit".into()), Change::Limit(None)))
             },
             each(state.map(zones)).key(|z: &String| z.clone()).children({
                 let ui = ui.clone();
@@ -1461,11 +1543,12 @@ fn rate_limit(ui: &Ui) -> impl Widget + use<> {
                         .pressed(state.map(move |s| current(s).is_some_and(|l| l.zone == pressed)))
                         .on_press(move || {
                             let burst = ui.state.with(|s| current(s).map(|l| l.burst).unwrap_or_else(|| "20".into()));
-                            ui.nginx_change(Change::Limit(Some((name.clone(), burst))));
+                            ui.nginx_change_at(Some("limit".into()), Change::Limit(Some((name.clone(), burst))));
                         })
                 }
             }),
         )),
+        error_at(state, "limit"),
         when(state.map(move |s| current(s).is_some()), {
             let ui = ui.clone();
             move || {
@@ -1580,10 +1663,11 @@ fn zones_editor(ui: &Ui) -> impl Widget + use<> {
                             .map(|e| Change::AddZone(e.adding.zone_name.clone(), e.adding.zone_rate.clone()))
                     });
                     if let Some(change) = change {
-                        add.nginx_change(change);
+                        add.nginx_change_at(Some("add-zone".into()), change);
                     }
                 }),
         )),
+        error_at(state, "add-zone"),
     ))
 }
 

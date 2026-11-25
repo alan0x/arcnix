@@ -498,7 +498,9 @@ def preview(identifier, staging, request_sha):
         else:
             desired = (upload / 'candidate').read_bytes()
             require(digest(desired) == spec['sha256'], 'Candidate hash mismatch')
-        require(len(desired) <= LIMIT and b'\0' not in desired and (request['restore_from'] or b'\r' not in desired), 'Candidate must be bounded UTF-8 text with LF endings')
+        # A file with Windows line endings keeps them (spec crlf); no other CR.
+        endings = desired.replace(b'\r\n', b'') if spec.get('crlf') else desired
+        require(len(desired) <= LIMIT and b'\0' not in desired and (request['restore_from'] or b'\r' not in endings), 'Candidate must be bounded UTF-8 text with LF endings')
         desired.decode('utf-8')
         record.mkdir(mode=0o700)
         sync_dir(ROOT)

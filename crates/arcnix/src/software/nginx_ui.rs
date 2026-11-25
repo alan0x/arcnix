@@ -51,6 +51,9 @@ pub(crate) struct Editor {
     health: String,
     create: bool,
     error: String,
+    /// The Settings control the error came from, where it is shown instead
+    /// of above the form.
+    error_at: Option<String>,
     /// Why the last publication of this file failed, from the server.
     failure: String,
     /// What happened that the operator should know, such as a certificate
@@ -487,6 +490,7 @@ impl Ui {
                 health: summary.map(nginx::health_address).unwrap_or_default(),
                 create: false,
                 error: String::new(),
+                error_at: None,
                 failure: String::new(),
                 info: String::new(),
                 issuing: None,
@@ -538,6 +542,7 @@ impl Ui {
                 health: String::new(),
                 create: true,
                 error: String::new(),
+                error_at: None,
                 failure: String::new(),
                 info: String::new(),
                 issuing: None,
@@ -572,6 +577,7 @@ impl Ui {
                         editor.error.clear();
                     }
                     Err(error) => {
+                        editor.error_at = None;
                         editor.error = i18n::translate(&format!(
                             "The file cannot be read as Nginx configuration: {error:#}"
                         ));
@@ -615,6 +621,7 @@ impl Ui {
             Err(error) => self.state.revise(|s| {
                 if let Some(editor) = &mut s.nginx.editor {
                     editor.error = format!("{error:#}");
+                    editor.error_at = None;
                 }
             }),
         }
@@ -658,9 +665,12 @@ pub(crate) fn event(
                     match selected.as_ref().filter(|n| n.key() == editor.instance) {
                         // A published file now matches what is being edited.
                         Some(snapshot) => {
-                            let live = snapshot.file(&editor.path).and_then(|f| f.text.as_ref());
-                            if live == Some(&editor.text) {
-                                editor.original = editor.text.clone();
+                            let live = snapshot.file(&editor.path).and_then(|f| f.text.clone());
+                            // Publishing gives every line the file's own ending.
+                            let lines = |t: &str| t.replace("\r\n", "\n");
+                            if let Some(live) = live.filter(|l| lines(l) == lines(&editor.text)) {
+                                editor.text = live.clone();
+                                editor.original = live;
                                 editor.create = false;
                             }
                         }
@@ -1194,7 +1204,7 @@ fn editor(ui: Ui) -> impl Widget {
         )),
         text()
             .class(state.map(|s| {
-                if s.nginx.editor.as_ref().is_some_and(|e| !e.error.is_empty() || !e.failure.is_empty()) {
+                if s.nginx.editor.as_ref().is_some_and(|e| (!e.error.is_empty() && e.error_at.is_none()) || !e.failure.is_empty()) {
                     "nginx-error"
                 } else {
                     "hidden"
@@ -1206,7 +1216,7 @@ fn editor(ui: Ui) -> impl Widget {
                 s.nginx
                     .editor
                     .as_ref()
-                    .map(|e| if e.error.is_empty() { e.failure.clone() } else { e.error.clone() })
+                    .map(|e| if e.error.is_empty() || e.error_at.is_some() { e.failure.clone() } else { e.error.clone() })
                     .unwrap_or_default()
             })),
         text()

@@ -3088,6 +3088,8 @@ button,
 .nginx-publish-row { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; }
 .nginx-change { flex: 1; font-size: 12px; min-width: 180px; }
 .nginx-error { font-size: 13px; color: var(--danger); padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 10%, transparent); overflow-wrap: anywhere; white-space: pre-wrap; }
+.nginx-field-error { font-size: 12px; color: var(--danger); padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, var(--danger) 10%, transparent); overflow-wrap: anywhere; white-space: pre-wrap; align-self: stretch; }
+.nginx-check, .nginx-row-item { display: flex !important; flex-direction: column; gap: 6px; min-width: 0; }
 .nginx-new-site { display: flex !important; flex-direction: column; gap: 10px; min-width: min(480px, 80vw); }
 .nginx-new-site>.nginx-segments { align-self: flex-start; }
 @container nginx (max-width: 560px) {
