@@ -479,6 +479,10 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 - 健康检查地址默认取站点的第一个域名。Nginx 应用的发布请求带 `local_probe`：向本服务器的 Nginx 请求该地址（连接本机地址、`Host` 为该域名；URL 中写的是 IP 时连接该 IP），任何非 5xx 响应都算通过，因此需要登录（401）或 `/` 没有页面（404）的站点不会被误回滚，域名尚未解析到本服务器也不影响。站点监听特定地址或处于停用状态时默认不填地址。
 - 服务器不允许私有挂载命名空间时（部分 OpenVZ、LXC 主机），站点文件无法在不改动生效目录的情况下检查，发布在检查前停止并说明原因。
 
+### 日志
+
+“日志”页以 SSH 账户读取所选日志的最后 200／1000／5000 行，最新的在前，可按文字筛选。服务器上的 Nginx 读取 `http` 块中 `access_log`／`error_log` 指定的文件（默认 `/var/log/nginx/access.log` 和 `error.log`），以及自己写日志的站点的文件（`tail`）；Debian 和 Ubuntu 上需要账户属于 adm 组，读不到时说明原因。容器中的 Nginx 读取容器输出：官方镜像把访问日志写到标准输出、错误日志写到标准错误，分别用 `docker logs --tail` 取得；站点自己的日志文件用 `docker exec … tail` 读取。命令由 `nginx::logs_command` 生成，路径经过校验并加引号，`read_logs` 只执行这种命令。
+
 ### Docker 中的 Nginx
 
 容器的读取使用 SSH 账户的 `docker` 命令（与 Docker 应用相同，需要该账户能访问 Docker；否则概览提示把账户加入 docker 组）。镜像名最后一段含 `nginx`，或入口命令为 `nginx` 的容器视为 Nginx 实例；实例以容器名区分，Compose 重建容器后仍对应同一实例。`docker inspect` 提供状态、启动时间、重启策略、Compose 项目／服务／目录、已发布端口和挂载；运行中的容器另执行 `docker exec <id> nginx -v` 和 `nginx -T`。容器启动 Nginx 时带的 `-c`、`-p`、`-g` 参数（取自 `docker inspect` 的命令行）用于该容器的所有 nginx 命令：读取、测试、重新加载以及发布检查，主配置为 `-c` 指定的文件。

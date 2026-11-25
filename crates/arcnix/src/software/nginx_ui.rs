@@ -12,12 +12,14 @@ use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
 
 mod form;
+mod logs;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum View {
     #[default]
     Overview,
     Sites,
+    Logs,
 }
 
 #[derive(Clone, Default)]
@@ -71,6 +73,7 @@ pub(crate) struct NginxState {
     filter: String,
     editor: Option<Editor>,
     new_site: NewSite,
+    logs: logs::Logs,
 }
 
 /// What a row in the sites list needs, without the file's text.
@@ -553,6 +556,7 @@ pub(crate) fn event(
     serial: u64,
     result: std::result::Result<Reply, String>,
 ) -> Option<std::result::Result<Reply, String>> {
+    let result = logs::event(ui, serial, result)?;
     if !ui.state.with(|s| s.nginx.pending == Some(serial)) {
         return Some(result);
     }
@@ -597,23 +601,32 @@ fn navigation(ui: Ui) -> impl Widget {
     let items = [
         ("Overview", Icon::Grid, View::Overview),
         ("Sites", Icon::WebServer, View::Sites),
+        ("Logs", Icon::Logs, View::Logs),
     ]
     .into_iter()
-    .map(move |(label, icon, view)| {
-        text_action(label, icon)
-            .class("button with-icon nginx-nav-item")
-            .pressed(state.map(move |s| s.nginx.view == view && !editing(s)))
-            .on_press(move || {
-                state.revise(|s| {
-                    s.nginx.view = view;
-                    s.nginx.editor = None;
+    .map({
+        let ui = ui.clone();
+        move |(label, icon, view)| {
+            let ui = ui.clone();
+            text_action(label, icon)
+                .class("button with-icon nginx-nav-item")
+                .pressed(state.map(move |s| s.nginx.view == view && !editing(s)))
+                .on_press(move || {
+                    state.revise(|s| {
+                        s.nginx.view = view;
+                        s.nginx.editor = None;
+                    });
+                    if view == View::Logs {
+                        ui.nginx_logs();
+                    }
                 })
-            })
+        }
     })
     .collect::<Vec<_>>();
     col().class("nginx-nav").fill((
         col().class("nginx-views").fill(items),
         when(state.map(|s| s.nginx.instances.len() > 1), move || {
+            let ui = ui.clone();
             col().class("nginx-instances").fill((
                 text()
                     .class("nginx-nav-label")
@@ -629,6 +642,7 @@ fn navigation(ui: Ui) -> impl Widget {
                 .children(move |item| {
                     let (key, title, docker, running) = item.value.get();
                     let chosen = key.clone();
+                    let logs_ui = ui.clone();
                     text_action(
                         title,
                         if docker {
@@ -657,7 +671,11 @@ fn navigation(ui: Ui) -> impl Widget {
                             s.nginx.instance = chosen.clone();
                             s.nginx.editor = None;
                             s.nginx.notice.clear();
-                        })
+                            s.nginx.logs.source.clear();
+                        });
+                        if logs_ui.state.with(|s| s.nginx.view == View::Logs) {
+                            logs_ui.nginx_logs();
+                        }
                     })
                 }),
             ))
@@ -1241,6 +1259,10 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 move || overview(ui.clone())
             },
         ),
+        when(state.map(|s| !editing(s) && s.nginx.view == View::Logs), {
+            let ui = ui.clone();
+            move || logs::view(ui.clone())
+        }),
         when(state.map(|s| !editing(s) && s.nginx.view == View::Sites), {
             let ui = ui.clone();
             move || sites(ui.clone())

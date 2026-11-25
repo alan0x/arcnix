@@ -470,6 +470,153 @@ pub fn read(session: &RemoteSession) -> Result<Reading> {
     parse(&output.stdout)
 }
 
+/// Which log the viewer shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LogKind {
+    #[default]
+    Access,
+    Error,
+}
+
+/// A log the viewer can show: for every site, or for one site that writes
+/// its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogSource {
+    /// The site's name; empty for the log of every site.
+    pub site: String,
+    /// The log file as Nginx knows it; empty for a container's own output.
+    pub path: String,
+}
+
+const DEFAULT_LOGS: [&str; 2] = ["/var/log/nginx/access.log", "/var/log/nginx/error.log"];
+
+/// The log file a directive writes to, when it writes to a file.
+fn log_file(args: &str) -> Option<String> {
+    let first = args.split_whitespace().next()?;
+    (first.starts_with('/') && checked_path(first).is_ok()).then(|| first.to_owned())
+}
+
+/// The logs of an instance: the one for every site first, then sites with
+/// their own.
+pub fn log_sources(snapshot: &Snapshot, kind: LogKind) -> Vec<LogSource> {
+    let name = match kind {
+        LogKind::Access => "access_log",
+        LogKind::Error => "error_log",
+    };
+    let global = if snapshot.docker.is_some() {
+        // The official images send both logs to the container's output.
+        String::new()
+    } else {
+        snapshot
+            .main
+            .text
+            .as_deref()
+            .and_then(|text| nginx_config::parse(text).ok())
+            .and_then(|d| {
+                let http = d.into_iter().find(|d| d.name == "http")?;
+                http.children()
+                    .iter()
+                    .find(|c| c.name == name)
+                    .map(|c| c.args.join(" "))
+            })
+            .and_then(|args| log_file(&args))
+            .unwrap_or_else(|| DEFAULT_LOGS[kind as usize].to_owned())
+    };
+    let mut out = vec![LogSource {
+        site: String::new(),
+        path: global,
+    }];
+    for site in &snapshot.sites {
+        let Some(text) = site.file.text.as_deref() else {
+            continue;
+        };
+        let Ok(form) = crate::nginx_site::read(text) else {
+            continue;
+        };
+        let args = match kind {
+            LogKind::Access => form.access_log,
+            LogKind::Error => form.error_log,
+        };
+        if let Some(path) = log_file(&args)
+            && !out.iter().any(|s| s.path == path)
+        {
+            out.push(LogSource {
+                site: site.title(),
+                path,
+            });
+        }
+    }
+    out
+}
+
+/// The command that prints the last `lines` lines of a log, as the SSH
+/// account.
+pub fn logs_command(
+    snapshot: &Snapshot,
+    kind: LogKind,
+    source: &LogSource,
+    lines: u16,
+) -> Result<String> {
+    let lines = lines.clamp(10, 5000);
+    if !source.path.is_empty() {
+        checked_path(&source.path)?;
+    }
+    Ok(match (&snapshot.docker, source.path.is_empty()) {
+        (None, true) => anyhow::bail!("Choose a log"),
+        (None, false) => format!(
+            "# arcnix:nginx:logs\nexec tail -n {lines} -- {}",
+            quote(&source.path)
+        ),
+        (Some(container), empty) => {
+            checked_container(container)?;
+            let id = quote(&container.id);
+            let prelude = "PATH=\"$PATH:/snap/bin\"; unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH";
+            if empty {
+                // Access lines go to the container's standard output, errors
+                // to its standard error.
+                match kind {
+                    LogKind::Access => format!(
+                        "# arcnix:nginx:logs\n{prelude}\nexec docker logs --tail {lines} {id} 2>/dev/null"
+                    ),
+                    LogKind::Error => format!(
+                        "# arcnix:nginx:logs\n{prelude}\nexec docker logs --tail {lines} {id} 2>&1 >/dev/null"
+                    ),
+                }
+            } else {
+                format!(
+                    "# arcnix:nginx:logs\n{prelude}\nexec docker exec {id} tail -n {lines} -- {}",
+                    quote(&source.path)
+                )
+            }
+        }
+    })
+}
+
+/// Reads a log with a command from [`logs_command`].
+pub fn read_logs(session: &RemoteSession, command: &str) -> Result<String> {
+    ensure!(
+        command.starts_with("# arcnix:nginx:logs\n"),
+        "Invalid log request"
+    );
+    let output = crate::server_apps::execute_lossy(session, command, 4 * 1024 * 1024)?;
+    if output.exit_code != 0 {
+        let reason = output.stderr.trim();
+        ensure!(
+            !reason.to_lowercase().contains("permission denied"),
+            "The SSH account cannot read this log. On Debian and Ubuntu, add it to the adm group, or to the docker group for containers."
+        );
+        ensure!(
+            !reason.contains("No such file"),
+            "This log file does not exist yet"
+        );
+        anyhow::bail!(
+            "Could not read the log (exit {}): {reason}",
+            output.exit_code
+        );
+    }
+    Ok(output.stdout)
+}
+
 /// Finds the docker command for administrator tasks, which may not have the
 /// snap folder in PATH.
 const DOCKER_PATH: &str = "if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then PATH=\"$PATH:/snap/bin\"; fi\nunset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH";
@@ -1254,5 +1401,62 @@ mod tests {
             odd["docker"]["args"] = args;
             assert!(reading(serde_json::json!([odd])).is_err());
         }
+    }
+
+    #[test]
+    fn reads_logs_for_every_site_and_sites_with_their_own() {
+        let mut fixture = host();
+        fixture["main"]["text"] = "events {}\nhttp { access_log /var/log/nginx/all.log main; include /etc/nginx/sites-enabled/*; }\n".into();
+        fixture["sites"][0]["text"] = "server { listen 80; server_name shop.example.com; access_log /var/log/nginx/shop.log; location / { proxy_pass http://127.0.0.1:8080; } }".into();
+        let s = reading(serde_json::json!([fixture]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let access = log_sources(&s, LogKind::Access);
+        assert_eq!(
+            access
+                .iter()
+                .map(|l| (l.site.as_str(), l.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("", "/var/log/nginx/all.log"),
+                ("shop.example.com", "/var/log/nginx/shop.log")
+            ]
+        );
+        assert_eq!(
+            log_sources(&s, LogKind::Error)[0].path,
+            "/var/log/nginx/error.log"
+        );
+        let command = logs_command(&s, LogKind::Access, &access[1], 200).unwrap();
+        assert!(
+            command.ends_with("exec tail -n 200 -- '/var/log/nginx/shop.log'"),
+            "{command}"
+        );
+        assert!(
+            logs_command(
+                &s,
+                LogKind::Access,
+                &LogSource {
+                    site: String::new(),
+                    path: "/var/log/../shadow".into()
+                },
+                200
+            )
+            .is_err()
+        );
+
+        let c = container();
+        let sources = log_sources(&c, LogKind::Error);
+        assert_eq!(sources[0].path, "");
+        let id = "a".repeat(64);
+        let error = logs_command(&c, LogKind::Error, &sources[0], 100).unwrap();
+        assert!(
+            error.ends_with(&format!(
+                "exec docker logs --tail 100 '{id}' 2>&1 >/dev/null"
+            )),
+            "{error}"
+        );
+        let access = logs_command(&c, LogKind::Access, &sources[0], 100).unwrap();
+        assert!(access.ends_with("2>/dev/null"));
     }
 }
