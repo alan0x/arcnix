@@ -405,14 +405,12 @@ pub(crate) fn can_close_tab(ui: &Ui, id: u64) -> bool {
             .get(&id)
             .is_some_and(|doc| doc.dirty || doc.is_saving())
     });
-    if blocked {
-        if let Some(window) = ui.state.with(|s| s.office.groups.owner(id)) {
-            document_tabs::select(ui, arcnix_core::server_apps::DesktopApp::Office, window, id);
-            ui.state.revise(|s| {
-                s.office.current_mut().error =
-                    "Finish editing or return to reading before leaving this document.".into()
-            });
-        }
+    if blocked && let Some(window) = ui.state.with(|s| s.office.groups.owner(id)) {
+        document_tabs::select(ui, arcnix_core::server_apps::DesktopApp::Office, window, id);
+        ui.state.revise(|s| {
+            s.office.current_mut().error =
+                "Finish editing or return to reading before leaving this document.".into()
+        });
     }
     !blocked
 }
