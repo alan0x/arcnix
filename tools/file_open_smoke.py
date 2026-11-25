@@ -247,14 +247,19 @@ def main():
             expect(groups).to_have_count(5)
             expect(groups.nth(0).get_by_role('button')).to_have_text(
                 ['Open with'])
-            expect(groups.nth(1).get_by_role('button')).to_have_text(
-                ['Copy', 'Duplicate', 'Make alias', 'Compress', 'Paste', 'Rename'])
-            expect(groups.nth(2).get_by_role('button')).to_have_text(
-                ['Copy selected paths', 'Properties', 'Terminal here'])
+            def check_group(index, labels):
+                buttons = groups.nth(index).get_by_role('button')
+                expect(buttons).to_have_count(len(labels))
+                for position, label in enumerate(labels):
+                    expect(buttons.nth(position)).to_have_accessible_name(label)
+            check_group(1, ['Copy', 'Duplicate', 'Make alias', 'Compress', 'Paste', 'Rename'])
+            check_group(2, ['Copy selected paths', 'Properties', 'Terminal here'])
             expect(groups.nth(3).locator('.file-color-swatch')).to_have_count(8)
             expect(groups.nth(3).get_by_role('button', name='Customize folder…', exact=True)).to_have_count(0)
-            expect(groups.nth(4).get_by_role('button')).to_have_text(
-                ['Move to Trash', 'Delete permanently'])
+            check_group(4, ['Move to Trash', 'Delete permanently'])
+            for label, chord in [('Copy selected paths', 'Ctrl+Shift+C'), ('Properties', 'Alt+Enter'),
+                                 ('Rename', 'F2'), ('Move to Trash', 'Delete'), ('Paste', 'Ctrl+V')]:
+                expect(menu.get_by_role('button', name=label, exact=True).locator('.menu-key-hint')).to_have_text(chord)
             assert groups.nth(1).evaluate(
                 'group => parseFloat(getComputedStyle(group).borderBlockStartWidth) > 0')
             expect(menu.get_by_role('button', name='Open', exact=True)).to_have_count(0)

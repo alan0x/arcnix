@@ -219,6 +219,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub theme: Theme,
     pub show_hidden_files: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_sidebar_width: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_picker_sidebar_width: Option<u16>,
     #[serde(default)]
     pub folder_defaults: FolderOverrides,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -261,6 +265,8 @@ impl Default for AppSettings {
             language: Language::English,
             theme: Theme::System,
             show_hidden_files: true,
+            files_sidebar_width: None,
+            file_picker_sidebar_width: None,
             folder_defaults: Default::default(),
             folder_views: Default::default(),
             capture_desktop_shortcuts: capture_desktop_shortcuts_default(),

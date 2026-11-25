@@ -230,7 +230,11 @@ pub(crate) fn connection(ui: Ui) -> impl Widget {
 }
 fn policy(ui: Ui, direction: TransferDirection) -> impl Widget {
     let uploads = direction == TransferDirection::Upload;
-    let title = if uploads { "Uploads" } else { "Downloads" };
+    let title = if uploads {
+        "Upload policy"
+    } else {
+        "Download policy"
+    };
     setting_field(
         false,
         title,
@@ -716,7 +720,7 @@ pub(crate) fn server_transfer_dialog(ui: Ui) -> impl Widget {
             }),col().class("preferences-stack").fill((
         text().class("section-title").content(state.map(|s|s.config.servers.iter().find(|p|Some(&p.id)==s.selected.as_ref()).map(|p|p.name.clone()).unwrap_or_default())),
         text().class("subtle").content(i18n::bind("Changes are saved for this server and affect future transfers. Active transfers keep their current choices.")),
-        label("Uploads"),server_policy(ui.clone(),TransferDirection::Upload),label("Downloads"),server_policy(ui.clone(),TransferDirection::Download),
+        label("Upload policy"),server_policy(ui.clone(),TransferDirection::Upload),label("Download policy"),server_policy(ui.clone(),TransferDirection::Download),
     )),sapid::button().class("button primary").label(i18n::bind("Done")).on_press(move||close.close_dialog()))
         },
     )

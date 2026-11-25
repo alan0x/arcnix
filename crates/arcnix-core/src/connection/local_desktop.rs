@@ -32,6 +32,42 @@ pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 impl crate::metrics::ResourceReader for Target {
+    fn sample_gpus(&self) -> Result<Vec<crate::gpu::Gpu>> {
+        use crate::gpu;
+        use crate::host::HostOs;
+        ensure!(
+            self.supports_metrics(),
+            "GPU monitoring is unavailable on this desktop"
+        );
+        #[cfg(windows)]
+        let (os, output) = {
+            use std::os::windows::process::CommandExt;
+            let mut command = Command::new(windows_host::powershell()?);
+            command.creation_flags(0x08000000).args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                gpu::WINDOWS,
+            ]);
+            (
+                HostOs::Windows,
+                Self::run_command(command, "GPU information", &[])?,
+            )
+        };
+        #[cfg(not(windows))]
+        let (os, output) = if cfg!(target_os = "macos") {
+            (
+                HostOs::MacOs,
+                self.run_script(gpu::MACOS, &["GPU information"], &[])?,
+            )
+        } else {
+            (
+                HostOs::Linux,
+                self.run_script(gpu::LINUX, &["GPU information"], &[])?,
+            )
+        };
+        gpu::parse(os, std::str::from_utf8(&output)?)
+    }
     fn sample_resources(&self) -> Result<crate::metrics::ResourceReading> {
         ensure!(
             self.supports_metrics(),
@@ -336,18 +372,18 @@ impl Target {
             path: home.into(),
         }];
         let directories = String::from_utf8(self.run(&["locations"], &[])?)?;
-        for (dir, name) in [
-            ("Desktop", "Desktop"),
-            ("Documents", "Documents"),
-            ("Downloads", "Download directory"),
-            ("Music", "Music"),
-            ("Pictures", "Pictures"),
-            ("Videos", "Videos"),
+        for name in [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Music",
+            "Pictures",
+            "Videos",
         ] {
-            if directories.lines().any(|line| line == dir) {
+            if directories.lines().any(|line| line == name) {
                 entries.push(FileLocation {
                     name,
-                    path: join(home, dir),
+                    path: join(home, name),
                 });
             }
         }

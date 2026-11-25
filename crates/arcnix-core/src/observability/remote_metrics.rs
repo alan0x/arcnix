@@ -29,7 +29,7 @@ pub(super) fn sample(session: &RemoteSession) -> Result<ResourceReading> {
     Ok(reading)
 }
 
-fn execute(session: &RemoteSession, command: &str) -> Result<String> {
+pub(super) fn execute(session: &RemoteSession, command: &str) -> Result<String> {
     let output = session
         .exec(command)
         .context("Cannot read remote resource information")?;

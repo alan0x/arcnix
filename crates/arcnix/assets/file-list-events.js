@@ -446,6 +446,13 @@
         const trigger = event.target.closest?.('.file-open-trigger');
         if (trigger) setFileSubmenu(trigger.closest('.file-open-branch'), true, true);
     }, true);
+    const fileCommands = [
+        ['files_copy_paths', 'copy_paths'], ['files_properties', 'properties'],
+        ['files_open', 'activate'], ['files_rename', 'rename'], ['files_new_folder', 'new_folder'],
+        ['files_trash', 'delete'], ['files_delete_permanently', 'delete_permanently'],
+        ['files_refresh', 'refresh'], ['files_copy', 'copy_files'], ['files_paste', 'paste_files'],
+        ['files_select_all', 'all'],
+    ];
     document.addEventListener('keydown',event=>{
         if(!(event.target instanceof Element)||event.isComposing)return;
         const menu=event.target.closest('.file-context-menu,.file-actions-menu');
@@ -486,21 +493,26 @@
         }
         const pane=validPane(event.target);
         if(!pane||!event.target.closest('.file-list-container'))return;
-        let kind=null;
-        if(event.key==='F2')kind='rename';
-        else if(event.key==='Delete'&&!event.ctrlKey&&!event.metaKey&&!event.altKey)kind=event.shiftKey?'delete_permanently':'delete';
-        else if(event.key==='F5')kind='refresh';
-        else if(event.altKey&&event.key==='Enter')kind='properties';
-        else if(additive(event)&&event.shiftKey&&event.key.toLowerCase()==='c')kind='copy_paths';
-        else if(pane.closest('.desktop-window.app-files')){
-            if(arcnixKeys.matches(event, 'files_copy', 'Ctrl+C'))kind='copy_files';
-            else if(arcnixKeys.matches(event, 'files_paste', 'Ctrl+V'))kind='paste_files';
+        const desktopFiles = !!pane.closest('.desktop-window.app-files');
+        const bindings = desktopFiles ? arcnixKeys.state()?.bindings
+            : JSON.parse(pane.querySelector('.native-file-shortcuts')?.textContent || '{}');
+        const chord = window.arcnixShortcutChord(event);
+        if (!bindings || event.getModifierState('AltGraph')) return;
+        const row = event.target.closest('.file-row');
+        for (const [action, kind] of fileCommands) {
+            if (!bindings[action]?.includes(chord)) continue;
+            if (kind === 'activate' && !event.target.closest('.file-name')) return;
+            if ((kind === 'copy_files' || kind === 'paste_files') && !desktopFiles) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (!event.repeat) send(pane, kind, row);
+            return;
         }
-        else if(pane.closest('.remote-files')&&additive(event)&&!event.shiftKey&&!event.altKey){
-            if(event.key.toLowerCase()==='c')kind='copy_files';
-            else if(event.key.toLowerCase()==='v')kind='paste_files';
+        // Browsers activate a focused button on Return. Respect a remapped or disabled file Open binding.
+        if (chord === 'Enter' && event.target.closest('.file-name')) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
         }
-        if(kind){send(pane,kind,event.target.closest('.file-row'));event.preventDefault();event.stopImmediatePropagation();}
     },true);
     function placeFileMenu(){
         menuScheduled=false;
@@ -552,7 +564,7 @@
         if (!toggle?.getClientRects().length || toggle.closest('[inert]')) return;
         const input = files.querySelector('.files-search-input');
         if (files.querySelector('.file-actions-menu,.file-context-menu')) return;
-        if (event.code === 'F5' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+        if (arcnixKeys.matches(event, 'files_refresh', 'F5') && !event.target.closest('input,textarea,select,[contenteditable]')) {
             files.querySelector('.path-refresh:not(:disabled)')?.click();
         } else if (event.key === 'Escape' && input) {
             const options = files.querySelector('.files-search-options');
@@ -647,9 +659,7 @@
                 && (event.code || event.key) === navigation && !event.altKey);
         const selectionEvent = customNavigation ? {} : event;
         let handled = true;
-        if (files ? arcnixKeys.matches(event, 'files_select_all', 'Ctrl+A')
-            : !event.altKey && additive(event) && event.key.toLowerCase() === 'a') send(pane, "all", row);
-        else if (navigation === "Space") send(pane, "select", row, selectionEvent);
+        if (navigation === "Space") send(pane, "select", row, selectionEvent);
         else if (pane.classList.contains("icons-view") && ["ArrowLeft", "ArrowRight"].includes(navigation)) {
             const rows = [...pane.querySelectorAll(".file-row")];
             const target = rows[Math.max(0, Math.min(rows.length - 1, rows.indexOf(row) + (navigation === "ArrowLeft" ? -1 : 1)))];

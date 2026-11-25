@@ -44,7 +44,7 @@ function observeNativeSurface(app) {
         for (const node of [surface, commandButton, menuSlot, frameElement, dock, menubar, ...windows]) if (node) next.add(node);
         const visibleFrame = rect(frameElement);
         const surfaceBox = rect(surface);
-        const area = visibleFrame && surfaceBox && !browser.closest('[inert]')
+        const area = visibleFrame && surfaceBox && !layer.classList.contains('window-overview') && !browser.closest('[inert]')
             && surfaceBox.right > visibleFrame.left && surfaceBox.left < visibleFrame.right
             && surfaceBox.bottom > visibleFrame.top && surfaceBox.top < visibleFrame.bottom ? surfaceBox : null;
         const commandCenter = area && rect(commandButton);

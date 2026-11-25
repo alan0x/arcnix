@@ -35,6 +35,7 @@ pub(crate) struct Workbench {
     pub active: Tab,
     pub tabs: Vec<Tab>,
     desktop_page: WorkspacePage,
+    pub(crate) overview: Option<DesktopApp>,
     pub apps: Vec<WorkspacePage>,
     stack: Vec<WorkspacePage>,
     desktop_restore: Vec<WorkspacePage>,
@@ -51,6 +52,7 @@ impl Default for Workbench {
             active: Tab::Home,
             tabs: vec![Tab::Home],
             desktop_page: WorkspacePage::Desktop,
+            overview: None,
             apps: Vec::new(),
             stack: Vec::new(),
             desktop_restore: Vec::new(),
@@ -135,6 +137,7 @@ impl Workbench {
     }
 
     pub(crate) fn reset_open_windows(&mut self) {
+        self.overview = None;
         self.apps.clear();
         self.stack.clear();
         self.desktop_restore.clear();
@@ -170,6 +173,7 @@ fn save_bounds(ui: &Ui, input: &str) {
         if !visible(s)
             || s.dialog.is_some()
             || s.epoch != event.epoch
+            || s.workbench.overview.is_some()
             || !s.workbench.window_visible(page)
             || app_id(page) != Some(event.app)
         {
@@ -209,6 +213,7 @@ fn focus_window(ui: &Ui, input: &str) {
             && s.epoch == event.epoch
             && s.dialog.is_none()
             && s.fingerprint.is_none()
+            && s.workbench.overview.is_none()
             && page != s.workspace_page
             && s.workbench.window_visible(page)
             && app_id(page) == Some(event.app)
@@ -220,19 +225,19 @@ fn focus_window(ui: &Ui, input: &str) {
 pub(crate) const APP_LAUNCHERS: [WorkspacePage; 15] = [
     WorkspacePage::Files(0),
     WorkspacePage::Terminal,
+    WorkspacePage::Editor,
     WorkspacePage::Code,
     WorkspacePage::Browser,
     WorkspacePage::Player,
     WorkspacePage::ImageViewer,
     WorkspacePage::PdfReader,
     WorkspacePage::Office,
-    WorkspacePage::Monitor,
     WorkspacePage::Docker,
     WorkspacePage::Nginx,
-    WorkspacePage::PgAdmin,
     WorkspacePage::AppCenter,
+    WorkspacePage::Monitor,
     WorkspacePage::Settings,
-    WorkspacePage::Editor,
+    WorkspacePage::PgAdmin,
 ];
 
 fn local_app(s: &State, page: WorkspacePage) -> bool {
@@ -360,8 +365,12 @@ pub(crate) fn app_class(page: WorkspacePage) -> &'static str {
 }
 
 pub(crate) fn reader_fullscreen(s: &State, page: WorkspacePage) -> bool {
-    match page {
-        WorkspacePage::PdfReader => s.pdf.fullscreen,
+    match page.base() {
+        WorkspacePage::PdfReader => {
+            s.pdf
+                .selected(page.tab_window().unwrap_or_default())
+                .fullscreen
+        }
         WorkspacePage::ImageViewer => s.images.fullscreen,
         _ => false,
     }
@@ -389,6 +398,7 @@ pub(crate) fn app_icon(page: WorkspacePage) -> Icon {
 }
 
 pub(crate) fn select_tab(s: &mut State, tab: Tab) {
+    s.workbench.overview = None;
     if tab != Tab::Desktop {
         s.workbench.fullscreen = false;
     }
@@ -433,6 +443,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
             Some(
                 Dialog::SoftwareInstall
                     | Dialog::OpenDesktopFile(_)
+                    | Dialog::ConfirmOfficeSave(_)
                     | Dialog::DesktopTimeZone
                     | Dialog::DesktopIcons
                     | Dialog::Launcher
@@ -515,6 +526,11 @@ pub(crate) fn remove_window(s: &mut State, page: WorkspacePage) {
         desktop_customization_ui::close_settings_search(s);
     }
     s.workbench.apps.retain(|&open| open != page);
+    if let Some(app) = s.workbench.overview
+        && !s.workbench.apps.iter().any(|p| app_id(*p) == Some(app))
+    {
+        s.workbench.overview = None;
+    }
     s.workbench.stack.retain(|&open| open != page);
     s.workbench.desktop_restore.retain(|&open| open != page);
     s.workbench.slots.remove(&page);
@@ -530,6 +546,7 @@ impl Ui {
     pub(crate) fn toggle_show_desktop(&self) {
         let hiding = self.state.revise(|s| {
             let workbench = &mut s.workbench;
+            workbench.overview = None;
             let hiding = !workbench.stack.is_empty();
             if hiding {
                 workbench.desktop_restore = std::mem::take(&mut workbench.stack);
@@ -632,6 +649,20 @@ impl Ui {
         }
     }
 
+    pub(super) fn open_window_overview(&self, app: DesktopApp) {
+        self.state.revise(|s| {
+            if s.fingerprint.is_none()
+                && desktop_customization_ui::appearance(s)
+                    .dock
+                    .overview_active_click
+                && app_id(s.workspace_page) == Some(app)
+                && launcher_running(s, app_page(app))
+            {
+                s.workbench.overview = Some(app);
+            }
+        });
+    }
+
     pub(crate) fn open_desktop_app(&self, page: WorkspacePage) {
         let page = self.state.with(|s| launcher_page(s, page));
         self.focus_desktop_app(page);
@@ -712,7 +743,7 @@ impl Ui {
             return;
         };
         let changed = self.state.revise(|s| {
-            if !s.workbench.window_visible(page) {
+            if s.workbench.overview.is_some() || !s.workbench.window_visible(page) {
                 return false;
             }
             let window = window_mut(s, page, app);
@@ -740,6 +771,19 @@ impl Ui {
             return;
         }
         match page.base() {
+            WorkspacePage::Office | WorkspacePage::PdfReader => {
+                let id = self.state.with(|s| {
+                    (if page.base() == WorkspacePage::Office {
+                        &s.office.groups
+                    } else {
+                        &s.pdf.groups
+                    })
+                    .selected(page.tab_window().unwrap_or_default())
+                });
+                if let Some(id) = id {
+                    document_tabs::close(self, app_id(page).unwrap(), id);
+                }
+            }
             WorkspacePage::Files(id) => files_tabs::close_selected(self, id),
             WorkspacePage::Terminal => {
                 let id = self.state.with(|s| s.terminal.id);
@@ -762,7 +806,18 @@ impl Ui {
     }
 
     fn close_desktop_app(&self, page: WorkspacePage) {
-        if page == WorkspacePage::Office && !office_reader::can_leave(self) {
+        if page.base() == WorkspacePage::Office
+            && !self
+                .state
+                .with(|s| {
+                    s.office
+                        .groups
+                        .tabs(page.tab_window().unwrap_or_default())
+                        .to_vec()
+                })
+                .into_iter()
+                .all(|id| office_reader::can_close_tab(self, id))
+        {
             return;
         }
         if page.base() == WorkspacePage::Editor && !text_editor::close_desktop(self, page) {
@@ -781,12 +836,6 @@ impl Ui {
         }
         if page == WorkspacePage::PgAdmin {
             self.state.revise(pgadmin_ui::reset);
-        }
-        if page == WorkspacePage::Office {
-            self.state.revise(|s| s.office = Default::default());
-        }
-        if page == WorkspacePage::PdfReader {
-            self.state.revise(|s| s.pdf = Default::default());
         }
         if page == WorkspacePage::ImageViewer {
             self.state.revise(|s| s.images = Default::default());
@@ -1041,6 +1090,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     let add_tab = ui.clone();
     let files_settings = ui.clone();
     let id = page.tab_window().unwrap_or_default();
+    let browse_document = ui.clone();
     let browse_video = ui.clone();
     let title = if page == WorkspacePage::Player {
         text().content(state.map(|s| {
@@ -1054,6 +1104,10 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     };
     let tools = match page.base() {
         WorkspacePage::Terminal => fragment(terminal::header(ui.clone(), id)),
+        WorkspacePage::PdfReader | WorkspacePage::Office => fragment((
+            document_tabs::strip(ui.clone(), app_id(page).unwrap(), id),
+            tab_overflow(),
+        )),
         WorkspacePage::Code => fragment(code_workbench::title_tools(ui.clone())),
         WorkspacePage::PgAdmin => fragment(pgadmin_ui::title_tools(ui.clone())),
         WorkspacePage::Files(id) => fragment((
@@ -1099,6 +1153,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
     } else {
         fragment((mark, title, tools))
     };
+    let pick = ui.clone();
     let monitor_tools = ui.clone();
     let content = match page.base() {
         WorkspacePage::Terminal => fragment(terminal::window_page(ui, id)),
@@ -1113,8 +1168,8 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::Editor => fragment(text_editor::page(ui, id)),
         WorkspacePage::Player => fragment(video_player::panel(ui)),
         WorkspacePage::ImageViewer => fragment(image_viewer::panel(ui)),
-        WorkspacePage::PdfReader => fragment(pdf_reader::panel(ui)),
-        WorkspacePage::Office => fragment(office_reader::panel(ui)),
+        WorkspacePage::PdfReader => fragment(pdf_reader::panel(ui, id)),
+        WorkspacePage::Office => fragment(office_reader::panel(ui, id)),
         #[cfg(windows)]
         WorkspacePage::Browser => fragment(web_browser::window_page(ui, id)),
         _ => fragment(()),
@@ -1128,6 +1183,17 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                 if window_tabs::movable(s, page) {
                     class.push_str(" window-tabs-movable");
                 }
+            }
+            if let Some(app) = s.workbench.overview {
+                if app_id(page) == Some(app) && s.workbench.apps.contains(&page) {
+                    class.push_str(" overview-tile");
+                    if s.workspace_page == page {
+                        class.push_str(" overview-current");
+                    }
+                } else {
+                    class.push_str(" hidden");
+                }
+                return class;
             }
             if !s.workbench.window_visible(page) {
                 class.push_str(" hidden");
@@ -1204,6 +1270,37 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                                     })
                             },
                         ),
+                        when(
+                            matches!(
+                                page.base(),
+                                WorkspacePage::PdfReader | WorkspacePage::Office
+                            ),
+                            move || {
+                                let ui = browse_document.clone();
+                                i18n::desktop::icon_action(
+                                    if page.base() == WorkspacePage::Office {
+                                        "Open Office document"
+                                    } else {
+                                        "Open PDF"
+                                    },
+                                    Icon::OpenDocument,
+                                )
+                                .class(if page.base() == WorkspacePage::Office {
+                                    "icon-button office-open"
+                                } else {
+                                    "icon-button pdf-open"
+                                })
+                                .enabled(state.map(code_workbench::available))
+                                .on_press(move || {
+                                    ui.focus_desktop_app(page);
+                                    if page.base() == WorkspacePage::Office {
+                                        office_reader::browse(&ui)
+                                    } else {
+                                        pdf_reader::browse(&ui)
+                                    }
+                                })
+                            },
+                        ),
                         i18n::desktop::icon_action("Minimize window", Icon::WindowMinimize)
                             .class("icon-button window-minimize")
                             .on_press(move || minimize.minimize_window(page)),
@@ -1224,27 +1321,118 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
                 )),
             col().class("desktop-window-content").fill(content),
             resize_handles(),
+            when(
+                state.map(move |s| {
+                    s.workbench.overview.is_some()
+                        && s.workbench.overview == app_id(page)
+                        && s.workbench.apps.contains(&page)
+                }),
+                move || {
+                    let pick = pick.clone();
+                    let label = state.map(move |s| {
+                        window_title(s, page)
+                            .unwrap_or_else(|| i18n::desktop::translate(app_label(page)))
+                    });
+                    sapid::button()
+                        .class("overview-select")
+                        .name(label)
+                        .fill((
+                            icons::glyph(app_icon(page)),
+                            text().class("overview-caption").content(label),
+                        ))
+                        .on_press(move || pick.focus_desktop_app(page))
+                },
+            ),
         ))
+}
+
+pub(super) fn window_title(s: &State, page: WorkspacePage) -> Option<String> {
+    let window = page.tab_window().unwrap_or_default();
+    let title = match page.base() {
+        WorkspacePage::Files(_) => s
+            .workbench
+            .files
+            .groups
+            .selected(window)
+            .map(|tab| files_tabs::title(s, window, tab)),
+        WorkspacePage::Editor => s
+            .desktop_editor
+            .groups
+            .selected(window)
+            .map(|tab| s.desktop_editor.tab_title(tab)),
+        WorkspacePage::Terminal => s.terminal.window_title(window),
+        #[cfg(windows)]
+        WorkspacePage::Browser => s
+            .web_browser
+            .groups
+            .selected(window)
+            .and_then(|id| s.web_browser.tab(id))
+            .map(|t| {
+                if t.title.is_empty() {
+                    t.url.clone()
+                } else {
+                    t.title.clone()
+                }
+            }),
+        WorkspacePage::Office => {
+            Some(arcnix_core::file_associations::filename(&s.office.selected(window).path).into())
+        }
+        WorkspacePage::Code => Some(s.code.folder.clone()),
+        WorkspacePage::ImageViewer => {
+            Some(arcnix_core::file_associations::filename(&s.images.path).into())
+        }
+        WorkspacePage::PdfReader => Some(
+            arcnix_core::file_associations::filename(crate::document_tabs::FileTab::path(
+                s.pdf.selected(window),
+            ))
+            .to_owned(),
+        ),
+        WorkspacePage::Player => s.video.as_ref().map(|v| v.title.clone()),
+        _ => None,
+    };
+    title.filter(|text| !text.is_empty())
 }
 
 fn app_windows(ui: Ui) -> impl Widget {
     let state = ui.state;
-    col().class("desktop-window-layer").fill(
-        each(state.map(|s| {
-            // The terminal bridge stays mounted until its session metadata is cleared.
-            std::iter::once(WorkspacePage::Terminal)
-                .chain(
-                    s.workbench
-                        .apps
-                        .iter()
-                        .copied()
-                        .filter(|&page| page != WorkspacePage::Terminal),
-                )
-                .collect::<Vec<_>>()
+    col()
+        .class(state.map(|s| {
+            if s.workbench.overview.is_some() {
+                "desktop-window-layer window-overview"
+            } else {
+                "desktop-window-layer"
+            }
+            .to_owned()
         }))
-        .key(|page| window_class(*page))
-        .children(move |item| app_window(ui.clone(), item.value.get())),
-    )
+        .fill((
+            when(state.map(|s| s.workbench.overview.is_some()), move || {
+                row().class("overview-heading").fill((
+                    text().content(i18n::desktop::bind("App window overview")),
+                    text().class("overview-app-name").content(state.map(|s| {
+                        s.workbench.overview.map_or_else(String::new, |app| {
+                            i18n::desktop::translate(app_label(app_page(app)))
+                        })
+                    })),
+                    i18n::desktop::close_action("Exit window overview")
+                        .class("icon-button overview-exit")
+                        .on_press(move || state.revise(|s| s.workbench.overview = None)),
+                ))
+            }),
+            each(state.map(|s| {
+                // The terminal bridge stays mounted until its session metadata is cleared.
+                std::iter::once(WorkspacePage::Terminal)
+                    .chain(
+                        s.workbench
+                            .apps
+                            .iter()
+                            .copied()
+                            .filter(|&page| page != WorkspacePage::Terminal),
+                    )
+                    .collect::<Vec<_>>()
+            }))
+            .key(|page| window_class(*page))
+            .children(move |item| app_window(ui.clone(), item.value.get())),
+        ))
 }
 
 pub(crate) fn selected_name(s: &State) -> String {
@@ -1371,6 +1559,8 @@ pub(crate) fn desktop(ui: Ui) -> impl Widget {
                     } else { String::new() },
                     "fullscreen": fullscreen(s),
                     "windows": windows,
+                    "overviewCount": s.workbench.overview.map_or(0, |app| s.workbench.apps.iter().filter(|page| app_id(**page) == Some(app)).count()),
+                    "activeClickOverview": desktop_customization_ui::appearance(s).dock.overview_active_click,
                 })
                 .to_string()
             })),

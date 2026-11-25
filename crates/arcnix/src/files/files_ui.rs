@@ -515,7 +515,7 @@ fn place(
                 "Music" => Icon::Audio,
                 "Videos" => Icon::Video,
                 "Documents" => Icon::File,
-                "Download directory" => Icon::Download,
+                "Downloads" => Icon::Download,
                 "Filesystem" => Icon::Disks,
                 _ => Icon::Folder,
             }),
@@ -612,129 +612,113 @@ pub(crate) fn tag_links(
 
 pub(crate) fn sidebar(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
-    when(
-        state.map(|s| s.sftp_available && !preferences(s).sidebar_hidden),
-        move || {
-            let place_ui = ui.clone();
-            let favorite_ui = ui.clone();
-            col()
-                .class("files-sidebar")
-                .name(i18n::bind("Files sidebar"))
+    let place_ui = ui.clone();
+    let favorite_ui = ui.clone();
+    col()
+        .class("files-sidebar")
+        .name(i18n::bind("Files sidebar"))
+        .fill((
+            fragment(location_links(
+                state,
+                move |s| files_tabs::directory(s, window).unwrap_or_default(),
+                true,
+                move |path| {
+                    if activate_window(&place_ui, window) {
+                        file_browser::navigate(&place_ui, true, path);
+                    }
+                },
+            )),
+            sapid::button()
+                .class("files-place files-apps-place")
+                .name(i18n::bind("Apps"))
+                .pressed(state.map(move |s| files_tabs::showing_apps(s, window)))
+                .fill((icons::glyph(Icon::Grid), text().content(i18n::bind("Apps"))))
+                .on_press({
+                    let ui = ui.clone();
+                    move || {
+                        if activate_window(&ui, window) {
+                            files_tabs::open_apps(&ui);
+                        }
+                    }
+                }),
+            sapid::button()
+                .class("files-place files-trash-place")
+                .enabled(state.map(|s| s.local_desktop.is_none()))
+                .name(i18n::bind("回收站"))
+                .pressed(state.map(move |s| files_tabs::showing_trash(s, window)))
                 .fill((
-                    fragment(location_links(
-                        state,
-                        move |s| files_tabs::directory(s, window).unwrap_or_default(),
-                        true,
-                        move |path| {
-                            if activate_window(&place_ui, window) {
-                                file_browser::navigate(&place_ui, true, path);
-                            }
-                        },
-                    )),
-                    sapid::button()
-                        .class("files-place files-apps-place")
-                        .name(i18n::bind("Apps"))
-                        .pressed(state.map(move |s| files_tabs::showing_apps(s, window)))
-                        .fill((icons::glyph(Icon::Grid), text().content(i18n::bind("Apps"))))
-                        .on_press({
-                            let ui = ui.clone();
-                            move || {
-                                if activate_window(&ui, window) {
-                                    files_tabs::open_apps(&ui);
-                                }
-                            }
-                        }),
-                    sapid::button()
-                        .class("files-place files-trash-place")
-                        .enabled(state.map(|s| s.local_desktop.is_none()))
-                        .name(i18n::bind("回收站"))
-                        .pressed(state.map(move |s| files_tabs::showing_trash(s, window)))
-                        .fill((
-                            icons::glyph(Icon::Clear),
-                            text().content(i18n::bind("回收站")),
-                        ))
-                        .on_press({
-                            let ui = ui.clone();
-                            move || {
-                                if activate_window(&ui, window) {
-                                    trash_ui::open(&ui, true);
-                                }
-                            }
-                        }),
-                    col()
-                        .class(state.map(|s| {
-                            if editable(s) && active(s) {
-                                "files-favorites editable"
-                            } else {
-                                "files-favorites"
-                            }
-                            .to_owned()
-                        }))
-                        .fill((
-                            text()
-                                .class("files-sidebar-heading")
-                                .content(i18n::bind("Favorites")),
-                            each(state.map(|s| preferences(s).favorites.clone()))
-                                .key(String::clone)
-                                .children(move |item| {
-                                    let path = item.value;
-                                    let open = favorite_ui.clone();
-                                    let remove = favorite_ui.clone();
-                                    row().class("files-favorite-row").name(path).fill((
-                                        sapid::button()
-                                            .class("files-place")
-                                            .name(i18n::bind(
-                                                path.map(|p| format!("Open favorite {p}")),
-                                            ))
-                                            .pressed(state.map(move |s| {
-                                                files_tabs::directory(s, window)
-                                                    == Some(path.get().as_str())
-                                            }))
-                                            .fill((
-                                                icons::glyph(Icon::Star),
-                                                text()
-                                                    .content(path.map(|p| item_name(p).to_owned())),
-                                                text()
-                                                    .class(
-                                                        state.map(move |s| {
-                                                            color_dot(s, &path.get())
-                                                        }),
-                                                    )
-                                                    .content(""),
-                                            ))
-                                            .on_press(move || {
-                                                if activate_window(&open, window) {
-                                                    open.open_files_item(path.get());
-                                                }
-                                            }),
-                                        sapid::button()
-                                            .class("icon-button files-favorite-remove")
-                                            .name(i18n::bind(
-                                                path.map(|p| format!("Remove favorite {p}")),
-                                            ))
-                                            .enabled(state.map(editable))
-                                            .fill(icons::glyph(Icon::Close))
-                                            .on_press(move || {
-                                                remove.toggle_files_favorite(path.get())
-                                            }),
-                                    ))
-                                }),
-                        )),
-                    fragment(tag_links(
-                        state,
-                        move |s| files_tabs::showing_tag(s, window),
-                        {
-                            let ui = ui.clone();
-                            move |filter| {
-                                if activate_window(&ui, window) {
-                                    ui.filter_files_tags(Some(filter));
-                                }
-                            }
-                        },
-                    )),
+                    icons::glyph(Icon::Clear),
+                    text().content(i18n::bind("回收站")),
                 ))
-        },
-    )
+                .on_press({
+                    let ui = ui.clone();
+                    move || {
+                        if activate_window(&ui, window) {
+                            trash_ui::open(&ui, true);
+                        }
+                    }
+                }),
+            col()
+                .class(state.map(|s| {
+                    if editable(s) && active(s) {
+                        "files-favorites editable"
+                    } else {
+                        "files-favorites"
+                    }
+                    .to_owned()
+                }))
+                .fill((
+                    text()
+                        .class("files-sidebar-heading")
+                        .content(i18n::bind("Favorites")),
+                    each(state.map(|s| preferences(s).favorites.clone()))
+                        .key(String::clone)
+                        .children(move |item| {
+                            let path = item.value;
+                            let open = favorite_ui.clone();
+                            let remove = favorite_ui.clone();
+                            row().class("files-favorite-row").name(path).fill((
+                                sapid::button()
+                                    .class("files-place")
+                                    .name(i18n::bind(path.map(|p| format!("Open favorite {p}"))))
+                                    .pressed(state.map(move |s| {
+                                        files_tabs::directory(s, window)
+                                            == Some(path.get().as_str())
+                                    }))
+                                    .fill((
+                                        icons::glyph(Icon::Star),
+                                        text().content(path.map(|p| item_name(p).to_owned())),
+                                        text()
+                                            .class(state.map(move |s| color_dot(s, &path.get())))
+                                            .content(""),
+                                    ))
+                                    .on_press(move || {
+                                        if activate_window(&open, window) {
+                                            open.open_files_item(path.get());
+                                        }
+                                    }),
+                                sapid::button()
+                                    .class("icon-button files-favorite-remove")
+                                    .name(i18n::bind(path.map(|p| format!("Remove favorite {p}"))))
+                                    .enabled(state.map(editable))
+                                    .fill(icons::glyph(Icon::Close))
+                                    .on_press(move || remove.toggle_files_favorite(path.get())),
+                            ))
+                        }),
+                )),
+            fragment(tag_links(
+                state,
+                move |s| files_tabs::showing_tag(s, window),
+                {
+                    let ui = ui.clone();
+                    move |filter| {
+                        if activate_window(&ui, window) {
+                            ui.filter_files_tags(Some(filter));
+                        }
+                    }
+                },
+            )),
+        ))
 }
 
 pub(crate) fn empty_state(icon: Icon, label: &'static str, class: &'static str) -> impl Widget {

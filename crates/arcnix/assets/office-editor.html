@@ -3,6 +3,14 @@
 <style>
 *{box-sizing:border-box}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:#e8eaee;color:#20242a;font:14px system-ui,sans-serif}
 main{overflow:auto;padding:12px;flex:1;min-height:0}.writer-page{background:white;color:#15191c;box-shadow:0 1px 5px #0003;margin:auto;width:min(100%,var(--writer-page-width,210mm));min-height:95%;padding:clamp(16px,5vw,64px);font:11pt Arial,'Microsoft YaHei',sans-serif}
+@media screen {
+  .writer-page {
+    width: var(--writer-page-width, 210mm);
+    min-height: var(--writer-page-height, 297mm);
+    padding: var(--writer-margin-top, 25.4mm) var(--writer-margin-right, 25.4mm)
+             var(--writer-margin-bottom, 25.4mm) var(--writer-margin-left, 25.4mm);
+  }
+}
 #body{min-height:50vh;outline:none;overflow-wrap:anywhere;white-space:pre-wrap}.writer-page img{max-width:100%;height:auto}.writer-page table{border-collapse:collapse;max-width:100%}.writer-page td{border:1px solid #9ca3af;padding:4px}.writer-page .writer-page-break{border-top:1px dashed #bac2cb;margin:14px 0}
 #message:not(:empty){padding:3px 12px;color:#475970;font-size:12px}
 </style></head>

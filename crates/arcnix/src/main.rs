@@ -47,6 +47,7 @@ use workers::*;
 enum Dialog {
     Update,
     OpenDesktopFile(desktop_file_picker::Purpose),
+    ConfirmOfficeSave(u64),
     TextEditor,
     DesktopTimeZone,
     DesktopIcons,
@@ -238,8 +239,9 @@ define_state! {
         code: code_workbench::Runtime = Default::default(),
         remote_editor: Option<text_editor::Editor> = None,
         desktop_editor: text_editor::Tabs = Default::default(),
-        office: office_reader::Reader = Default::default(),
-        pdf: pdf_reader::Reader = Default::default(),
+        office: document_tabs::Documents<office_reader::Reader> = Default::default(),
+        office_viewports: std::collections::BTreeMap<u32,native_viewport::Viewport> = Default::default(),
+        pdf: document_tabs::Documents<pdf_reader::Document> = Default::default(),
         pgadmin: pgadmin_ui::PgAdmin = Default::default(),
         images: image_viewer::Viewer = Default::default(),
         video: Option<video_player::Playback> = None,
@@ -329,6 +331,7 @@ define_state! {
         logs: String = String::new(),
         navigation: navigation::Page = Default::default(),
         settings_section: navigation::SettingsSection = Default::default(),
+        office_syncs: std::collections::BTreeMap<(String, String), office_sync::Entry> = Default::default(),
         unread_notifications: usize = 0,
         scripts: scripts_ui::ScriptsState = Default::default(),
         task_records: task_records_ui::RecordState = Default::default(),
@@ -611,9 +614,10 @@ impl Ui {
             if let Some(prompt) = &mut s.file_elevation {
                 prompt.clear_password();
             }
+            s.workbench.overview = None;
             s.swap_session(&mut incoming);
             s.code.viewport = None;
-            s.office.viewport = None;
+            s.office_viewports.clear();
             #[cfg(windows)]
             {
                 s.web_browser.viewports.clear();
@@ -923,6 +927,19 @@ impl Ui {
         worker_id: u64,
         response: worker::Response,
     ) {
+        if let Update::OfficeSync {
+            server: identity,
+            path,
+            stage,
+        } = response.update
+        {
+            if let Some(profile) = server {
+                self.state.revise(|s| {
+                    office_sync::record(s, profile, identity, path, response.serial, stage)
+                });
+            }
+            return;
+        }
         let finished = if let Update::Finished(id, _) = &response.update {
             self.state.revise(|s| s.inflight_transfers.remove(id))
         } else {
@@ -956,6 +973,7 @@ impl Ui {
             #[cfg(windows)]
             Update::WslFiles(result)=>wsl_workspace::receive(events,response.serial,result),
             Update::PgAdmin(reply)=>pgadmin_ui::reply(events,response.serial,reply),
+            Update::OfficeSync { .. } => unreachable!("global sync events are routed separately"),
             Update::OfficePending(result)=>office_reader::pending_received(events,response.serial,result),
             Update::OfficeSaved(result)=>office_reader::saved(events,response.serial,result),
             Update::Office(result)=>office_reader::received(events,response.serial,result),
@@ -980,7 +998,7 @@ impl Ui {
             Update::Connected(sftp,address)=>{state.revise(|s|{s.server_apps.connected_address=address;s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
                 #[cfg(windows)]
                 if state.with(|s| server_desktop::launcher_running(s, WorkspacePage::Browser)) { events.open_web_browser(); }
-                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.pgadmin_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
+                events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.send(Action::ResumeOffice(events.store.as_ref().clone()));events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.pgadmin_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
             Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
@@ -1003,9 +1021,10 @@ impl Ui {
                     s.images = Default::default();
                     s.pdf = Default::default();
                     s.office = Default::default();
+                    s.office_viewports.clear();
                     desktop_file_picker::dismiss(s);
                     file_elevation::reset(s);
-                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::Launcher | Dialog::SystemPower(..))) {
+                    if matches!(s.dialog, Some(Dialog::DesktopTimeZone | Dialog::DesktopIcons | Dialog::DockShortcuts | Dialog::Launcher | Dialog::SystemPower(..) | Dialog::ConfirmOfficeSave(_))) {
                         s.dialog = None;
                     }
                 });
@@ -1237,6 +1256,7 @@ impl Ui {
                 s.dialog,
                 Some(
                     Dialog::TransferConflict
+                        | Dialog::ConfirmOfficeSave(_)
                         | Dialog::DesktopTimeZone
                         | Dialog::DesktopIcons
                         | Dialog::DockShortcuts
@@ -1281,6 +1301,7 @@ impl Ui {
             s.images = Default::default();
             s.pdf = Default::default();
             s.office = Default::default();
+            s.office_viewports.clear();
             text_editor::disconnect(s);
             s.operations = Default::default();
             s.metrics = Default::default();
@@ -1707,6 +1728,7 @@ fn dismiss_menus(s: &mut State) {
 }
 /// Shows `dialog` in place of any open menu. Callers check [`file_task_busy`].
 fn show_dialog(s: &mut State, dialog: Dialog) {
+    s.workbench.overview = None;
     if dialog != Dialog::FileElevation {
         file_elevation::reset(s);
     }
@@ -1883,6 +1905,7 @@ fn modal_with_header(
                             | Dialog::Launcher
                             | Dialog::SystemPower(..)
                             | Dialog::OpenDesktopFile(_)
+                            | Dialog::ConfirmOfficeSave(_)
                             | Dialog::DesktopIcons
                             | Dialog::DockShortcuts
                     )
@@ -1958,6 +1981,7 @@ fn modal_with_header(
                                 ) => "modal-card settings-surface",
                                 Some(Dialog::DeleteFiles { .. }) => "modal-card file-delete-dialog",
                                 Some(Dialog::OpenDesktopFile(_)) => "modal-card file-picker-dialog",
+                                Some(Dialog::ConfirmOfficeSave(_)) => "modal-card office-save-dialog",
                                 Some(Dialog::TextEditor) => "modal-card remote-editor-modal",
                                 _ => "modal-card",
                             }
@@ -2213,7 +2237,10 @@ fn app(ui: Ui) -> impl Widget {
                 )),
                 servers::dialogs(ui.clone()),
                 settings::files_dialog(ui.clone()),
-                desktop_file_picker::dialog(ui.clone()),
+                fragment((
+                    desktop_file_picker::dialog(ui.clone()),
+                    office_reader::confirm_save_dialog(ui.clone()),
+                )),
                 files_ui::folder_icon_dialog(ui.clone()),
                 network_ui::dialog(ui.clone()),
                 fragment((
@@ -2402,6 +2429,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .unwrap_or("Arcnix 已就绪。新建服务器并连接，或浏览本地目录。"),
     );
     ui.refresh(false);
+    office_sync::restore(&ui)?;
     scripts_ui::restore(&ui);
     let batch_ui = ui.clone();
     scope.spawn(async move {
@@ -2484,6 +2512,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     include_str!("../assets/desktop-frame.js"),
                     include_str!("../assets/shortcut-chords.js"),
                     include_str!("../assets/file-list-events.js"),
+                    include_str!("../assets/file-sidebar.js"),
                     include_str!("../assets/desktop-customization.js"),
                     include_str!("../assets/settings-controls.js"),
                     include_str!("../assets/help-events.js"),

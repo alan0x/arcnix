@@ -69,6 +69,7 @@ pub struct NetworkCounters {
 
 #[derive(Clone, Debug, Default)]
 pub struct ResourceSnapshot {
+    pub gpus: Option<Vec<super::gpu::Gpu>>,
     pub cpu: Option<CpuCounters>,
     pub uptime_seconds: Option<f64>,
     pub load_average: Option<[f64; 3]>,
@@ -112,9 +113,32 @@ impl ResourceReading {
 /// Read a snapshot from the host represented by this session.
 pub trait ResourceReader {
     fn sample_resources(&self) -> Result<ResourceReading>;
+    fn sample_gpus(&self) -> Result<Vec<super::gpu::Gpu>>;
+    fn sample_monitor(&self, include_gpu: bool) -> Result<ResourceReading> {
+        let mut reading = self.sample_resources()?;
+        if include_gpu {
+            match self.sample_gpus() {
+                Ok(cards) => reading.snapshot.gpus = Some(cards),
+                Err(error) => reading.snapshot.warnings.push(format!("GPU: {error}")),
+            }
+        }
+        Ok(reading)
+    }
 }
 
 impl ResourceReader for RemoteSession {
+    fn sample_gpus(&self) -> Result<Vec<super::gpu::Gpu>> {
+        use super::gpu;
+        use crate::host::HostOs;
+        let os = self.host_os()?;
+        let command = match os {
+            HostOs::Windows => crate::host::powershell_command(gpu::WINDOWS),
+            HostOs::MacOs => gpu::MACOS.into(),
+            HostOs::Linux => gpu::LINUX.into(),
+            HostOs::Unknown => return Ok(Vec::new()),
+        };
+        gpu::parse(os, &super::remote_metrics::execute(self, &command)?)
+    }
     fn sample_resources(&self) -> Result<ResourceReading> {
         super::remote_metrics::sample(self)
     }

@@ -16,7 +16,17 @@ pub(super) fn available(s: &State) -> bool {
         && (s.local_desktop.is_some() || !s.server_apps.connected_address.is_empty())
 }
 
-pub(super) fn menu(ui: Ui) -> impl Widget {
+#[derive(Clone, Copy)]
+pub(super) enum MenuLocation {
+    General,
+    Launcher,
+}
+
+pub(super) fn menu(ui: Ui, location: MenuLocation) -> impl Widget {
+    let (id, side) = match location {
+        MenuLocation::General => ("device-power", AnchorSide::Bottom),
+        MenuLocation::Launcher => ("launcher-power", AnchorSide::Top),
+    };
     let state = ui.state;
     let item = |action: PowerAction, label: &'static str| {
         let ui = ui.clone();
@@ -24,21 +34,28 @@ pub(super) fn menu(ui: Ui) -> impl Widget {
             .label(i18n::bind(label))
             .on_activate(move || {
                 if let Some(epoch) = state.with(|s| {
-                    (available(s)
-                        && s.dialog.is_none()
-                        && server_apps_ui::settings_visible(s)
-                        && settings_page(s) == SettingsPage::General)
-                        .then_some(s.epoch)
+                    let visible = match location {
+                        MenuLocation::General => {
+                            s.dialog.is_none()
+                                && server_apps_ui::settings_visible(s)
+                                && settings_page(s) == SettingsPage::General
+                        }
+                        MenuLocation::Launcher => {
+                            s.dialog == Some(Dialog::Launcher)
+                                && desktop_customization_ui::appearance(s).dock.launcher_power
+                        }
+                    };
+                    (visible && available(s)).then_some(s.epoch)
                 }) {
                     ui.open_dialog(Dialog::SystemPower(epoch, action));
                 }
             })
     };
     row().class("device-power-menu").fill(
-        sapid::dropdown_menu("device-power")
+        sapid::dropdown_menu(id)
             .label(i18n::bind("Power options"))
             .trigger_content(icons::glyph(Icon::Power))
-            .position(AnchorPlacement::new(AnchorSide::Bottom, AnchorAlign::End))
+            .position(AnchorPlacement::new(side, AnchorAlign::End))
             .enabled(state.map(available))
             .item(item(PowerAction::Restart, "Restart system…"))
             .item(item(PowerAction::ShutDown, "Shut down…")),

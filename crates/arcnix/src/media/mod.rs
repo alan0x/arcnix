@@ -1,5 +1,6 @@
 #[cfg(windows)]
 pub(crate) mod browser_cookies;
+pub(crate) mod document_tabs;
 pub(crate) mod image_viewer;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_surface;
@@ -8,6 +9,7 @@ pub(crate) mod mpv_native;
 pub(crate) mod native_viewport;
 pub(crate) mod office_cache;
 pub(crate) mod office_reader;
+pub(crate) mod office_sync;
 pub(crate) mod office_view;
 pub(crate) mod pdf_reader;
 pub(crate) mod video_player;
@@ -45,9 +47,12 @@ pub(crate) fn viewer_fullscreen_button(state: Cage<State>, page: WorkspacePage) 
                 .otherwise(|| icons::glyph(Icon::Fullscreen)),
         )
         .on_press(move || {
-            state.revise(|s| match page {
+            state.revise(|s| match page.base() {
                 WorkspacePage::ImageViewer => s.images.fullscreen = !s.images.fullscreen,
-                WorkspacePage::PdfReader => s.pdf.fullscreen = !s.pdf.fullscreen,
+                WorkspacePage::PdfReader => {
+                    let doc = s.pdf.selected_mut(page.tab_window().unwrap_or_default());
+                    doc.fullscreen = !doc.fullscreen;
+                }
                 _ => {}
             })
         })

@@ -93,6 +93,12 @@ function setKeyboardNavigation(keyboard) {
 }
 window.addEventListener('pointerdown', () => setKeyboardNavigation(false), true);
 window.addEventListener('keydown', event => {
+    // A WebView reload restarts the native bridge. Files dispatches its own refresh.
+    if (event.key === 'F5' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r')) {
+        event.preventDefault();
+    }
+});
+window.addEventListener('keydown', event => {
     if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) setKeyboardNavigation(true);
 }, true);
 // A popup can consume navigation keydown before the app receives it.

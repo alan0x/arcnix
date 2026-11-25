@@ -1,0 +1,24 @@
+/* Keep desktop chrome separate from document and printer colors. */
+@media screen {
+  .syntra-command-bar[data-kind] {
+    --ink: var(--office-text);
+    --muted: var(--office-muted);
+    --line: var(--office-line);
+    --accent: var(--office-accent);
+    --tint: color-mix(in srgb, var(--office-bg), var(--office-fill) 20%);
+    background: var(--office-surface);
+    color-scheme: var(--office-scheme);
+    accent-color: var(--office-fill);
+  }
+  .syntra-menubar, .syntra-menu-popup, .syntra-find, .syntra-discard button {
+    background: var(--office-surface);
+    border-color: var(--office-line);
+  }
+  .syntra-toolbar select, .syntra-find input {
+    background: var(--office-input);
+    color: var(--office-text);
+  }
+  .syntra-command-bar button:hover:enabled, .syntra-menu-trigger[aria-expanded='true'] {
+    background: var(--tint);
+  }
+}

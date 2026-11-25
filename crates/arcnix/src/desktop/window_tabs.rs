@@ -30,6 +30,11 @@ impl Groups {
     pub fn first_window(&self) -> Option<u32> {
         self.window_ids().next()
     }
+    pub fn owner(&self, tab: u64) -> Option<u32> {
+        self.windows
+            .iter()
+            .find_map(|(&window, group)| group.tabs.contains(&tab).then_some(window))
+    }
     pub fn tabs(&self, window: u32) -> &[u64] {
         self.windows.get(&window).map_or(&[], |group| &group.tabs)
     }
@@ -95,7 +100,9 @@ impl WorkspacePage {
     pub fn tab_window(self) -> Option<u32> {
         match self {
             Self::Files(id) | Self::Detached(_, id) => Some(id),
-            Self::Terminal | Self::Browser | Self::Editor => Some(0),
+            Self::Terminal | Self::Browser | Self::Editor | Self::PdfReader | Self::Office => {
+                Some(0)
+            }
             _ => None,
         }
     }
@@ -106,6 +113,8 @@ fn groups_mut(s: &mut State, app: DesktopApp) -> Option<&mut Groups> {
         DesktopApp::Files => Some(&mut s.workbench.files.groups),
         DesktopApp::Terminal => Some(&mut s.terminal.groups),
         DesktopApp::Editor => Some(&mut s.desktop_editor.groups),
+        DesktopApp::Office => Some(&mut s.office.groups),
+        DesktopApp::PdfReader => Some(&mut s.pdf.groups),
         #[cfg(windows)]
         DesktopApp::Browser => Some(&mut s.web_browser.groups),
         _ => None,
@@ -116,6 +125,8 @@ pub fn current(s: &State, base: WorkspacePage) -> WorkspacePage {
     match base {
         WorkspacePage::Terminal => page(DesktopApp::Terminal, s.terminal.groups.current),
         WorkspacePage::Editor => page(DesktopApp::Editor, s.desktop_editor.groups.current),
+        WorkspacePage::Office => page(DesktopApp::Office, s.office.groups.current),
+        WorkspacePage::PdfReader => page(DesktopApp::PdfReader, s.pdf.groups.current),
         #[cfg(windows)]
         WorkspacePage::Browser => page(DesktopApp::Browser, s.web_browser.groups.current),
         _ => base,
@@ -158,6 +169,15 @@ pub fn focus(s: &mut State, window: WorkspacePage) {
 }
 
 pub fn forget(s: &mut State, window: WorkspacePage) {
+    let id = window.tab_window().unwrap_or_default();
+    match window.base() {
+        WorkspacePage::Office => {
+            s.office.remove_window(id);
+            s.office_viewports.remove(&id);
+        }
+        WorkspacePage::PdfReader => s.pdf.remove_window(id),
+        _ => {}
+    }
     #[cfg(windows)]
     if window.base() == WorkspacePage::Browser {
         s.web_browser

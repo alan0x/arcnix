@@ -691,6 +691,7 @@ enum GestureKind {
     Rename,
     Delete,
     DeletePermanently,
+    NewFolder,
     CopyPaths,
     CopyFiles,
     PasteFiles,
@@ -828,6 +829,9 @@ pub(crate) fn open_remote_file(ui: &Ui, path: &str) {
 }
 
 pub(crate) fn activate(ui: &Ui, remote: bool, target: &str) {
+    if remote && ui.state.with(|s| office_sync::uploading(s, target)) {
+        return;
+    }
     let entry = ui
         .state
         .with(|s| entries(s, remote).into_iter().find(|f| f.path == target));
@@ -1108,6 +1112,7 @@ fn gesture(ui: &Ui, remote: bool, value: String) {
         GestureKind::Delete => trash_ui::move_items(ui, remote),
         GestureKind::DeletePermanently => file_context::begin_delete(ui, remote),
         GestureKind::Rename => begin_rename(ui, remote),
+        GestureKind::NewFolder => create(ui, remote, true),
         GestureKind::CopyPaths => file_context::copy_paths(ui, remote, false),
         GestureKind::CopyFiles if remote => file_actions::copy(ui),
         GestureKind::PasteFiles if remote => file_actions::paste(ui),
@@ -1190,6 +1195,7 @@ pub(crate) fn entry_name<T: 'static>(
     entry: Cage<T>,
     file: fn(&T) -> &FileEntry,
     files: bool,
+    remote: bool,
 ) -> impl IntoChildren {
     (
         text()
@@ -1198,6 +1204,9 @@ pub(crate) fn entry_name<T: 'static>(
         text()
             .class("file-label")
             .content(entry.map(move |entry| file(entry).name.clone())),
+        office_sync::upload_badge(state.map(move |s| {
+            remote && entry.with(|item| office_sync::uploading(s, &file(item).path))
+        })),
         text().class("folder-color-dot").content(""),
     )
 }
@@ -1216,6 +1225,19 @@ pub(crate) fn listing(ui: Ui, remote: bool, files: bool) -> impl Widget {
         }))
         .focus(FocusMode::Programmatic)
         .fill((
+            when(!files, || {
+                use arcnix_core::desktop_shortcuts::{GROUPS, Scheme, Scope};
+                let preset = Scheme::Auto.preset();
+                let bindings: std::collections::BTreeMap<_, _> = GROUPS
+                    .iter()
+                    .filter(|(scope, _)| *scope == Scope::Files)
+                    .flat_map(|(_, group)| group.iter())
+                    .map(|b| (b.action, [preset.default_key(b.action)]))
+                    .collect();
+                text()
+                    .class("native-file-shortcuts hidden")
+                    .content(serde_json::to_string(&bindings).unwrap())
+            }),
             // Native pointer modifiers are absent from Glory 0.7's Activate event.
             // This private bridge carries a finite gesture; Rust validates the path
             // against the current visible rows before changing selection/navigation.
@@ -1301,7 +1323,12 @@ pub(crate) fn listing(ui: Ui, remote: bool, files: bool) -> impl Widget {
                                     .class(entry_name_class(state, entry, |row| &row.entry, files))
                                     .name(entry.map(|r| r.entry.name.clone()))
                                     .label("")
-                                    .fill(entry_name(state, entry, |row| &row.entry, files))
+                                    .enabled(state.map(move |s| {
+                                        !remote
+                                            || entry
+                                                .with(|r| !office_sync::uploading(s, &r.entry.path))
+                                    }))
+                                    .fill(entry_name(state, entry, |row| &row.entry, files, remote))
                                     .on_press(move || {
                                         activate(&open, remote, &entry.get().entry.path)
                                     }),

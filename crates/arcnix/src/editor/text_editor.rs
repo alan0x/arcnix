@@ -53,7 +53,17 @@ impl Tabs {
         self.active = selected;
     }
 
-    fn select(&mut self, id: u64) {
+    pub(crate) fn tab_title(&self, id: u64) -> String {
+        self.documents
+            .get(&id)
+            .filter(|e| !e.path.is_empty())
+            .map_or_else(
+                || format!("{} {id}", i18n::desktop::translate("Untitled")),
+                |e| filename(&e.path).to_owned(),
+            )
+    }
+
+    pub(crate) fn select(&mut self, id: u64) {
         self.groups.select(id);
         if self.documents.contains_key(&id) {
             self.active = Some(id);

@@ -98,6 +98,14 @@ impl TerminalState {
             .find(|session| session.id == id)
     }
 
+    pub(crate) fn window_title(&self, window: u32) -> Option<String> {
+        let selected = self.groups.selected(window)?;
+        self.tabs(window)
+            .iter()
+            .find(|tab| tab.id == selected)
+            .map(tab_label)
+    }
+
     fn tabs(&self, window: u32) -> Vec<Tab> {
         self.groups
             .tabs(window)
@@ -312,7 +320,17 @@ impl Ui {
         self.terminal_here_in(directory, false);
     }
     pub(crate) fn terminal_here_in(&self, directory: String, new_window: bool) {
-        if !directory_supported(&directory) || !self.state.with(State::terminal_available) {
+        if !directory_supported(&directory) {
+            return;
+        }
+        self.terminal_open_in(Some(directory), new_window);
+    }
+    pub(crate) fn terminal_new_window(&self) {
+        let directory = self.state.with(|s| s.terminal.directory.clone());
+        self.terminal_open_in(directory, true);
+    }
+    fn terminal_open_in(&self, directory: Option<String>, new_window: bool) {
+        if !self.state.with(State::terminal_available) {
             return;
         }
         if self
@@ -340,7 +358,7 @@ impl Ui {
             };
             server_desktop::select_app(s, page);
         });
-        self.terminal_open(100, 30, Some(directory), true);
+        self.terminal_open(100, 30, directory, true);
     }
     /// Stage one reviewed line in a fresh shell. Only the user submits it.
     pub(crate) fn terminal_with_command(&self, command: String) {

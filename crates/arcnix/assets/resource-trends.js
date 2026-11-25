@@ -18,14 +18,14 @@
         return node;
     };
     const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-    function rate(value, data, axis = false) {
+    function size(value, data, axis = false) {
         if (!valid(value)) return data.labels.missing;
         const base = data.base === 1024 ? 1024 : 1000;
         const units = base === 1000 ? ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'] : ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
         let index = 0;
         while (value >= base && index < units.length - 1) { value /= base; index++; }
         const decimals = index ? Math.min(data.decimals ?? 1, axis ? 1 : 2) : 0;
-        return `${value.toLocaleString(data.locale, { maximumFractionDigits: decimals, useGrouping: !!data.grouping })} ${units[index]}/s`;
+        return `${value.toLocaleString(data.locale, { maximumFractionDigits: decimals, useGrouping: !!data.grouping })} ${units[index]}`;
     }
     function makeChart(root, kind, keys) {
         const figure = element('figure', `resource-trend-chart resource-trend-${kind}`, root);
@@ -65,7 +65,9 @@
     }
     function formatted(state, key, value) {
         if (!valid(value)) return state.data.labels.missing;
-        return state.kind === 'network' ? rate(value, state.data) : `${value.toLocaleString(state.data.locale, { maximumFractionDigits: 1 })}%`;
+        if (state.kind === 'network') return size(value, state.data) + '/s';
+        if (['dedicated', 'shared'].includes(key)) return size(value, state.data);
+        return `${value.toLocaleString(state.data.locale, { maximumFractionDigits: 1 })}%`;
     }
     function inspect(state, point) {
         state.activeAt = point.at;
@@ -187,7 +189,8 @@
     function draw(state, data) {
         const width = Math.floor(state.svg.clientWidth);
         if (width < 100) return;
-        const height = 196, right = 10, top = 12, bottom = 166;
+        const height = data.adapter ? (['dedicated','shared'].includes(state.kind) ? 96 : 126) : 196;
+        const right = 10, top = 12, bottom = height - 30;
         const previous = state.data;
         const previousView = { start: state.start, span: state.span, first: state.points[0]?.at, series: state.series };
         const plot = data.plots[state.kind];
@@ -214,7 +217,7 @@
             return;
         }
         state.y = value => bottom - value / plot.maximum * (bottom - top);
-        const labels = plot.ticks.map(value => svgNode('text', { y: state.y(value) + 4, 'text-anchor': 'end', class: 'resource-trend-axis' }, svg, state.kind === 'network' ? rate(value, data, true) : `${value}%`));
+        const labels = plot.ticks.map(value => svgNode('text', { y: state.y(value) + 4, 'text-anchor': 'end', class: 'resource-trend-axis' }, svg, state.kind === 'network' ? size(value, data, true) + '/s' : ['dedicated','shared'].includes(state.kind) ? size(value,data,true) : `${value}%`));
         const left = Math.ceil(Math.max(0, ...labels.map(label => label.getComputedTextLength()))) + 10;
         state.left = left;
         state.plotWidth = Math.max(1, width - left - right);
@@ -262,7 +265,7 @@
         if (!state) {
             const catalog = [['cpu', ['cpu']], ['memory', ['memory']], ['network', ['receive', 'transmit']]];
             const single = catalog.find(([kind]) => root.classList.contains(`plot-${kind}`));
-            const charts = (single ? [single] : catalog).map(([kind, keys]) => makeChart(root, kind, keys));
+            const charts = (root.classList.contains('plot-gpu') ? [] : single ? [single] : catalog).map(([kind, keys]) => makeChart(root, kind, keys));
             state = { root, text: '', data: null, charts };
             state.resize = new ResizeObserver(() => {
                 if (!state.data) return;
@@ -279,6 +282,14 @@
             const data = JSON.parse(state.text);
             if (![60, 300, 900].includes(data.range) || !Array.isArray(data.points) || !data.labels) return;
             data.points = data.points.slice(-1024).filter(p => p && valid(p.at));
+            if (root.classList.contains('plot-gpu')) {
+                Object.assign(data.labels, data.gpuLabels);
+                const keys = ['graphics','utilization','renderer','tiler','copy','encode','decode','dedicated','shared'].filter(key => key in data.plots);
+                if (state.data?.adapter !== data.adapter || keys.join() !== state.charts.map(c => c.kind).join()) {
+                    root.replaceChildren();
+                    state.charts = keys.map(key => makeChart(root, key, [key]));
+                }
+            }
             state.data = data;
             for (const chart of state.charts) draw(chart, data);
         } catch { /* The Rust payload is replaced atomically on the next render. */ }

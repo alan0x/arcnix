@@ -214,6 +214,11 @@ class Desktop:
         launcher = self.page.locator('.desktop-dock').get_by_role('button', name=label, exact=True)
         if not launcher.count():
             launcher = self.apps().get_by_role('button', name=label, exact=True)
+        elif launcher.get_attribute('aria-pressed') == 'true':
+            overview = self.page.locator('.window-overview')
+            if overview.count():
+                overview.locator('.overview-exit').click()
+            return
         launcher.click()
     def apps(self):
         self.workspace('Desktop')

@@ -34,7 +34,7 @@ pub(crate) struct Viewer {
     pub fullscreen: bool,
     pub request: Option<u64>,
     pub directory_request: Option<u64>,
-    path: String,
+    pub(crate) path: String,
     siblings: Vec<String>,
     index: usize,
     picture: Option<(u64, Picture)>,

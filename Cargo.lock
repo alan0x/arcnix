@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "arcnix"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "anyhow",
  "arcnix-core",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "arcnix-core"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4335,7 +4335,7 @@ dependencies = [
 [[package]]
 name = "syntra-doc-engine"
 version = "0.1.0"
-source = "git+https://github.com/taidge/syntra?rev=5a1b8187d4f3d9e9acee033f298fc08c57326906#5a1b8187d4f3d9e9acee033f298fc08c57326906"
+source = "git+https://github.com/taidge/syntra?rev=580984a874a1f9da882350167e4a22cdb1112b4e#580984a874a1f9da882350167e4a22cdb1112b4e"
 dependencies = [
  "chrono",
  "serde",
@@ -4347,7 +4347,7 @@ dependencies = [
 [[package]]
 name = "syntra-export"
 version = "0.1.0"
-source = "git+https://github.com/taidge/syntra?rev=5a1b8187d4f3d9e9acee033f298fc08c57326906#5a1b8187d4f3d9e9acee033f298fc08c57326906"
+source = "git+https://github.com/taidge/syntra?rev=580984a874a1f9da882350167e4a22cdb1112b4e#580984a874a1f9da882350167e4a22cdb1112b4e"
 dependencies = [
  "base64 0.22.1",
  "calamine",
@@ -4367,7 +4367,7 @@ dependencies = [
 [[package]]
 name = "syntra-office-ui"
 version = "0.1.0"
-source = "git+https://github.com/taidge/syntra?rev=5a1b8187d4f3d9e9acee033f298fc08c57326906#5a1b8187d4f3d9e9acee033f298fc08c57326906"
+source = "git+https://github.com/taidge/syntra?rev=580984a874a1f9da882350167e4a22cdb1112b4e#580984a874a1f9da882350167e4a22cdb1112b4e"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

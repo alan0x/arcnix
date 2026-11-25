@@ -232,6 +232,7 @@ impl Ui {
 fn hidden_files_switch(ui: &Ui, desktop: bool) -> sapid::Switch {
     let ui = ui.clone();
     sapid::switch()
+        .size(sapid::Size::Small)
         .class("hidden-files-switch")
         .label_position(sapid::SwitchLabelPosition::Before)
         .label(i18n::bind_in(desktop, "Show hidden files"))
