@@ -412,11 +412,13 @@ pub fn parse(output: &str) -> Result<Reading> {
         raw.instances.len() <= INSTANCE_LIMIT,
         "Too many Nginx instances"
     );
-    let instances = raw
+    let mut instances = raw
         .instances
         .into_iter()
         .map(instance)
         .collect::<Result<Vec<_>>>()?;
+    // Docker lists containers in an order that changes when one restarts.
+    instances.sort_by_cached_key(|i| (i.docker.is_some(), i.title().to_lowercase()));
     let mut keys = std::collections::HashSet::new();
     ensure!(
         instances.iter().all(|i| keys.insert(i.key())),

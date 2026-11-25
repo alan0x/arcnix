@@ -2957,6 +2957,7 @@ button,
 .nginx-form-section .preference-check { color: var(--text) !important; font-size: 13px; }
 .nginx-form-summary { font-size: 12px; overflow-wrap: anywhere; }
 .nginx-file { min-height: 360px; font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace !important; white-space: pre; tab-size: 4; }
+.nginx-form input:disabled, .nginx-file:disabled { color: var(--muted); background: var(--raised); cursor: default; }
 .nginx-publish { gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 .nginx-health { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .nginx-publish-row { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; }

@@ -3027,3 +3027,5 @@ Docker 没有响应，因此不显示容器中的 Nginx。	Docker did not answer
 {} 位于容器镜像内；从服务器挂载后才能添加站点	{} is inside the container image; mount it from the server to add sites
 这个 Nginx 已不在服务器上	This Nginx is no longer on the server
 这个容器中没有从服务器挂载的内容，因此配置只能查看。从服务器挂载配置文件夹后即可在这里管理。	Nothing in this container is mounted from the server, so its configuration can only be read. Mount the configuration folder from the server to manage it here.
+请在“SSH 密码或私钥口令”中输入 {server} 的 SSH 密码	Enter the SSH password for {server} in SSH password or key passphrase
+“检查目标”会读取服务器上的文件，并在这里显示改动。运行任务之前，服务器上不会有任何改动。	Check targets reads the file on the server and shows the changes here. Nothing changes on the server until you run the task.

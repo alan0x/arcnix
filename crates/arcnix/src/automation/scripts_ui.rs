@@ -231,6 +231,9 @@ impl Ui {
                     if let Some(job)=&template.recovery {job.target(profile,&fingerprint)?;}
                     let (secret, sudo) = s.scripts.credentials.get(&profile.id).cloned().unwrap_or_default();
                     anyhow::ensure!([&secret, &sudo].iter().all(|value| value.len() <= 1024 && !value.contains(['\0','\r','\n'])), "Invalid credential");
+                    // Tasks never reuse the connection's password, and an empty
+                    // one only comes back from the server as a generic refusal.
+                    anyhow::ensure!(profile.auth != arcnix_core::AuthMethod::Password || !secret.is_empty(), "Enter the SSH password for {} in SSH password or key passphrase", profile.name);
                     let mut profile = profile.clone(); if profile.connection.is_none() { profile.connection=Some(s.config.settings.connection); }
                     records.push(tasks::Target { id: profile.id.clone(), name: profile.name.clone(), endpoint: format!("{}@{}:{}", profile.username, profile.host, profile.port), fingerprint: fingerprint.clone(), status: Status::Checking, preview: String::new(), output: String::new(), exit_code: None, remote_directory: String::new(), result_read_at: None });
                     targets.push(batch_worker::Target { profile, fingerprint, secret: Zeroizing::new(secret), sudo: Zeroizing::new(sudo) });
@@ -1113,6 +1116,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             text().class("installation-scope hint").content(state.map(|s|s.scripts.template.as_ref().and_then(|t|t.installation.as_ref()).map(|_|i18n::translate("Failed installation can leave partial changes. Review results before retrying; no automatic rollback or removal.")).unwrap_or_default())),
             crate::installation_ui::options(ui.clone()),
             )),
+            when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.configuration.is_some())),||text().class("hint").content(i18n::bind("Check targets reads the file on the server and shows the changes here. Nothing changes on the server until you run the task."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.service.is_some())),||text().class("hint").content(i18n::bind("Service changes may interrupt connections. Check the unit on every target before running."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.is_cross_server_recovery())),||text().class("hint cross-server-recovery-scope").content(i18n::bind("Cross-server recovery: trusted restore targets may be outside the original backup policy. Each target must access the same repository and prepared credential files. The source server is not contacted; backup and retention target scopes are unchanged."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.cleanup.is_some()||t.audit_cleanup.is_some()||t.recovery.as_ref().is_some_and(|j|j.targets.iter().any(|target|target.plan.action==arcnix_core::record_recovery::Action::Release)))),||text().class("hint").content(i18n::bind("Deletion cannot be undone. Review the exact file plan before execution."))),
