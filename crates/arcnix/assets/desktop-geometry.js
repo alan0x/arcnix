@@ -109,6 +109,14 @@ const desktopGeometry = (() => {
             const value = limits[edge] + 'px';
             if (canvas.style.getPropertyValue(property) !== value) canvas.style.setProperty(property, value);
         }
+        if (layout.overviewCount) {
+            const count = layout.overviewCount;
+            const columns = Math.max(1, Math.min(count, Math.floor(limits.width / 230),
+                Math.ceil(Math.sqrt(count * limits.width / (1.55 * limits.height)))));
+            canvas.style.setProperty('--overview-columns', String(columns));
+            canvas.style.setProperty('--overview-rows', String(Math.ceil(count / columns)));
+            return;
+        }
         for (const item of layout.windows) {
             const element = canvas.querySelector(`.desktop-window.${item.class}:not(.hidden)`);
             if (!element) continue;
@@ -135,7 +143,7 @@ const desktopGeometry = (() => {
     }
 
     function raise(element) {
-        if (!layout?.shown || element?.classList.contains('active') || element?.closest('[inert]')) return;
+        if (!layout?.shown || layout.overviewCount || element?.classList.contains('active') || element?.closest('[inert]')) return;
         const item = element && windowLayout(element);
         if (item) send('.desktop-focus-input', item);
     }
@@ -186,7 +194,7 @@ const desktopGeometry = (() => {
         if (next?.epoch !== layout?.epoch) openingAreas.clear();
         const nextCanvas = document.querySelector('.desktop-canvas');
         const reset = next?.epoch !== layout?.epoch || nextCanvas !== canvas;
-        const changedFrame = reset || !next?.shown || next.fullscreen !== layout?.fullscreen;
+        const changedFrame = reset || !!next?.overviewCount !== !!layout?.overviewCount || !next?.shown || next.fullscreen !== layout?.fullscreen;
         if (changedFrame || (gesture && !next.windows.some(item => item.class === gesture.app && !item.maximized))) {
             finish(false);
         }
@@ -224,7 +232,7 @@ const desktopGeometry = (() => {
         if (event.button === 0 && target.closest('.files-inactive-draggable')) return;
         raise(element);
         const item = windowLayout(element);
-        if (event.button !== 0 || gesture || !layout?.shown || !item
+        if (event.button !== 0 || gesture || !layout?.shown || layout.overviewCount || !item
             || element.closest('[inert]') || target.closest(controls)) return;
         const handle = target.closest('.desktop-resize-handle');
         const titlebar = target.closest('.desktop-window-titlebar');

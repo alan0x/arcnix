@@ -145,7 +145,10 @@ with Peer(out/'peer') as peer:
         app.settings('General');p.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check();app.servers();resources(app)
         app.screenshot('resources-dark.png')
         dock=p.locator('.desktop-dock')
-        app.settings('General');p.locator('.setting-theme:visible').get_by_role('radio', name='Light', exact=True).check();p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();app.servers();dock.get_by_role('button',name='监控',exact=True).click()
+        app.settings('General');p.locator('.setting-theme:visible').get_by_role('radio', name='Light', exact=True).check();p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check();app.servers()
+        monitor=dock.get_by_role('button',name='监控',exact=True)
+        if monitor.get_attribute('aria-pressed') != 'true':
+            monitor.click()
         p.locator('.monitor-sidebar').get_by_role('button',name='概览',exact=True).click()
         expect(p.locator('.resource-trend-title')).to_have_text(['CPU 使用率','内存使用','网络速率'])
         p.set_viewport_size(dict(width=900,height=780));expect(p.get_by_role('button',name='继续采样',exact=True)).to_be_visible()

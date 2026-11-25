@@ -824,6 +824,7 @@ impl RemoteSession {
         baseline: &crate::text_files::Version,
         limit: usize,
         check: impl Fn() -> Result<()>,
+        progress: impl Fn(u64),
     ) -> Result<crate::text_files::Version> {
         ensure!(bytes.len() <= limit, "Document exceeds the upload limit.");
         let verify = || -> Result<_> {
@@ -844,13 +845,9 @@ impl RemoteSession {
             Ok(())
         };
         unchanged(&current)?;
-        self.publish_bytes(
-            path,
-            bytes,
-            Some(baseline),
-            &check,
-            || unchanged(&verify()?),
-        )?;
+        self.publish_bytes(path, bytes, Some(baseline), &check, progress, || {
+            unchanged(&verify()?)
+        })?;
         let published = verify()?;
         ensure!(
             published.hash == hash,
@@ -866,7 +863,7 @@ impl RemoteSession {
         existing: Option<&crate::text_files::Version>,
         check: impl Fn() -> Result<()>,
     ) -> Result<crate::text_files::Document> {
-        self.publish_bytes(path, bytes, existing, &check, || {
+        self.publish_bytes(path, bytes, existing, &check, |_| {}, || {
             if let Some(version) = existing {
                 let latest = self.read_text(path, &check)?;
                 ensure!(&latest.version == version,
@@ -884,6 +881,7 @@ impl RemoteSession {
         bytes: &[u8],
         existing: Option<&crate::text_files::Version>,
         check: &impl Fn() -> Result<()>,
+        progress: impl Fn(u64),
         verify: impl Fn() -> Result<()>,
     ) -> Result<()> {
         let partial = remote_partial(path)?;
@@ -894,9 +892,15 @@ impl RemoteSession {
             OpenType::File,
         )?;
         let result = (|| {
+            let mut written = 0;
+            progress(0);
             for chunk in bytes.chunks(32768) {
                 check()?;
-                output.write_all(chunk)?;
+                output
+                    .write_all(chunk)
+                    .map_err(|error| crate::transport_error::stream_error(&self.session, error))?;
+                written += chunk.len() as u64;
+                progress(written);
             }
             output.flush()?;
             output.close()?;
@@ -1598,15 +1602,15 @@ impl RemoteSession {
                 path: home.clone(),
             });
         }
-        for (directory, name) in [
-            ("Desktop", "Desktop"),
-            ("Documents", "Documents"),
-            ("Downloads", "Download directory"),
-            ("Music", "Music"),
-            ("Pictures", "Pictures"),
-            ("Videos", "Videos"),
+        for name in [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Music",
+            "Pictures",
+            "Videos",
         ] {
-            let path = format!("{}/{directory}", home.trim_end_matches('/'));
+            let path = format!("{}/{name}", home.trim_end_matches('/'));
             if sftp.stat(Path::new(&path)).is_ok_and(|stat| stat.is_dir()) {
                 locations.push(FileLocation { name, path });
             }

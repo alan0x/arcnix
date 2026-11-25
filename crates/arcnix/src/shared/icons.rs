@@ -69,6 +69,9 @@ icons! {
     VolumeOff => "volume-off";
     Play => "play", "player";
     OpenVideo => "open-video";
+    OpenDocument => "open-document";
+    ZoomIn => "zoom-in";
+    ZoomOut => "zoom-out";
     Clear => "trash" as "clear", "trash";
     Plus => "plus";
     Minus => "minus";
@@ -196,6 +199,9 @@ pub fn css() -> String {
         css.push_str(&format!(
             ".glyph-{name}{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n"
         ));
+        if matches!(icon, Icon::Upload) {
+            css.push_str(&format!(".file-upload-badge::before{{mask-image:url(\"data:image/svg+xml;base64,{line}\")}}\n"));
+        }
         if let Some((art, svg)) = icon.color() {
             let color = STANDARD.encode(svg);
             css.push_str(&format!(

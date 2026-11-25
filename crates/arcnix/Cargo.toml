@@ -20,9 +20,9 @@ path = "src/main.rs"
 portable-pty = "0.9"
 flate2 = "1"
 hayro = "0.9"
-syntra-office-ui = { git = "https://github.com/taidge/syntra", rev = "5a1b8187d4f3d9e9acee033f298fc08c57326906" }
-syntra-export = { git = "https://github.com/taidge/syntra", rev = "5a1b8187d4f3d9e9acee033f298fc08c57326906" }
-syntra-doc-engine = { git = "https://github.com/taidge/syntra", rev = "5a1b8187d4f3d9e9acee033f298fc08c57326906" }
+syntra-office-ui = { git = "https://github.com/taidge/syntra", rev = "580984a874a1f9da882350167e4a22cdb1112b4e" }
+syntra-export = { git = "https://github.com/taidge/syntra", rev = "580984a874a1f9da882350167e4a22cdb1112b4e" }
+syntra-doc-engine = { git = "https://github.com/taidge/syntra", rev = "580984a874a1f9da882350167e4a22cdb1112b4e" }
 tempfile = "3"
 pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["html"] }
 anyhow.workspace = true

@@ -3,6 +3,7 @@ import re
 import json
 import time
 
+from file_context_smoke import copied
 from server_apps_fixture import read_desktop_settings
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
@@ -318,11 +319,31 @@ def main():
         expect(panel.get_by_role('button', name='Change shortcut: New tab', exact=True)).to_contain_text('Cmd+T')
         app.application('Files')
         files_tabs = page.locator('.app-files.active .files-tab')
+        expect(files_tabs.first).to_be_visible()
         count = files_tabs.count()
         page.keyboard.press('Control+t')
         expect(files_tabs).to_have_count(count)
         page.keyboard.press('Meta+t')
         expect(files_tabs).to_have_count(count + 1)
+        sample = app.file('shortcut-test.txt')
+        sample.click(button='right')
+        menu = page.locator('.file-context-menu:visible')
+        for label, chord in [('Copy selected paths', 'Option+Cmd+C'), ('Properties', 'Cmd+I'),
+                             ('Rename', 'Return'), ('Move to Trash', 'Cmd+Delete')]:
+            expect(menu.get_by_role('button', name=label, exact=True).locator('.menu-key-hint')).to_have_text(chord)
+        page.keyboard.press('Escape')
+        sample.click()
+        sample.press('Alt+Meta+c')
+        copied('/shortcut-test.txt')
+        sample.press('Meta+i')
+        info = page.get_by_role('dialog', name='Properties', exact=True)
+        expect(info).to_contain_text('shortcut-test.txt')
+        info.get_by_role('button', name='Close dialog', exact=True).click()
+        expect(info).to_be_hidden()
+        sample.click()
+        sample.press('Enter')
+        expect(page.locator('.file-inline-name:visible')).to_have_value('shortcut-test.txt')
+        page.keyboard.press('Escape')
         panel = settings()
         expect(panel.get_by_text('F7', exact=True)).to_have_count(0)
         expect(panel.get_by_role('button', name='Change shortcut: Show desktop', exact=True)).to_contain_text('Ctrl+Shift+D')

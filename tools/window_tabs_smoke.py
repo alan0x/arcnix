@@ -14,7 +14,7 @@ def round_trip(page, app, check_split):
     ids = items.locator('.window-tab-id').all_text_contents()
 
     def start(tab):
-        tab.hover(position=dict(x=5, y=5))
+        tab.hover()
         page.mouse.down()
 
     start(items.last.locator('.window-tab-select'))
@@ -155,7 +155,7 @@ def main():
             expect(items).to_have_count(2)
             # Closing a detached dirty document must only discard that window's draft.
             tab = active.locator('.window-tab-select').last
-            tab.hover(position=dict(x=5, y=5))
+            tab.hover()
             p.mouse.down()
             canvas = p.locator('.desktop-canvas').bounding_box()
             p.mouse.move(canvas['x'] + 5, canvas['y'] + 5, steps=12)

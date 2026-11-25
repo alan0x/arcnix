@@ -65,6 +65,66 @@ fn search(ui: Ui, query: Cage<String>, field: Option<Cage<Option<NodeId>>>) -> i
         .fill((icons::glyph(Icon::Search), input))
 }
 
+fn catalog_tile(ui: Ui, page: WorkspacePage, in_files: bool) -> impl Widget {
+    let state = ui.state;
+    let label = i18n::bind(server_desktop::app_label(page));
+    let open = ui.clone();
+    let tile = sapid::button()
+        .class(format!(
+            "desktop-app-catalog-item {}",
+            server_desktop::app_class(page)
+        ))
+        .name(label.clone())
+        .fill((
+            text().class("desktop-app-icon").content(""),
+            text().class("desktop-app-label").content(label.clone()),
+        ))
+        .on_press(move || launch(&open, page));
+    if in_files {
+        return fragment(tile);
+    }
+    let app = server_desktop::app_id(page).expect("catalog app");
+    let dock = arcnix_core::desktop_customization::DockItem::App(app);
+    let pin = ui.clone();
+    let desktop = ui.clone();
+    fragment(
+        sapid::context_menu(format!("launcher-{}", server_desktop::app_class(page)))
+            .name(label.clone())
+            .target_name(label)
+            .target(tile)
+            .item(
+                sapid::menu_item("pin")
+                    .label(i18n::bind(state.map(move |s| {
+                        if desktop_customization_ui::dock_pinned(s, dock) {
+                            "Unpin from Dock"
+                        } else {
+                            "Pin to Dock"
+                        }
+                        .to_owned()
+                    })))
+                    .enabled(state.map(server_apps_ui::preferences_ready))
+                    .on_activate(move || desktop_customization_ui::toggle_dock_pin(&pin, dock)),
+            )
+            .item(
+                sapid::menu_item("desktop")
+                    .label(i18n::bind(state.map(move |s| {
+                        if desktop_customization_ui::shortcut_visible(s, app) {
+                            "Hide from desktop"
+                        } else {
+                            "Show on desktop"
+                        }
+                        .to_owned()
+                    })))
+                    .enabled(state.map(server_apps_ui::preferences_ready))
+                    .on_activate(move || {
+                        let show =
+                            !state.with(|s| desktop_customization_ui::shortcut_visible(s, app));
+                        desktop_customization_ui::set_shortcut_visible(&desktop, app, show);
+                    }),
+            ),
+    )
+}
+
 fn catalog(ui: Ui, query: Cage<String>, in_files: bool) -> impl Widget {
     widget(move |scope| {
         let state = ui.state;
@@ -77,22 +137,7 @@ fn catalog(ui: Ui, query: Cage<String>, in_files: bool) -> impl Widget {
                         .key(|page| server_desktop::app_class(*page))
                         .children({
                             let ui = ui.clone();
-                            move |item| {
-                                let page = item.value.get();
-                                let label = i18n::bind(server_desktop::app_label(page));
-                                let open = ui.clone();
-                                sapid::button()
-                                    .class(format!(
-                                        "desktop-app-catalog-item {}",
-                                        server_desktop::app_class(page)
-                                    ))
-                                    .name(label.clone())
-                                    .fill((
-                                        text().class("desktop-app-icon").content(""),
-                                        text().class("desktop-app-label").content(label),
-                                    ))
-                                    .on_press(move || launch(&open, page))
-                            }
+                            move |item| catalog_tile(ui.clone(), item.value.get(), in_files)
                         }),
                 ),
                 when(scope.bond(move || matches.with(Vec::is_empty)), move || {
@@ -141,71 +186,50 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
     })
 }
 
-fn launcher_shortcuts(ui: Ui, query: Cage<String>) -> impl Widget {
+fn launcher_locations(ui: Ui, query: Cage<String>) -> impl Widget {
     let state = ui.state;
-    let open = ui.clone();
     when(query.map(|q| q.trim().is_empty()), move || {
-        let open = open.clone();
-        let restart = ui.clone();
-        fragment((
-            when(
-                state.map(|s| {
-                    s.sftp_available
-                        && desktop_customization_ui::appearance(s)
-                            .dock
-                            .launcher_locations
-                }),
-                move || {
-                    let open = open.clone();
-                    row()
-                        .class("launcher-locations")
-                        .fill(files_ui::location_links(
-                            state,
-                            |_| "",
-                            false,
-                            move |path| {
-                                if open.state.with(|s| {
-                                    s.dialog == Some(Dialog::Launcher) && s.file_pending.is_none()
-                                }) {
-                                    open.close_dialog();
-                                    files_tabs::new_window(
-                                        &open,
-                                        files_tabs::WindowStart::Directory(path),
-                                    );
-                                }
-                            },
-                        ))
-                },
-            ),
-            when(
-                state.map(|s| {
-                    desktop_customization_ui::appearance(s)
+        let ui = ui.clone();
+        when(
+            state.map(|s| {
+                s.sftp_available
+                    && desktop_customization_ui::appearance(s)
                         .dock
-                        .launcher_restart
-                        && desktop_power::supported(s)
-                }),
-                move || {
-                    let restart = restart.clone();
-                    row().class("launcher-actions").fill(
-                        i18n::text_action("Restart system…", Icon::Refresh)
-                            .enabled(state.map(desktop_power::available))
-                            .on_press(move || {
-                                if let Some(epoch) = state.with(|s| {
-                                    (s.dialog == Some(Dialog::Launcher)
-                                        && desktop_power::available(s))
-                                    .then_some(s.epoch)
-                                }) {
-                                    restart.open_dialog(Dialog::SystemPower(
-                                        epoch,
-                                        arcnix_core::host::PowerAction::Restart,
-                                    ));
-                                }
-                            }),
-                    )
-                },
-            ),
-        ))
+                        .launcher_locations
+            }),
+            move || {
+                let open = ui.clone();
+                row()
+                    .class("launcher-locations")
+                    .fill(files_ui::location_links(
+                        state,
+                        |_| "",
+                        false,
+                        move |path| {
+                            if open.state.with(|s| {
+                                s.dialog == Some(Dialog::Launcher) && s.file_pending.is_none()
+                            }) {
+                                open.close_dialog();
+                                files_tabs::new_window(
+                                    &open,
+                                    files_tabs::WindowStart::Directory(path),
+                                );
+                            }
+                        },
+                    ))
+            },
+        )
     })
+}
+
+fn launcher_power(ui: Ui) -> impl Widget {
+    when(
+        ui.state.map(|s| {
+            desktop_customization_ui::appearance(s).dock.launcher_power
+                && desktop_power::supported(s)
+        }),
+        move || desktop_power::menu(ui.clone(), desktop_power::MenuLocation::Launcher),
+    )
 }
 
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
@@ -223,9 +247,9 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                         search(ui.clone(), query, Some(field)),
                         col().class("desktop-app-catalog").fill((
                             catalog(ui.clone(), query, false),
-                            launcher_shortcuts(ui.clone(), query),
+                            launcher_locations(ui.clone(), query),
                         )),
-                        (),
+                        launcher_power(ui.clone()),
                     )
                 })?;
                 scope.retain(mounted)?;

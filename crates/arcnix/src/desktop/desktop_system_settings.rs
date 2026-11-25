@@ -156,7 +156,7 @@ fn clock_switch(
     let state = ui.state;
     let ui = ui.clone();
     sapid::switch()
-        .size(sapid::Size::Large)
+        .size(sapid::Size::Small)
         .name(i18n::bind(label))
         .checked(state.map(checked))
         .enabled(state.map(server_apps_ui::preferences_ready))

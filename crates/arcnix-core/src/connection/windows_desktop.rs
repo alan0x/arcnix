@@ -179,7 +179,7 @@ pub fn locations(home: &str) -> Result<Vec<FileLocation>> {
         for (name, path) in [
             ("Desktop", dirs.desktop_dir()),
             ("Documents", dirs.document_dir()),
-            ("Download directory", dirs.download_dir()),
+            ("Downloads", dirs.download_dir()),
             ("Pictures", dirs.picture_dir()),
             ("Music", dirs.audio_dir()),
             ("Videos", dirs.video_dir()),
@@ -273,20 +273,7 @@ pub fn write(path: &str, base: Option<&Version>, bytes: &[u8]) -> Result<Documen
         f.sync_all()?;
         drop(f);
         if original.is_some() {
-            // ReplaceFile preserves the original file's ACLs.
-            if unsafe {
-                ReplaceFileW(
-                    wide(target.as_os_str()).as_ptr(),
-                    wide(stage.as_os_str()).as_ptr(),
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                    std::ptr::null(),
-                )
-            } == 0
-            {
-                return Err(std::io::Error::last_os_error().into());
-            }
+            replace_file(&target, &stage)?;
         } else {
             crate::local::rename(&stage, &target)?;
         }
@@ -297,6 +284,23 @@ pub fn write(path: &str, base: Option<&Version>, bytes: &[u8]) -> Result<Documen
     }
     result?;
     read(path)
+}
+/// Atomically publish staged content while preserving the destination file's ACLs.
+pub fn replace_file(target: &Path, stage: &Path) -> Result<()> {
+    if unsafe {
+        ReplaceFileW(
+            wide(target.as_os_str()).as_ptr(),
+            wide(stage.as_os_str()).as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
 }
 pub fn clock() -> Result<crate::server_apps::ClockSample> {
     let now = time::OffsetDateTime::now_utc();

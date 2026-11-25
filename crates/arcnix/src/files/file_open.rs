@@ -242,6 +242,7 @@ pub(crate) fn menu(
     ui: Ui,
     path: impl Fn(&State) -> Option<String> + Clone + 'static,
     close: fn(&Ui),
+    file_list: bool,
 ) -> impl Widget {
     let state = ui.state;
     let available = state.map(|s| s.file_pending.is_none() && code_workbench::available(s));
@@ -268,6 +269,22 @@ pub(crate) fn menu(
                         .collect::<Vec<_>>()
                 }
             });
+            let default = state.map({
+                let path = path.clone();
+                move |s| path(s).and_then(|p| default_app(s, &p))
+            });
+            let open_hint = move |app| {
+                text().class("menu-key-hint").content(state.map(move |s| {
+                    if file_list && default.get() == app {
+                        file_context::shortcut_hint(
+                            s,
+                            arcnix_core::desktop_shortcuts::Action::FilesOpen,
+                        )
+                    } else {
+                        String::new()
+                    }
+                }))
+            };
             let launch_ui = ui.clone();
             submenu(
                 state,
@@ -285,6 +302,7 @@ pub(crate) fn menu(
                             .fill((
                                 icons::glyph(icon(app)),
                                 text().content(i18n::workspace_label(state, label(app))),
+                                open_hint(Some(app)),
                             ))
                             .on_press(move || {
                                 if let Some(path) = state.with(&path) {
@@ -296,7 +314,11 @@ pub(crate) fn menu(
                     text().class("menu-divider").content(""),
                     sapid::button()
                         .class("menu-item")
-                        .label(i18n::workspace_label(state, "Choose another app"))
+                        .name(i18n::workspace_label(state, "Choose another app"))
+                        .fill((
+                            text().content(i18n::workspace_label(state, "Choose another app")),
+                            open_hint(None),
+                        ))
                         .enabled(available)
                         .on_press(move || {
                             if let Some(path) = state.with(&choose_path) {
@@ -395,7 +417,9 @@ fn set_default(ui: &Ui, ext: &str, app: Option<FileApp>) {
 }
 
 pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
-    if !ui.state.with(code_workbench::available) {
+    if ui.state.with(|s| office_sync::uploading(s, path))
+        || !ui.state.with(code_workbench::available)
+    {
         return;
     }
     if !ui.state.with(|s| available_app(s, app)) {

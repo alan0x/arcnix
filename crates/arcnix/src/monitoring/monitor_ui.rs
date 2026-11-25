@@ -9,6 +9,7 @@ pub(crate) enum Section {
     #[default]
     Overview,
     Cpu,
+    Gpu,
     Memory,
     Disks,
     Network,
@@ -18,9 +19,10 @@ pub(crate) enum Section {
 }
 
 impl Section {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Overview,
         Self::Cpu,
+        Self::Gpu,
         Self::Memory,
         Self::Disks,
         Self::Network,
@@ -33,6 +35,7 @@ impl Section {
         match self {
             Self::Overview => "Overview",
             Self::Cpu => "CPU",
+            Self::Gpu => "GPU",
             Self::Memory => "Memory",
             Self::Disks => "Disks",
             Self::Network => "Network",
@@ -46,6 +49,7 @@ impl Section {
         match self {
             Self::Overview => Icon::Grid,
             Self::Cpu => Icon::Monitor,
+            Self::Gpu => Icon::Monitor,
             Self::Memory => Icon::Server,
             Self::Disks => Icon::Disks,
             Self::Network => Icon::Upload,
@@ -59,6 +63,7 @@ impl Section {
         match self {
             Self::Overview => "monitor-overview",
             Self::Cpu => "monitor-cpu",
+            Self::Gpu => "monitor-gpu",
             Self::Memory => "monitor-memory",
             Self::Disks => "monitor-disks",
             Self::Network => "monitor-network",
@@ -71,7 +76,7 @@ impl Section {
     fn shows_samples(self) -> bool {
         matches!(
             self,
-            Self::Overview | Self::Cpu | Self::Memory | Self::Network
+            Self::Overview | Self::Cpu | Self::Gpu | Self::Memory | Self::Network
         )
     }
 
@@ -82,6 +87,14 @@ impl Section {
     fn summary(self, usage: &ResourceUsage) -> Option<String> {
         match self {
             Self::Cpu => usage.cpu_percent.map(percent),
+            Self::Gpu => usage
+                .snapshot
+                .gpus
+                .as_ref()?
+                .iter()
+                .filter_map(|g| g.utilization)
+                .reduce(f64::max)
+                .map(percent),
             Self::Memory => usage
                 .snapshot
                 .memory
@@ -146,7 +159,8 @@ impl Ui {
             Some(current)
         });
         if let Some(previous) = previous {
-            if !previous.samples_metrics() && section.samples_metrics() {
+            if section == Section::Gpu || (!previous.samples_metrics() && section.samples_metrics())
+            {
                 self.observability_enter();
             } else {
                 self.monitor_detail_enter();
@@ -432,6 +446,125 @@ fn memory_cards(state: Cage<State>) -> impl Widget {
     ))
 }
 
+pub(super) fn selected_gpu(s: &State) -> Option<&arcnix_core::gpu::Gpu> {
+    let cards = s.metrics.usage.as_ref()?.snapshot.gpus.as_ref()?;
+    cards
+        .iter()
+        .find(|g| g.id == s.metrics.gpu_id)
+        .or_else(|| cards.first())
+}
+
+fn gpu_header(state: Cage<State>) -> impl Widget {
+    col().class("monitor-gpu-header").fill((
+        row().class("script-actions gpu-adapters").fill(
+            each(state.map(|s| {
+                s.metrics
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.snapshot.gpus.as_ref())
+                    .filter(|v| v.len() > 1)
+                    .map(|cards| cards.iter().map(|g| g.id.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            }))
+            .key(|id| id.clone())
+            .children(move |item| {
+                let id = item.value.get();
+                let key = id.clone();
+                let selection = id.clone();
+                sapid::button()
+                    .class("choice")
+                    .pressed(state.map(move |s| selected_gpu(s).is_some_and(|g| g.id == selection)))
+                    .label(state.map(move |s| {
+                        s.metrics
+                            .usage
+                            .as_ref()
+                            .and_then(|u| u.snapshot.gpus.as_ref())
+                            .and_then(|v| v.iter().position(|g| g.id == key))
+                            .map(|i| format!("GPU {i}"))
+                            .unwrap_or_default()
+                    }))
+                    .on_press(move || state.revise(|s| s.metrics.gpu_id = id.clone()))
+            }),
+        ),
+        text()
+            .class("section-title")
+            .content(i18n::bind(state.map(|s| {
+                if let Some(g) = selected_gpu(s) {
+                    return g.name.clone().unwrap_or_else(|| g.id.clone());
+                }
+                if s.metrics
+                    .usage
+                    .as_ref()
+                    .is_some_and(|u| u.snapshot.gpus.as_ref().is_some_and(Vec::is_empty))
+                {
+                    "No GPU reported by this host"
+                } else if !s.metrics.error.is_empty()
+                    || s.metrics
+                        .usage
+                        .as_ref()
+                        .is_some_and(|u| u.snapshot.warnings.iter().any(|w| w.starts_with("GPU:")))
+                {
+                    "Unavailable"
+                } else {
+                    "Waiting for samples"
+                }
+                .to_owned()
+            }))),
+        row().class("gpu-details").fill(
+            each(state.map(|s| {
+                let mut items = Vec::new();
+                if let Some(g) = selected_gpu(s) {
+                    if let Some(v) = g.utilization {
+                        items.push(("GPU utilization", percent(v)));
+                    }
+                    for (label, used, total) in [
+                        ("Dedicated GPU memory", g.dedicated, g.dedicated_total),
+                        ("Shared GPU memory", g.shared, g.shared_total),
+                    ] {
+                        if let Some(value) = used {
+                            let mut v = formatting::bytes(value);
+                            if let Some(limit) = total.filter(|n| *n > 0) {
+                                v.push_str(&format!(" / {}", formatting::bytes(limit)));
+                            }
+                            items.push((label, v));
+                        }
+                    }
+                    if let Some(v) = g.temperature {
+                        items.push(("Temperature", format!("{v:.0} °C")));
+                    }
+                    if let Some(v) = g.driver.as_ref().filter(|v| !v.is_empty()) {
+                        items.push(("Driver", v.clone()));
+                    }
+                }
+                items
+            }))
+            .key(|(k, _)| *k)
+            .children(|item| {
+                col().class("gpu-detail").fill((
+                    text()
+                        .class("subtle")
+                        .content(i18n::bind(item.value.get().0)),
+                    text().content(item.value.map(|(_, v)| v.clone())),
+                ))
+            }),
+        ),
+        when(
+            state.map(|s| {
+                selected_gpu(s).is_some_and(|g| {
+                    !super::resource_trends::GPU_CHARTS
+                        .iter()
+                        .any(|(key, _)| g.value(key).is_some())
+                })
+            }),
+            || {
+                text()
+                    .class("subtle")
+                    .content(i18n::bind("This adapter does not report live counters."))
+            },
+        ),
+    ))
+}
+
 fn samples(ui: Ui, section: Section) -> impl Widget {
     let state = ui.state;
     fragment((
@@ -464,18 +597,22 @@ fn samples(ui: Ui, section: Section) -> impl Widget {
         text()
             .class("monitor-sample-error software-error")
             .content(i18n::bind(state.map(|s| s.metrics.error.clone()))),
-        when(section != Section::Network, move || {
-            row().class("metric-grid monitor-metric-grid").fill((
-                when(
-                    matches!(section, Section::Overview | Section::Cpu),
-                    move || cpu_cards(state),
-                ),
-                when(
-                    matches!(section, Section::Overview | Section::Memory),
-                    move || memory_cards(state),
-                ),
-            ))
-        }),
+        when(section == Section::Gpu, move || gpu_header(state)),
+        when(
+            matches!(section, Section::Overview | Section::Cpu | Section::Memory),
+            move || {
+                row().class("metric-grid monitor-metric-grid").fill((
+                    when(
+                        matches!(section, Section::Overview | Section::Cpu),
+                        move || cpu_cards(state),
+                    ),
+                    when(
+                        matches!(section, Section::Overview | Section::Memory),
+                        move || memory_cards(state),
+                    ),
+                ))
+            },
+        ),
         resource_trends::panel(ui, section),
         when(section == Section::Network, move || {
             network_interfaces(state)

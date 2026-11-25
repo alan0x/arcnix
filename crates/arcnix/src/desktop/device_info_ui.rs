@@ -70,7 +70,11 @@ pub(crate) fn details(ui: Ui) -> impl Widget {
         col()
             .class("desktop-settings-card desktop-settings-rows")
             .fill((
-                settings::section_heading("Device", true, desktop_power::menu(power)),
+                settings::section_heading(
+                    "Device",
+                    true,
+                    desktop_power::menu(power, desktop_power::MenuLocation::General),
+                ),
                 when(
                     state.map(|s| s.server_apps.device.pending.is_some()),
                     || text().class("subtle").content(i18n::bind("Loading…")),

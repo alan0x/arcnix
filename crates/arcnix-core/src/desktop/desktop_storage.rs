@@ -87,6 +87,8 @@ struct Shell {
     order: Vec<Shortcut>,
     #[serde(deserialize_with = "known_apps")]
     hidden: Vec<App>,
+    #[serde(deserialize_with = "known_apps", skip_serializing_if = "Vec::is_empty")]
+    extra_shortcuts: Vec<App>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "appearance_value")]
     theme: Option<Preset>,
@@ -108,6 +110,7 @@ impl From<&Appearance> for Shell {
             show_apps: value.show_apps,
             order: value.order.clone(),
             hidden: value.hidden.clone(),
+            extra_shortcuts: value.extra_shortcuts.clone(),
             theme: value.theme,
             wallpaper: value.wallpaper.clone(),
             overrides: value.overrides.clone(),
@@ -275,6 +278,7 @@ impl Domain {
                     show_apps,
                     order,
                     hidden,
+                    extra_shortcuts,
                     theme,
                     wallpaper,
                     overrides,
@@ -285,6 +289,7 @@ impl Domain {
                 prefs.appearance.show_apps = show_apps;
                 prefs.appearance.order = order;
                 prefs.appearance.hidden = hidden;
+                prefs.appearance.extra_shortcuts = extra_shortcuts;
                 prefs.appearance.theme = theme;
                 prefs.appearance.wallpaper = wallpaper;
                 prefs.appearance.overrides = overrides;

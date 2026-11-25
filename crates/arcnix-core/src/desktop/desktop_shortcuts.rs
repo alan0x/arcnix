@@ -37,6 +37,14 @@ pub enum Action {
     FilesSelectAll,
     FilesCopy,
     FilesPaste,
+    FilesOpen,
+    FilesCopyPaths,
+    FilesProperties,
+    FilesRename,
+    FilesNewFolder,
+    FilesRefresh,
+    FilesTrash,
+    FilesDeletePermanently,
     FilesSelect,
     FilesUp,
     FilesDown,
@@ -137,6 +145,22 @@ pub const GROUPS: &[(Scope, &[Binding])] = &[
             key(Action::FilesHidden, "Toggle hidden files", "Ctrl+H"),
             key(Action::FilesCopy, "Copy files", "Ctrl+C"),
             key(Action::FilesPaste, "Paste files", "Ctrl+V"),
+            key(Action::FilesOpen, "Open", "Enter"),
+            key(
+                Action::FilesCopyPaths,
+                "Copy selected paths",
+                "Ctrl+Shift+C",
+            ),
+            key(Action::FilesProperties, "Properties", "Alt+Enter"),
+            key(Action::FilesRename, "Rename", "F2"),
+            key(Action::FilesNewFolder, "New folder", "Ctrl+Shift+N"),
+            key(Action::FilesRefresh, "Refresh", "F5"),
+            key(Action::FilesTrash, "Move to Trash", "Delete"),
+            key(
+                Action::FilesDeletePermanently,
+                "Delete permanently",
+                "Shift+Delete",
+            ),
             key(Action::FilesSelectAll, "Select all", "Ctrl+A"),
             key(Action::FilesSelect, "Select focused entry", "Space"),
             key(Action::FilesUp, "Move up", "ArrowUp"),
@@ -219,6 +243,14 @@ impl Preset {
                 Action::TerminalPaste | Action::FilesPaste => return "Meta+V",
                 Action::TerminalSelectAll | Action::FilesSelectAll => return "Meta+A",
                 Action::TerminalClear => return "Meta+K",
+                Action::FilesOpen => return "Meta+O",
+                Action::FilesCopyPaths => return "Alt+Meta+C",
+                Action::FilesProperties => return "Meta+I",
+                Action::FilesRename => return "Enter",
+                Action::FilesNewFolder => return "Shift+Meta+N",
+                Action::FilesRefresh => return "Meta+R",
+                Action::FilesTrash => return "Meta+Backspace",
+                Action::FilesDeletePermanently => return "Alt+Meta+Backspace",
                 Action::FilesNewTab => return "Meta+T",
                 Action::FilesDuplicateWindow => return "Meta+N",
                 Action::FilesEditPath => return "Shift+Meta+G",
@@ -235,6 +267,8 @@ impl Preset {
             chord
                 .replace("Meta+", "Cmd+")
                 .replace("Alt+", "Option+")
+                .replace("Backspace", "Delete")
+                .replace("Enter", "Return")
                 .replace("Period", ".")
         } else {
             chord.replace("Meta+", "Win+")

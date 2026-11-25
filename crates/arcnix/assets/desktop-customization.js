@@ -5,6 +5,8 @@
     let clockOptions, clockTimer, clockSample, clockAnchor;
     let timeZonePicker;
     let themeSource, themeTokens;
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    const wallpapers = new WeakMap();
     const sizeControls = new Map();
     const themed = new WeakMap();
 
@@ -19,6 +21,46 @@
         event.target.closest?.('.desktop-dock button')?.removeAttribute('data-keyboard-focus');
     }, true);
 
+    function updateWallpaper(desktop, epoch) {
+        const art = desktop.querySelector('.desktop-wallpaper-art');
+        if (!art) return;
+        const key = art.className + desktop.classList.contains('desktop-dark');
+        const previous = wallpapers.get(art);
+        const reduced = reducedMotion.matches;
+        if (previous?.key === key && previous.epoch === epoch && previous.reduced === reduced) return;
+
+        const style = getComputedStyle(art);
+        const next = {key, epoch, reduced, background: style.background};
+        wallpapers.set(art, next);
+        if (!previous || previous.epoch !== epoch || reduced || previous.reduced) {
+            art.replaceChildren();
+            return;
+        }
+        // The base already has the new CSS background. Keep the old frame opaque until decode finishes.
+        if (!art.firstElementChild) {
+            const base = document.createElement('div');
+            base.className = 'wallpaper-transition-layer';
+            base.style.background = previous.background;
+            art.append(base);
+        }
+        const image = new Image();
+        image.alt = '';
+        image.className = 'wallpaper-transition-layer';
+        image.style.objectPosition = style.backgroundPosition;
+        image.src = style.backgroundImage.slice(5, -2); // Computed url("…") of a bundled wallpaper.
+        image.decode().then(async () => {
+            if (!art.isConnected || wallpapers.get(art) !== next) return;
+            art.append(image);
+            await Promise.allSettled(image.getAnimations().map(animation => animation.finished));
+            // A newer selection may already be fading in above this frame.
+            while (image.previousElementSibling) image.previousElementSibling.remove();
+            if (wallpapers.get(art) === next) image.remove();
+        }).catch(() => {
+            if (wallpapers.get(art) === next) art.replaceChildren();
+        });
+    }
+
+    reducedMotion.addEventListener('change', updateTheme);
     function updateTheme() {
         const data = document.querySelector('.server-desktop:not(.hidden) .desktop-theme-data');
         if (!data?.textContent) return;
@@ -28,7 +70,9 @@
             themeSource = source;
         }
         const {colors, icons, iconFamily} = themeTokens;
-        const roots = [data.closest('.server-desktop'), ...document.querySelectorAll('.desktop-modal-backdrop')];
+        const desktop = data.closest('.server-desktop');
+        updateWallpaper(desktop, themeTokens.epoch);
+        const roots = [desktop, ...document.querySelectorAll('.desktop-modal-backdrop')];
         for (const root of roots) {
             const old = themed.get(root);
             if (old?.source === source) continue;
@@ -64,6 +108,40 @@
         const key = slot?.querySelector('.desktop-item-key');
         return key ? JSON.parse(key.textContent) : null;
     }
+
+    // Pointer clicks select a desktop icon. Keep the native button activation for
+    // keyboards, assistive technology and the system's double-click gesture.
+    document.addEventListener('click', event => {
+        const icon = event.target.closest?.('.desktop-shortcuts .desktop-shortcut');
+        if (!icon || event.button !== 0 || event.detail === 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        icon.focus({preventScroll: true});
+    }, true);
+
+    document.addEventListener('dblclick', event => {
+        const icon = event.target.closest?.('.desktop-shortcuts .desktop-shortcut');
+        if (!icon || event.button !== 0) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        icon.click();
+    }, true);
+
+    document.addEventListener('click', event => {
+        const button = event.target.closest?.('.desktop-dock-app.active.running');
+        if (!button || event.button || event.detail !== 1 || event.altKey || event.ctrlKey ||
+            event.metaKey || event.shiftKey) return;
+        const canvas = canvasFor(button);
+        const app = shortcut(button.closest('.desktop-icon-slot'));
+        if (!canvas || app?.kind !== 'app') return;
+        const state = JSON.parse(canvas.closest('.server-desktop').querySelector('.desktop-motion-state').textContent);
+        if (!state.activeClickOverview) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const exit = canvas.querySelector('.overview-exit');
+        if (exit) exit.click();
+        else send(canvas, {kind: 'dock_overview', app: app.id});
+    }, true);
 
     function openContextMenu(canvas, target, x, y) {
         const slot = target.closest('.desktop-icon-slot');

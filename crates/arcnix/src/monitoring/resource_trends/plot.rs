@@ -62,7 +62,38 @@ pub(super) fn layout(kind: Section, samples: &[Sample], domain: [f64; 2]) -> kar
         ],
         _ => unreachable!("only resource trend sections have plots"),
     };
-    let (maximum, ticks) = if kind == Section::Network {
+    layout_series(
+        series,
+        samples,
+        domain,
+        (kind != Section::Network).then_some(100.),
+        kind != Section::Network,
+    )
+}
+
+pub(super) fn gpu_layout(
+    samples: &[Sample],
+    domain: [f64; 2],
+    id: &str,
+    key: &str,
+    maximum: Option<f64>,
+) -> kartis::Result<Plot> {
+    let values = series(key, samples, |p| {
+        p.gpus.iter().find(|g| g.id == id)?.value(key)
+    });
+    layout_series(vec![values], samples, domain, maximum, true)
+}
+
+fn layout_series(
+    series: Vec<Series>,
+    samples: &[Sample],
+    domain: [f64; 2],
+    fixed_max: Option<f64>,
+    area: bool,
+) -> kartis::Result<Plot> {
+    let (maximum, ticks) = if let Some(maximum) = fixed_max.filter(|n| *n > 0.) {
+        (maximum, (0..=4).map(|i| maximum * i as f64 / 4.).collect())
+    } else {
         let peak = series
             .iter()
             .flat_map(|s| &s.data)
@@ -70,8 +101,6 @@ pub(super) fn layout(kind: Section, samples: &[Sample], domain: [f64; 2]) -> kar
             .fold(4., f64::max);
         let scale = kartis::scales::LinearScale::new([0., peak], [1., 0.])?.nice(4);
         (scale.domain[1], scale.ticks(4))
-    } else {
-        (100., vec![0., 25., 50., 75., 100.])
     };
     let config = ChartConfig {
         width: 1.,
@@ -88,7 +117,7 @@ pub(super) fn layout(kind: Section, samples: &[Sample], domain: [f64; 2]) -> kar
         x_domain: Some(domain),
         y_domain: Some([0., maximum]),
         points: false,
-        area: kind != Section::Network,
+        area,
         // Reads can share a clock tick. Monotone interpolation requires strictly increasing x.
         curve: if samples.windows(2).all(|w| w[0].at < w[1].at) {
             Curve::MonotoneX
@@ -165,6 +194,7 @@ mod tests {
             memory: Some(50.),
             receive: Some(0.),
             transmit: Some(2048.),
+            gpus: Vec::new(),
             break_before: false,
         }
     }

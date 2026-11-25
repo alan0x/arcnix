@@ -16,6 +16,8 @@ pub struct Point {
     pub memory: Option<f64>,
     pub receive: Option<f64>,
     pub transmit: Option<f64>,
+    #[serde(skip)]
+    pub gpus: Vec<crate::gpu::Gpu>,
     pub break_before: bool,
 }
 
@@ -42,6 +44,9 @@ impl History {
         let uptime = usage.and_then(|u| nonnegative(u.snapshot.uptime_seconds));
         let reboot = matches!((uptime,self.uptime),(Some(now),Some(before)) if now<=before);
         let point = Point {
+            gpus: usage
+                .and_then(|u| u.snapshot.gpus.clone())
+                .unwrap_or_default(),
             at,
             cpu: usage
                 .and_then(|u| nonnegative(u.cpu_percent))

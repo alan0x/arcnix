@@ -1,4 +1,6 @@
 //! Shared file actions for pointer and keyboard context menus.
+use arcnix_core::desktop_shortcuts::{Action as Shortcut, Scheme};
+
 use crate::*;
 
 #[derive(Clone)]
@@ -139,12 +141,19 @@ fn has_item(s: &State, remote: bool) -> bool {
         .map(|c| c.item)
         .unwrap_or_else(|| !selection(s, remote).is_empty())
 }
-fn display_path(file: &FileEntry, remote: bool) -> String {
-    if remote {
-        file.path.clone()
-    } else {
-        local_display(Path::new(&file.path))
+fn clipboard_path(_s: &State, path: &str, remote: bool) -> String {
+    if !remote {
+        return local_display(Path::new(path));
     }
+    #[cfg(windows)]
+    if matches!(
+        _s.local_desktop,
+        Some(local_desktop::Target::Native | local_desktop::Target::ReadOnlyHost)
+    ) && let Ok(physical) = local_desktop::windows_host::physical(path)
+    {
+        return local_display(&physical);
+    }
+    path.to_owned()
 }
 pub(crate) fn open(ui: &Ui, remote: bool, path: &str) {
     if ui.state.with(|s| {
@@ -186,12 +195,12 @@ fn close(ui: &Ui) {
 }
 pub(crate) fn copy_paths(ui: &Ui, remote: bool, directory: bool) {
     let text = ui.state.with(|s| {
-        if directory {
-            file_browser::path(s, remote).to_owned()
+        if directory || selection(s, remote).is_empty() {
+            clipboard_path(s, file_browser::path(s, remote), remote)
         } else {
             chosen(s, remote)
                 .into_iter()
-                .map(|f| display_path(&f, remote))
+                .map(|f| clipboard_path(s, &f.path, remote))
                 .collect::<Vec<_>>()
                 .join("\n")
         }
@@ -207,6 +216,37 @@ fn copy_text(ui: &Ui, value: &str) {
 pub(crate) fn properties(ui: &Ui, remote: bool) {
     file_properties::open(ui, remote);
 }
+pub(crate) fn shortcut_hint(s: &State, shortcut: Shortcut) -> String {
+    if s.workspace_page.is_files() {
+        desktop_shortcuts_ui::menu_hint(s, shortcut)
+    } else {
+        let preset = Scheme::Auto.preset();
+        preset.display(preset.default_key(shortcut))
+    }
+}
+
+fn menu_button(
+    state: Cage<State>,
+    label: &'static str,
+    shortcut: Option<Shortcut>,
+) -> sapid::Button {
+    let title = i18n::workspace_label(state, label);
+    let button = sapid::button().class(if label == "永久删除" {
+        "menu-item danger"
+    } else {
+        "menu-item"
+    });
+    let Some(shortcut) = shortcut else {
+        return button.label(title);
+    };
+    button.name(title.clone()).fill((
+        text().content(title),
+        text()
+            .class("menu-key-hint")
+            .content(state.map(move |s| shortcut_hint(s, shortcut))),
+    ))
+}
+
 fn action<F: FnMut() + 'static>(
     ui: &Ui,
     remote: bool,
@@ -215,13 +255,20 @@ fn action<F: FnMut() + 'static>(
     mut handler: F,
 ) -> impl Widget + use<F> {
     let close_ui = ui.clone();
-    sapid::button()
-        .class(if label == "永久删除" {
-            "menu-item danger"
-        } else {
-            "menu-item"
-        })
-        .label(i18n::workspace_label(ui.state, label))
+    let shortcut = match label {
+        "Open alias" => Some(Shortcut::FilesOpen),
+        "复制所选路径" | "复制当前目录路径" => Some(Shortcut::FilesCopyPaths),
+        "重命名" => Some(Shortcut::FilesRename),
+        "属性" => Some(Shortcut::FilesProperties),
+        "新建文件夹" => Some(Shortcut::FilesNewFolder),
+        "刷新" => Some(Shortcut::FilesRefresh),
+        "移入回收站" => Some(Shortcut::FilesTrash),
+        "永久删除" => Some(Shortcut::FilesDeletePermanently),
+        "Paste" => Some(Shortcut::FilesPaste),
+        "全选" => Some(Shortcut::FilesSelectAll),
+        _ => None,
+    };
+    menu_button(ui.state, label, shortcut)
         .enabled(ui.state.map(move |s| enabled(s, remote)))
         .on_press(move || {
             close(&close_ui);
@@ -450,7 +497,7 @@ fn open_actions(ui: Ui, remote: bool) -> impl Widget {
                 ),
                 when(remote, {
                     let ui = ui.clone();
-                    move || file_open::menu(ui.clone(), regular_file, close)
+                    move || file_open::menu(ui.clone(), regular_file, close, true)
                 }),
                 when(
                     state.map(move |s| {
@@ -516,14 +563,16 @@ fn edit_actions(ui: Ui, remote: bool) -> impl Widget {
                             file_actions::has_selection(s)
                                 && (!writes || file_actions::available(s))
                         });
-                        sapid::button()
-                            .class("menu-item")
-                            .label(i18n::workspace_label(state, label))
-                            .enabled(enabled)
-                            .on_press(move || {
-                                close(&changed);
-                                run(&changed);
-                            })
+                        menu_button(
+                            state,
+                            label,
+                            (label == "复制").then_some(Shortcut::FilesCopy),
+                        )
+                        .enabled(enabled)
+                        .on_press(move || {
+                            close(&changed);
+                            run(&changed);
+                        })
                     })
                     .collect::<Vec<_>>(),
                 )

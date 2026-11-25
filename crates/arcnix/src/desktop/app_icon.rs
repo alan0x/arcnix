@@ -220,7 +220,7 @@ impl NativeLifecycle for DesktopWindow {
             self.pgadmin.retain(|&id, _| live(id));
         });
         if let Some(epoch) = epoch {
-            if state.with(|s| s.office.document.is_some()) {
+            if state.with(|s| s.office.files.values().any(|doc| doc.document.is_some())) {
                 self.office
                     .entry(epoch)
                     .or_default()

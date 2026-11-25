@@ -168,3 +168,76 @@ pub(crate) fn panes(
                 .fill(right),
         ))
 }
+
+#[derive(Clone, Copy)]
+pub(crate) enum FileSidebar {
+    Files,
+    Picker,
+}
+
+impl FileSidebar {
+    fn width(self, s: &State) -> u16 {
+        let prefs = &s.config.settings;
+        match self {
+            Self::Files => prefs.files_sidebar_width.unwrap_or(160),
+            Self::Picker => prefs.file_picker_sidebar_width.unwrap_or(148),
+        }
+        .clamp(104, 420)
+    }
+
+    fn save(self, ui: &Ui, width: u16) {
+        if ui.state.with(|s| self.width(s)) != width {
+            ui.update_preferences(|prefs| match self {
+                Self::Files => prefs.files_sidebar_width = Some(width),
+                Self::Picker => prefs.file_picker_sidebar_width = Some(width),
+            });
+        }
+    }
+}
+
+pub(crate) fn files_body<W: Widget + 'static>(
+    ui: Ui,
+    kind: FileSidebar,
+    sidebar: impl Fn() -> W + 'static,
+    content: impl Widget + 'static,
+) -> impl Widget {
+    let state = ui.state;
+    row().class("files-body").fill((
+        when(
+            state.map(move |s| match kind {
+                FileSidebar::Files => s.sftp_available && !files_ui::preferences(s).sidebar_hidden,
+                FileSidebar::Picker => !s.desktop_file_picker_sidebar_hidden,
+            }),
+            move || {
+                let ui = ui.clone();
+                fragment((
+                    col()
+                        .class("files-sidebar-frame")
+                        .style(
+                            state.map(move |s| {
+                                Style::new().width(Length::Px(f64::from(kind.width(s))))
+                            }),
+                        )
+                        .fill(sidebar()),
+                    view()
+                        .class("files-sidebar-splitter")
+                        .role(Role::Group)
+                        .focus(FocusMode::TabStop)
+                        .name(i18n::desktop::bind("Resize sidebar")),
+                    input().class("files-sidebar-width-input hidden").on(
+                        value_changed,
+                        move |event| {
+                            if let Event::ValueChanged { value, .. } = event
+                                && let Ok(width) = value.parse::<u16>()
+                                && (104..=420).contains(&width)
+                            {
+                                kind.save(&ui, width);
+                            }
+                        },
+                    ),
+                ))
+            },
+        ),
+        content,
+    ))
+}

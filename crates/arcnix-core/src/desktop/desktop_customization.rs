@@ -182,7 +182,8 @@ pub struct Dock {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub launcher_locations: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub launcher_restart: bool,
+    #[serde(alias = "launcher_restart")]
+    pub launcher_power: bool,
     #[serde(
         rename = "magnify",
         skip_serializing,
@@ -190,6 +191,7 @@ pub struct Dock {
     )]
     legacy_magnify: (),
     pub auto_hide: bool,
+    pub overview_active_click: bool,
 }
 
 impl Default for Dock {
@@ -205,9 +207,10 @@ impl Default for Dock {
             panel_centered: false,
             floating_status: true,
             launcher_locations: false,
-            launcher_restart: false,
+            launcher_power: false,
             legacy_magnify: (),
             auto_hide: false,
+            overview_active_click: true,
         }
     }
 }
@@ -311,6 +314,12 @@ pub struct Appearance {
     pub order: Vec<Shortcut>,
     #[serde(deserialize_with = "known_apps")]
     pub hidden: Vec<DesktopApp>,
+    #[serde(
+        default,
+        deserialize_with = "known_apps",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub extra_shortcuts: Vec<DesktopApp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "appearance_value")]
     pub theme: Option<Preset>,
@@ -333,6 +342,7 @@ impl Default for Appearance {
             show_apps: true,
             order: vec![],
             hidden: vec![],
+            extra_shortcuts: vec![],
             theme: None,
             wallpaper: None,
             overrides: Box::default(),
@@ -396,7 +406,12 @@ impl Appearance {
                 ensure!(valid_name(name), "Invalid desktop filename");
             }
         }
-        for apps in [&self.hidden, &self.dock.unpinned, &self.dock.extra_pins] {
+        for apps in [
+            &self.hidden,
+            &self.extra_shortcuts,
+            &self.dock.unpinned,
+            &self.dock.extra_pins,
+        ] {
             ensure!(
                 apps.len() <= DesktopApp::COUNT && unique(apps),
                 "Invalid application list"

@@ -58,7 +58,7 @@ pub(crate) fn variables(s: &State) -> String {
         .into_iter()
         .map(|(key, value)| (key, value.to_string()))
         .collect::<Vec<_>>();
-    serde_json::json!({"icons": theme.icons.slug(), "iconFamily": theme.icon_family.slug(), "colors": colors}).to_string()
+    serde_json::json!({"epoch": s.epoch, "icons": theme.icons.slug(), "iconFamily": theme.icon_family.slug(), "colors": colors}).to_string()
 }
 
 pub(crate) fn choices_ready(s: &State) -> bool {

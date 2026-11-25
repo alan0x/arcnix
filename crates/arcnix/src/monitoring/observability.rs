@@ -9,6 +9,7 @@ use crate::*;
 #[derive(Clone, Default)]
 pub(crate) struct MetricState {
     pub section: monitor_ui::Section,
+    pub gpu_id: String,
     pub remote_platform: Option<arcnix_core::host::HostOs>,
     pub pending: Option<u64>,
     previous: Option<ResourceSnapshot>,
@@ -72,7 +73,10 @@ impl Ui {
         {
             return;
         }
-        let serial = self.send(Action::MetricsSample);
+        let serial = self.send(Action::MetricsSample(
+            self.state
+                .with(|s| s.metrics.section == monitor_ui::Section::Gpu),
+        ));
         self.state.revise(|s| {
             s.metrics.pending = Some(serial);
             s.metrics.error.clear();
@@ -177,6 +181,17 @@ pub(crate) fn metrics_event(
             .as_secs_f64();
         match result {
             Ok(reading) => {
+                if m.section == monitor_ui::Section::Gpu
+                    && reading.snapshot.gpus.is_none()
+                    && !reading
+                        .snapshot
+                        .warnings
+                        .iter()
+                        .any(|w| w.starts_with("GPU:"))
+                {
+                    // A CPU-only request was already in flight when the GPU page opened.
+                    m.completed = None;
+                }
                 m.remote_platform = reading.remote_platform;
                 m.usage = Some(reading.usage(m.previous.as_ref()));
                 m.history.push(at, m.usage.as_ref());

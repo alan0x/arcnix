@@ -1,6 +1,7 @@
 mod darwin_host;
 pub(crate) mod darwin_metrics;
 pub mod disks;
+pub mod gpu;
 pub mod host_capabilities;
 pub mod metric_history;
 pub mod metrics;

@@ -121,7 +121,7 @@ impl Session {
             Action::CodeFile(request) => Update::CodeFile(message(
                 request.execute(crate::code_workbench::Files::Local(target), || Ok(())),
             )),
-            Action::MetricsSample => Update::Metrics(message(target.sample_resources())),
+            Action::MetricsSample(gpu) => Update::Metrics(message(target.sample_monitor(gpu))),
             Action::Keepalive => Update::Alive,
             Action::Remote(path) => match target.list_entries(&path) {
                 Ok((path, entries)) => Update::Remote(path, entries),

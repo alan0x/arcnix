@@ -355,7 +355,7 @@ pub(crate) fn open_tab(ui: &Ui, id: u32, path: Option<String>) {
     }
 }
 
-fn select(ui: &Ui, window: u32, tab: u64) {
+pub(crate) fn select(ui: &Ui, window: u32, tab: u64) {
     if !ui.state.with(|s| {
         available(s)
             && s.workbench.window_visible(WorkspacePage::Files(window))
@@ -463,7 +463,7 @@ pub(crate) fn bridge(ui: Ui) -> impl Widget {
         })
 }
 
-fn title(s: &State, window: u32, id: u64) -> String {
+pub(crate) fn title(s: &State, window: u32, id: u64) -> String {
     let files = &s.workbench.files;
     if files.live == Some(window) && files.groups.selected(window) == Some(id) {
         file_browser::live_tab_title(s)
