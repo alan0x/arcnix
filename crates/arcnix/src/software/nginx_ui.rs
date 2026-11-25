@@ -3,13 +3,15 @@
 //! review, and that runs with administrator rights.
 use std::rc::Rc;
 
-use arcnix_core::nginx::{self, Control, Kind, Layout, Serves, Settings, Snapshot, Style};
-use arcnix_core::nginx_config;
+use arcnix_core::nginx::{self, Control, Kind, Layout, Serves, Snapshot, Style};
+use arcnix_core::nginx_site::{self, Site};
 
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, icon_action, text_action};
 use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
+
+mod form;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum View {
@@ -30,7 +32,12 @@ pub(crate) struct Editor {
     /// The live text when the editor opened; empty for a new file.
     original: String,
     text: String,
-    form: Settings,
+    /// The text as the Settings view shows it.
+    site: Site,
+    /// Values typed into Settings fields, by field, so typing is not lost
+    /// while a value is not valid yet.
+    drafts: std::collections::HashMap<String, String>,
+    adding: form::Adding,
     file_view: bool,
     health: String,
     create: bool,
@@ -276,8 +283,8 @@ fn tail(output: &str) -> String {
 }
 
 /// The form needs at least one field it can show.
-fn has_form(form: &Settings) -> bool {
-    form.names.is_some() || form.proxy.is_some() || form.folder.is_some() || form.upload.is_some()
+fn has_form(site: &Site) -> bool {
+    site.names.is_some() || site.server.is_some() || site.upload.is_some()
 }
 
 impl Ui {
@@ -397,7 +404,7 @@ impl Ui {
                 None => return None,
             };
             let text = file.text.clone()?;
-            let form = nginx_config::settings(&text).unwrap_or_default();
+            let site = nginx_site::read(&text).unwrap_or_default();
             // A site's domain does not reach a container from the server, so
             // a containerized Nginx checks only that it keeps running.
             let summary = summary.filter(|_| snapshot.docker.is_none());
@@ -406,8 +413,10 @@ impl Ui {
                 path: file.path.clone(),
                 target: file.target.clone(),
                 original: text.clone(),
-                file_view: !has_form(&form),
-                form,
+                file_view: !has_form(&site),
+                site,
+                drafts: Default::default(),
+                adding: Default::default(),
                 text,
                 health: summary.map(nginx::health_address).unwrap_or_default(),
                 create: false,
@@ -436,7 +445,7 @@ impl Ui {
             let new = &s.nginx.new_site;
             let text = nginx::new_site(new.kind, &new.names, new.target.trim())?;
             let (path, target) = nginx::new_site_path(snapshot, &new.names)?;
-            let form = nginx_config::settings(&text).unwrap_or_default();
+            let site = nginx_site::read(&text).unwrap_or_default();
             Ok(Editor {
                 instance: snapshot.key(),
                 path,
@@ -444,7 +453,9 @@ impl Ui {
                 original: String::new(),
                 text,
                 file_view: false,
-                form,
+                site,
+                drafts: Default::default(),
+                adding: Default::default(),
                 // A new site that is not on yet cannot answer, so only check
                 // that Nginx keeps running.
                 health: String::new(),
@@ -465,23 +476,6 @@ impl Ui {
             Err(error) => self.state.revise(|s| s.dialog_error = format!("{error:#}")),
         }
     }
-    fn nginx_form(&self, change: impl FnOnce(&mut Settings)) {
-        self.state.revise(|s| {
-            let Some(editor) = &mut s.nginx.editor else {
-                return;
-            };
-            change(&mut editor.form);
-            let result = nginx_config::settings(&editor.text)
-                .and_then(|before| nginx_config::apply(&editor.text, &before, &editor.form));
-            match result {
-                Ok(text) => {
-                    editor.text = text;
-                    editor.error.clear();
-                }
-                Err(error) => editor.error = i18n::translate(&format!("{error:#}")),
-            }
-        });
-    }
     fn nginx_file_view(&self, file: bool) {
         self.state.revise(|s| {
             let Some(editor) = &mut s.nginx.editor else {
@@ -491,9 +485,10 @@ impl Ui {
                 return;
             }
             if !file {
-                match nginx_config::settings(&editor.text) {
-                    Ok(form) => {
-                        editor.form = form;
+                match nginx_site::read(&editor.text) {
+                    Ok(site) => {
+                        editor.site = site;
+                        editor.drafts.clear();
                         editor.error.clear();
                     }
                     Err(error) => {
@@ -1014,158 +1009,6 @@ fn field(label: &'static str, control: impl Widget) -> impl Widget {
     ))
 }
 
-fn text_field(
-    ui: &Ui,
-    label: &'static str,
-    read: fn(&Settings) -> Option<String>,
-    write: fn(&mut Settings, String),
-) -> impl Widget + use<> {
-    let state = ui.state;
-    let ui = ui.clone();
-    when(
-        state.map(move |s| {
-            s.nginx
-                .editor
-                .as_ref()
-                .is_some_and(|e| read(&e.form).is_some())
-        }),
-        move || {
-            let ui = ui.clone();
-            field(
-                label,
-                input()
-                    .name(i18n::bind(label))
-                    .enabled(state.map(writable))
-                    .value(state.map(move |s| {
-                        s.nginx
-                            .editor
-                            .as_ref()
-                            .and_then(|e| read(&e.form))
-                            .unwrap_or_default()
-                    }))
-                    .on(value_changed, move |event| {
-                        if let Event::ValueChanged { value, .. } = event {
-                            ui.nginx_form(|form| write(form, value));
-                        }
-                    }),
-            )
-        },
-    )
-}
-
-fn check_field(
-    ui: &Ui,
-    label: &'static str,
-    read: fn(&Settings) -> Option<bool>,
-    write: fn(&mut Settings, bool),
-) -> impl Widget + use<> {
-    let state = ui.state;
-    let ui = ui.clone();
-    when(
-        state.map(move |s| {
-            s.nginx
-                .editor
-                .as_ref()
-                .is_some_and(|e| read(&e.form).is_some())
-        }),
-        move || {
-            let ui = ui.clone();
-            sapid::checkbox()
-                .class("preference-check")
-                .label(i18n::bind(label))
-                .enabled(state.map(writable))
-                .checked(state.map(move |s| {
-                    s.nginx
-                        .editor
-                        .as_ref()
-                        .and_then(|e| read(&e.form))
-                        .unwrap_or_default()
-                }))
-                .on_checked_change(move |value| ui.nginx_form(|form| write(form, value)))
-        },
-    )
-}
-
-fn settings_form(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    col().class("nginx-form").fill((
-        col().class("nginx-form-section").fill((
-            text().class("section-title").content(i18n::bind("Domain")),
-            text_field(&ui, "Domains", |f| f.names.clone(), |f, v| f.names = Some(v)),
-            text()
-                .class("nginx-form-summary subtle")
-                .content(i18n::bind(state.map(|s| {
-                    let Some(editor) = &s.nginx.editor else {
-                        return String::new();
-                    };
-                    let summary = nginx_config::parse(&editor.text)
-                        .map(|d| nginx_config::summary(&d))
-                        .unwrap_or_default();
-                    let ports = summary
-                        .ports
-                        .iter()
-                        .map(u16::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    match (&summary.certificate, ports.is_empty()) {
-                        (_, true) => String::new(),
-                        (Some(certificate), false) => {
-                            format!("Listens on {ports} · certificate {certificate}")
-                        }
-                        (None, false) => format!("Listens on {ports}"),
-                    }
-                }))),
-        )),
-        when(
-            state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| e.form.proxy.is_some())),
-            {
-                let ui = ui.clone();
-                move || {
-                    col().class("nginx-form-section").fill((
-                        text().class("section-title").content(i18n::bind("Reverse proxy")),
-                        row().class("nginx-form-grid").fill((
-                            text_field(&ui, "Forward to", |f| f.proxy.clone(), |f, v| f.proxy = Some(v)),
-                            text_field(&ui, "Timeout", |f| f.timeout.clone(), |f, v| f.timeout = Some(v)),
-                        )),
-                        check_field(&ui, "WebSocket connections", |f| f.websocket, |f, v| f.websocket = Some(v)),
-                        check_field(&ui, "Pass the visitor’s address (X-Forwarded-For)", |f| f.forwarded, |f, v| f.forwarded = Some(v)),
-                    ))
-                }
-            },
-        ),
-        when(
-            state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| e.form.folder.is_some())),
-            {
-                let ui = ui.clone();
-                move || {
-                    col().class("nginx-form-section").fill((
-                        text().class("section-title").content(i18n::bind("Static files")),
-                        text_field(&ui, "Folder", |f| f.folder.clone(), |f, v| f.folder = Some(v)),
-                    ))
-                }
-            },
-        ),
-        when(
-            state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| e.form.upload.is_some())),
-            {
-                let ui = ui.clone();
-                move || {
-                    col().class("nginx-form-section").fill((
-                        text().class("section-title").content(i18n::bind("Requests")),
-                        text_field(&ui, "Largest upload", |f| f.upload.clone(), |f, v| f.upload = Some(v)),
-                        text().class("hint").content(i18n::bind(
-                            "Use Nginx units: 60s or 5m for times, 50m or 1g for sizes. Leave empty to use the Nginx default.",
-                        )),
-                    ))
-                }
-            },
-        ),
-        text().class("hint").content(i18n::bind(
-            "Settings covers common directives. Anything else in the file is kept as written; switch to File to see or change it.",
-        )),
-    ))
-}
-
 fn editor(ui: Ui) -> impl Widget {
     let state = ui.state;
     let back = ui.clone();
@@ -1219,7 +1062,7 @@ fn editor(ui: Ui) -> impl Widget {
                     .class("nginx-segment")
                     .label(i18n::bind("Settings"))
                     .pressed(state.map(move |s| !file(s)))
-                    .enabled(state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| has_form(&e.form) || !e.file_view)))
+                    .enabled(state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| has_form(&e.site) || !e.file_view)))
                     .on_press(move || form_view.nginx_file_view(false)),
                 sapid::button()
                     .class("nginx-segment")
@@ -1259,7 +1102,7 @@ fn editor(ui: Ui) -> impl Widget {
             )),
         when(state.map(move |s| !file(s)), {
             let ui = ui.clone();
-            move || settings_form(ui.clone())
+            move || form::settings_form(ui.clone())
         }),
         when(state.map(file), move || {
             input()
@@ -1313,6 +1156,11 @@ fn editor(ui: Ui) -> impl Widget {
             text().class("hint").content(i18n::bind(
                 "Arcnix checks the complete configuration before replacing the file. After the reload, it asks this server's Nginx for the address. If there is no answer, or only server errors (5xx), for 30 seconds, the previous file is put back. Leave it empty to check only that Nginx keeps running.",
             )),
+            text()
+                .class(state.map(|s| {
+                    if s.nginx.editor.as_ref().is_some_and(|e| !e.error.is_empty()) { "error" } else { "hidden" }.to_owned()
+                }))
+                .content(state.map(|s| s.nginx.editor.as_ref().map(|e| e.error.clone()).unwrap_or_default())),
             row().class("nginx-publish-row").fill((
                 text().class("nginx-change subtle").content(i18n::bind(state.map(|s| {
                     match &s.nginx.editor {
@@ -1333,7 +1181,8 @@ fn editor(ui: Ui) -> impl Widget {
                                 s.nginx.editor = None;
                             } else if let Some(editor) = &mut s.nginx.editor {
                                 editor.text = editor.original.clone();
-                                editor.form = nginx_config::settings(&editor.text).unwrap_or_default();
+                                editor.site = nginx_site::read(&editor.text).unwrap_or_default();
+                                editor.drafts.clear();
                                 editor.error.clear();
                                 editor.failure.clear();
                             }
@@ -1511,10 +1360,10 @@ mod tests {
 
     #[test]
     fn forms_appear_only_for_files_with_common_settings() {
-        assert!(!has_form(&Settings::default()));
-        let site = nginx_config::settings("server { server_name a.com; root /srv; }").unwrap();
+        assert!(!has_form(&Site::default()));
+        let site = nginx_site::read("server { server_name a.com; root /srv; }").unwrap();
         assert!(has_form(&site));
-        let main = nginx_config::settings("events {}\nhttp { include mime.types; }\n").unwrap();
+        let main = nginx_site::read("events {}\nhttp { include mime.types; }\n").unwrap();
         assert!(!has_form(&main));
     }
 }

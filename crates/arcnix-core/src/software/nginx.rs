@@ -15,8 +15,8 @@ use anyhow::{Result, ensure};
 use serde::Deserialize;
 
 use crate::configurations;
+pub use crate::nginx_config::Serves;
 use crate::nginx_config::{self, Summary};
-pub use crate::nginx_config::{Serves, Settings};
 use crate::operations::Snippet;
 use crate::remote::RemoteSession;
 use crate::remote_tasks::quote;
@@ -1104,13 +1104,20 @@ mod tests {
             "/etc/nginx/conf.d/new.example.com.conf"
         );
         let proxy = new_site(Kind::Proxy, "a.example.com", "http://127.0.0.1:3000").unwrap();
-        let settings = nginx_config::settings(&proxy).unwrap();
-        assert_eq!(settings.proxy.as_deref(), Some("http://127.0.0.1:3000"));
-        assert_eq!(settings.forwarded, Some(true));
+        let site = crate::nginx_site::read(&proxy).unwrap();
+        assert!(matches!(
+            &site.locations[0].kind,
+            crate::nginx_site::Kind::Proxy { target, forwarded: true, .. } if target == "http://127.0.0.1:3000"
+        ));
         let folder = new_site(Kind::Folder, "a.example.com", "/srv/www").unwrap();
-        assert_eq!(
-            nginx_config::settings(&folder).unwrap().folder.as_deref(),
-            Some("/srv/www")
+        let site = crate::nginx_site::read(&folder).unwrap();
+        assert!(
+            matches!(&site.locations[..], [l] if matches!(&l.kind, crate::nginx_site::Kind::Static { folder, .. } if folder == "/srv/www"))
+                || site
+                    .rows
+                    .iter()
+                    .any(|r| r.name == "root" && r.args == "/srv/www"),
+            "{site:?}"
         );
         let redirect = new_site(Kind::Redirect, "old.example.com", "https://example.com/").unwrap();
         assert!(redirect.contains("return 301 https://example.com$request_uri;"));
