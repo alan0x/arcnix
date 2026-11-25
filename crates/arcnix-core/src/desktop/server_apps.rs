@@ -601,7 +601,7 @@ pub(crate) fn parse_clock(output: &str) -> Result<ClockSample> {
 }
 
 pub fn discover_command() -> &'static str {
-    "# arcnix:apps:discover\nprintf 'ARCNIX_APPS_V1\\n'; if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH=\"$PATH:/snap/bin\"; fi; if command -v docker >/dev/null 2>&1; then printf 'docker\\n'; if command -v timeout >/dev/null 2>&1 && timeout -k 1s 5s docker compose version --short >/dev/null 2>&1; then printf 'compose\\n'; fi; fi; if command -v snap >/dev/null 2>&1; then printf 'snap\\n'; fi; if command -v tmux >/dev/null 2>&1; then printf 'tmux\\n'; fi; if command -v nginx >/dev/null 2>&1 || test -x /usr/sbin/nginx; then printf 'nginx\\n'; fi"
+    "# arcnix:apps:discover\nprintf 'ARCNIX_APPS_V1\\n'; if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH=\"$PATH:/snap/bin\"; fi; if command -v docker >/dev/null 2>&1; then printf 'docker\\n'; if command -v timeout >/dev/null 2>&1 && timeout -k 1s 5s docker compose version --short >/dev/null 2>&1; then printf 'compose\\n'; fi; fi; if command -v snap >/dev/null 2>&1; then printf 'snap\\n'; fi; if command -v tmux >/dev/null 2>&1; then printf 'tmux\\n'; fi; arcnix_nginx=; if command -v nginx >/dev/null 2>&1 || test -x /usr/sbin/nginx; then arcnix_nginx=1; elif command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 && timeout -k 1s 5s docker ps -a --no-trunc --format '{{.Image}} {{.Command}}' 2>/dev/null | grep -qi nginx; then arcnix_nginx=1; fi; if [ -n \"$arcnix_nginx\" ]; then printf 'nginx\\n'; fi"
 }
 pub fn discover(session: &RemoteSession) -> Result<Applications> {
     use crate::host::HostOs;

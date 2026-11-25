@@ -434,9 +434,9 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 
 ## Nginx
 
-服务器上有 `nginx` 可执行文件（PATH 中或 `/usr/sbin/nginx`）时，应用检测加入 `nginx`，Apps 显示 Nginx 窗口，App Center 的 Nginx 页按钮变为「打开」。与 pgAdmin 相同，Nginx 不默认放上桌面或写入窗口位置，避免较早版本读取桌面设置时遇到不认识的应用。
+服务器上有 `nginx` 可执行文件（PATH 中或 `/usr/sbin/nginx`），或 `docker ps -a` 列出的容器镜像或命令含 `nginx` 时，应用检测加入 `nginx`，Apps 显示 Nginx 窗口，App Center 的 Nginx 页按钮变为「打开」。与 pgAdmin 相同，Nginx 不默认放上桌面或写入窗口位置，避免较早版本读取桌面设置时遇到不认识的应用。
 
-读取以 SSH 账户运行 `crates/arcnix-core/src/software/nginx_read.py`（Python 3，20 秒限时），只读取：`systemctl show nginx.service` 的状态和运行时长、`nginx -v`、`/etc/nginx/nginx.conf`，以及 `sites-available`（是否由 `sites-enabled` 中的链接启用）、`sites-enabled` 中直接放置的文件和 `conf.d/*.conf`／`*.conf.disabled`。单个文件最多 128 KiB，总量 6 MiB，最多 200 个站点；读不到的文件标明原因。解析在 Rust 中完成（`nginx_config.rs`）：保留每条指令的字节位置，从 `server` 块得到域名、端口、HTTPS、证书路径，以及 `location /` 的反向代理目标、静态目录或重定向。
+读取以 SSH 账户运行 `crates/arcnix-core/src/software/nginx_read.py`（Python 3，60 秒限时），返回服务器上的每个 Nginx 实例：服务器本身安装的一个，以及最多 20 个运行 Nginx 的 Docker 容器（`docker run` 或 Compose 创建均可）。服务器本身的实例只读取：`systemctl show nginx.service` 的状态和运行时长、`nginx -v`、`/etc/nginx/nginx.conf`，以及 `sites-available`（是否由 `sites-enabled` 中的链接启用）、`sites-enabled` 中直接放置的文件和 `conf.d/*.conf`／`*.conf.disabled`。单个文件最多 128 KiB，总量 6 MiB，最多 200 个站点；读不到的文件标明原因。解析在 Rust 中完成（`nginx_config.rs`）：保留每条指令的字节位置，从 `server` 块得到域名、端口、HTTPS、证书路径，以及 `location /` 的反向代理目标、静态目录或重定向。
 
 站点编辑器的表单只修改有变化的字段，其余内容按原文保留：域名、转发地址、超时、WebSocket、X-Forwarded-For、静态目录和最大上传大小。一个字段在文件中出现在多处且取值不一致时不显示，需要在文件视图编辑。值不允许空格、引号、分号、大括号和 `#`。
 
@@ -445,13 +445,27 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 - 启用／停用站点：Debian 布局创建或删除 `sites-enabled` 中的链接，`conf.d` 布局改名为 `.conf.disabled`；随后 `nginx -t` 并重新加载，任一步失败就撤销改动并再次重新加载。
 - 编辑或新建文件使用下文的配置发布器。新站点在 Debian 布局下写入 `sites-available`，默认停用；在 `conf.d` 布局下发布即生效。
 
+### Docker 中的 Nginx
+
+容器的读取使用 SSH 账户的 `docker` 命令（与 Docker 应用相同，需要该账户能访问 Docker；否则概览提示把账户加入 docker 组）。镜像名最后一段含 `nginx`，或入口命令为 `nginx` 的容器视为 Nginx 实例；实例以容器名区分，Compose 重建容器后仍对应同一实例。`docker inspect` 提供状态、启动时间、重启策略、Compose 项目／服务／目录、已发布端口和挂载；运行中的容器另执行 `docker exec <id> nginx -v` 和 `nginx -T`。
+
+容器内的路径按挂载映射到服务器文件：bind 挂载或卷中的文件从服务器读取，可以修改，编辑器同时显示容器路径和服务器路径；其余文件来自 `nginx -T` 的输出，只能查看。`nginx -T` 还列出容器加载的其他含 `server` 块的文件，作为始终启用的站点显示。新站点只能写入从服务器挂载的 `conf.d` 或 `sites-available`；容器中什么都没挂载时，界面说明需要先从服务器挂载配置文件夹。
+
+容器实例的服务器任务：
+- 测试、重新加载为 `docker exec <id> nginx -t`／`nginx -s reload`；启动、停止、重启为 `docker start`／`stop`／`restart`，重启前容器运行时先测试配置。
+- 启用／停用站点在服务器上改名或修改链接（链接内容为容器内路径），再在容器中测试并重新加载，失败时撤销；容器未运行时不能切换站点。
+- 发布请求带 `container`（完整容器 ID）。校验在一次性容器中进行：同一镜像 ID，相同用户，复制原容器的全部 bind 和卷挂载（只读），把候选文件放在目标位置：目标本身是单文件挂载时直接挂载候选；目标位于挂载的文件夹中时，复制该文件夹（最多 64 MiB）并替换候选后挂载副本。运行中的容器共享其网络（`--network container:<id>`），使 Compose 服务名等上游地址按原样解析；未运行时加入其第一个网络。正在运行的容器和生效文件夹都不会被改动，检查容器以 `--rm` 删除。
+- 单独挂载进容器的文件（如 `./nginx.conf:/etc/nginx/nginx.conf`）就地写入并保持 inode，替换会让容器继续读取旧文件；位于挂载文件夹中的文件仍原子替换。
+- 重新加载使用 `docker exec <id> nginx -s reload`，同样等待容器中的 Nginx 主进程（与容器 PID 命名空间相同、进程标题为 `nginx: master` 的进程）启动新的子进程。健康检查地址为空时检查容器仍在运行且 Nginx 主进程存在；站点域名通常不能从服务器直接访问，因此容器实例默认不填地址。容器未运行时只写入文件，不重新加载，Nginx 在容器启动时读取。
+- 新文件属主与所在文件夹相同（`/etc/nginx` 中为 root，Compose 项目文件夹中为项目所有者），权限 644。
+
 ## 跨服务器配置发布与恢复（历史设计，桌面页面已移除）
 
 Configurations 为全局入口，支持完整 Nginx 配置和自定义应用配置。发布目标是现有的、无符号链接的真实绝对路径常规文件，且只有一个硬链接；候选为最多 128 KiB 的 UTF-8 文本，CRLF 统一为 LF。自定义校验接收私有候选文件作为 `$1`，重载及健康检查接收生效路径作为 `$1`；这些命令以 root 运行，必须能在服务器独立完成。Nginx 使用 `-t -c` 校验、`systemctl reload` 重载及 HTTP 2xx／可选包含文本检查，不自动启动或重启服务。
 
 预检查需要 SFTP、Python 3.8+、root／sudo 和 systemd。候选、请求描述及经过 SHA-256 核对的执行器先私有上传到 SSH 用户的 staging 目录；提权后创建 `/var/lib/arcnix/configurations/<task-id>`，保存原始版本、候选、校验日志及版本化 manifest。状态目录和父级必须由 root 控制，目录模式为 700。候选和原始文件数据及阶段记录执行 fsync；执行器按任务冻结，客户端退出或升级不会替换正在执行的服务器代码。
 
-Nginx 主配置（`nginx -V` 中的 `--conf-path`）用 `-t -c` 校验候选；被包含的文件（站点等）在私有挂载命名空间（`unshare --mount --propagation private`）中检查：把该目录的副本（候选加上指向其余原文件的链接）绑定挂载到原目录，再运行 `nginx -t`，因此校验的是候选生效后的完整配置，正在运行的 Nginx 和其他进程看不到这次挂载。请求中的 `create` 表示目标必须尚不存在，新文件属主为 root、权限 644。Nginx 健康检查地址可以留空，此时检查 `systemctl is-active` 是否仍为运行中。`systemctl reload` 发出信号即返回，旧 worker 进程在新配置载入前仍按旧配置响应，因此重新加载后先等待主进程启动新的子进程（10 秒内未出现视为重新加载失败），再做健康检查；否则健康检查可能测到旧配置而放过有问题的版本。
+Nginx 主配置（`nginx -V` 中的 `--conf-path`）用 `-t -c` 校验候选；被包含的文件（站点等）在私有挂载命名空间（`unshare --mount --propagation private`）中检查：把该目录的副本（候选加上指向其余原文件的链接）绑定挂载到原目录，再运行 `nginx -t`，因此校验的是候选生效后的完整配置，正在运行的 Nginx 和其他进程看不到这次挂载。请求中的 `create` 表示目标必须尚不存在，新文件属主与所在文件夹相同、权限 644。Nginx 健康检查地址可以留空，此时检查 `systemctl is-active` 是否仍为运行中。`systemctl reload` 发出信号即返回，旧 worker 进程在新配置载入前仍按旧配置响应，因此重新加载后先等待主进程启动新的子进程（10 秒内未出现视为重新加载失败），再做健康检查；否则健康检查可能测到旧配置而放过有问题的版本。
 
 预检查会创建私有记录及同目录的临时校验文件，但不改动生效配置，也不重载服务。每台服务器生成独立差异、原／新摘要及属主／权限计划。差异只在本次会话内存显示；任务历史不保存配置正文或差异。命令、健康条件、路径和摘要是持久元数据，不能包含口令或令牌；敏感参数应引用服务器文件。客户端重启后显示结果未知，通过原端点和指纹查询任务，不重复提交。
 

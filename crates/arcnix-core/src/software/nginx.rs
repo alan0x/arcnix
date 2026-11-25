@@ -1,10 +1,16 @@
 //! Nginx status and sites, and the server tasks that change them.
 //!
-//! Reading runs as the SSH account. Every change runs as a reviewed
+//! A server can run Nginx itself, in Docker containers, or both; each is an
+//! instance. Reading runs as the SSH account. Every change runs as a reviewed
 //! administrator task: service and site switches as short shell scripts, and
 //! file edits through [`crate::configurations`], which checks the complete
 //! configuration before replacing a file and puts the old file back if Nginx
 //! stops answering.
+//!
+//! In a container, only files mounted from the server can change. Arcnix
+//! writes them on the server, where the paths differ from the container's.
+use std::collections::BTreeMap;
+
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 
@@ -18,6 +24,7 @@ use crate::scripts::Template;
 
 pub const SERVICE: &str = "nginx.service";
 const RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
+const INSTANCE_LIMIT: usize = 21;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct Service {
@@ -37,6 +44,38 @@ impl Service {
             self.enabled.as_str(),
             "enabled" | "enabled-runtime" | "alias"
         )
+    }
+}
+
+/// A Docker container that runs Nginx, from `docker run` or Compose.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Container {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub state: String,
+    pub uptime: Option<u64>,
+    /// The restart policy.
+    pub restart: String,
+    /// The Compose project and service, empty for `docker run`.
+    pub project: String,
+    pub service: String,
+    /// The Compose project folder.
+    pub directory: String,
+    /// Published ports, as `host:container/protocol`.
+    pub ports: Vec<String>,
+}
+
+impl Container {
+    pub fn running(&self) -> bool {
+        self.state == "running"
+    }
+    pub fn starts_at_boot(&self) -> bool {
+        matches!(self.restart.as_str(), "always" | "unless-stopped")
+    }
+    pub fn compose(&self) -> bool {
+        !self.project.is_empty()
     }
 }
 
@@ -60,14 +99,19 @@ pub enum Style {
     Linked,
     /// `.conf` or `.conf.disabled` in conf.d.
     Renamed,
-    /// A file copied into sites-enabled, which stays on.
+    /// A file that stays on: copied into sites-enabled, or another file
+    /// Nginx loads.
     #[default]
     Fixed,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct File {
+    /// The path Nginx knows, inside the container for Docker.
     pub path: String,
+    /// The file on the server that Arcnix changes; the same as the path for
+    /// Nginx on the server, empty for a file inside a container image.
+    pub target: String,
     pub text: Option<String>,
     /// Why the text could not be read: permission, large, encoding or limit.
     pub error: String,
@@ -76,6 +120,9 @@ pub struct File {
 impl File {
     pub fn name(&self) -> &str {
         self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+    pub fn editable(&self) -> bool {
+        !self.target.is_empty()
     }
 }
 
@@ -86,6 +133,9 @@ pub struct Site {
     pub style: Style,
     /// The sites-enabled entry for a linked site that is on.
     pub link: String,
+    /// Where on the server the sites-enabled link is, or goes when the site
+    /// is turned on.
+    pub link_target: String,
     pub summary: Summary,
     /// The file could be read but not understood.
     pub invalid: bool,
@@ -108,7 +158,11 @@ impl Site {
             .unwrap_or(name)
     }
     pub fn switchable(&self) -> bool {
-        self.style != Style::Fixed
+        match self.style {
+            Style::Fixed => false,
+            Style::Renamed => self.file.editable(),
+            Style::Linked => self.file.editable() && !self.link_target.is_empty(),
+        }
     }
 }
 
@@ -118,9 +172,12 @@ pub struct Snapshot {
     pub binary: String,
     pub version: String,
     pub service: Option<Service>,
+    pub docker: Option<Container>,
     pub layout: Layout,
     pub main: File,
     pub sites: Vec<Site>,
+    /// Folders new sites can go in, and where they are on the server.
+    pub dirs: BTreeMap<String, String>,
     pub truncated: bool,
 }
 
@@ -129,7 +186,37 @@ impl Snapshot {
         !self.binary.is_empty()
     }
     pub fn running(&self) -> bool {
-        self.service.as_ref().is_some_and(Service::running)
+        match &self.docker {
+            Some(container) => container.running(),
+            None => self.service.as_ref().is_some_and(Service::running),
+        }
+    }
+    pub fn starts_at_boot(&self) -> bool {
+        match &self.docker {
+            Some(container) => container.starts_at_boot(),
+            None => self.service.as_ref().is_some_and(Service::starts_at_boot),
+        }
+    }
+    pub fn uptime(&self) -> Option<u64> {
+        match &self.docker {
+            Some(container) => container.uptime,
+            None => self.service.as_ref().and_then(|s| s.uptime),
+        }
+    }
+    /// Stays the same while a container is recreated.
+    pub fn key(&self) -> String {
+        match &self.docker {
+            Some(container) => format!("docker:{}", container.name),
+            None => "server".into(),
+        }
+    }
+    /// The instance's name in a list.
+    pub fn title(&self) -> String {
+        match &self.docker {
+            Some(c) if c.compose() => format!("{} · {}", c.service, c.project),
+            Some(c) => c.name.clone(),
+            None => "On the server".into(),
+        }
     }
     /// Ports that enabled sites and the main configuration listen on.
     pub fn ports(&self) -> Vec<u16> {
@@ -154,12 +241,27 @@ impl Snapshot {
     pub fn site(&self, path: &str) -> Option<&Site> {
         self.sites.iter().find(|s| s.file.path == path)
     }
+    /// The main configuration or a site, by the path Nginx knows.
+    pub fn file(&self, path: &str) -> Option<&File> {
+        self.site(path)
+            .map(|s| &s.file)
+            .or((self.main.path == path).then_some(&self.main))
+    }
+}
+
+/// Every Nginx on a server.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reading {
+    pub instances: Vec<Snapshot>,
+    /// Why containers could not be listed: permission or unavailable.
+    pub docker_error: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
     path: String,
+    target: String,
     text: Option<String>,
     error: String,
 }
@@ -168,25 +270,36 @@ struct RawFile {
 #[serde(deny_unknown_fields)]
 struct RawSite {
     path: String,
+    target: String,
     enabled: bool,
     style: Style,
     link: String,
+    link_target: String,
     text: Option<String>,
     error: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Raw {
-    version: u8,
+struct RawInstance {
     root: String,
     binary: String,
     nginx: String,
     service: Option<Service>,
+    docker: Option<Container>,
     layout: Layout,
     main: RawFile,
+    dirs: BTreeMap<String, String>,
     sites: Vec<RawSite>,
     truncated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Raw {
+    version: u8,
+    instances: Vec<RawInstance>,
+    docker_error: String,
 }
 
 fn checked_path(path: &str) -> Result<()> {
@@ -200,18 +313,62 @@ fn checked_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn parse(output: &str) -> Result<Snapshot> {
-    let raw: Raw = serde_json::from_str(output)?;
-    ensure!(raw.version == 1, "Unsupported Nginx response");
+fn checked_target(target: &str) -> Result<()> {
+    if target.is_empty() {
+        Ok(())
+    } else {
+        checked_path(target)
+    }
+}
+
+fn checked_container(container: &Container) -> Result<()> {
+    ensure!(
+        container.id.len() == 64
+            && container
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+        "Invalid Docker container ID"
+    );
+    ensure!(
+        !container.name.is_empty()
+            && container.name.len() <= 255
+            && container
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
+        "Invalid Docker container name"
+    );
+    Ok(())
+}
+
+fn file(raw: RawFile) -> Result<File> {
+    checked_path(&raw.path)?;
+    checked_target(&raw.target)?;
+    Ok(File {
+        path: raw.path,
+        target: raw.target,
+        text: raw.text,
+        error: raw.error,
+    })
+}
+
+fn instance(raw: RawInstance) -> Result<Snapshot> {
     checked_path(&raw.root)?;
-    checked_path(&raw.main.path)?;
+    if let Some(container) = &raw.docker {
+        checked_container(container)?;
+    }
+    for (dir, target) in &raw.dirs {
+        checked_path(dir)?;
+        checked_path(target)?;
+    }
     ensure!(raw.sites.len() <= 200, "Too many Nginx sites");
     let mut sites = Vec::with_capacity(raw.sites.len());
     for site in raw.sites {
-        checked_path(&site.path)?;
         if !site.link.is_empty() {
             checked_path(&site.link)?;
         }
+        checked_target(&site.link_target)?;
         let parsed = site.text.as_deref().map(nginx_config::parse);
         let invalid = matches!(parsed, Some(Err(_)));
         let summary = match parsed {
@@ -219,14 +376,16 @@ pub fn parse(output: &str) -> Result<Snapshot> {
             _ => Summary::default(),
         };
         sites.push(Site {
-            file: File {
+            file: file(RawFile {
                 path: site.path,
+                target: site.target,
                 text: site.text,
                 error: site.error,
-            },
+            })?,
             enabled: site.enabled,
             style: site.style,
             link: site.link,
+            link_target: site.link_target,
             summary,
             invalid,
         });
@@ -237,26 +396,47 @@ pub fn parse(output: &str) -> Result<Snapshot> {
         binary: raw.binary,
         version: raw.nginx,
         service: raw.service,
+        docker: raw.docker,
         layout: raw.layout,
-        main: File {
-            path: raw.main.path,
-            text: raw.main.text,
-            error: raw.main.error,
-        },
+        main: file(raw.main)?,
         sites,
+        dirs: raw.dirs,
         truncated: raw.truncated,
+    })
+}
+
+pub fn parse(output: &str) -> Result<Reading> {
+    let raw: Raw = serde_json::from_str(output)?;
+    ensure!(raw.version == 2, "Unsupported Nginx response");
+    ensure!(
+        raw.instances.len() <= INSTANCE_LIMIT,
+        "Too many Nginx instances"
+    );
+    let instances = raw
+        .instances
+        .into_iter()
+        .map(instance)
+        .collect::<Result<Vec<_>>>()?;
+    let mut keys = std::collections::HashSet::new();
+    ensure!(
+        instances.iter().all(|i| keys.insert(i.key())),
+        "Duplicate Nginx instance"
+    );
+    Ok(Reading {
+        instances,
+        docker_error: raw.docker_error,
     })
 }
 
 pub fn read_command() -> String {
     let source = include_str!("nginx_read.py").replace("\r\n", "\n");
     format!(
-        "# arcnix:nginx:read\ncd /\nexec timeout --kill-after=2 20 python3 -I -c {}",
+        "# arcnix:nginx:read\ncd /\nexec timeout --kill-after=2 60 python3 -I -c {}",
         quote(&source)
     )
 }
 
-pub fn read(session: &RemoteSession) -> Result<Snapshot> {
+pub fn read(session: &RemoteSession) -> Result<Reading> {
     session.require_linux_capability("Nginx")?;
     let output = crate::server_apps::execute(session, &read_command(), RESPONSE_LIMIT)?;
     ensure!(
@@ -270,6 +450,36 @@ pub fn read(session: &RemoteSession) -> Result<Snapshot> {
         output.stderr.trim()
     );
     parse(&output.stdout)
+}
+
+/// Finds the docker command for administrator tasks, which may not have the
+/// snap folder in PATH.
+const DOCKER_PATH: &str = "if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then PATH=\"$PATH:/snap/bin\"; fi\nunset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH";
+
+/// How a task tests and reloads one instance.
+struct Commands {
+    prelude: String,
+    test: String,
+    reload: String,
+}
+
+fn commands(snapshot: &Snapshot) -> Result<Commands> {
+    Ok(match &snapshot.docker {
+        None => Commands {
+            prelude: String::new(),
+            test: "nginx -t".into(),
+            reload: format!("systemctl reload {SERVICE}"),
+        },
+        Some(container) => {
+            checked_container(container)?;
+            let id = quote(&container.id);
+            Commands {
+                prelude: format!("{DOCKER_PATH}\n"),
+                test: format!("docker exec {id} nginx -t"),
+                reload: format!("docker exec {id} nginx -s reload"),
+            }
+        }
+    })
 }
 
 /// Changes to the service, each a reviewed administrator task.
@@ -293,74 +503,117 @@ fn task(id: &str, name: &str, description: &str, command: String) -> Template {
     })
 }
 
-pub fn control(control: Control) -> Template {
-    let (id, name, description, command) = match control {
-        Control::Test => (
+pub fn control(snapshot: &Snapshot, control: Control) -> Result<Template> {
+    let c = commands(snapshot)?;
+    let (id, name, description, command) = match (&snapshot.docker, control) {
+        (_, Control::Test) => (
             "test",
             "Test Nginx configuration",
             "Checks the complete configuration without changing anything.",
-            "nginx -t",
+            c.test.clone(),
         ),
-        Control::Reload => (
+        (_, Control::Reload) => (
             "reload",
             "Reload Nginx",
             "Checks the configuration, then reloads it. Open connections finish on the old configuration.",
-            "nginx -t\nsystemctl reload nginx.service",
+            format!("{}\n{}", c.test, c.reload),
         ),
-        Control::Restart => (
+        (None, Control::Restart) => (
             "restart",
             "Restart Nginx",
             "Checks the configuration, then restarts Nginx. Open connections are dropped.",
-            "nginx -t\nsystemctl restart nginx.service",
+            format!("{}\nsystemctl restart {SERVICE}", c.test),
         ),
-        Control::Start => (
+        (None, Control::Start) => (
             "start",
             "Start Nginx",
             "Starts the nginx service.",
-            "systemctl start nginx.service",
+            format!("systemctl start {SERVICE}"),
         ),
-        Control::Stop => (
+        (None, Control::Stop) => (
             "stop",
             "Stop Nginx",
             "Stops the nginx service. Every site stops answering until it is started again.",
-            "systemctl stop nginx.service",
+            format!("systemctl stop {SERVICE}"),
+        ),
+        (Some(container), Control::Restart) => (
+            "restart",
+            "Restart Nginx container",
+            "Checks the configuration, then restarts the container. Open connections are dropped.",
+            format!(
+                "if [ -n \"$(docker ps -q --no-trunc --filter id={id} --filter status=running)\" ]; then {}; fi\ndocker restart {id}",
+                c.test,
+                id = quote(&container.id)
+            ),
+        ),
+        (Some(container), Control::Start) => (
+            "start",
+            "Start Nginx container",
+            "Starts the container.",
+            format!("docker start {}", quote(&container.id)),
+        ),
+        (Some(container), Control::Stop) => (
+            "stop",
+            "Stop Nginx container",
+            "Stops the container. Every site it serves stops answering until it is started again.",
+            format!("docker stop {}", quote(&container.id)),
         ),
     };
-    task(
+    let description = match &snapshot.docker {
+        Some(container) => format!("{} · {description}", container.name),
+        None => description.into(),
+    };
+    Ok(task(
         id,
         name,
-        description,
-        format!("# arcnix:nginx:{id}\nset -eu\n{command}\n"),
-    )
+        &description,
+        format!("# arcnix:nginx:{id}\nset -eu\n{}{command}\n", c.prelude),
+    ))
 }
 
 /// Turns a site on or off: change the link or name, check the complete
 /// configuration and reload, and undo the change if either fails.
-pub fn switch(site: &Site, on: bool) -> Result<Template> {
+pub fn switch(snapshot: &Snapshot, site: &Site, on: bool) -> Result<Template> {
     ensure!(
         site.enabled != on,
         "The site is already {}",
         if on { "on" } else { "off" }
     );
+    ensure!(
+        site.switchable(),
+        "This site's file is inside the container image; mount it from the server to change it"
+    );
+    if let Some(container) = &snapshot.docker {
+        ensure!(
+            container.running(),
+            "Start the container before turning sites on or off"
+        );
+    }
+    let c = commands(snapshot)?;
     checked_path(&site.file.path)?;
+    checked_path(&site.file.target)?;
     let path = &site.file.path;
+    let target = &site.file.target;
     let (parent, name) = path.rsplit_once('/').unwrap_or_default();
     let (change, undo) = match site.style {
-        Style::Fixed => anyhow::bail!("This site is a file in sites-enabled; edit it to change it"),
+        Style::Fixed => anyhow::bail!("This site is always on; edit it to change it"),
         Style::Linked => {
             let enabled = parent
                 .strip_suffix("/sites-available")
                 .map(|root| format!("{root}/sites-enabled"))
                 .ok_or_else(|| anyhow::anyhow!("The site is not in sites-available"))?;
+            checked_path(&site.link_target)?;
+            // The link holds the path Nginx knows, which in a container is
+            // not the server's path.
+            let link = quote(&site.link_target);
             if on {
-                let link = format!("{enabled}/{name}");
                 (
                     format!(
-                        "test -f {site}\nln -s -- {site} {link}",
-                        site = quote(path),
-                        link = quote(&link)
+                        "test -f {target}\nln -s -- {site} {link}",
+                        target = quote(target),
+                        site = quote(path)
                     ),
-                    format!("rm -f -- {}", quote(&link)),
+                    format!("rm -f -- {link}"),
                 )
             } else {
                 checked_path(&site.link)?;
@@ -369,28 +622,29 @@ pub fn switch(site: &Site, on: bool) -> Result<Template> {
                     "The site's link is not in sites-enabled"
                 );
                 (
-                    format!("test -L {link}\nrm -- {link}", link = quote(&site.link)),
-                    format!("ln -s -- {} {}", quote(path), quote(&site.link)),
+                    format!("test -L {link}\nrm -- {link}"),
+                    format!("ln -s -- {} {link}", quote(path)),
                 )
             }
         }
         Style::Renamed => {
-            let base = name
+            let (folder, file) = target.rsplit_once('/').unwrap_or_default();
+            let base = file
                 .strip_suffix(".conf.disabled")
-                .or_else(|| name.strip_suffix(".conf"))
+                .or_else(|| file.strip_suffix(".conf"))
                 .ok_or_else(|| anyhow::anyhow!("Unexpected conf.d file name"))?;
-            let target = if on {
-                format!("{parent}/{base}.conf")
+            let renamed = if on {
+                format!("{folder}/{base}.conf")
             } else {
-                format!("{parent}/{base}.conf.disabled")
+                format!("{folder}/{base}.conf.disabled")
             };
             (
                 format!(
                     "test -f {from}\ntest ! -e {to}\nmv -- {from} {to}",
-                    from = quote(path),
-                    to = quote(&target)
+                    from = quote(target),
+                    to = quote(&renamed)
                 ),
-                format!("mv -- {} {}", quote(&target), quote(path)),
+                format!("mv -- {} {}", quote(&renamed), quote(target)),
             )
         }
     };
@@ -400,28 +654,49 @@ pub fn switch(site: &Site, on: bool) -> Result<Template> {
         ("disable", "off")
     };
     let title = site.title();
+    let place = match &snapshot.docker {
+        Some(container) => format!(" in {}", container.name),
+        None => String::new(),
+    };
     Ok(task(
         &format!("site-{id}"),
         &format!("Turn {verb} Nginx site"),
         &format!(
-            "{title} · If Nginx rejects the configuration or does not reload, the change is undone."
+            "{title}{place} · If Nginx rejects the configuration or does not reload, the change is undone."
         ),
         format!(
-            "# arcnix:nginx:site-{id}\nset -eu\n{change}\nif ! nginx -t; then\n  {undo}\n  echo 'Nginx rejected the configuration. The change was undone.' >&2\n  exit 1\nfi\nif ! systemctl reload nginx.service; then\n  {undo}\n  systemctl reload nginx.service || true\n  echo 'Nginx did not reload. The change was undone.' >&2\n  exit 1\nfi\necho 'Turned {verb} {name}.'\n",
+            "# arcnix:nginx:site-{id}\nset -eu\n{prelude}{change}\nif ! {test}; then\n  {undo}\n  echo 'Nginx rejected the configuration. The change was undone.' >&2\n  exit 1\nfi\nif ! {reload}; then\n  {undo}\n  {reload} || true\n  echo 'Nginx did not reload. The change was undone.' >&2\n  exit 1\nfi\necho 'Turned {verb} {name}.'\n",
+            prelude = c.prelude,
+            test = c.test,
+            reload = c.reload,
             name = name.replace(['\'', '\n'], "")
         ),
     ))
 }
 
-/// What the publication checks after Nginx reloads. An empty address checks
-/// only that the service is still running.
-pub fn publish(path: &str, content: &str, health_url: &str, create: bool) -> Result<Template> {
-    checked_path(path)?;
+/// Publishes a file of an instance. `target` is the file on the server. An
+/// empty health address checks only that Nginx is still running.
+pub fn publish(
+    snapshot: &Snapshot,
+    target: &str,
+    content: &str,
+    health_url: &str,
+    create: bool,
+) -> Result<Template> {
+    checked_path(target)?;
     nginx_config::parse(content)
         .map_err(|e| anyhow::anyhow!("The file cannot be read as Nginx configuration: {e}"))?;
+    let container = match &snapshot.docker {
+        Some(container) => {
+            checked_container(container)?;
+            container.id.clone()
+        }
+        None => String::new(),
+    };
     let spec = configurations::Spec {
-        path: path.into(),
+        path: target.into(),
         health_url: health_url.trim().into(),
+        container,
         ..Default::default()
     };
     let job = if create {
@@ -496,8 +771,9 @@ pub fn new_site(kind: Kind, names: &str, target: &str) -> Result<String> {
     })
 }
 
-/// Where a new site's file goes, from its first domain.
-pub fn new_site_path(snapshot: &Snapshot, names: &str) -> Result<String> {
+/// Where a new site's file goes, from its first domain: the path Nginx knows
+/// and the file on the server.
+pub fn new_site_path(snapshot: &Snapshot, names: &str) -> Result<(String, String)> {
     let first = names.split_whitespace().next().unwrap_or_default();
     let name: String = first
         .trim_start_matches("*.")
@@ -509,11 +785,17 @@ pub fn new_site_path(snapshot: &Snapshot, names: &str) -> Result<String> {
         "Enter a domain for the site"
     );
     let root = snapshot.root.trim_end_matches('/');
-    let path = match snapshot.layout {
-        Layout::Debian => format!("{root}/sites-available/{name}"),
-        Layout::Confd => format!("{root}/conf.d/{name}.conf"),
-        Layout::None => anyhow::bail!("This server has neither sites-available nor conf.d"),
+    let (dir, file) = match snapshot.layout {
+        Layout::Debian => (format!("{root}/sites-available"), name.clone()),
+        Layout::Confd => (format!("{root}/conf.d"), format!("{name}.conf")),
+        Layout::None => anyhow::bail!("This Nginx has neither sites-available nor conf.d"),
     };
+    let folder = snapshot.dirs.get(&dir).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{dir} is inside the container image; mount it from the server to add sites"
+        )
+    })?;
+    let path = format!("{dir}/{file}");
     let taken = |candidate: &str| {
         snapshot.sites.iter().any(|s| {
             let existing = &s.file.path;
@@ -523,61 +805,157 @@ pub fn new_site_path(snapshot: &Snapshot, names: &str) -> Result<String> {
         })
     };
     ensure!(!taken(&path), "A site file named {name} already exists");
+    let target = format!("{}/{file}", folder.trim_end_matches('/'));
     checked_path(&path)?;
-    Ok(path)
+    checked_path(&target)?;
+    Ok((path, target))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn snapshot() -> Snapshot {
-        parse(&serde_json::json!({
-            "version": 1,
+    fn reading(instances: serde_json::Value) -> Result<Reading> {
+        parse(
+            &serde_json::json!({"version": 2, "instances": instances, "docker_error": ""})
+                .to_string(),
+        )
+    }
+
+    fn host() -> serde_json::Value {
+        serde_json::json!({
             "root": "/etc/nginx",
             "binary": "/usr/sbin/nginx",
             "nginx": "nginx/1.24.0 (Ubuntu)",
             "service": {"load": "loaded", "active": "active", "sub": "running", "enabled": "enabled", "uptime": 90},
+            "docker": null,
             "layout": "debian",
-            "main": {"path": "/etc/nginx/nginx.conf", "text": "events {}\nhttp { include /etc/nginx/sites-enabled/*; }\n", "error": ""},
+            "main": {"path": "/etc/nginx/nginx.conf", "target": "/etc/nginx/nginx.conf", "text": "events {}\nhttp { include /etc/nginx/sites-enabled/*; }\n", "error": ""},
+            "dirs": {"/etc/nginx/sites-available": "/etc/nginx/sites-available", "/etc/nginx/conf.d": "/etc/nginx/conf.d"},
             "sites": [
-                {"path": "/etc/nginx/sites-available/shop", "enabled": true, "style": "linked", "link": "/etc/nginx/sites-enabled/shop",
+                {"path": "/etc/nginx/sites-available/shop", "target": "/etc/nginx/sites-available/shop", "enabled": true, "style": "linked",
+                 "link": "/etc/nginx/sites-enabled/shop", "link_target": "/etc/nginx/sites-enabled/shop",
                  "text": "server { listen 443 ssl; server_name shop.example.com; location / { proxy_pass http://127.0.0.1:8080; } }", "error": ""},
-                {"path": "/etc/nginx/sites-available/default", "enabled": false, "style": "linked", "link": "",
+                {"path": "/etc/nginx/sites-available/default", "target": "/etc/nginx/sites-available/default", "enabled": false, "style": "linked",
+                 "link": "", "link_target": "/etc/nginx/sites-enabled/default",
                  "text": "server { listen 80 default_server; root /var/www/html; }", "error": ""},
-                {"path": "/etc/nginx/conf.d/old.conf.disabled", "enabled": false, "style": "renamed", "link": "", "text": null, "error": "permission"},
-                {"path": "/etc/nginx/sites-available/broken", "enabled": false, "style": "linked", "link": "", "text": "server {", "error": ""}
+                {"path": "/etc/nginx/conf.d/old.conf.disabled", "target": "/etc/nginx/conf.d/old.conf.disabled", "enabled": false, "style": "renamed",
+                 "link": "", "link_target": "", "text": null, "error": "permission"},
+                {"path": "/etc/nginx/sites-available/broken", "target": "/etc/nginx/sites-available/broken", "enabled": false, "style": "linked",
+                 "link": "", "link_target": "/etc/nginx/sites-enabled/broken", "text": "server {", "error": ""}
             ],
             "truncated": false
         })
-        .to_string())
-        .unwrap()
+    }
+
+    fn compose() -> serde_json::Value {
+        serde_json::json!({
+            "root": "/etc/nginx",
+            "binary": "nginx",
+            "nginx": "nginx/1.27.5",
+            "service": null,
+            "docker": {"id": "a".repeat(64), "name": "web-web-1", "image": "nginx:1.27-alpine", "state": "running", "uptime": 60,
+                       "restart": "unless-stopped", "project": "web", "service": "web", "directory": "/srv/web", "ports": ["8080:80/tcp"]},
+            "layout": "confd",
+            "main": {"path": "/etc/nginx/nginx.conf", "target": "", "text": "events {}\n", "error": ""},
+            "dirs": {"/etc/nginx/conf.d": "/srv/web/conf.d"},
+            "sites": [
+                {"path": "/etc/nginx/conf.d/shop.conf", "target": "/srv/web/conf.d/shop.conf", "enabled": true, "style": "renamed",
+                 "link": "", "link_target": "", "text": "server { listen 80; server_name shop.local; location / { proxy_pass http://app:8000; } }", "error": ""},
+                {"path": "/etc/nginx/conf.d/default.conf", "target": "", "enabled": true, "style": "renamed",
+                 "link": "", "link_target": "", "text": "server { listen 80; }", "error": ""}
+            ],
+            "truncated": false
+        })
+    }
+
+    fn snapshot() -> Snapshot {
+        reading(serde_json::json!([host()]))
+            .unwrap()
+            .instances
+            .remove(0)
+    }
+
+    fn container() -> Snapshot {
+        reading(serde_json::json!([compose()]))
+            .unwrap()
+            .instances
+            .remove(0)
     }
 
     #[test]
     fn reads_the_server_response() {
         let s = snapshot();
-        assert!(s.running() && s.installed());
+        assert!(s.running() && s.installed() && s.starts_at_boot());
         assert_eq!(s.ports(), [443]);
         let titles: Vec<_> = s.sites.iter().map(Site::title).collect();
         assert_eq!(titles, ["broken", "default", "old", "shop.example.com"]);
         assert!(s.sites[0].invalid);
         assert_eq!(s.sites[2].file.error, "permission");
-        assert!(parse(r#"{"version":2}"#).is_err());
+        assert!(parse(r#"{"version":1}"#).is_err());
+        let mut bad = host();
+        bad["root"] = "/etc/nginx/../x".into();
+        assert!(reading(serde_json::json!([bad])).is_err());
+        let both = reading(serde_json::json!([host(), compose()])).unwrap();
+        let keys: Vec<_> = both.instances.iter().map(Snapshot::key).collect();
+        assert_eq!(keys, ["server", "docker:web-web-1"]);
+        assert!(reading(serde_json::json!([compose(), compose()])).is_err());
+        let mut odd = compose();
+        odd["docker"]["id"] = "x; rm -rf /".into();
+        assert!(reading(serde_json::json!([odd])).is_err());
+    }
+
+    #[test]
+    fn containers_change_only_files_mounted_from_the_server() {
+        let c = container();
+        assert_eq!(c.title(), "web · web");
+        assert!(c.running() && c.starts_at_boot());
+        assert!(!c.main.editable());
+        let shop = c.site("/etc/nginx/conf.d/shop.conf").unwrap();
+        let baked = c.site("/etc/nginx/conf.d/default.conf").unwrap();
+        assert!(shop.switchable() && !baked.switchable());
+        assert!(switch(&c, baked, false).is_err());
+        let off = switch(&c, shop, false).unwrap().snippet.command;
+        let id = "a".repeat(64);
         assert!(
-            parse(
-                &serde_json::json!({"version":1,"root":"/etc/nginx/../x","binary":"","nginx":"","service":null,"layout":"none",
-                    "main":{"path":"/etc/nginx/nginx.conf","text":null,"error":""},"sites":[],"truncated":false})
-                .to_string()
+            off.contains("mv -- '/srv/web/conf.d/shop.conf' '/srv/web/conf.d/shop.conf.disabled'")
+        );
+        assert!(off.contains(&format!("docker exec '{id}' nginx -t")));
+        assert!(off.contains(&format!("docker exec '{id}' nginx -s reload")));
+        assert!(!off.contains("systemctl"));
+        let mut stopped = c.clone();
+        stopped.docker.as_mut().unwrap().state = "exited".into();
+        assert!(switch(&stopped, shop, false).is_err());
+        let restart = control(&c, Control::Restart).unwrap().snippet.command;
+        assert!(restart.contains(&format!("docker restart '{id}'")));
+        assert_eq!(
+            new_site_path(&c, "blog.local").unwrap(),
+            (
+                "/etc/nginx/conf.d/blog.local.conf".into(),
+                "/srv/web/conf.d/blog.local.conf".into()
             )
-            .is_err()
+        );
+        let mut unmounted = c.clone();
+        unmounted.dirs.clear();
+        assert!(new_site_path(&unmounted, "blog.local").is_err());
+        let published =
+            publish(&c, &shop.file.target, "server { listen 80; }\n", "", false).unwrap();
+        let spec = &published.configuration.as_ref().unwrap().record.spec;
+        assert_eq!(
+            (spec.path.as_str(), spec.container.as_str()),
+            ("/srv/web/conf.d/shop.conf", id.as_str())
         );
     }
 
     #[test]
     fn site_switches_undo_their_change_on_failure() {
         let s = snapshot();
-        let on = switch(s.site("/etc/nginx/sites-available/default").unwrap(), true).unwrap();
+        let on = switch(
+            &s,
+            s.site("/etc/nginx/sites-available/default").unwrap(),
+            true,
+        )
+        .unwrap();
         assert_eq!(on.snippet.id, "builtin:nginx:site-enable");
         assert!(on.snippet.administrator);
         let command = &on.snippet.command;
@@ -585,13 +963,24 @@ mod tests {
             "ln -s -- '/etc/nginx/sites-available/default' '/etc/nginx/sites-enabled/default'"
         ));
         assert!(command.contains("rm -f -- '/etc/nginx/sites-enabled/default'"));
+        assert!(command.contains("systemctl reload nginx.service"));
         assert!(on.parameters().unwrap().is_empty());
-        let off = switch(s.site("/etc/nginx/sites-available/shop").unwrap(), false).unwrap();
+        let off = switch(
+            &s,
+            s.site("/etc/nginx/sites-available/shop").unwrap(),
+            false,
+        )
+        .unwrap();
         assert!(off.snippet.command.contains(
             "test -L '/etc/nginx/sites-enabled/shop'\nrm -- '/etc/nginx/sites-enabled/shop'"
         ));
-        assert!(switch(s.site("/etc/nginx/sites-available/shop").unwrap(), true).is_err());
-        let renamed = switch(s.site("/etc/nginx/conf.d/old.conf.disabled").unwrap(), true).unwrap();
+        assert!(switch(&s, s.site("/etc/nginx/sites-available/shop").unwrap(), true).is_err());
+        let renamed = switch(
+            &s,
+            s.site("/etc/nginx/conf.d/old.conf.disabled").unwrap(),
+            true,
+        )
+        .unwrap();
         assert!(
             renamed.snippet.command.contains(
                 "mv -- '/etc/nginx/conf.d/old.conf.disabled' '/etc/nginx/conf.d/old.conf'"
@@ -607,7 +996,8 @@ mod tests {
             .unwrap()
             .clone();
         quoted.file.path = "/etc/nginx/sites-available/it's".into();
-        let command = switch(&quoted, true).unwrap().snippet.command;
+        quoted.file.target = quoted.file.path.clone();
+        let command = switch(&s, &quoted, true).unwrap().snippet.command;
         assert!(command.contains(&quote("/etc/nginx/sites-available/it's")));
         for control in [
             Control::Test,
@@ -616,7 +1006,20 @@ mod tests {
             Control::Start,
             Control::Stop,
         ] {
-            assert!(self::control(control).parameters().unwrap().is_empty());
+            assert!(
+                self::control(&s, control)
+                    .unwrap()
+                    .parameters()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                self::control(&container(), control)
+                    .unwrap()
+                    .parameters()
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 
@@ -624,7 +1027,9 @@ mod tests {
     fn new_sites_have_safe_names_and_contents() {
         let s = snapshot();
         assert_eq!(
-            new_site_path(&s, "blog.example.com www.blog.example.com").unwrap(),
+            new_site_path(&s, "blog.example.com www.blog.example.com")
+                .unwrap()
+                .0,
             "/etc/nginx/sites-available/blog.example.com"
         );
         assert!(new_site_path(&s, "shop").is_err());
@@ -633,7 +1038,7 @@ mod tests {
         confd.layout = Layout::Confd;
         assert!(new_site_path(&confd, "old").is_err());
         assert_eq!(
-            new_site_path(&confd, "new.example.com").unwrap(),
+            new_site_path(&confd, "new.example.com").unwrap().1,
             "/etc/nginx/conf.d/new.example.com.conf"
         );
         let proxy = new_site(Kind::Proxy, "a.example.com", "http://127.0.0.1:3000").unwrap();
@@ -649,9 +1054,19 @@ mod tests {
         assert!(redirect.contains("return 301 https://example.com$request_uri;"));
         assert!(new_site(Kind::Proxy, "a.example.com", "http://x; evil").is_err());
         assert!(new_site(Kind::Folder, "a b;", "/srv").is_err());
-        let template = publish("/etc/nginx/sites-available/a", &proxy, "", true).unwrap();
+        let template = publish(&s, "/etc/nginx/sites-available/a", &proxy, "", true).unwrap();
         assert!(template.configuration.as_ref().unwrap().record.create);
-        assert!(publish("/etc/nginx/sites-available/a", "server {", "", false).is_err());
+        assert!(
+            template
+                .configuration
+                .as_ref()
+                .unwrap()
+                .record
+                .spec
+                .container
+                .is_empty()
+        );
+        assert!(publish(&s, "/etc/nginx/sites-available/a", "server {", "", false).is_err());
     }
 
     #[test]

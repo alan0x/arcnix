@@ -27,6 +27,10 @@ pub struct Spec {
     pub reload: String,
     pub health: String,
     pub sha256: String,
+    /// The Docker container that runs Nginx, for a file mounted into it from
+    /// the server. Empty for Nginx on the server.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub container: String,
 }
 impl Default for Spec {
     fn default() -> Self {
@@ -41,6 +45,7 @@ impl Default for Spec {
             reload: String::new(),
             health: String::new(),
             sha256: String::new(),
+            container: String::new(),
         }
     }
 }
@@ -72,6 +77,16 @@ impl Spec {
                     .bytes()
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "Invalid configuration content digest"
+        );
+        ensure!(
+            self.container.is_empty()
+                || self.kind == Kind::Nginx
+                    && self.container.len() == 64
+                    && self
+                        .container
+                        .bytes()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "Invalid Docker container ID"
         );
         match self.kind {
             Kind::Nginx => {
@@ -222,6 +237,20 @@ impl Job {
     pub fn review(&self) -> String {
         let s = &self.record.spec;
         let steps = match s.kind {
+            Kind::Nginx if !s.container.is_empty() => format!(
+                "Validate: Nginx complete configuration, in a temporary container with the same image and mounts\nReload: nginx -s reload in container {}\nHTTP health: {}\nExpected response text: {}",
+                &s.container[..12],
+                if s.health_url.is_empty() {
+                    "[container still running after reload]"
+                } else {
+                    &s.health_url
+                },
+                if self.record.restore_from.is_some() {
+                    "[previous-version health; no new-response expectation]"
+                } else {
+                    &s.expected_body
+                }
+            ),
             Kind::Nginx => format!(
                 "Validate: Nginx complete configuration\nReload: {}\nHTTP health: {}\nExpected response text: {}",
                 s.service,

@@ -82,7 +82,7 @@ pub enum Reply {
     Volume(docker::VolumeDetails),
     Logs(String),
     Operated,
-    Nginx(arcnix_core::nginx::Snapshot),
+    Nginx(arcnix_core::nginx::Reading),
 }
 pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> {
     Ok(match action {

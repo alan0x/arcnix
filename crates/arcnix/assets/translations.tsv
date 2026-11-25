@@ -2977,7 +2977,6 @@ Nginx 站点过多	Too many Nginx sites
 站点的链接不在 sites-enabled 中	The site's link is not in sites-enabled
 重定向地址必须以 http:// 或 https:// 开头	Redirect to an address starting with http:// or https://
 请输入站点的域名	Enter a domain for the site
-此服务器既没有 sites-available 也没有 conf.d	This server has neither sites-available nor conf.d
 已存在名为 {name} 的站点文件	A site file named {name} already exists
 {what}不能包含空格、引号、分号、大括号或 #	{what} cannot contain spaces, quotes, semicolons, braces or #
 地址	The address
@@ -3004,3 +3003,27 @@ Nginx 站点过多	Too many Nginx sites
 已放回之前的文件，但服务未确认恢复。请立即检查服务。	The previous file was put back, but the service did not confirm that it recovered. Check the service now.
 放回之前的文件失败。请立即检查文件和服务；服务器记录中有详细信息。	Putting the previous file back failed. Check the file and the service now; the server record has the details.
 执行时检查未通过，生效文件没有改动。	The check failed when the task ran, so the live file was not changed.
+正在重启	Restarting
+实例	Instances
+在服务器上	On the server
+这个 Nginx 既没有 sites-available 也没有 conf.d	This Nginx has neither sites-available nor conf.d
+位于容器镜像内；从服务器挂载后才能更改	Inside the container image; mount it from the server to change it
+Nginx 直接加载此文件，因此始终启用	Nginx loads this file directly, so it stays on
+自动重启	restarts automatically
+不自动重启	does not restart automatically
+Compose 项目 {project} 中的服务 {service}	Compose service {service} in project {project}
+Docker 容器 {}	Docker container {}
+未发布	Not published
+Arcnix 无法以 SSH 账户列出 Docker 容器，因此不显示容器中的 Nginx。将该账户加入 docker 组后即可管理。	Arcnix cannot list Docker containers as the SSH account, so Nginx in containers is not shown. Add the account to the docker group to manage it.
+Docker 没有响应，因此不显示容器中的 Nginx。	Docker did not answer, so Nginx in containers is not shown.
+{}（服务器上：{}）	{} (on the server: {})
+容器访问应用所用的地址，例如 Compose 服务可填 http://app:3000。	The address of the application as the container sees it, for example http://app:3000 for a Compose service.
+此文件位于容器镜像内，只能查看。从服务器挂载后才能编辑。	This file is inside the container image, so it can only be read. Mount it from the server to edit it.
+重启 Nginx 容器	Restart Nginx container
+启动 Nginx 容器	Start Nginx container
+停止 Nginx 容器	Stop Nginx container
+请先启动容器，再启用或停用站点	Start the container before turning sites on or off
+该站点文件位于容器镜像内；从服务器挂载后才能更改	This site's file is inside the container image; mount it from the server to change it
+{} 位于容器镜像内；从服务器挂载后才能添加站点	{} is inside the container image; mount it from the server to add sites
+这个 Nginx 已不在服务器上	This Nginx is no longer on the server
+这个容器中没有从服务器挂载的内容，因此配置只能查看。从服务器挂载配置文件夹后即可在这里管理。	Nothing in this container is mounted from the server, so its configuration can only be read. Mount the configuration folder from the server to manage it here.

@@ -2907,9 +2907,14 @@ button,
 /* Nginx app. */
 .desktop-window-content:has(>.nginx-page) { padding: 0; }
 .nginx-page { display: flex; flex: 1; flex-direction: row !important; min-height: 0; min-width: 0; overflow: hidden; container: nginx / inline-size; font-size: 14px; }
-.nginx-nav { display: flex; flex-direction: column; flex: 0 0 134px; gap: 3px; padding: 14px 7px; background: var(--bg); border-right: 1px solid var(--line); }
+.nginx-nav { display: flex; flex-direction: column; flex: 0 0 170px; gap: 3px; padding: 14px 7px; background: var(--bg); border-right: 1px solid var(--line); }
 .nginx-nav .nginx-nav-item { display: flex; justify-content: flex-start; gap: 8px; width: 100%; border: 0 !important; background: transparent !important; padding: 8px !important; text-align: left; }
 .nginx-nav .nginx-nav-item[aria-pressed=true] { color: var(--accent) !important; background: var(--accent-bg) !important; box-shadow: inset 3px 0 var(--accent); }
+.nginx-views, .nginx-instances { display: flex; flex-direction: column; gap: 3px; }
+.nginx-instances { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.nginx-nav-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 0 8px 4px; }
+.nginx-nav .nginx-instance { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nginx-nav .nginx-instance.stopped { opacity: .6; }
 .nginx-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; gap: 14px; overflow: auto; padding: 18px 20px; background: var(--surface); }
 .nginx-overview, .nginx-sites-view, .nginx-editor { display: flex !important; flex-direction: column; gap: 16px; min-width: 0; }
 .nginx-header { gap: 6px; min-width: 0; }
