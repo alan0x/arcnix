@@ -2,7 +2,7 @@
 //! the upload limit and every other directive, each change written straight
 //! into the file text by `nginx_site`.
 use arcnix_core::nginx_site::{
-    self, Change, Kind as Serve, Location, MainField, NewKind, Path, Row, Site,
+    self, Change, Header, Kind as Serve, Location, MainField, NewKind, Path, Row, Site,
 };
 
 use super::*;
@@ -91,6 +91,8 @@ impl Ui {
                 | Change::AddRule(..)
                 | Change::DenyOthers(_)
                 | Change::Gzip(_)
+                | Change::Www(_)
+                | Change::Header(..)
         );
         self.state.revise(|s| {
             let Some(editor) = &mut s.nginx.editor else {
@@ -256,11 +258,108 @@ fn domains(ui: &Ui) -> impl Widget + use<> {
                                 (false, false) => i18n::translate(&format!("Listens on {ports}")),
                             }
                         }))),
+                    www_choice(&ui),
                 )),
             )
             }
         },
     )
+}
+
+/// Which name of a www pair the site uses.
+fn www_choice(ui: &Ui) -> impl Widget + use<> {
+    let state = ui.state;
+    let base = |s: &State| {
+        site(s)
+            .and_then(|site| site.www_base.clone())
+            .filter(|_| has_server(s))
+    };
+    when(state.map(move |s| base(s).is_some()), {
+        let ui = ui.clone();
+        move || {
+            let option = |label: fn(&str) -> String, choice: Option<bool>| {
+                let ui = ui.clone();
+                sapid::button()
+                    .class("nginx-segment")
+                    .label(state.map(move |s| label(&base(s).unwrap_or_default())))
+                    .enabled(state.map(writable))
+                    .pressed(state.map(move |s| {
+                        let www = site(s).and_then(|site| site.www.clone());
+                        match (choice, www) {
+                            (None, None) => true,
+                            (Some(bare), Some(w)) => bare == !w.to.starts_with("www."),
+                            _ => false,
+                        }
+                    }))
+                    .on_press(move || ui.nginx_change(Change::Www(choice)))
+            };
+            col().class("form-stack").fill((
+                text().class("field-label").content(i18n::bind("With or without www")),
+                row().class("nginx-segments nginx-www").fill((
+                    option(|_| i18n::translate("Answer both"), None),
+                    option(|b| i18n::translate(&format!("Use {b}")), Some(true)),
+                    option(|b| i18n::translate(&format!("Use www.{b}")), Some(false)),
+                )),
+                text().class("hint").content(i18n::bind(
+                    "Using one name sends visitors of the other to it with a permanent redirect, so search engines see one site.",
+                )),
+            ))
+        }
+    })
+}
+
+fn headers_and_logs(ui: &Ui) -> impl Widget + use<> {
+    let state = ui.state;
+    when(state.map(has_server), {
+        let ui = ui.clone();
+        move || {
+            let header = |label: &'static str, h: Header| {
+                check(
+                    &ui,
+                    label,
+                    move |s| site(s).is_some_and(|site| site.headers.contains(&h)),
+                    move |_, on| Some(Change::Header(h, on)),
+                )
+            };
+            section(
+                "Headers and logs",
+                col().class("form-stack").fill((
+                    header("Only let this site show its pages in frames (X-Frame-Options)", Header::Frames),
+                    header("Stop browsers from guessing file types (X-Content-Type-Options)", Header::Sniffing),
+                    header("Send other sites only the origin of a page they are linked from (Referrer-Policy)", Header::Referrer),
+                    text().class("hint").content(i18n::bind(state.map(|s| {
+                        let own = site(s).map(|site| site.own_headers.join(", ")).unwrap_or_default();
+                        if own.is_empty() {
+                            String::new()
+                        } else {
+                            i18n::translate(&format!(
+                                "Locations that set their own headers do not get these: {own}. Nginx does not combine header lists."
+                            ))
+                        }
+                    }))),
+                    row().class("nginx-form-grid").fill((
+                        input_field(
+                            &ui,
+                            "Access log",
+                            |_| "access-log".into(),
+                            |s| shown(s, "access-log", |site| Some(site.access_log.clone())),
+                            |_, v| Some(Change::AccessLog(v)),
+                        ),
+                        input_field(
+                            &ui,
+                            "Error log",
+                            |_| "error-log".into(),
+                            |s| shown(s, "error-log", |site| Some(site.error_log.clone())),
+                            |_, v| Some(Change::ErrorLog(v)),
+                        ),
+                    )),
+                    text().class("hint").content(i18n::bind(
+                        "A full path such as /var/log/nginx/example.log, optionally followed by a log format or level. off turns the access log off; leave empty to use the logs in nginx.conf.",
+                    )),
+                )),
+            )
+        }
+    })
 }
 
 fn https(ui: &Ui) -> impl Widget + use<> {
@@ -1399,6 +1498,7 @@ pub(super) fn settings_form(ui: Ui) -> impl Widget {
         https(&ui),
         locations(&ui),
         access(&ui),
+        headers_and_logs(&ui),
         requests(&ui),
         other(&ui),
         when(

@@ -80,6 +80,13 @@ pub struct Rule {
     pub address: String,
 }
 
+/// One name of a www pair sent to the other.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Www {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Auth {
     pub realm: String,
@@ -106,6 +113,20 @@ pub struct Site {
     pub rules: Vec<Rule>,
     /// The rules end with `deny all`: everyone not allowed is refused.
     pub deny_others: bool,
+    /// Security headers the server block sends.
+    pub headers: Vec<Header>,
+    /// Locations with their own `add_header`, which do not get the server
+    /// block's headers (Nginx does not merge them).
+    pub own_headers: Vec<String>,
+    /// `access_log` and `error_log` arguments as written; empty when the
+    /// site uses the global logs.
+    pub access_log: String,
+    pub error_log: String,
+    /// The domain without `www.`, when the site has a real domain that a
+    /// www pair can be made of.
+    pub www_base: Option<String>,
+    /// The www redirect, when one name of the pair is sent to the other.
+    pub www: Option<Www>,
     pub locations: Vec<Location>,
     /// The server block's other directives.
     pub rows: Vec<Row>,
@@ -173,6 +194,51 @@ pub enum Change {
     ServerTokens(bool),
     /// Compress text responses.
     Gzip(bool),
+    /// A security header for the whole site, on or off.
+    Header(Header, bool),
+    /// The site's access log (`access_log`), as arguments; empty uses the
+    /// global log.
+    AccessLog(String),
+    /// The site's error log (`error_log`).
+    ErrorLog(String),
+    /// The www pair: `None` answers both names, `Some(true)` sends
+    /// `www.example.com` to `example.com`, `Some(false)` the other way.
+    Www(Option<bool>),
+}
+
+/// Response headers that protect visitors, each with the value written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Header {
+    /// Pages may only be framed by the same site.
+    Frames,
+    /// Browsers must not guess content types.
+    Sniffing,
+    /// Other sites only see the origin in `Referer`.
+    Referrer,
+}
+
+impl Header {
+    pub const ALL: [Header; 3] = [Header::Frames, Header::Sniffing, Header::Referrer];
+    pub fn name(self) -> &'static str {
+        match self {
+            Header::Frames => "X-Frame-Options",
+            Header::Sniffing => "X-Content-Type-Options",
+            Header::Referrer => "Referrer-Policy",
+        }
+    }
+    fn value(self) -> &'static str {
+        match self {
+            Header::Frames => "SAMEORIGIN",
+            Header::Sniffing => "nosniff",
+            Header::Referrer => "strict-origin-when-cross-origin",
+        }
+    }
+}
+
+fn header<'a>(block: &'a Directive, name: &str) -> Option<&'a Directive> {
+    block
+        .find("add_header")
+        .find(|d| d.args.first().is_some_and(|n| n.eq_ignore_ascii_case(name)))
 }
 
 /// Settings of the main configuration, in nginx.conf.
@@ -353,11 +419,48 @@ fn ssl_listen(listen: &Directive) -> bool {
 }
 
 /// A server block that only sends plain HTTP to HTTPS.
+/// A server block that only sends plain HTTP to HTTPS on the same host.
 fn https_redirect(server: &Directive) -> bool {
     config::redirect_only(server)
         && server.first("return").is_some_and(|r| {
-            r.args.len() == 2 && r.args[0].starts_with('3') && r.args[1].starts_with("https://")
+            r.args.len() == 2
+                && r.args[0].starts_with('3')
+                && (r.args[1].starts_with("https://$host")
+                    || r.args[1].starts_with("https://$server_name"))
         })
+}
+
+/// The other half of a www pair: `www.example.com` for `example.com`, and
+/// the other way round.
+fn www_twin(name: &str) -> String {
+    match name.strip_prefix("www.") {
+        Some(bare) => bare.to_owned(),
+        None => format!("www.{name}"),
+    }
+}
+
+/// A server block that sends one name of a www pair to the other:
+/// `server_name www.example.com; return 301 $scheme://example.com$request_uri;`
+fn www_redirect(server: &Directive) -> Option<Www> {
+    if !config::redirect_only(server) {
+        return None;
+    }
+    let names = &server.first("server_name")?.args;
+    let ret = server.first("return")?;
+    let [from] = names.as_slice() else {
+        return None;
+    };
+    let [code, target] = ret.args.as_slice() else {
+        return None;
+    };
+    let rest = ["$scheme://", "https://", "http://"]
+        .iter()
+        .find_map(|p| target.strip_prefix(p))?;
+    let to = rest.strip_suffix("$request_uri")?;
+    (code.starts_with('3') && www_twin(from) == to).then(|| Www {
+        from: from.clone(),
+        to: to.to_owned(),
+    })
 }
 
 fn kind(server: &Directive, location: &Directive) -> Kind {
@@ -452,8 +555,10 @@ pub fn read(text: &str) -> Result<Site> {
         return Ok(site);
     }
     let server_at = |p: &Path| at(&directives, p).expect("server path");
+    // A www redirect has the other name of the pair on purpose.
     site.names = agreed(
         all.iter()
+            .filter(|p| www_redirect(server_at(p)).is_none())
             .map(|p| server_at(p).first("server_name").map(|d| d.args.join(" "))),
     )
     .flatten();
@@ -503,6 +608,35 @@ pub fn read(text: &str) -> Result<Site> {
         .enumerate()
         .filter(|(_, d)| matches!(d.name.as_str(), "allow" | "deny") && d.args.len() == 1)
         .collect();
+    site.headers = Header::ALL
+        .into_iter()
+        .filter(|h| header(server, h.name()).is_some())
+        .collect();
+    site.own_headers = server
+        .find("location")
+        .filter(|l| l.block.is_some() && l.first("add_header").is_some())
+        .map(|l| args_text(text, l))
+        .collect();
+    site.access_log = server
+        .first("access_log")
+        .map(|d| args_text(text, d))
+        .unwrap_or_default();
+    site.error_log = server
+        .first("error_log")
+        .map(|d| args_text(text, d))
+        .unwrap_or_default();
+    let main_names: Vec<&String> = server
+        .first("server_name")
+        .map(|d| d.args.iter().collect())
+        .unwrap_or_default();
+    site.www = all
+        .iter()
+        .filter(|p| *p != path)
+        .find_map(|p| www_redirect(server_at(p)));
+    site.www_base = main_names
+        .iter()
+        .find(|n| n.contains('.') && !n.contains(['*', '~', '$']) && !n.starts_with('.'))
+        .map(|n| n.strip_prefix("www.").unwrap_or(n).to_owned());
     site.deny_others = access
         .last()
         .is_some_and(|(_, d)| d.name == "deny" && d.args[0] == "all");
@@ -557,6 +691,14 @@ pub fn read(text: &str) -> Result<Site> {
             || (auth && matches!(d.name.as_str(), "auth_basic" | "auth_basic_user_file"))
             || (inherited_root && d.name == "root")
             || (matches!(d.name.as_str(), "allow" | "deny") && d.args.len() == 1)
+            || (d.name == "add_header"
+                && Header::ALL.iter().any(|h| {
+                    d.args
+                        .first()
+                        .is_some_and(|n| n.eq_ignore_ascii_case(h.name()))
+                }))
+            || (matches!(d.name.as_str(), "access_log" | "error_log")
+                && server.find(&d.name).count() == 1)
     });
     Ok(site)
 }
@@ -733,7 +875,11 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
             config::check_names(names)?;
             let names = names.split_whitespace().collect::<Vec<_>>().join(" ");
             for p in &all {
-                if let Some(d) = get(p)?.first("server_name") {
+                let server = get(p)?;
+                if www_redirect(server).is_some() {
+                    continue;
+                }
+                if let Some(d) = server.first("server_name") {
                     edits.replace_args(d, &names);
                 }
             }
@@ -1160,6 +1306,129 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                     }
                 }
             }
+        }
+        Change::Header(h, on) => {
+            let server = single()?;
+            match (header(server, h.name()), on) {
+                (None, true) => {
+                    let line = format!("add_header {} \"{}\" always;", h.name(), h.value());
+                    let anchor = server
+                        .find("add_header")
+                        .last()
+                        .or_else(|| server.first("ssl_certificate_key"))
+                        .or_else(|| server.first("server_name"))
+                        .or_else(|| server.find("listen").last());
+                    match anchor {
+                        Some(anchor) => edits.insert_after(anchor, &[line]),
+                        None => edits.insert_first(server, &[line]),
+                    }
+                }
+                (Some(d), false) => edits.remove(d),
+                _ => {}
+            }
+        }
+        Change::AccessLog(value) | Change::ErrorLog(value) => {
+            let value = value.trim();
+            let name = if matches!(change, Change::AccessLog(_)) {
+                "access_log"
+            } else {
+                "error_log"
+            };
+            let server = single()?;
+            ensure!(
+                server.find(name).count() <= 1,
+                "This site writes several {name} lines; edit them in File"
+            );
+            if !value.is_empty() {
+                check_args(name, value)?;
+                let first = value.split_whitespace().next().unwrap_or_default();
+                ensure!(
+                    first.starts_with('/')
+                        || first == "off"
+                        || first == "stderr"
+                        || first.starts_with("syslog:"),
+                    "Enter a full path such as /var/log/nginx/site.log, or off"
+                );
+            }
+            match (server.first(name), value.is_empty()) {
+                (Some(d), true) => edits.remove(d),
+                (Some(d), false) => edits.replace_args(d, value),
+                (None, false) => {
+                    let line = format!("{name} {value};");
+                    let anchor = server
+                        .first("access_log")
+                        .or_else(|| server.first("error_log"))
+                        .or_else(|| {
+                            server
+                                .children()
+                                .iter()
+                                .take_while(|d| d.block.is_none())
+                                .last()
+                        });
+                    match anchor {
+                        Some(anchor) => edits.insert_after(anchor, &[line]),
+                        None => edits.insert_first(server, &[line]),
+                    }
+                }
+                (None, true) => {}
+            }
+        }
+        Change::Www(choice) => {
+            let path = match content.as_slice() {
+                [path] => path.clone(),
+                _ => bail!("This file has several server blocks; edit it in File"),
+            };
+            let server = get(&path)?;
+            let names_directive = server.first("server_name").context("Add a domain first")?;
+            let existing: Vec<(&Directive, Www)> = all
+                .iter()
+                .filter(|p| **p != path)
+                .filter_map(|p| get(p).ok())
+                .filter_map(|s| www_redirect(s).map(|w| (s, w)))
+                .collect();
+            let mut names: Vec<String> = names_directive.args.clone();
+            for (block, www) in &existing {
+                edits.remove(block);
+                if !names.contains(&www.from) {
+                    names.push(www.from.clone());
+                }
+            }
+            let base = names
+                .iter()
+                .find(|n| n.contains('.') && !n.contains(['*', '~', '$']) && !n.starts_with('.'))
+                .map(|n| n.strip_prefix("www.").unwrap_or(n).to_owned())
+                .context("The site needs a domain such as example.com")?;
+            let www = format!("www.{base}");
+            for name in [&base, &www] {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+            if let Some(bare) = choice {
+                let (from, to) = if *bare {
+                    (www.clone(), base.clone())
+                } else {
+                    (base.clone(), www.clone())
+                };
+                names.retain(|n| *n != from);
+                let (_, unit) = deeper(&edits, server);
+                let mut lines = vec!["server {".to_owned()];
+                for listen in server.find("listen") {
+                    lines.push(format!("{unit}listen {};", args_text(text, listen)));
+                }
+                lines.push(format!("{unit}server_name {from};"));
+                if server.find("listen").any(ssl_listen) {
+                    for name in ["ssl_certificate", "ssl_certificate_key"] {
+                        if let Some(d) = server.first(name) {
+                            lines.push(format!("{unit}{name} {};", args_text(text, d)));
+                        }
+                    }
+                }
+                lines.push(format!("{unit}return 301 $scheme://{to}$request_uri;"));
+                lines.push("}".to_owned());
+                edits.insert_before(server, &lines);
+            }
+            edits.replace_args(names_directive, &names.join(" "));
         }
         Change::LocationKind(path, new, value) => {
             let l = location(path)?;
@@ -1623,17 +1892,16 @@ server {
         );
         let server_wide = change(
             SHOP,
-            Change::AddRow(
-                vec![],
-                "access_log".into(),
-                "/var/log/nginx/shop.log".into(),
-            ),
+            Change::AddRow(vec![], "client_body_timeout".into(), "30s".into()),
         );
         assert!(
-            server_wide.contains("ssl_certificate_key /etc/letsencrypt/live/shop.example.com/privkey.pem;\n    access_log /var/log/nginx/shop.log;"),
+            server_wide.contains("ssl_certificate_key /etc/letsencrypt/live/shop.example.com/privkey.pem;\n    client_body_timeout 30s;"),
             "{server_wide}"
         );
-        assert_eq!(read(&server_wide).unwrap().rows[0].name, "access_log");
+        assert_eq!(
+            read(&server_wide).unwrap().rows[0].name,
+            "client_body_timeout"
+        );
         assert!(apply(SHOP, &Change::AddRow(vec![], "Bad-Name".into(), "x".into())).is_err());
         let removed = change(SHOP, Change::RemoveRow(host));
         assert!(!removed.contains("proxy_set_header"));
@@ -1952,5 +2220,121 @@ server {
         );
         assert!(apply(main, &Change::Main(MainField::Keepalive, "1 minute".into())).is_err());
         assert!(apply("server { listen 80; }", &Change::Gzip(true)).is_err());
+    }
+
+    #[test]
+    fn security_headers_and_logs() {
+        let plain = "server {\n    listen 80;\n    server_name a.com;\n    location / {\n        root /srv;\n    }\n    location /api/ {\n        add_header Cache-Control no-store;\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
+        let site = read(plain).unwrap();
+        assert!(site.headers.is_empty());
+        assert_eq!(site.own_headers, ["/api/"]);
+        let mut text = plain.to_owned();
+        for h in Header::ALL {
+            text = change(&text, Change::Header(h, true));
+        }
+        assert!(text.contains("    server_name a.com;\n    add_header X-Frame-Options \"SAMEORIGIN\" always;\n    add_header X-Content-Type-Options \"nosniff\" always;\n    add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;\n"), "{text}");
+        let site = read(&text).unwrap();
+        assert_eq!(site.headers, Header::ALL);
+        assert!(site.rows.is_empty(), "{:?}", site.rows);
+        assert!(!change(&text, Change::Header(Header::Frames, false)).contains("X-Frame-Options"));
+
+        let logged = change(
+            plain,
+            Change::AccessLog("/var/log/nginx/a.log combined".into()),
+        );
+        assert!(
+            logged.contains(
+                "    server_name a.com;\n    access_log /var/log/nginx/a.log combined;\n"
+            ),
+            "{logged}"
+        );
+        let logged = change(
+            &logged,
+            Change::ErrorLog("/var/log/nginx/a.error.log warn".into()),
+        );
+        assert!(logged.contains("    access_log /var/log/nginx/a.log combined;\n    error_log /var/log/nginx/a.error.log warn;\n"));
+        let site = read(&logged).unwrap();
+        assert_eq!(
+            (site.access_log.as_str(), site.error_log.as_str()),
+            (
+                "/var/log/nginx/a.log combined",
+                "/var/log/nginx/a.error.log warn"
+            )
+        );
+        assert!(change(&logged, Change::AccessLog("off".into())).contains("access_log off;"));
+        assert!(!change(&logged, Change::AccessLog(String::new())).contains("access_log"));
+        for bad in ["a.log", "/x; y", "/x {"] {
+            assert!(
+                apply(plain, &Change::AccessLog(bad.into())).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn sends_one_www_name_to_the_other() {
+        let site = "server {\n    listen 80;\n    server_name example.com www.example.com;  # shop\n    root /srv;\n}\n";
+        assert_eq!(read(site).unwrap().www_base.as_deref(), Some("example.com"));
+        let bare = change(site, Change::Www(Some(true)));
+        assert_eq!(
+            bare,
+            "server {\n    listen 80;\n    server_name www.example.com;\n    return 301 $scheme://example.com$request_uri;\n}\n\nserver {\n    listen 80;\n    server_name example.com;  # shop\n    root /srv;\n}\n"
+        );
+        let read_back = read(&bare).unwrap();
+        assert_eq!(read_back.server, Some(vec![1]));
+        assert_eq!(read_back.names.as_deref(), Some("example.com"));
+        assert_eq!(
+            config::summary(&parse(&bare).unwrap()).names,
+            ["example.com", "www.example.com"]
+        );
+        let renamed = change(&bare, Change::Names("example.com shop.example.com".into()));
+        assert!(
+            renamed.contains("server_name www.example.com;\n    return 301"),
+            "{renamed}"
+        );
+        assert!(
+            renamed.contains("server_name example.com shop.example.com;  # shop"),
+            "{renamed}"
+        );
+        assert_eq!(
+            read_back.www,
+            Some(Www {
+                from: "www.example.com".into(),
+                to: "example.com".into()
+            })
+        );
+        assert!(read_back.https.is_none());
+        let www = change(&bare, Change::Www(Some(false)));
+        assert!(
+            www.contains(
+                "server_name example.com;\n    return 301 $scheme://www.example.com$request_uri;"
+            ),
+            "{www}"
+        );
+        assert!(
+            www.contains("server_name www.example.com;  # shop"),
+            "{www}"
+        );
+        let both = change(&www, Change::Www(None));
+        assert_eq!(
+            both,
+            "server {\n    listen 80;\n    server_name www.example.com example.com;  # shop\n    root /srv;\n}\n"
+        );
+
+        // An HTTPS site: the redirect needs the certificate too, and is not
+        // mistaken for sending HTTP to HTTPS.
+        let secure = "server {\n    listen 443 ssl;\n    server_name example.com;\n    ssl_certificate /c.pem;\n    ssl_certificate_key /c.key;\n    root /srv;\n}\n";
+        let paired = change(secure, Change::Www(Some(true)));
+        assert!(paired.contains("server {\n    listen 443 ssl;\n    server_name www.example.com;\n    ssl_certificate /c.pem;\n    ssl_certificate_key /c.key;\n    return 301 $scheme://example.com$request_uri;\n}"), "{paired}");
+        let site = read(&paired).unwrap();
+        assert!(!site.https.unwrap().force);
+        assert_eq!(site.www.unwrap().from, "www.example.com");
+        assert!(
+            apply(
+                "server { server_name _; root /srv; }",
+                &Change::Www(Some(true))
+            )
+            .is_err()
+        );
     }
 }

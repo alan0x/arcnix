@@ -3194,3 +3194,20 @@ GPU 使用率	GPU utilization
 从程序坞取消固定	Unpin from Dock
 在桌面显示	Show on desktop
 从桌面隐藏	Hide from desktop
+带不带 www	With or without www
+两者都响应	Answer both
+使用 {b}	Use {b}
+使用 www.{b}	Use www.{b}
+使用其中一个名称时，访问另一个名称的访客会被永久重定向过来，搜索引擎只会看到一个站点。	Using one name sends visitors of the other to it with a permanent redirect, so search engines see one site.
+响应头和日志	Headers and logs
+只允许本站在框架中显示自己的页面（X-Frame-Options）	Only let this site show its pages in frames (X-Frame-Options)
+禁止浏览器猜测文件类型（X-Content-Type-Options）	Stop browsers from guessing file types (X-Content-Type-Options)
+链接到其他站点时只发送页面的来源（Referrer-Policy）	Send other sites only the origin of a page they are linked from (Referrer-Policy)
+自行设置响应头的 location 不会得到这些响应头：{own}。Nginx 不会合并响应头列表。	Locations that set their own headers do not get these: {own}. Nginx does not combine header lists.
+访问日志	Access log
+错误日志	Error log
+完整路径，例如 /var/log/nginx/example.log，后面可以跟日志格式或级别。off 关闭访问日志；留空则使用 nginx.conf 中的日志。	A full path such as /var/log/nginx/example.log, optionally followed by a log format or level. off turns the access log off; leave empty to use the logs in nginx.conf.
+请输入完整路径，例如 /var/log/nginx/site.log，或 off	Enter a full path such as /var/log/nginx/site.log, or off
+此站点有多行 {name}；请在“文件”中编辑	This site writes several {name} lines; edit them in File
+请先添加域名	Add a domain first
+站点需要一个域名，例如 example.com	The site needs a domain such as example.com

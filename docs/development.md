@@ -457,11 +457,12 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 读取以 SSH 账户运行 `crates/arcnix-core/src/software/nginx_read.py`（Python 3，60 秒限时），返回服务器上的每个 Nginx 实例：服务器本身安装的一个，以及最多 20 个运行 Nginx 的 Docker 容器（`docker run` 或 Compose 创建均可，最多 10 个同时读取，避免个别响应慢的容器用完整个时限）。服务器本身的实例只读取：`systemctl show nginx.service` 的状态和运行时长、`nginx -v`、`/etc/nginx/nginx.conf`，以及 `sites-available`（是否由 `sites-enabled` 中的链接启用）、`sites-enabled` 中直接放置的文件和 `conf.d/*.conf`／`*.conf.disabled`。单个文件最多 128 KiB，总量 6 MiB，最多 200 个站点；读不到的文件标明原因。解析在 Rust 中完成（`nginx_config.rs`）：保留每条指令的字节位置，从 `server` 块得到域名、端口、HTTPS、证书路径，以及 `location /` 的反向代理目标、静态目录或重定向。
 
 站点编辑器的“设置”视图由 `nginx_site.rs` 读出：文件中唯一提供内容的 `server` 块（另有只做跳转的 `server` 块时，以提供内容的那个为准）分为以下几部分，其余内容按原文保留：
-- 域名（所有 `server` 块一致时）、监听端口；`_` 说明为兜底站点。
+- 域名（除 www 跳转块外所有 `server` 块一致时）、监听端口；`_` 说明为兜底站点。站点有真实域名时可选择“两者都响应”“使用 example.com”或“使用 www.example.com”：使用其中一个时，另加一个只含另一名称、复制主块监听端口（HTTPS 时也复制证书）并返回 `301 $scheme://<名称>$request_uri` 的 `server` 块，并从主块的 `server_name` 中去掉该名称；改为“两者都响应”时删除该块并把名称加回。www 跳转块不计入“提供内容的块”，也不会被当作 HTTPS 跳转（后者返回 `https://$host`）。站点摘要优先取提供内容的块的域名，标题和默认健康检查地址因此不受跳转块影响。
 - HTTPS：证书和私钥路径、HTTP/2、HSTS，以及“普通 HTTP 跳转到 HTTPS”（另加一个只返回 301 的 `server` 块，并去掉原块的 80 端口监听；关闭时删除该块并恢复 80 端口）。站点未启用 HTTPS 时，填入服务器上已有的证书和私钥即可开启。HTTP/2 在 Nginx 1.25.1 及以上写为 `http2 on;`，更早的版本写为 `listen` 参数。
 - location 列表：每个 location 按用途显示字段：转发（地址、超时、WebSocket、X-Forwarded-For）、提供文件（`root`/`alias`、单页应用回退到 `/index.html`）、重定向（状态码和目标）、固定响应（状态码和文本）；其他用途只列出指令。可以修改匹配规则、新增或删除 location；新增的转发 location 带常用的代理头，非 `/` 路径的目录用 `alias`。
 - 访问控制：按顺序排列的 `allow`／`deny` 规则（新规则放在末尾的 `deny all` 之前），以及“拒绝其他所有地址”（末尾的 `deny all`，至少有一条允许规则时才能开启）；整站的 Basic 认证（提示文本和密码文件；密码文件需事先在服务器上创建）。
 - location 可以直接改为其他用途：删除只适用于原用途的指令（转发的所有 `proxy_*`，提供文件的 `root`／`alias`／`try_files`／`expires`，重定向和固定响应的 `return`），其余指令保留，已设置的同名代理头不会重复添加。提供文件的 location 可设置浏览器缓存时长（`expires`）。
+- 响应头和日志：`X-Frame-Options: SAMEORIGIN`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin` 三个开关（`add_header … always`）。Nginx 中 location 自带 `add_header` 时不继承 `server` 块的响应头，界面列出这些 location。站点自己的 `access_log`／`error_log`（只有一行时以字段显示，参数按原文编辑，留空则删除、使用全局日志）。
 - 最大上传大小。
 - 其他指令：`server` 块和每个 location 中表单没有字段的指令按“名称 + 参数”逐行列出，可以修改、删除或新增；`if` 等嵌套块只显示，需在文件视图编辑。
 

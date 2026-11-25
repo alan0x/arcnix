@@ -339,12 +339,18 @@ pub fn summary(directives: &[Directive]) -> Summary {
         servers: servers.len(),
         ..Default::default()
     };
-    for server in &servers {
+    // Names of the servers that serve the site come first: a server that
+    // only redirects (to HTTPS, or from www) may come earlier in the file.
+    let mut ordered: Vec<&&Directive> = servers.iter().filter(|s| !redirect_only(s)).collect();
+    ordered.extend(servers.iter().filter(|s| redirect_only(s)));
+    for server in ordered {
         for name in server.find("server_name").flat_map(|d| &d.args) {
             if !name.is_empty() && name != "_" && !out.names.contains(name) {
                 out.names.push(name.clone());
             }
         }
+    }
+    for server in &servers {
         out.addressed |= server.find("listen").any(addressed);
         for (port, ssl) in server.find("listen").filter_map(port) {
             if !out.ports.contains(&port) {
