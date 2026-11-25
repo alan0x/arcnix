@@ -13,7 +13,7 @@ pub(crate) enum Purpose {
     Office,
     TextEditor,
     SaveText(u64),
-    SaveOffice,
+    SaveOffice(u64),
     Code,
 }
 
@@ -32,14 +32,14 @@ impl Purpose {
             Self::Image => "Open image",
             Self::Pdf => "Open PDF",
             Self::Office => "Open Office document",
-            Self::SaveText(_) | Self::SaveOffice => "Save as…",
+            Self::SaveText(_) | Self::SaveOffice(_) => "Save as…",
             _ => "Open file",
         }
     }
 
     fn formats(self) -> Formats {
         match self {
-            Self::Office | Self::SaveOffice => Formats {
+            Self::Office | Self::SaveOffice(_) => Formats {
                 label: "Office documents",
                 empty: "No Office documents in this folder.",
                 includes: office_reader::supports,
@@ -101,7 +101,7 @@ pub(crate) fn open(ui: &Ui, purpose: Purpose, start: Option<String>) {
     if ui.state.with(current) == Some(purpose) {
         let path = start.unwrap_or_else(|| ui.state.with(|s| s.remote_path.clone()));
         read_directory(ui, path);
-        if matches!(purpose, Purpose::SaveText(_) | Purpose::SaveOffice) {
+        if matches!(purpose, Purpose::SaveText(_) | Purpose::SaveOffice(_)) {
             ui.state.revise(|s| {
                 if let Some(d) = &mut s.desktop_file_picker {
                     d.filter = Filter::All;
@@ -121,11 +121,14 @@ pub(crate) fn dismiss(s: &mut State) {
 }
 
 fn confirm(ui: &Ui, path: &str) {
+    if ui.state.with(|s| office_sync::uploading(s, path)) {
+        return;
+    }
     let Some(purpose) = ui.state.with(current) else {
         return;
     };
     let open: fn(&Ui, &str) = match purpose {
-        Purpose::SaveOffice => return office_reader::submit_save(ui, path),
+        Purpose::SaveOffice(id) => return office_reader::submit_save(ui, id, path),
         Purpose::SaveText(id) => return submit_save(ui, id, path),
         Purpose::Video => |ui, path| ui.player.open_from_picker(ui, path),
         Purpose::Image => image_viewer::open,
@@ -159,7 +162,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                 panel(ui.clone(), formats),
                 (
                     match purpose {
-                        Purpose::SaveText(_) | Purpose::SaveOffice => fragment(
+                        Purpose::SaveText(_) | Purpose::SaveOffice(_) => fragment(
                             row().class("file-picker-save-name").fill((
                                 text().content(i18n::bind("File name")),
                                 input()
@@ -201,7 +204,7 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                                     {
                                         "Replace"
                                     }
-                                    Purpose::SaveText(_) | Purpose::SaveOffice => "Save",
+                                    Purpose::SaveText(_) | Purpose::SaveOffice(_) => "Save",
                                     _ => "Open",
                                 }
                                 .to_owned()
@@ -212,7 +215,9 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                                 }
                             })
                             .class("button primary")
-                            .enabled(state.map(|s| chosen_path(s).is_some())),
+                            .enabled(state.map(|s| {
+                                chosen_path(s).is_some_and(|path| !office_sync::uploading(s, &path))
+                            })),
                     )),
                 ),
             )
@@ -260,7 +265,10 @@ fn save_path(s: &State) -> Option<String> {
 }
 
 fn chosen_path(s: &State) -> Option<String> {
-    if matches!(current(s), Some(Purpose::SaveText(_) | Purpose::SaveOffice)) {
+    if matches!(
+        current(s),
+        Some(Purpose::SaveText(_) | Purpose::SaveOffice(_))
+    ) {
         save_path(s)
     } else {
         selected_path(s).map(str::to_owned)
@@ -676,13 +684,12 @@ fn panel(ui: Ui, formats: Formats) -> impl Widget {
                     }
                 }),
         )),
-        row().class("files-body").fill((
-            when(
-                state.map(|s| !s.desktop_file_picker_sidebar_hidden),
-                move || sidebar(places.clone()),
-            ),
+        splitter::files_body(
+            ui.clone(),
+            splitter::FileSidebar::Picker,
+            move || sidebar(places.clone()),
             listing(ui, formats),
-        )),
+        ),
     ))
 }
 
@@ -739,7 +746,16 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                     })
                                 }))
                                 .name(entry.map(|e| e.name.clone()))
-                                .fill(file_browser::entry_name(state, entry, |file| file, true))
+                                .enabled(state.map(move |s| {
+                                    entry.with(|e| !office_sync::uploading(s, &e.path))
+                                }))
+                                .fill(file_browser::entry_name(
+                                    state,
+                                    entry,
+                                    |file| file,
+                                    true,
+                                    true,
+                                ))
                                 .on(activate, move |_| {
                                     let e = entry.get();
                                     if e.is_dir {
@@ -748,7 +764,7 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                         state.revise(|s| {
                                             let saving = matches!(
                                                 current(s),
-                                                Some(Purpose::SaveText(_) | Purpose::SaveOffice)
+                                                Some(Purpose::SaveText(_) | Purpose::SaveOffice(_))
                                             );
                                             if let Some(directory) = &mut s.desktop_file_picker {
                                                 directory.selected = Some(e.path);
@@ -776,7 +792,10 @@ fn listing(ui: Ui, formats: Formats) -> impl Widget {
                                             )
                                         })
                                     {
-                                        if state.with(current) == Some(Purpose::SaveOffice) {
+                                        if matches!(
+                                            state.with(current),
+                                            Some(Purpose::SaveOffice(_))
+                                        ) {
                                             set_save_name(&open, file.name);
                                         } else {
                                             confirm(&open, &file.path);

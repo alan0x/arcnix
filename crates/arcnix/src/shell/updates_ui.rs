@@ -93,8 +93,10 @@ fn restart_safe(s: &State) -> bool {
                 || p.connecting
                 || p.file_pending.is_some()
                 || p.system_task_running
-                || p.office.dirty
-                || p.office.is_saving()
+                || p.office
+                    .files
+                    .values()
+                    .any(|doc| doc.dirty || doc.is_saving())
                 || p.code.dirty
                 || !p.code.pending.is_empty()
                 || text_editor::has_pending_work(&p.desktop_editor, p.remote_editor.as_ref())
@@ -103,8 +105,11 @@ fn restart_safe(s: &State) -> bool {
         && !scripts_ui::busy(s)
         && s.scripts.refreshing.is_empty()
         && s.file_pending.is_none()
-        && !s.office.dirty
-        && !s.office.is_saving()
+        && !s
+            .office
+            .files
+            .values()
+            .any(|doc| doc.dirty || doc.is_saving())
         && s.code.pending.is_empty()
         && !s.code.dirty
         && !text_editor::has_pending_work(&s.desktop_editor, s.remote_editor.as_ref())

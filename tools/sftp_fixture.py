@@ -1291,6 +1291,7 @@ class DelayedHandle(paramiko.SFTPHandle):
     """Optional latency for visible transfer progress in loopback UI tests."""
     delay = 0
     range_trace = None
+    upload_gate = None
     def stat(self):
         stream = getattr(self, 'readfile', None) or getattr(self, 'writefile', None)
         if stream is None:
@@ -1304,6 +1305,14 @@ class DelayedHandle(paramiko.SFTPHandle):
                 trace.write(f'{offset} {len(data)}\n')
         return data
     def write(self, offset, data):
+        if self.upload_gate and self.upload_gate.exists():
+            self.upload_gate.with_suffix('.started').touch()
+            deadline = time.monotonic() + 20
+            while self.upload_gate.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            if self.upload_gate.with_suffix('.drop').exists():
+                self.transport.close()
+                return paramiko.SFTP_FAILURE
         if self.delay: time.sleep(self.delay)
         return super().write(offset, data)
     def close(self):
@@ -1430,6 +1439,9 @@ class Files(paramiko.SFTPServerInterface):
             mode = "r+b" if flags & os.O_RDWR else ("wb" if flags & os.O_WRONLY else "rb")
             stream = os.fdopen(fd, mode)
             handle = DelayedHandle(flags)
+            if flags & os.O_WRONLY and Path(path).name.startswith('.arcnix-') and path.endswith('.part'):
+                handle.upload_gate = self.root.parent / 'pause-office-upload'
+                handle.transport = self.transport
             trace = self.root.parent / 'video-reads.txt'
             if path.lower().endswith(('.mp4', '.mkv')) and trace.exists():
                 handle.range_trace = trace

@@ -13,7 +13,8 @@ def main():
         (start / 'Nested').mkdir(parents=True)
         (start / 'Nested' / 'marker.txt').write_text('nested', encoding='utf-8')
         home = peer.root / 'home/arcnix'
-        (home / 'Music').mkdir(parents=True, exist_ok=True)
+        for directory in ('Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Videos'):
+            (home / directory).mkdir(parents=True, exist_ok=True)
         prefs = home / '.arcnix/desktop.json'
         prefs.parent.mkdir(parents=True, exist_ok=True)
         prefs.write_text(json.dumps({'version': 1, 'theme': 'System', 'appearance': {'dock': {
@@ -68,9 +69,22 @@ def main():
             location('/Start/Nested')
 
             dock_files.click(button='right')
+            expect(menu.locator('.dock-document')).to_have_count(2)
+            menu.get_by_role('button', name='Start', exact=True).click()
+            location('/Start')
+            dock_files.click(button='right')
             choose('New window')
             expect(windows).to_have_count(3)
             location('/Start')
+            dock_files.click(button='right')
+            same_name = menu.locator('.dock-document-name').filter(has_text='Start · Window')
+            expect(same_name).to_have_count(2)
+            assert len(set(same_name.all_text_contents())) == 2
+            selected = menu.locator('.dock-document[aria-pressed=true]')
+            expect(selected.locator('.dock-document-check')).to_have_text('✓')
+            assert selected.evaluate("""el => el.querySelector('.dock-document-check').getBoundingClientRect().right
+                < el.querySelector('.dock-document-name').getBoundingClientRect().left""")
+            selected.click()
             app.show_desktop()
             desktop_files = icon('.desktop-shortcuts', 'Files')
             desktop_files.focus()
@@ -149,28 +163,71 @@ def main():
             active.locator('.window-close').click()
 
             page.locator('.desktop-dock').get_by_role('button', name='Launcher', exact=True).click(button='right')
+            expect(menu.get_by_role('button', name='Dock settings')).to_have_count(0)
+            page.locator('.desktop-menu-backdrop').click(position={'x': 2, 'y': 2})
+            icon('.desktop-dock', 'Settings').click(button='right')
             choose('Dock settings')
             tabs = page.locator('.desktop-settings-tabs')
             expect(tabs.get_by_role('button', name='Dock', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings = page.locator('.desktop-settings-pane')
             settings.get_by_role('switch', name='Show locations', exact=True).click()
-            settings.get_by_role('switch', name='Show restart button', exact=True).click()
-            eventually(lambda: all(dock_preferences().get(key) for key in ('launcher_locations', 'launcher_restart')))
-            app.apps().get_by_role('button', name='Music', exact=True).click()
+            settings.get_by_role('switch', name='Show power menu', exact=True).click()
+            eventually(lambda: all(dock_preferences().get(key) for key in ('launcher_locations', 'launcher_power')))
+            catalog = app.apps()
+            locations = catalog.locator('.launcher-locations')
+            places = locations.get_by_role('button')
+            expect(places).to_have_count(8)
+            cells = places.evaluate_all("""buttons => buttons.map(button => button.getBoundingClientRect().toJSON())""")
+            columns = sum(abs(cell['y'] - cells[0]['y']) < 1 for cell in cells)
+            assert 1 < columns < len(cells), cells
+            for index, cell in enumerate(cells):
+                assert abs(cell['x'] - cells[index % columns]['x']) < 1
+                assert abs(cell['width'] - cells[0]['width']) < 1
+            power = catalog.get_by_role('button', name='Power options', exact=True)
+            def check_power_corner():
+                expect(power).to_be_visible()
+                offsets = power.evaluate("""button => {
+                    const b = button.getBoundingClientRect();
+                    const d = button.closest('.modal-card').getBoundingClientRect();
+                    return [d.right - b.right, d.bottom - b.bottom, b.width, b.height];
+                }""")
+                assert 0 <= offsets[0] <= 16 and 0 <= offsets[1] <= 10, offsets
+                assert all(abs(size - 40) < 1 for size in offsets[2:]), offsets
+            check_power_corner()
+            search = catalog.get_by_role('textbox', name='Search apps')
+            search.fill('no matching application')
+            expect(catalog.get_by_text('No matching apps')).to_be_visible()
+            check_power_corner()
+            search.fill('')
+            viewport = page.viewport_size
+            page.set_viewport_size({'width': 820, 'height': 520})
+            body = catalog.locator('.desktop-app-catalog')
+            assert body.evaluate('el => { el.scrollTop = el.scrollHeight; return el.scrollTop > 0; }')
+            check_power_corner()
+            page.set_viewport_size(viewport)
+            locations.get_by_role('button', name='Music', exact=True).click()
             location('/home/arcnix/Music')
             def restart_requests():
                 queries = (peer.root / 'server-app-queries.jsonl').read_text(encoding='utf-8').splitlines()
                 return sum(json.loads(line)['command'].startswith('# arcnix:desktop:restart\n') for line in queries)
             confirm = page.get_by_role('dialog', name='Restart system?', exact=True)
-            app.apps().get_by_role('button', name='Restart system…', exact=True).click()
+            def power_action(label):
+                app.apps().get_by_role('button', name='Power options', exact=True).click()
+                page.get_by_role('menuitem', name=label, exact=True).click()
+            power_action('Shut down…')
+            shutdown = page.get_by_role('dialog', name='Shut down system?', exact=True)
+            expect(shutdown.get_by_role('button', name='Shut down', exact=True)).to_be_disabled()
+            shutdown.get_by_role('button', name='Cancel', exact=True).click()
+            power_action('Restart system…')
             expect(confirm).to_contain_text('Files launchers')
             confirm.get_by_role('button', name='Cancel', exact=True).click()
             assert restart_requests() == 0
-            app.apps().get_by_role('button', name='Restart system…', exact=True).click()
+            power_action('Restart system…')
             confirm.get_by_role('button', name='Restart', exact=True).click()
             eventually(lambda: restart_requests() == 1)
             active.locator('.window-close').click()
-            app.application('Settings')
+            icon('.desktop-dock', 'Settings').click(button='right')
+            choose('Dock settings')
             settings.get_by_role('button', name='App icons', exact=True).click()
             pins = page.get_by_role('dialog', name='App icons', exact=True)
             options = pins.locator('.preference-check')
@@ -192,10 +249,15 @@ def main():
             terminal = page.locator('.desktop-window.app-terminal.active')
             expect(terminal.locator('.terminal-status')).to_have_text('Interactive SSH')
             dock_terminal.click(button='right')
-            choose('New tab')
-            expect(terminal.locator('.terminal-tab')).to_have_count(2)
+            expect(menu.get_by_role('button', name='New tab', exact=True)).to_have_count(0)
+            choose('New window')
+            expect(page.locator('.desktop-window.app-terminal:not(.hidden)')).to_have_count(2)
+            expect(terminal.locator('.terminal-tab')).to_have_count(1)
             dock_terminal.click(button='right')
-            choose('Close application')
+            choose('Close window')
+            expect(page.locator('.desktop-window.app-terminal:not(.hidden)')).to_have_count(1)
+            dock_terminal.click(button='right')
+            choose('Close window')
             expect(page.locator('.desktop-window.app-terminal')).to_be_hidden()
 
         with Desktop(out / 'restarted', peer.config([profile], out)) as app:

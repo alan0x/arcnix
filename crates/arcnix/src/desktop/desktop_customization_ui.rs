@@ -3,6 +3,7 @@ use arcnix_core::desktop_customization::{
     IconFlow, Layout, MAX_ICON_SIZE, MEDIUM_ICON_SIZE, MIN_ICON_SIZE, Shortcut, SystemIcon,
     Wallpaper,
 };
+use arcnix_core::desktop_shortcuts::Action as KeyAction;
 use arcnix_core::server_apps::DesktopApp;
 use serde::Deserialize;
 
@@ -375,6 +376,11 @@ pub(crate) fn launchers(ui: Ui, dock: bool) -> impl Widget {
                 let open = ui.clone();
                 let current = name.clone();
                 let appearance = name.clone();
+                let busy_name = name.clone();
+                let busy = move |s: &State| {
+                    find_file(s, &busy_name).is_some_and(|e| office_sync::uploading(s, &e.path))
+                };
+                let badge = state.map(busy.clone());
                 fragment(
                     sapid::button()
                         .class(state.map(move |s| {
@@ -385,6 +391,7 @@ pub(crate) fn launchers(ui: Ui, dock: bool) -> impl Widget {
                             format!("desktop-shortcut desktop-file app-{art}")
                         }))
                         .name(name.clone())
+                        .enabled(state.map(move |s| !busy(s)))
                         .fill((
                             text()
                                 .class(state.map(move |s| {
@@ -410,6 +417,7 @@ pub(crate) fn launchers(ui: Ui, dock: bool) -> impl Widget {
                                     class
                                 }))
                                 .content(""),
+                            office_sync::upload_badge(badge),
                             text().class("desktop-app-label").content(name.clone()),
                         ))
                         .on_press(move || open.open_desktop_file(&name)),
@@ -540,6 +548,10 @@ struct Menu {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Gesture {
+    DockOverview {
+        epoch: u64,
+        app: DesktopApp,
+    },
     RemoveFile {
         epoch: u64,
         name: String,
@@ -592,7 +604,8 @@ fn gesture(ui: &Ui, value: &str) {
         return;
     };
     let epoch = match &gesture {
-        Gesture::RemoveFile { epoch, .. }
+        Gesture::DockOverview { epoch, .. }
+        | Gesture::RemoveFile { epoch, .. }
         | Gesture::OpenInTextEditor { epoch, .. }
         | Gesture::Context { epoch, .. }
         | Gesture::Dismiss { epoch }
@@ -605,6 +618,7 @@ fn gesture(ui: &Ui, value: &str) {
         return;
     }
     match gesture {
+        Gesture::DockOverview { app, .. } => ui.open_window_overview(app),
         Gesture::OpenInTextEditor { window, name, .. } => {
             let file = ui.state.with(|s| {
                 find_file(s, &name)
@@ -629,6 +643,7 @@ fn gesture(ui: &Ui, value: &str) {
         Gesture::Context {
             zone, item, x, y, ..
         } => ui.state.revise(|s| {
+            s.workbench.overview = None;
             let item = item.filter(|item| icons(s, zone).contains(item));
             s.server_apps.customization.menu = Some(Menu { zone, item, x, y });
         }),
@@ -712,6 +727,32 @@ fn menu_action<F: FnMut(&Ui) + 'static>(
         })
 }
 
+fn menu_action_with_key(
+    ui: &Ui,
+    label: impl Into<Vary<String>>,
+    shortcut: KeyAction,
+    applies: impl Fn(&State) -> bool + 'static,
+    action: impl FnMut(&Ui) + 'static,
+) -> sapid::Button {
+    let label = label.into();
+    let title = i18n::bind(label.clone());
+    menu_action(ui, label, action)
+        .label("")
+        .name(title.clone())
+        .fill((
+            text().content(title),
+            text()
+                .class("menu-key-hint")
+                .content(ui.state.map(move |s| {
+                    if applies(s) {
+                        desktop_shortcuts_ui::menu_hint(s, shortcut)
+                    } else {
+                        String::new()
+                    }
+                })),
+        ))
+}
+
 pub(crate) fn open_settings(ui: &Ui, page: SettingsPage) {
     ui.state.revise(|s| {
         s.server_apps.customization.settings_page = page;
@@ -742,16 +783,194 @@ fn system_icon_menu(ui: Ui, system: SystemIcon, zone: Zone) -> impl Widget {
         menu_action(&ui, "Open", move |ui| open_system_icon(ui, system)),
         dock_pin_action(&ui, DockItem::System { system }),
         if zone == Zone::Desktop {
-            menu_action(&ui, "Hide desktop shortcut", move |ui| {
-                set_system_visible(ui, system, false);
-            })
-            .enabled(ui.state.map(server_apps_ui::preferences_ready))
+            fragment(
+                menu_action(&ui, "Hide desktop shortcut", move |ui| {
+                    set_system_visible(ui, system, false);
+                })
+                .enabled(ui.state.map(server_apps_ui::preferences_ready)),
+            )
         } else {
-            menu_action(&ui, "Dock settings", |ui| {
-                open_settings(ui, SettingsPage::Dock)
-            })
+            fragment(())
         },
     ))
+}
+
+#[derive(Clone, PartialEq)]
+struct DockDocument {
+    page: WorkspacePage,
+    tab: Option<u64>,
+    label: String,
+    selected: bool,
+}
+
+fn open_documents(s: &State, app: DesktopApp) -> Vec<DockDocument> {
+    let mut entries = Vec::new();
+    for &page in &s.workbench.apps {
+        if server_desktop::app_id(page) != Some(app) {
+            continue;
+        }
+        let window = page.tab_window().unwrap_or_default();
+        let mut push = |tab, label: String, selected| {
+            entries.push(DockDocument {
+                page,
+                tab,
+                label,
+                selected: selected && s.workspace_page == page && s.workbench.window_visible(page),
+            })
+        };
+        match page.base() {
+            WorkspacePage::PdfReader | WorkspacePage::Office => {
+                let (tabs, selected) = if page.base() == WorkspacePage::Office {
+                    (s.office.tabs(window), s.office.groups.selected(window))
+                } else {
+                    (s.pdf.tabs(window), s.pdf.groups.selected(window))
+                };
+                if tabs.is_empty() {
+                    push(None, i18n::translate(server_desktop::app_label(page)), true);
+                }
+                for (id, path) in tabs {
+                    push(
+                        Some(id),
+                        arcnix_core::file_associations::filename(&path).to_owned(),
+                        selected == Some(id),
+                    );
+                }
+            }
+            WorkspacePage::Files(_) => {
+                let groups = &s.workbench.files.groups;
+                for &id in groups.tabs(window) {
+                    push(
+                        Some(id),
+                        files_tabs::title(s, window, id),
+                        groups.selected(window) == Some(id),
+                    );
+                }
+            }
+            WorkspacePage::Editor => {
+                let groups = &s.desktop_editor.groups;
+                for &id in groups.tabs(window) {
+                    push(
+                        Some(id),
+                        s.desktop_editor.tab_title(id),
+                        groups.selected(window) == Some(id),
+                    );
+                }
+            }
+            #[cfg(windows)]
+            WorkspacePage::Browser => {
+                let browser = &s.web_browser;
+                for &id in browser.groups.tabs(window) {
+                    if let Some(tab) = browser.tab(id) {
+                        let title = if tab.title.is_empty() {
+                            &tab.url
+                        } else {
+                            &tab.title
+                        };
+                        push(
+                            Some(id),
+                            title.clone(),
+                            browser.groups.selected(window) == Some(id),
+                        );
+                    }
+                }
+            }
+            WorkspacePage::ImageViewer | WorkspacePage::Player | WorkspacePage::Code => {
+                if let Some(title) = server_desktop::window_title(s, page) {
+                    push(None, title, true);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for entry in &entries {
+        *counts.entry(entry.label.clone()).or_insert(0usize) += 1;
+    }
+    for entry in &mut entries {
+        if counts[&entry.label] > 1 {
+            let window = entry.page.tab_window().unwrap_or_default();
+            let groups = match app {
+                DesktopApp::Office => &s.office.groups,
+                DesktopApp::PdfReader => &s.pdf.groups,
+                DesktopApp::Files => &s.workbench.files.groups,
+                DesktopApp::Editor => &s.desktop_editor.groups,
+                #[cfg(windows)]
+                DesktopApp::Browser => &s.web_browser.groups,
+                _ => continue,
+            };
+            let window_name = i18n::translate("Window");
+            entry
+                .label
+                .push_str(&format!(" · {window_name} {}", window + 1));
+            if groups.tabs(window).len() > 1
+                && let Some(index) = groups
+                    .tabs(window)
+                    .iter()
+                    .position(|id| Some(*id) == entry.tab)
+            {
+                let tab_name = i18n::translate("Tab");
+                entry
+                    .label
+                    .push_str(&format!(" · {tab_name} {}", index + 1));
+            }
+        }
+    }
+    entries
+}
+
+fn dock_documents(ui: Ui, app: DesktopApp) -> impl Widget {
+    let state = ui.state;
+    let entries = state.map(move |s| open_documents(s, app));
+    when(state.map(move |_| !entries.get().is_empty()), move || {
+        let ui = ui.clone();
+        fragment((
+            text().class("menu-divider").content(""),
+            each(entries)
+                .key(|entry| (entry.page.tab_window(), entry.tab))
+                .children(move |item| {
+                    let ui = ui.clone();
+                    let DockDocument { page, tab, .. } = item.value.get();
+                    sapid::button()
+                        .class("menu-item dock-document")
+                        .name(item.value.map(|entry| entry.label.clone()))
+                        .fill((
+                            text().class("dock-document-check").content(
+                                item.value
+                                    .map(|entry| if entry.selected { "✓" } else { "" }.to_owned()),
+                            ),
+                            text()
+                                .class("dock-document-name")
+                                .content(item.value.map(|entry| entry.label.clone())),
+                        ))
+                        .pressed(item.value.map(|entry| entry.selected))
+                        .on_press(move || {
+                            ui.close_desktop_menu();
+                            ui.focus_desktop_app(page);
+                            if let Some(id) = tab {
+                                match page.base() {
+                                    WorkspacePage::PdfReader => {
+                                        ui.state.revise(|s| s.pdf.groups.select(id))
+                                    }
+                                    WorkspacePage::Office => {
+                                        ui.state.revise(|s| s.office.groups.select(id))
+                                    }
+                                    WorkspacePage::Editor => {
+                                        ui.state.revise(|s| s.desktop_editor.select(id))
+                                    }
+                                    WorkspacePage::Files(window) => {
+                                        files_tabs::select(&ui, window, id)
+                                    }
+                                    #[cfg(windows)]
+                                    WorkspacePage::Browser => {
+                                        ui.state.revise(|s| s.web_browser.select(id))
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        })
+                }),
+        ))
+    })
 }
 
 fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
@@ -761,20 +980,23 @@ fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
     let files = page.is_files();
     let extra = match page {
         WorkspacePage::Files(_) => fragment(
-            menu_action(&ui, "New window", |ui| {
-                files_tabs::new_window(ui, files_tabs::WindowStart::Default);
-            })
+            menu_action_with_key(
+                &ui,
+                "New window",
+                KeyAction::OpenFiles,
+                files_tabs::available,
+                |ui| {
+                    files_tabs::new_window(ui, files_tabs::WindowStart::Default);
+                },
+            )
             .enabled(state.map(files_tabs::available)),
         ),
         WorkspacePage::Terminal => fragment(when(running, {
             let ui = ui.clone();
             move || {
-                menu_action(&ui, "New tab", move |ui| {
-                    let id = ui.state.with(|s| s.terminal.id);
-                    ui.open_desktop_app(page);
-                    ui.terminal_new_tab(id);
-                })
-                .enabled(state.map(|s| s.terminal.session_count() < terminal_worker::SESSION_LIMIT))
+                menu_action(&ui, "New window", |ui| ui.terminal_new_window()).enabled(
+                    state.map(|s| s.terminal.session_count() < terminal_worker::SESSION_LIMIT),
+                )
             }
         })),
         #[cfg(windows)]
@@ -822,6 +1044,28 @@ fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
             move |ui| ui.open_desktop_app(page),
         ),
         extra,
+        when(matches!(app, DesktopApp::PdfReader | DesktopApp::Office), {
+            let ui = ui.clone();
+            move || {
+                menu_action(&ui, "New window", move |ui| {
+                    let id = ui.state.revise(|s| {
+                        if !server_desktop::launcher_running(s, page) {
+                            0
+                        } else if app == DesktopApp::Office {
+                            s.office.groups.new_window()
+                        } else {
+                            s.pdf.groups.new_window()
+                        }
+                    });
+                    ui.focus_desktop_app(window_tabs::page(app, id));
+                })
+            }
+        }),
+        if zone == Zone::Dock {
+            fragment(dock_documents(ui.clone(), app))
+        } else {
+            fragment(())
+        },
         when(files, {
             let ui = ui.clone();
             move || {
@@ -850,25 +1094,36 @@ fn launcher_menu(ui: Ui, app: DesktopApp, zone: Zone) -> impl Widget {
         text().class("menu-divider").content(""),
         dock_pin_action(&ui, DockItem::App(app)),
         if zone == Zone::Desktop {
-            menu_action(&ui, "Hide desktop shortcut", move |ui| {
-                set_shortcut_visible(ui, app, false);
-            })
-            .enabled(state.map(server_apps_ui::preferences_ready))
-        } else {
-            menu_action(&ui, "Dock settings", |ui| {
+            fragment(
+                menu_action(&ui, "Hide desktop shortcut", move |ui| {
+                    set_shortcut_visible(ui, app, false);
+                })
+                .enabled(state.map(server_apps_ui::preferences_ready)),
+            )
+        } else if page == WorkspacePage::Settings {
+            fragment(menu_action(&ui, "Dock settings", |ui| {
                 open_settings(ui, SettingsPage::Dock)
-            })
+            }))
+        } else {
+            fragment(())
         },
         when(running, move || {
             fragment((
                 text().class("menu-divider").content(""),
-                menu_action(
+                menu_action_with_key(
                     &ui,
-                    if files {
+                    if files
+                        || matches!(
+                            app,
+                            DesktopApp::Office | DesktopApp::PdfReader | DesktopApp::Terminal
+                        )
+                    {
                         "Close window"
                     } else {
                         "Close application"
                     },
+                    KeyAction::CloseWindow,
+                    move |s| server_desktop::app_id(s.workspace_page) == Some(app),
                     move |ui| ui.close_desktop_launcher(page),
                 )
                 .enabled(state.map(move |s| server_desktop::can_close_app(s, page))),
@@ -938,6 +1193,7 @@ pub(crate) fn context_menu(ui: Ui) -> impl Widget {
                                 }
                             },
                             Ui::close_desktop_menu,
+                            false,
                         ),
                         when(
                             !dock && file.is_some() && state.with(|s| s.local_desktop.is_none()),
@@ -1028,18 +1284,13 @@ pub(crate) fn context_menu(ui: Ui) -> impl Widget {
                         when(dock, {
                             let ui = ui.clone();
                             move || {
-                                fragment((
-                                    menu_action(
-                                        &ui,
-                                        state.map(|s| {
-                                            server_desktop::show_desktop_label(s).to_owned()
-                                        }),
-                                        Ui::toggle_show_desktop,
-                                    ),
-                                    menu_action(&ui, "Dock settings", |ui| {
-                                        open_settings(ui, SettingsPage::Dock)
-                                    }),
-                                ))
+                                menu_action_with_key(
+                                    &ui,
+                                    state.map(|s| server_desktop::show_desktop_label(s).to_owned()),
+                                    KeyAction::ShowDesktop,
+                                    |_| true,
+                                    Ui::toggle_show_desktop,
+                                )
                             }
                         }),
                     ))
@@ -1104,9 +1355,11 @@ const SETTINGS_SECTIONS: [(SettingsPage, &str, Icon, &[&str]); 10] = [
         Icon::Sidebar,
         &[
             "Dock layout",
+            "App window overview",
+            "Click the active app",
             "Launcher",
             "Show locations",
-            "Show restart button",
+            "Show power menu",
             "Dock position",
             "Dock style",
             "Status bar",
@@ -1332,7 +1585,7 @@ fn toggle(
 ) -> impl Widget + use<> {
     let ui = ui.clone();
     sapid::switch()
-        .size(sapid::Size::Large)
+        .size(sapid::Size::Small)
         .name(i18n::bind(label))
         .checked(ui.state.map(move |s| selected(appearance(s))))
         .enabled(ui.state.map(server_apps_ui::preferences_ready))
@@ -1642,6 +1895,7 @@ fn icon_size_control(
 pub(crate) fn dock_settings(ui: Ui) -> impl Widget {
     col().class("desktop-settings-pane").fill((
         dock_layout(ui.clone()),
+        dock_overview_settings(ui.clone()),
         dock_icons_settings(ui.clone()),
         dock_status_settings(ui.clone()),
         col()
@@ -1652,7 +1906,7 @@ pub(crate) fn dock_settings(ui: Ui) -> impl Widget {
                     true,
                     settings::desktop_reset(&ui, |prefs| {
                         prefs.appearance.dock.launcher_locations = false;
-                        prefs.appearance.dock.launcher_restart = false;
+                        prefs.appearance.dock.launcher_power = false;
                     }),
                 ),
                 settings_row(
@@ -1666,12 +1920,12 @@ pub(crate) fn dock_settings(ui: Ui) -> impl Widget {
                 ),
                 when(ui.state.map(desktop_power::supported), move || {
                     settings_row(
-                        "Show restart button",
+                        "Show power menu",
                         toggle(
                             &ui,
-                            "Show restart button",
-                            |p| p.dock.launcher_restart,
-                            |p, show| p.dock.launcher_restart = show,
+                            "Show power menu",
+                            |p| p.dock.launcher_power,
+                            |p, show| p.dock.launcher_power = show,
                         ),
                     )
                 }),
@@ -1725,6 +1979,30 @@ fn dock_layout(ui: Ui) -> impl Widget {
                     "Automatically hide the dock",
                     |p| p.dock.auto_hide,
                     |p, hide| p.dock.auto_hide = hide,
+                ),
+            ),
+        ))
+}
+
+fn dock_overview_settings(ui: Ui) -> impl Widget {
+    col()
+        .class("desktop-settings-card desktop-settings-rows")
+        .fill((
+            settings::section_heading(
+                "App window overview",
+                true,
+                settings::desktop_reset(&ui, |prefs| {
+                    let defaults = Dock::default();
+                    prefs.appearance.dock.overview_active_click = defaults.overview_active_click;
+                }),
+            ),
+            settings_row(
+                "Click the active app",
+                toggle(
+                    &ui,
+                    "Click the active app",
+                    |p| p.dock.overview_active_click,
+                    |p, value| p.dock.overview_active_click = value,
                 ),
             ),
         ))

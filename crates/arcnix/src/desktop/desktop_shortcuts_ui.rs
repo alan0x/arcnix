@@ -13,7 +13,18 @@ pub(crate) fn keys(s: &State) -> Keymap<'_> {
         .resolved(s.config.settings.shortcut_scheme.preset())
 }
 
+pub(crate) fn menu_hint(s: &State, action: Shortcut) -> String {
+    let keys = keys(s);
+    keys.chords(action)
+        .next()
+        .map(|chord| keys.preset.display(chord))
+        .unwrap_or_default()
+}
+
 pub(super) fn can_run(s: &State, action: Shortcut) -> bool {
+    if s.workbench.overview.is_some() {
+        return false;
+    }
     match action {
         Shortcut::NextApp | Shortcut::PreviousApp => !s.workbench.apps.is_empty(),
         Shortcut::Maximize | Shortcut::Minimize => {
@@ -125,8 +136,12 @@ pub(super) fn run(ui: &Ui, action: Shortcut) {
                 .state
                 .with(|s| server_desktop::reader_fullscreen(s, s.workspace_page)) =>
         {
-            ui.state.revise(|s| match s.workspace_page {
-                WorkspacePage::PdfReader => s.pdf.fullscreen = false,
+            ui.state.revise(|s| match s.workspace_page.base() {
+                WorkspacePage::PdfReader => {
+                    s.pdf
+                        .selected_mut(s.workspace_page.tab_window().unwrap_or_default())
+                        .fullscreen = false
+                }
                 WorkspacePage::ImageViewer => s.images.fullscreen = false,
                 _ => {}
             });

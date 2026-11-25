@@ -8,6 +8,8 @@ use zeroize::Zeroizing;
 use crate::i18n::desktop as i18n;
 use crate::*;
 
+const ZOOM_PRESETS: [u16; 9] = [25, 50, 75, 100, 125, 150, 200, 300, 400];
+
 pub const LIMIT: usize = 64 * 1024 * 1024;
 
 pub enum Command {
@@ -137,8 +139,9 @@ pub fn start(
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Reader {
+pub(crate) struct Document {
     pub fullscreen: bool,
+    zoom: String,
     serial: Option<u64>,
     commands: Option<async_channel::Sender<Command>>,
     path: String,
@@ -152,7 +155,13 @@ pub(crate) struct Reader {
     error: String,
 }
 
-impl Reader {
+impl document_tabs::FileTab for Document {
+    fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Document {
     fn send(&mut self, command: Command) {
         self.busy = self
             .commands
@@ -186,7 +195,8 @@ pub(crate) fn browse(ui: &Ui) {
     desktop_file_picker::open(
         ui,
         desktop_file_picker::Purpose::Pdf,
-        ui.state.with(|s| desktop_file_picker::parent(&s.pdf.path)),
+        ui.state
+            .with(|s| desktop_file_picker::parent(&s.pdf.current().path)),
     );
 }
 
@@ -194,26 +204,35 @@ pub(crate) fn open(ui: &Ui, path: &str) {
     if !ui.state.with(code_workbench::available) {
         return;
     }
+    if let Some((window, id)) = ui.state.with(|s| s.pdf.find(path)) {
+        document_tabs::select(
+            ui,
+            arcnix_core::server_apps::DesktopApp::PdfReader,
+            window,
+            id,
+        );
+        return;
+    }
     ui.open_desktop_app(WorkspacePage::PdfReader);
     let (tx, rx) = async_channel::bounded(1);
     let serial = ui.send(Action::OpenPdf(path.into(), rx));
     ui.state.revise(|s| {
-        s.pdf = Reader {
-            serial: Some(serial),
-            commands: Some(tx),
-            path: path.into(),
-            busy: true,
-            ..Default::default()
-        }
+        s.pdf.insert(
+            serial,
+            Document {
+                serial: Some(serial),
+                commands: Some(tx),
+                path: path.into(),
+                busy: true,
+                ..Default::default()
+            },
+        );
     });
 }
 
 pub(crate) fn received(ui: &Ui, serial: u64, reply: Reply) {
     let path = ui.state.revise(|s| {
-        let r = &mut s.pdf;
-        if r.serial != Some(serial) {
-            return None;
-        }
+        let r = s.pdf.files.get_mut(&serial)?;
         r.busy = false;
         match reply {
             Reply::Password(wrong) => {
@@ -248,49 +267,102 @@ pub(crate) fn received(ui: &Ui, serial: u64, reply: Reply) {
     }
 }
 
-pub(crate) fn panel(ui: Ui) -> impl Widget {
+pub(crate) fn panel(ui: Ui, window: u32) -> impl Widget {
     let state = ui.state;
-    let open = ui.clone();
-    let loaded = state.map(|s| s.pdf.rendered.is_some());
+    let loaded = state.map(move |s| s.pdf.selected(window).rendered.is_some());
     col().class("pdf-reader").fill((
         row().class("viewer-toolbar").fill((
-            i18n::text_action("Open PDF", Icon::Folder)
-                .class("button with-icon pdf-open")
-                .enabled(state.map(|s| s.connected && s.sftp_available))
-                .on_press(move || browse(&open)),
             row().class("viewer-controls").fill((
                 reader_control("Previous page", "previous", Icon::ChevronRight)
-                    .enabled(state.map(|s| !s.pdf.busy && s.pdf.total > 0 && s.pdf.page > 1))
-                    .on_press(move || state.revise(|s| s.pdf.show(s.pdf.page.saturating_sub(1)))),
+                    .enabled(state.map(move |s| {
+                        !s.pdf.selected(window).busy
+                            && s.pdf.selected(window).total > 0
+                            && s.pdf.selected(window).page > 1
+                    }))
+                    .on_press(move || {
+                        state.revise(|s| {
+                            let doc = s.pdf.selected_mut(window);
+                            doc.show(doc.page.saturating_sub(1))
+                        })
+                    }),
                 input()
                     .class("pdf-page-number")
                     .name(i18n::bind("Page number"))
-                    .enabled(state.map(|s| s.pdf.total > 0 && !s.pdf.busy))
-                    .value(state.map(|s| s.pdf.page_input.clone()))
+                    .enabled(state.map(move |s| {
+                        s.pdf.selected(window).total > 0 && !s.pdf.selected(window).busy
+                    }))
+                    .value(state.map(move |s| s.pdf.selected(window).page_input.clone()))
                     .on(value_changed, move |e| {
                         if let Event::ValueChanged { value, .. } = e {
-                            state.revise(|s| s.pdf.page_input = value);
+                            state.revise(|s| s.pdf.selected_mut(window).page_input = value);
                         }
                     })
                     .on(commit, move |e| {
                         if let Event::Commit { value, .. } = e {
-                            state.revise(|s| s.pdf.show(value.trim().parse().unwrap_or_default()));
+                            state.revise(|s| {
+                                s.pdf
+                                    .selected_mut(window)
+                                    .show(value.trim().parse().unwrap_or_default())
+                            });
                         }
                     }),
-                text().class("pdf-total").content(state.map(|s| {
-                    if s.pdf.total > 0 {
-                        format!("/ {}", s.pdf.total)
+                text().class("pdf-total").content(state.map(move |s| {
+                    if s.pdf.selected(window).total > 0 {
+                        format!("/ {}", s.pdf.selected(window).total)
                     } else {
                         String::new()
                     }
                 })),
                 reader_control("Next page", "next", Icon::ChevronRight)
-                    .enabled(state.map(|s| !s.pdf.busy && s.pdf.page < s.pdf.total))
-                    .on_press(move || state.revise(|s| s.pdf.show(s.pdf.page + 1))),
+                    .enabled(state.map(move |s| {
+                        !s.pdf.selected(window).busy
+                            && s.pdf.selected(window).page < s.pdf.selected(window).total
+                    }))
+                    .on_press(move || {
+                        state.revise(|s| {
+                            let doc = s.pdf.selected_mut(window);
+                            doc.show(doc.page + 1)
+                        })
+                    }),
             )),
             row().class("viewer-controls").fill((
-                reader_control("Zoom out", "out", Icon::Minus).enabled(loaded),
-                reader_control("Zoom in", "in", Icon::Plus).enabled(loaded),
+                row().class("pdf-zoom-box").fill((
+                    input()
+                        .class("pdf-zoom-input")
+                        .name(i18n::bind("Zoom percentage"))
+                        .enabled(loaded),
+                    sapid::dropdown_menu(format!("pdf-zoom-presets-{window}"))
+                        .label(i18n::bind("Zoom presets"))
+                        .trigger_content(icons::glyph(Icon::Collapse))
+                        .position(glory::render::AnchorPlacement::new(
+                            glory::render::AnchorSide::Bottom,
+                            glory::render::AnchorAlign::End,
+                        ))
+                        .width(100.0)
+                        .enabled(loaded)
+                        .radio_group(
+                            sapid::menu_radio_group("zoom")
+                                .value(state.map(move |s| {
+                                    s.pdf
+                                        .selected(window)
+                                        .zoom
+                                        .parse::<u16>()
+                                        .ok()
+                                        .filter(|p| ZOOM_PRESETS.contains(p))
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default()
+                                }))
+                                .items(ZOOM_PRESETS.map(|p| {
+                                    sapid::menu_radio_item(p.to_string(), format!("{p}%"))
+                                }))
+                                .close_on_select(true)
+                                .on_value_change(move |zoom| {
+                                    state.revise(|s| s.pdf.selected_mut(window).zoom = zoom)
+                                }),
+                        ),
+                )),
+                reader_control("Zoom out", "out", Icon::ZoomOut).enabled(loaded),
+                reader_control("Zoom in", "in", Icon::ZoomIn).enabled(loaded),
                 sapid::button()
                     .class("button pdf-fit")
                     .label(i18n::bind("Fit page"))
@@ -302,21 +374,25 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
             )),
             row()
                 .class("viewer-controls")
-                .fill(viewer_fullscreen_button(state, WorkspacePage::PdfReader)),
+                .fill(viewer_fullscreen_button(
+                    state,
+                    window_tabs::page(arcnix_core::server_apps::DesktopApp::PdfReader, window),
+                )),
         )),
         col().class("pdf-stage").fill((
-            each(state.map(|s| {
+            each(state.map(move |s| {
                 s.pdf
+                    .selected(window)
                     .rendered
                     .as_ref()
-                    .map(|_| (s.pdf.serial, s.pdf.page))
+                    .map(|_| (s.pdf.selected(window).serial, s.pdf.selected(window).page))
                     .into_iter()
                     .collect::<Vec<_>>()
             }))
             .key(|key| *key)
             .children(move |_| {
                 let (src, width, alt) = state.with(|s| {
-                    let r = &s.pdf;
+                    let r = s.pdf.selected(window);
                     let p = r.rendered.as_ref().unwrap();
                     (
                         p.source.to_string(),
@@ -329,49 +405,91 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
                     glory::ui::image().source(src).alt(alt),
                 ))
             }),
-            when(state.map(|s| s.pdf.rendered.is_none()), move || {
-                col().class("viewer-placeholder").fill((
-                    icons::glyph(Icon::File),
-                    text().content(i18n::bind(state.map(|s| {
-                        if !s.pdf.error.is_empty() {
-                            return s.pdf.error.clone();
-                        }
-                        if s.pdf.locked {
-                            "Enter the PDF password."
-                        } else if s.pdf.busy {
-                            "Loading PDF…"
-                        } else {
-                            "Open a PDF to read it."
-                        }
-                        .into()
-                    }))),
-                    when(state.map(|s| s.pdf.locked), move || {
-                        row().class("pdf-unlock").fill((
-                            input()
-                                .purpose(Purpose::Password)
-                                .name(i18n::bind("PDF password"))
-                                .value(state.map(|s| s.pdf.password.to_string()))
-                                .on(value_changed, move |e| {
-                                    if let Event::ValueChanged { value, .. } = e {
-                                        state.revise(|s| s.pdf.password = Zeroizing::new(value));
-                                    }
-                                })
-                                .on(commit, move |_| state.revise(|s| s.pdf.unlock())),
-                            i18n::btn("Unlock PDF", move || state.revise(|s| s.pdf.unlock()))
-                                .enabled(state.map(|s| !s.pdf.busy)),
-                        ))
-                    }),
-                ))
-            }),
+            when(
+                state.map(move |s| s.pdf.selected(window).rendered.is_none()),
+                move || {
+                    col().class("viewer-placeholder").fill((
+                        icons::glyph(Icon::File),
+                        text().content(i18n::bind(state.map(move |s| {
+                            if !s.pdf.selected(window).error.is_empty() {
+                                return s.pdf.selected(window).error.clone();
+                            }
+                            if s.pdf.selected(window).locked {
+                                "Enter the PDF password."
+                            } else if s.pdf.selected(window).busy {
+                                "Loading PDF…"
+                            } else {
+                                "Open a PDF to read it."
+                            }
+                            .into()
+                        }))),
+                        when(
+                            state.map(move |s| s.pdf.selected(window).locked),
+                            move || {
+                                row().class("pdf-unlock").fill((
+                                    input()
+                                        .purpose(Purpose::Password)
+                                        .name(i18n::bind("PDF password"))
+                                        .value(state.map(move |s| {
+                                            s.pdf.selected(window).password.to_string()
+                                        }))
+                                        .on(value_changed, move |e| {
+                                            if let Event::ValueChanged { value, .. } = e {
+                                                state.revise(|s| {
+                                                    s.pdf.selected_mut(window).password =
+                                                        Zeroizing::new(value)
+                                                });
+                                            }
+                                        })
+                                        .on(commit, move |_| {
+                                            state.revise(|s| s.pdf.selected_mut(window).unlock())
+                                        }),
+                                    i18n::btn("Unlock PDF", move || {
+                                        state.revise(|s| s.pdf.selected_mut(window).unlock())
+                                    })
+                                    .enabled(state.map(move |s| !s.pdf.selected(window).busy)),
+                                ))
+                            },
+                        ),
+                    ))
+                },
+            ),
         )),
         row().class("viewer-status").fill((
             text()
                 .class("viewer-filename")
-                .content(state.map(|s| filename(&s.pdf.path).to_owned())),
+                .content(state.map(move |s| filename(&s.pdf.selected(window).path).to_owned())),
             text()
                 .class("hidden pdf-document-id")
-                .content(state.map(|s| s.pdf.serial.map(|n| n.to_string()).unwrap_or_default())),
+                .content(state.map(move |s| {
+                    s.pdf
+                        .selected(window)
+                        .serial
+                        .map(|n| n.to_string())
+                        .unwrap_or_default()
+                })),
             text().class("pdf-scale"),
+            text()
+                .class("hidden pdf-zoom-mode")
+                .content(state.map(move |s| s.pdf.selected(window).zoom.clone())),
+            input()
+                .class("hidden pdf-zoom-command")
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event
+                        && let Some((id, zoom)) = value.split_once(':')
+                        && let Ok(id) = id.parse::<u64>()
+                        && (matches!(zoom, "page" | "width")
+                            || zoom
+                                .parse::<f64>()
+                                .is_ok_and(|z| (10.0..=400.0).contains(&z)))
+                    {
+                        state.revise(|s| {
+                            if s.pdf.groups.selected(window) == Some(id) {
+                                s.pdf.selected_mut(window).zoom = zoom.to_owned();
+                            }
+                        });
+                    }
+                }),
         )),
     ))
 }

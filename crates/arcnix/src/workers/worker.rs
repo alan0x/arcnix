@@ -85,12 +85,13 @@ pub enum Action {
         Option<crate::office_cache::Record>,
     ),
     PendingOffice(arcnix_core::store::ConfigStore),
+    ResumeOffice(arcnix_core::store::ConfigStore),
     SyncOffice(
         arcnix_core::store::ConfigStore,
         crate::office_cache::Record,
         Option<Arc<str>>,
     ),
-    SaveOffice(String, Arc<str>),
+    SaveOffice(String, Arc<str>, Option<[u8; 32]>),
     OpenPdf(String, async_channel::Receiver<crate::pdf_reader::Command>),
     PlayVideo {
         path: String,
@@ -263,6 +264,11 @@ pub enum Update {
     LocalDesktop(Result<String, String>),
     Pdf(crate::pdf_reader::Reply),
     Office(Result<crate::office_reader::Document, String>),
+    OfficeSync {
+        server: String,
+        path: String,
+        stage: crate::office_sync::Stage,
+    },
     OfficePending(Result<Vec<String>, String>),
     OfficeSaved(Result<(String, crate::office_reader::Document), String>),
     PgAdmin(crate::pgadmin_ui::Reply),
@@ -743,12 +749,13 @@ pub(crate) fn start_with_limiter(
                 send(Update::LocalDesktop(result));
                 continue;
             }
-            if let Action::SaveOffice(path, model) = action {
+            if let Action::SaveOffice(path, model, baseline) = action {
                 if epoch == active_epoch && epoch == generation.load(Ordering::Acquire) {
                     let result = crate::office_reader::save_copy(
                         local_desktop.as_ref().map(|d| &d.target),
                         &path,
                         &model,
+                        baseline,
                     )
                     .map(|document| (path, document))
                     .map_err(|e| format!("{e:#}"));
@@ -758,11 +765,17 @@ pub(crate) fn start_with_limiter(
             }
             if matches!(
                 &action,
-                Action::OpenOffice(..) | Action::SyncOffice(..) | Action::PendingOffice(..)
+                Action::OpenOffice(..)
+                    | Action::SyncOffice(..)
+                    | Action::PendingOffice(..)
+                    | Action::ResumeOffice(..)
             ) {
+                let lost = std::cell::OnceCell::new();
                 let check = || {
                     anyhow::ensure!(
-                        epoch == active_epoch && epoch == generation.load(Ordering::Acquire),
+                        lost.get().is_none()
+                            && epoch == active_epoch
+                            && epoch == generation.load(Ordering::Acquire),
                         "Session disconnected."
                     );
                     Ok(())
@@ -778,10 +791,99 @@ pub(crate) fn start_with_limiter(
                         arcnix_core::browser::profile_key(profile, fingerprint),
                     ))
                 };
+                use crate::office_sync::Stage;
+                let status = |record: &crate::office_cache::Record, stage| {
+                    send(Update::OfficeSync {
+                        server: record.server.clone(),
+                        path: record.path.clone(),
+                        stage,
+                    })
+                };
+                let sync = |store: &arcnix_core::store::ConfigStore,
+                            expected: &crate::office_cache::Record,
+                            model: Option<&str>| {
+                    let result =
+                        crate::office_cache::Cache::lock(store, &expected.server, &expected.path)
+                            .and_then(|cache| {
+                                cache.save(expected, model, |bytes, baseline| {
+                                    let (ssh, server) = remote()?;
+                                    anyhow::ensure!(
+                                        server == expected.server,
+                                        "The SSH server changed. Your cached copy was kept."
+                                    );
+                                    status(expected, Stage::Checking);
+                                    let last = std::cell::Cell::new(None);
+                                    ssh.sync_versioned_file(
+                                        &expected.path,
+                                        bytes,
+                                        baseline,
+                                        crate::office_reader::LIMIT,
+                                        check,
+                                        |written| {
+                                            let percent =
+                                                (written * 100 / bytes.len() as u64) as u8;
+                                            if last.replace(Some(percent)) != Some(percent) {
+                                                status(
+                                                    expected,
+                                                    if percent == 100 {
+                                                        Stage::Verifying
+                                                    } else {
+                                                        Stage::Uploading(percent)
+                                                    },
+                                                );
+                                            }
+                                        },
+                                    )
+                                    .inspect_err(|error| {
+                                        if arcnix_core::transport_error::is_connection_error(error)
+                                        {
+                                            let _ = lost.set(format!("{error:#}"));
+                                        }
+                                    })
+                                })
+                            });
+                    let stage = match &result {
+                        Ok(doc) => {
+                            match doc.remote.as_ref().expect("remote save has a cache record") {
+                                copy if copy.pending() => Stage::Pending(copy.notice.clone()),
+                                _ => Stage::Saved,
+                            }
+                        }
+                        Err(error) => Stage::Failed(format!("{error:#}")),
+                    };
+                    status(expected, stage);
+                    result
+                };
                 match action {
+                    Action::ResumeOffice(store) => {
+                        let result = remote().and_then(|(_, server)| {
+                            crate::office_cache::pending_records(&store, &server)
+                        });
+                        match result {
+                            Ok(records) => {
+                                for record in &records {
+                                    status(record, Stage::Queued);
+                                }
+                                for record in records {
+                                    if check().is_err() {
+                                        status(
+                                            &record,
+                                            Stage::Pending("Session disconnected.".into()),
+                                        );
+                                    } else {
+                                        let _ = sync(&store, &record, None);
+                                    }
+                                }
+                            }
+                            Err(error) => send(Update::Error(format!(
+                                "Could not check pending Office uploads: {error:#}"
+                            ))),
+                        }
+                    }
                     Action::PendingOffice(store) => {
                         let result = remote().and_then(|(_, server)| {
-                            crate::office_cache::pending_paths(&store, &server)
+                            crate::office_cache::pending_records(&store, &server)
+                                .map(|records| records.into_iter().map(|r| r.path).collect())
                         });
                         send(Update::OfficePending(result.map_err(|e| format!("{e:#}"))));
                     }
@@ -801,7 +903,11 @@ pub(crate) fn start_with_limiter(
                                 let (ssh, server) = remote()?;
                                 let cache =
                                     crate::office_cache::Cache::lock(&store, &server, &path)?;
-                                cache.open(ssh, replace.as_ref())
+                                let doc = cache.open(ssh, replace.as_ref())?;
+                                if let Some(record) = &replace {
+                                    status(record, Stage::Preserved);
+                                }
+                                Ok(doc)
                             }
                         });
                         send(Update::Office(result.map_err(|e| format!("{e:#}"))));
@@ -809,27 +915,7 @@ pub(crate) fn start_with_limiter(
                     Action::SyncOffice(store, expected, model) => {
                         // Persist the edit even if a disconnect invalidated this request's SSH
                         // epoch.
-                        let result = crate::office_cache::Cache::lock(
-                            &store,
-                            &expected.server,
-                            &expected.path,
-                        )
-                        .and_then(|cache| {
-                            cache.save(&expected, model.as_deref(), |bytes, baseline| {
-                                let (ssh, server) = remote()?;
-                                anyhow::ensure!(
-                                    server == expected.server,
-                                    "The SSH server changed. Your cached copy was kept."
-                                );
-                                ssh.sync_versioned_file(
-                                    &expected.path,
-                                    bytes,
-                                    baseline,
-                                    crate::office_reader::LIMIT,
-                                    check,
-                                )
-                            })
-                        });
+                        let result = sync(&store, &expected, model.as_deref());
                         send(Update::OfficeSaved(
                             result
                                 .map(|d| (expected.path, d))
@@ -837,6 +923,12 @@ pub(crate) fn start_with_limiter(
                         ));
                     }
                     _ => unreachable!(),
+                }
+                if let Some(message) = lost.into_inner() {
+                    session = None;
+                    pending = None;
+                    transfers.reset();
+                    send(Update::ConnectionLost(message));
                 }
                 continue;
             }

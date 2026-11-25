@@ -26,8 +26,13 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                 ))
             }
         }),
-        row().class("files-body").fill((
-            files_ui::sidebar(ui.clone(), window),
+        splitter::files_body(
+            ui.clone(),
+            splitter::FileSidebar::Files,
+            {
+                let ui = ui.clone();
+                move || files_ui::sidebar(ui.clone(), window)
+            },
             col().class("files-content-pane").fill((
                 files_ui::tag_results(ui.clone(), window),
                 when(state.map(move |s| files_tabs::showing_apps(s, window)), {
@@ -79,7 +84,7 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
                     )
                 }),
             )),
-        )),
+        ),
     ))
 }
 

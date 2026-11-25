@@ -158,6 +158,10 @@ fn rail(ui: Ui) -> impl Widget {
                 ),
             )),
             col().class("rail-bottom").fill((
+                when(ui.state.map(|s| !s.office_syncs.is_empty()), {
+                    let ui = ui.clone();
+                    move || office_sync::rail(ui.clone())
+                }),
                 updates_ui::rail_item(ui.clone()),
                 rail_button(
                     &ui,
@@ -426,6 +430,7 @@ fn notifications(ui: Ui) -> impl Widget {
         text().class("subtle").content(i18n::bind(
             "本次会话中的连接、传输与操作记录，最新记录显示在前。",
         )),
+        office_sync::listing(state),
         col().class("notification-feed").fill(
             each(state.map(|s| {
                 s.logs

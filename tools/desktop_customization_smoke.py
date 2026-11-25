@@ -256,7 +256,11 @@ def main():
             check_hover(desktop_button(long_name), clipped=True)
             p.set_viewport_size(dict(width=1440, height=980))
             p.emulate_media(reduced_motion=None)
-            desktop_button('App Center').click()
+            app_center = desktop_button('App Center')
+            app_center.click()
+            expect(app_center).to_be_focused()
+            expect(p.locator('.desktop-window:not(.hidden)')).to_have_count(0)
+            app_center.dblclick()
             expect(p.locator('.desktop-window:not(.hidden)')).to_be_visible()
             title = p.locator('.desktop-window.active .desktop-window-titlebar')
             assert title.evaluate("""element => !element.dispatchEvent(new MouseEvent('contextmenu', {
@@ -267,7 +271,11 @@ def main():
             expect(desktop_button('Terminal')).to_be_visible()
             assert p.locator('.desktop-window.active').evaluate('el => el.offsetLeft') == 22
             app.show_desktop()
-            desktop_button('Projects').click()
+            projects = desktop_button('Projects')
+            projects.click()
+            expect(projects).to_be_focused()
+            expect(p.locator('.desktop-window.app-files:not(.hidden)')).to_have_count(0)
+            projects.dblclick()
             expect(app.file('plan.txt')).to_be_visible()
             p.locator('.files-sidebar').get_by_role('button', name='Desktop', exact=True).click()
             expect(p.locator('.desktop-window.app-files.active .pathbar .breadcrumb.current')).to_have_attribute(
@@ -280,6 +288,9 @@ def main():
             eventually(lambda: preferences().get('order', [])[:1] == [{'kind': 'file', 'id': 'notes.txt'}])
             expect(p.locator('.desktop-shortcut').first).to_have_attribute('aria-label', 'notes.txt')
             notes.click()
+            expect(notes).to_be_focused()
+            expect(p.locator('.app-editor.active')).to_have_count(0)
+            notes.press('Enter')
             expect(p.locator('.app-editor.active .remote-editor-content')).to_have_value('desktop notes')
             p.locator('.desktop-window.active .window-close').click()
 
@@ -291,7 +302,7 @@ def main():
             expect(settings().get_by_role('button', name='Desktop', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings().get_by_role('button', name='Dock', exact=True).click()
             expect(settings().locator('.desktop-settings-card .section-title')).to_have_text(
-                ['Dock layout', 'Dock icons', 'Status bar', 'Launcher'])
+                ['Dock layout', 'App window overview', 'Dock icons', 'Status bar', 'Launcher'])
             settings().get_by_text('Dock layout', exact=True).dblclick(position={'x': 8, 'y': 8})
             assert not p.evaluate('window.getSelection().toString()')
             position = settings().get_by_role('radiogroup', name='Dock position')
@@ -338,7 +349,15 @@ def main():
             settings().get_by_role('button', name='Appearance', exact=True).click()
             expect(settings().locator('.theme-preset-select')).to_have_text(['Fjord', 'Aurora', 'Seaside'])
             seaside = settings().get_by_role('button', name='Seaside', exact=True)
+            p.emulate_media(reduced_motion='no-preference')
+            p.evaluate("""() => {
+                window.wallpaperFades = 0;
+                document.addEventListener('animationstart', event => {
+                    if (event.animationName === 'wallpaper-fade-in') window.wallpaperFades++;
+                });
+            }""")
             seaside.click()
+            eventually(lambda: p.evaluate('window.wallpaperFades') > 0)
             saved()
             art = p.locator('.desktop-wallpaper-art.wallpaper-seaside')
             expect(art).to_be_visible()
@@ -373,14 +392,22 @@ def main():
                 check_wallpaper(p.locator('.desktop-wallpaper-art'), picture)
                 check_wallpaper(gallery.locator('.wallpaper-swatch.wallpaper-fjord'), picture)
             expect(gallery.get_by_role('button', name='Add Picture', exact=True)).to_have_count(0)
+            p.emulate_media(reduced_motion='reduce')
+            fades = p.evaluate('window.wallpaperFades')
             gallery.get_by_role('button', name='Seaside wallpaper', exact=True).click()
             eventually(lambda: preferences().get('wallpaper') == 'seaside')
+            expect(p.locator('.wallpaper-transition-layer')).to_have_count(0)
+            assert p.evaluate('window.wallpaperFades') == fades
+            p.emulate_media(reduced_motion=None)
             assert preferences()['theme'] == 'fjord'
             close_settings()
             expect(p.locator('.desktop-shortcut').first).to_have_attribute('aria-label', 'notes.txt')
             desktop_button('Projects').drag_to(notes, target_position={'x': 8, 'y': 30})
             eventually(lambda: preferences()['order'][:1] == [{'kind': 'file', 'id': 'Projects'}])
             dock_button('Terminal').click(button='right')
+            expect(menu('Dock settings')).to_have_count(0)
+            p.locator('.desktop-menu-backdrop').click(position={'x': 2, 'y': 2})
+            dock_button('Settings').click(button='right')
             menu('Dock settings').click()
             expect(settings().get_by_role('button', name='Dock', exact=True)).to_have_attribute('aria-pressed', 'true')
             settings().locator('.desktop-setting-row').filter(has_text='Dock icon size').locator('.setting-dock-icon-size:visible').get_by_role('radio', name='Large', exact=True).check()
@@ -541,6 +568,10 @@ def main():
             status_toggle = settings().get_by_role('switch', name='Show dock status bar', exact=True)
             switch = settings().locator('.sapid-switch', has=p.get_by_role('switch', name='Show dock status bar', exact=True))
             track = switch.locator('.sapid-switch-track')
+            assert track.evaluate('el => el.offsetHeight') == 20
+            assert switch.locator('.sapid-switch-thumb').evaluate('el => el.offsetWidth') == 14
+            target = switch.locator('.sapid-switch-control')
+            assert target.evaluate('el => el.offsetWidth >= 56 && el.offsetHeight >= 44')
             expect(status_toggle).not_to_be_checked()
             status_toggle.click()
             expect(status_toggle).to_be_checked()

@@ -141,71 +141,50 @@ pub(crate) fn files(ui: Ui, window: u32) -> impl Widget {
     })
 }
 
-fn launcher_shortcuts(ui: Ui, query: Cage<String>) -> impl Widget {
+fn launcher_locations(ui: Ui, query: Cage<String>) -> impl Widget {
     let state = ui.state;
-    let open = ui.clone();
     when(query.map(|q| q.trim().is_empty()), move || {
-        let open = open.clone();
-        let restart = ui.clone();
-        fragment((
-            when(
-                state.map(|s| {
-                    s.sftp_available
-                        && desktop_customization_ui::appearance(s)
-                            .dock
-                            .launcher_locations
-                }),
-                move || {
-                    let open = open.clone();
-                    row()
-                        .class("launcher-locations")
-                        .fill(files_ui::location_links(
-                            state,
-                            |_| "",
-                            false,
-                            move |path| {
-                                if open.state.with(|s| {
-                                    s.dialog == Some(Dialog::Launcher) && s.file_pending.is_none()
-                                }) {
-                                    open.close_dialog();
-                                    files_tabs::new_window(
-                                        &open,
-                                        files_tabs::WindowStart::Directory(path),
-                                    );
-                                }
-                            },
-                        ))
-                },
-            ),
-            when(
-                state.map(|s| {
-                    desktop_customization_ui::appearance(s)
+        let ui = ui.clone();
+        when(
+            state.map(|s| {
+                s.sftp_available
+                    && desktop_customization_ui::appearance(s)
                         .dock
-                        .launcher_restart
-                        && desktop_power::supported(s)
-                }),
-                move || {
-                    let restart = restart.clone();
-                    row().class("launcher-actions").fill(
-                        i18n::text_action("Restart system…", Icon::Refresh)
-                            .enabled(state.map(desktop_power::available))
-                            .on_press(move || {
-                                if let Some(epoch) = state.with(|s| {
-                                    (s.dialog == Some(Dialog::Launcher)
-                                        && desktop_power::available(s))
-                                    .then_some(s.epoch)
-                                }) {
-                                    restart.open_dialog(Dialog::SystemPower(
-                                        epoch,
-                                        arcnix_core::host::PowerAction::Restart,
-                                    ));
-                                }
-                            }),
-                    )
-                },
-            ),
-        ))
+                        .launcher_locations
+            }),
+            move || {
+                let open = ui.clone();
+                row()
+                    .class("launcher-locations")
+                    .fill(files_ui::location_links(
+                        state,
+                        |_| "",
+                        false,
+                        move |path| {
+                            if open.state.with(|s| {
+                                s.dialog == Some(Dialog::Launcher) && s.file_pending.is_none()
+                            }) {
+                                open.close_dialog();
+                                files_tabs::new_window(
+                                    &open,
+                                    files_tabs::WindowStart::Directory(path),
+                                );
+                            }
+                        },
+                    ))
+            },
+        )
     })
+}
+
+fn launcher_power(ui: Ui) -> impl Widget {
+    when(
+        ui.state.map(|s| {
+            desktop_customization_ui::appearance(s).dock.launcher_power
+                && desktop_power::supported(s)
+        }),
+        move || desktop_power::menu(ui.clone(), desktop_power::MenuLocation::Launcher),
+    )
 }
 
 pub(crate) fn dialog(ui: Ui) -> impl Widget {
@@ -223,9 +202,9 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                         search(ui.clone(), query, Some(field)),
                         col().class("desktop-app-catalog").fill((
                             catalog(ui.clone(), query, false),
-                            launcher_shortcuts(ui.clone(), query),
+                            launcher_locations(ui.clone(), query),
                         )),
-                        (),
+                        launcher_power(ui.clone()),
                     )
                 })?;
                 scope.retain(mounted)?;

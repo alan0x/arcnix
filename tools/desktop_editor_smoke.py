@@ -256,7 +256,7 @@ def main():
             expect(paint).not_to_be_visible()
             p.locator('.desktop-window.active .window-minimize').click()
             app.show_desktop()
-            p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).click()
+            p.locator('.desktop-shortcuts').get_by_role('button', name='Notes.md', exact=True).dblclick()
             expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Text Editor')
             preview = editor.locator('.markdown-preview')
             actions = titlebar.locator('.desktop-window-actions button')

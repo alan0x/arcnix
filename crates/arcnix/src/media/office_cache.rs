@@ -58,7 +58,7 @@ fn server_files(store: &ConfigStore, server: &str) -> Result<PathBuf> {
         .join("files"))
 }
 
-pub fn pending_paths(store: &ConfigStore, server: &str) -> Result<Vec<String>> {
+pub fn pending_records(store: &ConfigStore, server: &str) -> Result<Vec<Record>> {
     let root = server_files(store, server)?;
     if !root.try_exists()? {
         return Ok(Vec::new());
@@ -76,10 +76,10 @@ pub fn pending_paths(store: &ConfigStore, server: &str) -> Result<Vec<String>> {
         };
         let record: Record = serde_json::from_reader(file.take(65536))?;
         if record.server == server && record.pending.is_some() {
-            paths.push(record.path);
+            paths.push(record);
         }
     }
-    paths.sort();
+    paths.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(paths)
 }
 

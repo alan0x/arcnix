@@ -738,8 +738,9 @@ SSH 保活	SSH keepalive
 目标文件已存在时	Existing files
 目标文件已存在时的默认操作，服务器和会话规则优先于这些默认值。	Default behavior when a destination already exists. Server and session choices override these defaults.
 始终询问	Ask every time
-上传策略	Uploads
-下载策略	Downloads
+上传策略	Upload policy
+下载策略	Download policy
+下载文件夹	Downloads
 日志设置	Logging
 客户端操作日志	Client operation log
 为新日志条目显示时间戳	Show timestamps in new log entries
@@ -2691,6 +2692,7 @@ Dock 时钟	Dock clock
 纯文本	Plain text
 新建文档	New document
 未命名	Untitled
+保存到当前文件？	Save to the current file?
 另存为…	Save as…
 视图	View
 撤销	Undo
@@ -2774,6 +2776,8 @@ Linux 目录	Linux directory
 上一张图片	Previous image
 下一张图片	Next image
 放大	Zoom in
+缩放比例	Zoom percentage
+预设缩放比例	Zoom presets
 缩小	Zoom out
 适应窗口	Fit to window
 实际大小	Actual size
@@ -2870,7 +2874,7 @@ GPU 型号	GPU model
 设备信息响应无效	Invalid device information response
 启动器	Launcher
 显示常用位置	Show locations
-显示重启按钮	Show restart button
+显示电源菜单	Show power menu
 重启系统…	Restart system…
 重启系统？	Restart system?
 本机	This computer
@@ -2914,3 +2918,21 @@ Office 文档	Office documents
 在本机安装一次 pgAdmin，即可在所有服务器桌面中使用。	Install pgAdmin once on this computer to use it from all your server desktops.
 安装已取消	Installation cancelled
 安装已中断	Installation stopped
+应用窗口总览	App window overview
+单击当前活跃应用	Click the active app
+退出窗口总览	Exit window overview
+窗口	Window
+标签页	Tab
+调整侧栏宽度	Resize sidebar
+Office 文件同步	Office file sync
+等待同步	Queued for sync
+正在检查服务器版本	Checking server version
+正在验证上传结果	Verifying upload
+待上传	Pending upload
+保存失败	Save failed
+正在上传	Uploading
+连接已断开。	Session disconnected.
+等待连接	Waiting for connection
+文档已保存。	Document saved.
+文件在打开后已被修改。请另存副本。	This file changed since it was opened. Save a copy instead.
+该文档为只读。请另存副本。	The document is read-only. Save a copy instead.

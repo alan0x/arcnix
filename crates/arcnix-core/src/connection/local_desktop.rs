@@ -336,18 +336,18 @@ impl Target {
             path: home.into(),
         }];
         let directories = String::from_utf8(self.run(&["locations"], &[])?)?;
-        for (dir, name) in [
-            ("Desktop", "Desktop"),
-            ("Documents", "Documents"),
-            ("Downloads", "Download directory"),
-            ("Music", "Music"),
-            ("Pictures", "Pictures"),
-            ("Videos", "Videos"),
+        for name in [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Music",
+            "Pictures",
+            "Videos",
         ] {
-            if directories.lines().any(|line| line == dir) {
+            if directories.lines().any(|line| line == name) {
                 entries.push(FileLocation {
                     name,
-                    path: join(home, dir),
+                    path: join(home, name),
                 });
             }
         }

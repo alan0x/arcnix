@@ -15,6 +15,55 @@ const arcnixKeys = (() => {
 })();
 
 (() => {
+    // Window selection has its own focus loop; none of these keys should reach
+    // a terminal, document, or the desktop's configurable shortcuts.
+    let overviewLayer;
+    const overviewInert = new Set();
+    function focusOverview() {
+        const layer = document.querySelector('.server-desktop:not(.hidden) .window-overview');
+        if (layer || overviewInert.size) {
+            for (const node of overviewInert) if (!layer?.contains(node) || !node.closest('.overview-tile')) {
+                node.inert = false;
+                overviewInert.delete(node);
+            }
+            for (const node of layer?.querySelectorAll('.overview-tile > :is(.desktop-window-titlebar,.desktop-window-content)') || []) {
+                if (!node.inert) { node.inert = true; overviewInert.add(node); }
+            }
+        }
+        if (layer === overviewLayer) return;
+        const previous = overviewLayer;
+        overviewLayer = layer;
+        if (layer) (layer.querySelector('.overview-current .overview-select') || layer.querySelector('.overview-select'))?.focus({preventScroll: true});
+        else if (previous?.isConnected && document.activeElement === document.body) {
+            previous.closest('.desktop-canvas')?.querySelector('.desktop-dock-app.active')?.focus({preventScroll: true});
+        }
+    }
+    new MutationObserver(focusOverview).observe(document, {
+        subtree: true, childList: true, attributes: true, attributeFilter: ['class'],
+    });
+    document.addEventListener('click', event => {
+        if (event.target.matches?.('.window-overview,.overview-heading')) {
+            event.target.closest('.window-overview').querySelector('.overview-exit')?.click();
+        }
+    });
+    window.addEventListener('keydown', event => {
+        const layer = overviewLayer;
+        if (!layer || !layer.closest('.desktop-canvas')?.contains(event.target) ||
+            layer.closest('[inert]') || event.isComposing) return;
+        const tiles = [...layer.querySelectorAll('.overview-select')];
+        const index = tiles.indexOf(document.activeElement);
+        const columns = Number(getComputedStyle(layer).getPropertyValue('--overview-columns')) || 1;
+        const step = {ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns,
+            Tab: event.shiftKey ? -1 : 1}[event.key];
+        if (event.key === 'Escape') layer.querySelector('.overview-exit')?.click();
+        else if (step !== undefined && tiles.length) tiles[(Math.max(index, 0) + step + tiles.length) % tiles.length]?.focus();
+        else if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('.overview-select,.overview-exit')) {
+            if (!event.repeat) event.target.click();
+        } else return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }, true);
+
     const recordButton = '.desktop-shortcut-record';
     const editableFocus = 'input, textarea, select, [contenteditable]';
     const protectedFocus = [

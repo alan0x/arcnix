@@ -52,7 +52,7 @@ def main():
                 assert record['ready'] and record['animations'],record
                 assert all(0<float(a['duration'])<=250 for a in record['animations']),record
                 settled();return record
-            p.locator('.desktop-shortcuts').get_by_role('button',name='Terminal',exact=True).click()
+            p.locator('.desktop-shortcuts').get_by_role('button',name='Terminal',exact=True).dblclick()
             opened=motion('open',0)
             entrance=next(a for a in opened['animations'] if a['name']=='desktop-window-enter')
             assert 'scale(0.88)' in entrance['frames'][0]['transform'],entrance
