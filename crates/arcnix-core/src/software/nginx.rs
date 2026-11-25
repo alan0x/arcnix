@@ -169,9 +169,19 @@ pub struct Site {
     pub summary: Summary,
     /// The file could be read but not understood.
     pub invalid: bool,
+    /// Which site of the file this is, when the file holds several (such
+    /// as nginx.conf): the key from [`crate::nginx_site::site_keys`].
+    pub scope: Option<String>,
 }
 
 impl Site {
+    /// Tells sites apart, also several in one file.
+    pub fn key(&self) -> String {
+        match &self.scope {
+            None => self.file.path.clone(),
+            Some(scope) => format!("{}#{scope}", self.file.path),
+        }
+    }
     /// The name people know the site by.
     pub fn title(&self) -> String {
         self.summary
@@ -188,6 +198,10 @@ impl Site {
             .unwrap_or(name)
     }
     pub fn switchable(&self) -> bool {
+        // Turning the file off would turn off the other sites in it too.
+        if self.scope.is_some() {
+            return false;
+        }
         match self.style {
             Style::Fixed => false,
             Style::Renamed => self.file.editable(),
@@ -268,14 +282,27 @@ impl Snapshot {
         ports.dedup();
         ports
     }
-    pub fn site(&self, path: &str) -> Option<&Site> {
-        self.sites.iter().find(|s| s.file.path == path)
+    /// A site by its [`Site::key`].
+    pub fn site(&self, key: &str) -> Option<&Site> {
+        self.sites.iter().find(|s| s.key() == key)
     }
-    /// The main configuration or a site, by the path Nginx knows.
+    /// The main configuration or a site's file, by the path Nginx knows.
     pub fn file(&self, path: &str) -> Option<&File> {
-        self.site(path)
+        if self.main.path == path {
+            return Some(&self.main);
+        }
+        self.sites
+            .iter()
+            .find(|s| s.file.path == path)
             .map(|s| &s.file)
-            .or((self.main.path == path).then_some(&self.main))
+    }
+    /// A container that only runs Nginx inside an application, such as a web
+    /// front end built on the nginx image: it publishes no port and nothing
+    /// in it comes from the server, so there is nothing to manage.
+    pub fn internal(&self) -> bool {
+        self.docker.as_ref().is_some_and(|c| c.ports.is_empty())
+            && !self.main.editable()
+            && !self.sites.iter().any(|s| s.file.editable())
     }
 }
 
@@ -400,6 +427,45 @@ fn file(raw: RawFile) -> Result<File> {
     })
 }
 
+/// The sites in one file: one, or one per site when the file holds several.
+/// Sites in the main configuration are always told apart, so its own
+/// settings stay separate from theirs.
+fn file_sites(
+    file: File,
+    enabled: bool,
+    style: Style,
+    link: String,
+    link_target: String,
+    main: bool,
+) -> Vec<Site> {
+    let parsed = file.text.as_deref().map(nginx_config::parse);
+    let invalid = matches!(parsed, Some(Err(_)));
+    let directives = match parsed {
+        Some(Ok(directives)) => directives,
+        _ => Vec::new(),
+    };
+    let keys = crate::nginx_site::site_keys(&directives);
+    let site = |summary, scope| Site {
+        file: file.clone(),
+        enabled,
+        style,
+        link: link.clone(),
+        link_target: link_target.clone(),
+        summary,
+        invalid,
+        scope,
+    };
+    if !main && keys.len() <= 1 {
+        return vec![site(nginx_config::summary(&directives), None)];
+    }
+    keys.into_iter()
+        .map(|key| {
+            let servers = crate::nginx_site::site_servers(&directives, &key);
+            site(nginx_config::summary(&servers), Some(key))
+        })
+        .collect()
+}
+
 fn instance(raw: RawInstance) -> Result<Snapshot> {
     checked_path(&raw.root)?;
     if let Some(container) = &raw.docker {
@@ -416,27 +482,30 @@ fn instance(raw: RawInstance) -> Result<Snapshot> {
             checked_path(&site.link)?;
         }
         checked_target(&site.link_target)?;
-        let parsed = site.text.as_deref().map(nginx_config::parse);
-        let invalid = matches!(parsed, Some(Err(_)));
-        let summary = match parsed {
-            Some(Ok(directives)) => nginx_config::summary(&directives),
-            _ => Summary::default(),
-        };
-        sites.push(Site {
-            file: file(RawFile {
-                path: site.path,
-                target: site.target,
-                text: site.text,
-                error: site.error,
-            })?,
-            enabled: site.enabled,
-            style: site.style,
-            link: site.link,
-            link_target: site.link_target,
-            summary,
-            invalid,
-        });
+        let file = file(RawFile {
+            path: site.path,
+            target: site.target,
+            text: site.text,
+            error: site.error,
+        })?;
+        sites.extend(file_sites(
+            file,
+            site.enabled,
+            site.style,
+            site.link,
+            site.link_target,
+            false,
+        ));
     }
+    let main = file(raw.main)?;
+    sites.extend(file_sites(
+        main.clone(),
+        true,
+        Style::Fixed,
+        String::new(),
+        String::new(),
+        true,
+    ));
     sites.sort_by_cached_key(|s| (s.title().to_lowercase(), s.file.path.clone()));
     Ok(Snapshot {
         root: raw.root,
@@ -445,7 +514,7 @@ fn instance(raw: RawInstance) -> Result<Snapshot> {
         service: raw.service,
         docker: raw.docker,
         layout: raw.layout,
-        main: file(raw.main)?,
+        main,
         sites,
         dirs: raw.dirs,
         truncated: raw.truncated,
@@ -561,7 +630,7 @@ pub fn log_sources(snapshot: &Snapshot, kind: LogKind) -> Vec<LogSource> {
         let Some(text) = site.file.text.as_deref() else {
             continue;
         };
-        let Ok(form) = crate::nginx_site::read(text) else {
+        let Ok(form) = crate::nginx_site::read_in(text, site.scope.as_deref()) else {
             continue;
         };
         let args = match kind {
@@ -851,6 +920,10 @@ pub struct Certificates {
     pub certbot: bool,
     /// How certificates are renewed: "timer", "cron", or empty for not set up.
     pub renewal: String,
+    /// Other automatic renewal found on the server, such as "acme.sh (cron)"
+    /// or a Certbot container; Arcnix shows it but does not manage it.
+    #[serde(default)]
+    pub others: Vec<String>,
     pub served: Vec<Served>,
 }
 
@@ -866,6 +939,62 @@ def renewal():
         if os.path.exists(path):
             return 'cron'
     return ''
+CLIENTS = (('acme.sh', 'acme.sh'), ('certbot', 'Certbot'), ('lego', 'lego'), ('dehydrated', 'dehydrated'), ('getssl', 'getssl'), ('acme-companion', 'acme-companion'), ('letsencrypt-nginx-proxy-companion', 'acme-companion'), ('swag', 'SWAG'))
+def client(text):
+    text = text.lower()
+    for needle, name in CLIENTS:
+        if needle in text:
+            return name
+    return ''
+def others():
+    found = []
+    def add(item):
+        if item not in found:
+            found.append(item)
+    tables = []
+    crontab = shutil.which('crontab')
+    if crontab:
+        result = subprocess.run([crontab, '-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        tables.append(result.stdout.decode('utf-8', 'replace'))
+    paths = ['/etc/crontab'] + [os.path.join('/etc/cron.d', n) for n in sorted(os.listdir('/etc/cron.d'))] if os.path.isdir('/etc/cron.d') else ['/etc/crontab']
+    for path in paths:
+        if path in ('/etc/cron.d/certbot',):
+            continue
+        try:
+            with open(path, errors='replace') as f:
+                tables.append(f.read(65536))
+        except OSError:
+            pass
+    for table in tables:
+        for line in table.splitlines():
+            line = line.strip()
+            if line and not line.startswith('#') and client(line):
+                add(client(line) + ' (cron)')
+    systemctl = shutil.which('systemctl')
+    if systemctl:
+        result = subprocess.run([systemctl, 'list-timers', '--all', '--no-legend', '--no-pager'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        for line in result.stdout.decode('utf-8', 'replace').splitlines():
+            unit = next((w for w in line.split() if w.endswith('.timer')), '')
+            if unit and unit not in ('certbot.timer', 'snap.certbot.renew.timer') and client(unit):
+                add(client(unit) + ' (systemd timer)')
+    docker = shutil.which('docker') or ('/snap/bin/docker' if os.path.exists('/snap/bin/docker') else '')
+    if docker:
+        env = {k: v for k, v in os.environ.items() if k not in ('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH')}
+        try:
+            result = subprocess.run([docker, 'ps', '--format', '{{.Names}}\t{{.Image}}'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, env=env)
+            for line in result.stdout.decode('utf-8', 'replace').splitlines()[:200]:
+                name, _, image = line.partition('\t')
+                tool = client(image.rsplit('/', 1)[-1].split(':')[0]) or client(name)
+                if tool:
+                    add(tool + ' (container ' + name[:64] + ')')
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return found[:8]
+def safe_others():
+    try:
+        return others()
+    except Exception:
+        return []
 def served(name, port):
     out = {'name': name, 'port': port, 'expires': 0, 'issuer': '', 'error': ''}
     try:
@@ -890,7 +1019,7 @@ def served(name, port):
     except Exception as error:
         out['error'] = type(error).__name__
     return out
-print(json.dumps({'certbot': bool(shutil.which('certbot') or os.path.exists('/snap/bin/certbot')), 'renewal': renewal(), 'served': [served(p['name'], int(p['port'])) for p in probes[:50]]}))
+print(json.dumps({'certbot': bool(shutil.which('certbot') or os.path.exists('/snap/bin/certbot')), 'renewal': renewal(), 'others': safe_others(), 'served': [served(p['name'], int(p['port'])) for p in probes[:50]]}))
 "#;
 
 /// The command that checks Certbot and the certificates the sites serve, as
@@ -1416,6 +1545,72 @@ mod tests {
         let mut odd = compose();
         odd["docker"]["id"] = "x; rm -rf /".into();
         assert!(reading(serde_json::json!([odd])).is_err());
+    }
+
+    #[test]
+    fn sites_in_the_main_configuration_are_listed_one_by_one() {
+        let mut edge = compose();
+        edge["main"] = serde_json::json!({"path": "/etc/nginx/nginx.conf", "target": "/srv/web/nginx.conf",
+            "text": "events {}\nhttp {\n server { listen 80; server_name a.example.com; location / { proxy_pass http://a:80; } }\n server { listen 80; server_name b.example.com; return 301 https://$host$request_uri; }\n server { listen 443 ssl; server_name b.example.com; ssl_certificate /c; ssl_certificate_key /k; root /srv; }\n}\n", "error": ""});
+        edge["sites"] = serde_json::json!([]);
+        edge["layout"] = "none".into();
+        let n = reading(serde_json::json!([edge]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let keys: Vec<_> = n.sites.iter().map(Site::key).collect();
+        assert_eq!(
+            keys,
+            [
+                "/etc/nginx/nginx.conf#a.example.com",
+                "/etc/nginx/nginx.conf#b.example.com"
+            ]
+        );
+        let b = n.site("/etc/nginx/nginx.conf#b.example.com").unwrap();
+        assert!(b.summary.https && b.enabled && !b.switchable());
+        assert_eq!(b.summary.ports, [80, 443]);
+        assert_eq!(
+            n.file("/etc/nginx/nginx.conf").unwrap().target,
+            "/srv/web/nginx.conf"
+        );
+        assert!(!n.internal());
+
+        // A site file with several sites is split too, and keeps one switch
+        // for the file only through File.
+        let mut shared = compose();
+        shared["sites"][0]["text"] =
+            "server { listen 80; server_name a.local; } server { listen 80; server_name b.local; }"
+                .into();
+        let n = reading(serde_json::json!([shared]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let split: Vec<_> = n
+            .sites
+            .iter()
+            .filter(|s| s.scope.is_some())
+            .map(Site::title)
+            .collect();
+        assert_eq!(split, ["a.local", "b.local"]);
+        assert!(
+            n.sites
+                .iter()
+                .filter(|s| s.scope.is_some())
+                .all(|s| !s.switchable())
+        );
+
+        // A front end built on the nginx image: nothing published or mounted.
+        let mut front = compose();
+        front["docker"]["name"] = "app-front-1".into();
+        front["docker"]["ports"] = serde_json::json!([]);
+        front["sites"] = serde_json::json!([{"path": "/etc/nginx/conf.d/default.conf", "target": "", "enabled": true, "style": "renamed",
+            "link": "", "link_target": "", "text": "server { listen 80; root /usr/share/nginx/html; }", "error": ""}]);
+        let n = reading(serde_json::json!([front]))
+            .unwrap()
+            .instances
+            .remove(0);
+        assert!(n.internal());
+        assert!(!container().internal());
     }
 
     #[test]

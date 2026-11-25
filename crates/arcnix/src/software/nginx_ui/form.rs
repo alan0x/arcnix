@@ -107,14 +107,22 @@ impl Ui {
             let Some(editor) = &mut s.nginx.editor else {
                 return;
             };
-            match nginx_site::apply(&editor.text, &change).and_then(|text| {
-                Ok((
-                    nginx_site::read(&text)?,
-                    nginx_site::read_main(&text)?,
-                    text,
-                ))
-            }) {
+            // A site in a shared file is known by its first name.
+            let scope = match (&change, &editor.scope) {
+                (Change::Names(names), Some(_)) => {
+                    names.split_whitespace().next().map(str::to_owned)
+                }
+                _ => editor.scope.clone(),
+            };
+            match nginx_site::apply_in(&editor.text, editor.scope.as_deref(), &change).and_then(
+                |text| {
+                    let (site, main) =
+                        super::settings_of(editor.main_only, scope.as_deref(), &text)?;
+                    Ok((site, main, text))
+                },
+            ) {
                 Ok((site, main, text)) => {
+                    editor.scope = scope;
                     editor.text = text;
                     editor.site = site;
                     editor.main = main;

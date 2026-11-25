@@ -165,10 +165,17 @@ pub(super) fn event(
     None
 }
 
-fn renewal(reading: &Certificates) -> &'static str {
-    match (reading.certbot, reading.renewal.as_str()) {
+fn renewal(reading: &Certificates) -> String {
+    let certbot = matches!(reading.renewal.as_str(), "timer" | "cron");
+    if !reading.others.is_empty() && !certbot {
+        let tools = reading.others.join(", ");
+        return i18n::translate(&format!(
+            "Found automatic renewal by {tools}. Arcnix shows when each certificate expires, but does not manage that renewal."
+        ));
+    }
+    i18n::translate(match (reading.certbot, reading.renewal.as_str()) {
         (false, _) => {
-            "Certbot is not installed. Install it from App Center to get certificates from Let's Encrypt."
+            "Arcnix found no automatic renewal it recognizes (Certbot, acme.sh, lego or a renewal container). If the certificates are renewed another way, the expiry dates above show whether it works. To get certificates from Let's Encrypt here, install Certbot from App Center."
         }
         (true, "timer") => {
             "Certbot renews certificates automatically (systemd timer) and reloads Nginx after each renewal."
@@ -179,7 +186,7 @@ fn renewal(reading: &Certificates) -> &'static str {
         (true, _) => {
             "Certbot is installed, but automatic renewal is not set up. Certificates expire after 90 days."
         }
-    }
+    })
 }
 
 /// The Certificates section of the overview.
@@ -223,14 +230,14 @@ pub(super) fn overview(ui: &Ui) -> impl Widget + use<> {
                         ))
                     }),
                 ),
-                text().class("hint").content(i18n::bind(state.map(|s| {
+                text().class("hint").content(state.map(|s| {
                     s.nginx
                         .certificates
                         .reading
                         .as_ref()
-                        .map(|r| renewal(r).to_owned())
+                        .map(renewal)
                         .unwrap_or_default()
-                }))),
+                })),
             ))
         },
     )
@@ -254,7 +261,8 @@ fn served_here(s: &State) -> Option<nginx::Served> {
 fn published_acme(s: &State) -> bool {
     s.nginx.editor.as_ref().is_some_and(|e| {
         !e.original.is_empty()
-            && nginx_site::read(&e.original).is_ok_and(|site| site.acme.is_some())
+            && nginx_site::read_in(&e.original, e.scope.as_deref())
+                .is_ok_and(|site| site.acme.is_some())
             && !changed(e)
     })
 }
@@ -284,9 +292,17 @@ pub(super) fn lets_encrypt(ui: &Ui) -> impl Widget + use<> {
             .as_ref()
             .is_none_or(|r| r.certbot)
     };
+    // Certbot writes challenge files to Arcnix's folder; a site that serves
+    // them from another folder is renewed by some other tool.
+    let elsewhere = move |s: &State| {
+        site(s)
+            .acme
+            .is_some_and(|root| root != nginx_site::ACME_ROOT)
+    };
     let can_issue = move |s: &State| {
         writable(s)
             && can_change(s)
+            && !elsewhere(s)
             && !site(s).certificate_names.is_empty()
             && published_acme(s)
             && missing_mounts(s).is_empty()
@@ -309,6 +325,11 @@ pub(super) fn lets_encrypt(ui: &Ui) -> impl Widget + use<> {
         }))),
         text().class("hint").content(i18n::bind(state.map(move |s| {
             let site = site(s);
+            if let Some(root) = site.acme.as_ref().filter(|_| elsewhere(s)) {
+                return i18n::translate(&format!(
+                    "This site serves Let's Encrypt's challenge files from {root}, so another tool probably gets and renews its certificate. Arcnix leaves that alone; the date above shows when the certificate expires."
+                ));
+            }
             let step = if site.certificate_names.is_empty() {
                 "Let's Encrypt needs the site to have a full domain name such as example.com."
             } else if !site.plain_http {
@@ -328,7 +349,7 @@ pub(super) fn lets_encrypt(ui: &Ui) -> impl Widget + use<> {
         }))),
         text().class("nginx-path nginx-mounts").selectable(true).content(state.map(move |s| {
             let missing = missing_mounts(s);
-            if missing.is_empty() || site(s).acme.is_none() {
+            if missing.is_empty() || site(s).acme.is_none() || elsewhere(s) {
                 String::new()
             } else {
                 missing.iter().map(|m| format!("  - {m}")).collect::<Vec<_>>().join("\n")
@@ -345,7 +366,7 @@ pub(super) fn lets_encrypt(ui: &Ui) -> impl Widget + use<> {
                     .on_press(move || ui.nginx_change(Change::Acme(Some(nginx_site::ACME_ROOT.into())))),
             )
         }),
-        when(state.map(move |s| site(s).acme.is_some()), move || {
+        when(state.map(move |s| site(s).acme.is_some() && !elsewhere(s)), move || {
             let ui = issue.clone();
             col().class("form-stack").fill((
                 super::form::adding_text(&ui, "Email for expiry notices (optional)", |a| a.email.clone(), |a, v| a.email = v),

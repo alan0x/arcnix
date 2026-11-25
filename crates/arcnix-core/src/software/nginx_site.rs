@@ -481,9 +481,52 @@ fn server_paths(directives: &[Directive]) -> Vec<Path> {
     out
 }
 
+/// The site a server block belongs to, in a file that holds several: the
+/// first name it answers to, or for a www redirect the name it sends
+/// visitors to. Empty for a block without `server_name`.
+fn site_key(server: &Directive) -> String {
+    if let Some(www) = www_redirect(server) {
+        return www.to;
+    }
+    server
+        .first("server_name")
+        .and_then(|d| d.args.first())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The sites in a file, in the order they first appear. A file such as
+/// nginx.conf can hold several; each is edited on its own.
+pub fn site_keys(directives: &[Directive]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for p in server_paths(directives) {
+        let key = site_key(at(directives, &p).expect("server path"));
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// Only the server blocks of one site, for its summary.
+pub fn site_servers(directives: &[Directive], key: &str) -> Vec<Directive> {
+    scoped_paths(directives, Some(key))
+        .iter()
+        .filter_map(|p| at(directives, p).cloned())
+        .collect()
+}
+
+/// The server blocks of one site, or of the whole file when no site is named.
+fn scoped_paths(directives: &[Directive], scope: Option<&str>) -> Vec<Path> {
+    server_paths(directives)
+        .into_iter()
+        .filter(|p| scope.is_none_or(|key| at(directives, p).is_some_and(|s| site_key(s) == key)))
+        .collect()
+}
+
 /// The server blocks that serve content, rather than only redirect.
-fn content_paths(directives: &[Directive]) -> Vec<Path> {
-    let all = server_paths(directives);
+fn content_paths(directives: &[Directive], scope: Option<&str>) -> Vec<Path> {
+    let all = scoped_paths(directives, scope);
     let content: Vec<_> = all
         .iter()
         .filter(|p| !at(directives, p).is_some_and(config::redirect_only))
@@ -497,8 +540,27 @@ fn agreed<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> {
     values.all(|v| v == first).then_some(first)
 }
 
+/// The arguments as written, on one line: a list such as `gzip_types` can
+/// span several, but form fields hold one line.
 fn args_text(text: &str, d: &Directive) -> String {
-    text[d.args_span.clone()].to_owned()
+    let written = &text[d.args_span.clone()];
+    if !written.contains(['\n', '\r']) {
+        return written.to_owned();
+    }
+    let mut out = String::with_capacity(written.len());
+    let mut space = false;
+    for c in written.chars() {
+        if c.is_whitespace() {
+            space = true;
+        } else {
+            if space && !out.is_empty() {
+                out.push(' ');
+            }
+            space = false;
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn joined(d: Option<&Directive>) -> String {
@@ -531,6 +593,28 @@ fn https_redirect(server: &Directive) -> bool {
             && r.args[0].starts_with('3')
             && (r.args[1].starts_with("https://$host")
                 || r.args[1].starts_with("https://$server_name"))
+    })
+}
+
+/// An `if ($scheme = http) { return 301 https://…; }` in the server block
+/// itself, which sends plain HTTP to HTTPS without a server block of its own.
+fn scheme_redirect(server: &Directive) -> Option<&Directive> {
+    server.find("if").find(|d| {
+        let condition: String = d
+            .args
+            .concat()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let body = d.children();
+        matches!(
+            condition.as_str(),
+            "($scheme=http)" | "($scheme=\"http\")" | "($scheme='http')"
+        ) && body.len() == 1
+            && body[0].name == "return"
+            && body[0].args.len() == 2
+            && body[0].args[0].starts_with('3')
+            && body[0].args[1].starts_with("https://")
     })
 }
 
@@ -681,9 +765,15 @@ fn rows(
 }
 
 pub fn read(text: &str) -> Result<Site> {
+    read_in(text, None)
+}
+
+/// Reads one site of a file that holds several, by its key from
+/// [`site_keys`]; `None` reads every server block in the file.
+pub fn read_in(text: &str, scope: Option<&str>) -> Result<Site> {
     let directives = parse(text)?;
-    let all = server_paths(&directives);
-    let content = content_paths(&directives);
+    let all = scoped_paths(&directives, scope);
+    let content = content_paths(&directives, scope);
     let mut site = Site::default();
     if all.is_empty() {
         return Ok(site);
@@ -725,9 +815,10 @@ pub fn read(text: &str) -> Result<Site> {
                     .find("listen")
                     .any(|l| l.args.iter().any(|a| a == "http2")),
             hsts: hsts(server).is_some(),
-            force: all
-                .iter()
-                .any(|p| p != path && https_redirect(server_at(p))),
+            force: scheme_redirect(server).is_some()
+                || all
+                    .iter()
+                    .any(|p| p != path && https_redirect(server_at(p))),
         });
     }
     if let Some(realm) = auth_on(server) {
@@ -782,13 +873,21 @@ pub fn read(text: &str) -> Result<Site> {
             .filter_map(config::port)
             .any(|(port, ssl)| port == 80 && !ssl)
     });
+    let acme_root = |s: &Directive| {
+        config::acme_location(s)
+            .and_then(|l| l.first("root").or_else(|| l.first("alias")))
+            .map(|d| joined(Some(d)))
+    };
+    // Let's Encrypt follows a redirect to HTTPS, so a block that sends
+    // plain HTTP there counts when the HTTPS block serves the files.
+    let secure_root = server
+        .find("listen")
+        .any(ssl_listen)
+        .then(|| acme_root(server))
+        .flatten();
     let roots: Vec<Option<String>> = plain
         .iter()
-        .map(|s| {
-            config::acme_location(s)
-                .and_then(|l| l.first("root").or_else(|| l.first("alias")))
-                .map(|d| joined(Some(d)))
-        })
+        .map(|s| acme_root(s).or_else(|| https_redirect(s).then(|| secure_root.clone()).flatten()))
         .collect();
     site.acme = match roots.split_first() {
         Some((Some(first), rest)) if rest.iter().all(|r| r.as_ref() == Some(first)) => {
@@ -850,6 +949,7 @@ pub fn read(text: &str) -> Result<Site> {
     site.rows = rows(text, server, path, |d| {
         let block_location = d.name == "location" && d.block.is_some();
         block_location
+            || (https && scheme_redirect(server).is_some_and(|r| r.span == d.span))
             || matches!(
                 d.name.as_str(),
                 "listen" | "server_name" | "client_max_body_size"
@@ -1031,9 +1131,15 @@ fn location_body(kind: NewKind, matching: &str, value: &str) -> Result<Vec<Strin
 
 /// Applies one change, leaving the rest of the file as written.
 pub fn apply(text: &str, change: &Change) -> Result<String> {
+    apply_in(text, None, change)
+}
+
+/// Applies one change to one site of a file that holds several; see
+/// [`read_in`].
+pub fn apply_in(text: &str, scope: Option<&str>, change: &Change) -> Result<String> {
     let directives = parse(text)?;
-    let all = server_paths(&directives);
-    let content = content_paths(&directives);
+    let all = scoped_paths(&directives, scope);
+    let content = content_paths(&directives, scope);
     let get =
         |path: &[usize]| at(&directives, path).context("This part of the file changed; reopen it");
     let single = || -> Result<&Directive> {
@@ -1055,6 +1161,14 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
         Change::Names(names) => {
             config::check_names(names)?;
             let names = names.split_whitespace().collect::<Vec<_>>().join(" ");
+            if let Some(scope) = scope {
+                // The first name tells the sites in the file apart.
+                let first = names.split(' ').next().unwrap_or_default();
+                ensure!(
+                    first == scope || !site_keys(&directives).iter().any(|k| k == first),
+                    "Another site in this file already answers to {first}"
+                );
+            }
             for p in &all {
                 let server = get(p)?;
                 if www_redirect(server).is_some() {
@@ -1400,8 +1514,12 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
             let ipv6 = server
                 .find("listen")
                 .any(|l| l.args.first().is_some_and(|a| a.starts_with('[')));
+            let inline = scheme_redirect(server);
             if *on {
-                ensure!(redirects.is_empty(), "Plain HTTP already goes to HTTPS");
+                ensure!(
+                    redirects.is_empty() && inline.is_none(),
+                    "Plain HTTP already goes to HTTPS"
+                );
                 let names = server.first("server_name").map(|d| args_text(text, d));
                 let (_, unit) = deeper(&edits, server);
                 let mut lines = vec!["server {".to_owned(), format!("{unit}listen 80;")];
@@ -1423,6 +1541,9 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                 for l in plain {
                     edits.remove(l);
                 }
+            } else if let Some(inline) = inline.filter(|_| redirects.is_empty()) {
+                // The server already answers plain HTTP; only the redirect goes.
+                edits.remove(inline);
             } else {
                 ensure!(!redirects.is_empty(), "Plain HTTP does not go to HTTPS");
                 for r in redirects {
@@ -2816,5 +2937,166 @@ server {
         let secure_only = "server { listen 443 ssl; server_name a.example.com; ssl_certificate /c; ssl_certificate_key /k; root /srv; }";
         assert!(!read(secure_only).unwrap().plain_http);
         assert!(apply(secure_only, &Change::Acme(Some(ACME_ROOT.into()))).is_err());
+    }
+
+    /// nginx.conf with every site in its own `http` block, the way many
+    /// Compose setups keep it.
+    const SHARED: &str = "events {}
+http {
+    client_max_body_size 100M;
+    server {
+        listen 80;
+        listen 443 ssl;
+        server_name a.example.com;
+        ssl_certificate /c/a.pem;
+        ssl_certificate_key /c/a.key;
+        if ($scheme = http) {
+            return 301 https://$host$request_uri;
+        }
+        location ^~ /.well-known/acme-challenge/ {
+            root /c/acme;
+        }
+        location / {
+            proxy_pass http://front:80;
+        }
+    }
+    limit_req_zone $binary_remote_addr zone=b:10m rate=30r/s;
+    server {
+        listen 80;
+        server_name b.example.com;
+        return 301 https://$host$request_uri;
+    }
+    server {
+        listen 443 ssl;
+        server_name b.example.com;
+        ssl_certificate /c/b.pem;
+        ssl_certificate_key /c/b.key;
+        client_max_body_size 64k;
+        location ^~ /.well-known/acme-challenge/ {
+            root /c/acme;
+        }
+        location / {
+            limit_req zone=b burst=100 nodelay;
+            set $up b-app:8080;
+            proxy_pass http://$up;
+        }
+    }
+    server {
+        listen 80;
+        server_name www.c.example.com;
+        return 301 $scheme://c.example.com$request_uri;
+    }
+    server {
+        listen 80;
+        server_name c.example.com;
+        root /srv/c;
+    }
+}
+";
+
+    #[test]
+    fn a_file_with_several_sites_edits_each_on_its_own() {
+        let directives = parse(SHARED).unwrap();
+        assert_eq!(
+            site_keys(&directives),
+            ["a.example.com", "b.example.com", "c.example.com"]
+        );
+        // Without a scope the sites disagree, so the form has no site.
+        assert!(read(SHARED).unwrap().server.is_none());
+
+        let a = read_in(SHARED, Some("a.example.com")).unwrap();
+        assert_eq!(a.names.as_deref(), Some("a.example.com"));
+        let https = a.https.as_ref().unwrap();
+        assert!(https.force, "the if block sends plain HTTP to HTTPS");
+        assert_eq!(https.certificate, "/c/a.pem");
+        assert_eq!(a.acme.as_deref(), Some("/c/acme"));
+        assert!(!a.rows.iter().any(|r| r.name == "if"), "{:?}", a.rows);
+        assert_eq!(a.locations.len(), 1);
+
+        let b = read_in(SHARED, Some("b.example.com")).unwrap();
+        assert!(b.https.as_ref().unwrap().force);
+        assert_eq!(b.upload.as_deref(), Some("64k"));
+        // Let's Encrypt follows the redirect to the HTTPS block's challenge.
+        assert_eq!(b.acme.as_deref(), Some("/c/acme"));
+        assert!(
+            matches!(&b.locations[0].kind, Kind::Proxy { target, .. } if target == "http://$up")
+        );
+        let c = read_in(SHARED, Some("c.example.com")).unwrap();
+        assert_eq!(
+            c.www.as_ref().map(|w| w.from.as_str()),
+            Some("www.c.example.com")
+        );
+
+        // A change reaches only its own site.
+        let changed =
+            apply_in(SHARED, Some("a.example.com"), &Change::Upload("8m".into())).unwrap();
+        assert_eq!(
+            read_in(&changed, Some("a.example.com"))
+                .unwrap()
+                .upload
+                .as_deref(),
+            Some("8m")
+        );
+        assert_eq!(
+            read_in(&changed, Some("b.example.com"))
+                .unwrap()
+                .upload
+                .as_deref(),
+            Some("64k")
+        );
+        assert_eq!(
+            read_in(&changed, Some("c.example.com"))
+                .unwrap()
+                .upload
+                .as_deref(),
+            Some("")
+        );
+
+        // Turning off the inline redirect removes only the if block.
+        let plain = apply_in(SHARED, Some("a.example.com"), &Change::ForceHttps(false)).unwrap();
+        assert!(!plain.contains("if ($scheme"), "{plain}");
+        assert!(
+            !read_in(&plain, Some("a.example.com"))
+                .unwrap()
+                .https
+                .unwrap()
+                .force
+        );
+        assert!(
+            read_in(&plain, Some("b.example.com"))
+                .unwrap()
+                .https
+                .unwrap()
+                .force
+        );
+        assert!(apply_in(SHARED, Some("a.example.com"), &Change::ForceHttps(true)).is_err());
+
+        // A list over several lines is shown on one.
+        let lists = "server { server_name a.example.com;\n    gzip_types\n        text/plain\n        text/css;\n}";
+        let rows = read(lists).unwrap().rows;
+        assert_eq!(rows[0].args, "text/plain text/css");
+
+        // A site cannot take the name another site in the file is known by.
+        assert!(
+            apply_in(
+                SHARED,
+                Some("a.example.com"),
+                &Change::Names("b.example.com".into())
+            )
+            .is_err()
+        );
+        let renamed = apply_in(
+            SHARED,
+            Some("c.example.com"),
+            &Change::Names("c.example.com d.example.com".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            read_in(&renamed, Some("c.example.com"))
+                .unwrap()
+                .names
+                .as_deref(),
+            Some("c.example.com d.example.com")
+        );
     }
 }

@@ -29,6 +29,10 @@ pub(crate) struct Editor {
     instance: String,
     /// The path Nginx knows.
     path: String,
+    /// Which site of the file this is, when the file holds several.
+    scope: Option<String>,
+    /// The main configuration's own settings, without its sites.
+    main_only: bool,
     /// The file on the server that publishing writes; empty when the file is
     /// inside a container image and can only be read.
     target: String,
@@ -56,6 +60,37 @@ pub(crate) struct Editor {
     issuing: Option<String>,
 }
 
+/// The text as the Settings view shows it: one site, the main
+/// configuration's settings, or both for a file that holds one site.
+fn settings_of(
+    main_only: bool,
+    scope: Option<&str>,
+    text: &str,
+) -> anyhow::Result<(Site, Option<Main>)> {
+    if main_only {
+        return Ok((Site::default(), nginx_site::read_main(text)?));
+    }
+    let site = nginx_site::read_in(text, scope)?;
+    let main = match scope {
+        Some(_) => None,
+        None => nginx_site::read_main(text)?,
+    };
+    Ok((site, main))
+}
+
+impl Editor {
+    fn read(&self, text: &str) -> anyhow::Result<(Site, Option<Main>)> {
+        settings_of(self.main_only, self.scope.as_deref(), text)
+    }
+    /// The [`nginx::Site::key`] of the site being edited.
+    fn key(&self) -> String {
+        match &self.scope {
+            Some(scope) => format!("{}#{scope}", self.path),
+            None => self.path.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct NewSite {
     kind: Kind,
@@ -71,6 +106,9 @@ pub(crate) struct NginxState {
     snapshot: Option<Rc<Snapshot>>,
     /// Why Docker containers could not be listed.
     docker_error: String,
+    /// Containers that run Nginx only inside an application, which are not
+    /// listed as instances.
+    hidden: Vec<String>,
     pending: Option<u64>,
     error: String,
     /// Why the last site or service task failed.
@@ -110,7 +148,7 @@ fn rows(s: &State, enabled_only: bool) -> Vec<Row> {
         .iter()
         .filter(|site| !enabled_only || site.enabled)
         .map(|site| Row {
-            path: site.file.path.clone(),
+            path: site.key(),
             title: site.title(),
             file: site.file.path.clone(),
             names: site.summary.names.join(" "),
@@ -133,6 +171,10 @@ fn rows(s: &State, enabled_only: bool) -> Vec<Row> {
                 "Not valid Nginx configuration"
             } else if !site.file.editable() {
                 "Inside the container image; mount it from the server to change it"
+            } else if site.scope.is_some() && site.file.path == snapshot.main.path {
+                "In the main configuration, so it stays on"
+            } else if site.scope.is_some() {
+                "Shares its file with other sites, so it is turned on and off in File"
             } else if site.style == Style::Fixed && site.file.path.contains("/sites-enabled/") {
                 "Copied into sites-enabled, so it stays on"
             } else if site.style == Style::Fixed {
@@ -411,29 +453,34 @@ impl Ui {
             self.nginx_task(template);
         }
     }
-    fn nginx_open(&self, path: &str) {
+    /// Opens a site by its key, or the main configuration by its path.
+    fn nginx_open(&self, key: &str) {
         let editor = self.state.with(|s| {
             let snapshot = s.nginx.snapshot.as_ref()?;
             // A site that is off cannot answer, so it gets no health address.
-            let (file, summary) = match snapshot.site(path) {
-                Some(site) => (&site.file, site.enabled.then_some(&site.summary)),
-                None if snapshot.main.path == path => (&snapshot.main, None),
+            let (file, summary, scope) = match snapshot.site(key) {
+                Some(site) => (
+                    &site.file,
+                    site.enabled.then_some(&site.summary),
+                    Some(site.scope.clone()),
+                ),
+                None if snapshot.main.path == key => (&snapshot.main, None, None),
                 None => return None,
             };
             let text = file.text.clone()?;
-            let site = nginx_site::read(&text).unwrap_or_default();
-            let main = nginx_site::read_main(&text).ok().flatten();
             // A site's domain does not reach a container from the server, so
             // a containerized Nginx checks only that it keeps running.
             let summary = summary.filter(|_| snapshot.docker.is_none());
-            Some(Editor {
+            let mut editor = Editor {
                 instance: snapshot.key(),
                 path: file.path.clone(),
+                main_only: scope.is_none(),
+                scope: scope.flatten(),
                 target: file.target.clone(),
                 original: text.clone(),
-                file_view: !has_form(&site, main.as_ref()),
-                site,
-                main,
+                file_view: false,
+                site: Site::default(),
+                main: None,
                 drafts: Default::default(),
                 adding: Default::default(),
                 text,
@@ -443,7 +490,12 @@ impl Ui {
                 failure: String::new(),
                 info: String::new(),
                 issuing: None,
-            })
+            };
+            let (site, main) = editor.read(&editor.text).unwrap_or_default();
+            editor.file_view = !has_form(&site, main.as_ref());
+            editor.site = site;
+            editor.main = main;
+            Some(editor)
         });
         if editor.is_some() {
             self.state.revise(|s| s.nginx.editor = editor);
@@ -471,6 +523,8 @@ impl Ui {
             Ok(Editor {
                 instance: snapshot.key(),
                 path,
+                scope: None,
+                main_only: false,
                 target,
                 original: String::new(),
                 text,
@@ -510,10 +564,10 @@ impl Ui {
                 return;
             }
             if !file {
-                match nginx_site::read(&editor.text) {
-                    Ok(site) => {
+                match editor.read(&editor.text) {
+                    Ok((site, main)) => {
                         editor.site = site;
-                        editor.main = nginx_site::read_main(&editor.text).ok().flatten();
+                        editor.main = main;
                         editor.drafts.clear();
                         editor.error.clear();
                     }
@@ -582,8 +636,18 @@ pub(crate) fn event(
         s.nginx.pending = None;
         match result {
             Ok(Reply::Nginx(reading)) => {
-                let instances: Vec<Rc<Snapshot>> =
-                    reading.instances.into_iter().map(Rc::new).collect();
+                // An application's own Nginx is listed only when there is no
+                // other to manage.
+                let managed = reading.instances.iter().any(|n| !n.internal());
+                let (instances, hidden): (Vec<Snapshot>, Vec<Snapshot>) = reading
+                    .instances
+                    .into_iter()
+                    .partition(|n| !managed || !n.internal());
+                s.nginx.hidden = hidden
+                    .iter()
+                    .filter_map(|n| n.docker.as_ref().map(|c| c.name.clone()))
+                    .collect();
+                let instances: Vec<Rc<Snapshot>> = instances.into_iter().map(Rc::new).collect();
                 let selected = instances
                     .iter()
                     .find(|n| n.key() == s.nginx.instance)
@@ -869,6 +933,15 @@ fn overview(ui: Ui) -> impl Widget {
         text().class("hint").content(i18n::bind(
             "Changes run as server tasks with administrator rights. You review each one before it runs, and it is kept in task history.",
         )),
+        text().class("hint").content(state.map(|s| {
+            if s.nginx.hidden.is_empty() {
+                return String::new();
+            }
+            let names = s.nginx.hidden.join(", ");
+            i18n::translate(&format!(
+                "Not listed: {names}. These containers run Nginx inside an application; they publish no port and nothing in them comes from the server, so there is nothing to manage."
+            ))
+        })),
         text().class("hint").content(i18n::bind(state.map(|s| {
             match s.nginx.docker_error.as_str() {
                 "permission" => "Arcnix cannot list Docker containers as the SSH account, so Nginx in containers is not shown. Add the account to the docker group to manage it.",
@@ -1080,7 +1153,7 @@ fn editor(ui: Ui) -> impl Widget {
                             s.nginx
                                 .snapshot
                                 .as_ref()
-                                .and_then(|n| n.site(&e.path))
+                                .and_then(|n| n.site(&e.key()))
                                 .map(|site| site.title())
                                 .unwrap_or_else(|| {
                                     e.path.rsplit('/').next().unwrap_or_default().to_owned()
@@ -1234,8 +1307,7 @@ fn editor(ui: Ui) -> impl Widget {
                                 s.nginx.editor = None;
                             } else if let Some(editor) = &mut s.nginx.editor {
                                 editor.text = editor.original.clone();
-                                editor.site = nginx_site::read(&editor.text).unwrap_or_default();
-                                editor.main = nginx_site::read_main(&editor.text).ok().flatten();
+                                (editor.site, editor.main) = editor.read(&editor.text).unwrap_or_default();
                                 editor.drafts.clear();
                                 editor.error.clear();
                                 editor.failure.clear();
