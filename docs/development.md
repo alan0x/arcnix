@@ -462,6 +462,7 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 - location 列表：每个 location 按用途显示字段：转发（地址、超时、WebSocket、X-Forwarded-For）、提供文件（`root`/`alias`、单页应用回退到 `/index.html`）、重定向（状态码和目标）、固定响应（状态码和文本）；其他用途只列出指令。可以修改匹配规则、新增或删除 location；新增的转发 location 带常用的代理头，非 `/` 路径的目录用 `alias`。
 - 访问控制：按顺序排列的 `allow`／`deny` 规则（新规则放在末尾的 `deny all` 之前），以及“拒绝其他所有地址”（末尾的 `deny all`，至少有一条允许规则时才能开启）；整站的 Basic 认证（提示文本和密码文件；密码文件需事先在服务器上创建）。
 - location 可以直接改为其他用途：删除只适用于原用途的指令（转发的所有 `proxy_*`，提供文件的 `root`／`alias`／`try_files`／`expires`，重定向和固定响应的 `return`），其余指令保留，已设置的同名代理头不会重复添加。提供文件的 location 可设置浏览器缓存时长（`expires`）。
+- 请求频率：站点可选择主配置中定义的频率限制（`limit_req zone=… [burst=N nodelay]`，并加上 `limit_req_status 429;`），可设置突发时额外允许的请求数。限制本身在主配置的“请求频率限制”中按“名称 + 频率”添加（`limit_req_zone $binary_remote_addr zone=名称:10m rate=…;`）。两个文件分别发布：站点引用不存在的限制时 `nginx -t` 不会通过，因此要先发布主配置中的限制；删除时先去掉站点中的引用。其他写法的 `limit_req`／`limit_req_zone` 保留为指令行。
 - 响应头和日志：`X-Frame-Options: SAMEORIGIN`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin` 三个开关（`add_header … always`）。Nginx 中 location 自带 `add_header` 时不继承 `server` 块的响应头，界面列出这些 location。站点自己的 `access_log`／`error_log`（只有一行时以字段显示，参数按原文编辑，留空则删除、使用全局日志）。
 - 最大上传大小。
 - 其他指令：`server` 块和每个 location 中表单没有字段的指令按“名称 + 参数”逐行列出，可以修改、删除或新增；`if` 等嵌套块只显示，需在文件视图编辑。

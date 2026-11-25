@@ -3211,3 +3211,19 @@ GPU 使用率	GPU utilization
 此站点有多行 {name}；请在“文件”中编辑	This site writes several {name} lines; edit them in File
 请先添加域名	Add a domain first
 站点需要一个域名，例如 example.com	The site needs a domain such as example.com
+请求频率	Request rate
+不限制	No limit
+请先在主配置（nginx.conf）中添加请求频率限制，然后在这里选择。	Add a request rate limit to the main configuration (nginx.conf) first; then choose it here.
+突发时额外允许的请求数	Extra requests allowed in a burst
+每个访客地址可按限制的频率发送请求；突发值允许短时间的峰值立即通过。超出的请求返回 429 Too Many Requests。	Each visitor address may send requests at the limit's rate; a burst lets short peaks through at once. Requests over it get 429 Too Many Requests.
+请求频率限制	Request rate limits
+限制按访客地址统计请求数。站点在“访问控制”中选择要使用的限制。	A limit counts requests per visitor address. Sites choose a limit in their Access settings.
+删除限制	Remove limit
+限制名称	Limit name
+频率	Rate
+名称	name
+限制名称只能包含字母、数字、- 和 _	A limit name has letters, digits, - and _
+请输入频率，例如 10r/s 或 60r/m	Enter a rate such as 10r/s or 60r/m
+已有名为 {name} 的限制	There is already a limit called {name}
+此站点的频率限制写法表单无法修改；请在“文件”中编辑	This site's rate limit is written in a way the form does not change; edit it in File
+请输入额外允许的请求数，例如 20，或留空	Enter how many extra requests to allow, such as 20, or leave it empty

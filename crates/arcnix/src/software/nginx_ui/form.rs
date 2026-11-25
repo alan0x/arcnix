@@ -23,9 +23,12 @@ pub(crate) struct Adding {
     /// A location being changed to do something else: its key, the new
     /// purpose and its main value.
     convert: Option<(String, NewKind, String)>,
-    /// A new IP rule: allow (true) or deny, and the address.
-    rule_allow: bool,
+    /// A new IP rule: deny (true) or allow, and the address.
+    rule_deny: bool,
     rule_address: String,
+    /// A new request rate limit for nginx.conf.
+    zone_name: String,
+    zone_rate: String,
 }
 
 fn key(path: &[usize]) -> String {
@@ -92,6 +95,8 @@ impl Ui {
                 | Change::DenyOthers(_)
                 | Change::Gzip(_)
                 | Change::Www(_)
+                | Change::AddZone(..)
+                | Change::Limit(_)
                 | Change::Header(..)
         );
         self.state.revise(|s| {
@@ -1191,6 +1196,7 @@ fn access(ui: &Ui) -> impl Widget + use<> {
                 "Access",
                 col().class("form-stack").fill((
                     rules(&ui),
+                    rate_limit(&ui),
                     text().class("field-label nginx-subsection").content(i18n::bind("Password")),
                     when(state.map(on), {
                         let ui = ui.clone();
@@ -1272,12 +1278,12 @@ fn rules(ui: &Ui) -> impl Widget + use<> {
                 s.nginx
                     .editor
                     .as_ref()
-                    .is_some_and(|e| e.adding.rule_allow == allow)
+                    .is_some_and(|e| e.adding.rule_deny != allow)
             }))
             .on_press(move || {
                 state.revise(|s| {
                     if let Some(editor) = &mut s.nginx.editor {
-                        editor.adding.rule_allow = allow;
+                        editor.adding.rule_deny = !allow;
                     }
                 })
             })
@@ -1336,7 +1342,7 @@ fn rules(ui: &Ui) -> impl Widget + use<> {
                 .on_press(move || {
                     let change = add
                         .state
-                        .with(|s| s.nginx.editor.as_ref().map(|e| Change::AddRule(e.adding.rule_allow, e.adding.rule_address.clone())));
+                        .with(|s| s.nginx.editor.as_ref().map(|e| Change::AddRule(!e.adding.rule_deny, e.adding.rule_address.clone())));
                     if let Some(change) = change {
                         add.nginx_change(change);
                     }
@@ -1348,6 +1354,191 @@ fn rules(ui: &Ui) -> impl Widget + use<> {
             |s| site(s).is_some_and(|site| site.deny_others),
             |_, on| Some(Change::DenyOthers(on)),
         ),
+    ))
+}
+
+/// The rate limits nginx.conf defines, for a site to use.
+fn zones(s: &State) -> Vec<String> {
+    let mut names: Vec<String> = s
+        .nginx
+        .snapshot
+        .as_ref()
+        .and_then(|n| n.main.text.as_deref())
+        .and_then(|text| nginx_site::read_main(text).ok().flatten())
+        .map(|m| {
+            m.zones
+                .into_iter()
+                .map(|z| format!("{} · {}", z.name, z.rate))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(limit) = site(s).and_then(|site| site.limit.as_ref())
+        && !names
+            .iter()
+            .any(|n| n.split(" · ").next() == Some(limit.zone.as_str()))
+    {
+        names.push(limit.zone.clone());
+    }
+    names
+}
+
+fn rate_limit(ui: &Ui) -> impl Widget + use<> {
+    let state = ui.state;
+    let current = |s: &State| site(s).and_then(|site| site.limit.clone());
+    col().class("form-stack").fill((
+        text().class("field-label nginx-subsection").content(i18n::bind("Request rate")),
+        when(state.map(|s| zones(s).is_empty()), || {
+            text().class("hint").content(i18n::bind(
+                "Add a request rate limit to the main configuration (nginx.conf) first; then choose it here.",
+            ))
+        }),
+        row().class("nginx-segments nginx-zones").fill((
+            {
+                let ui = ui.clone();
+                sapid::button()
+                    .class("nginx-segment")
+                    .label(i18n::bind("No limit"))
+                    .enabled(state.map(writable))
+                    .pressed(state.map(move |s| current(s).is_none()))
+                    .on_press(move || ui.nginx_change(Change::Limit(None)))
+            },
+            each(state.map(zones)).key(|z: &String| z.clone()).children({
+                let ui = ui.clone();
+                move |item| {
+                    let label: String = item.value.get();
+                    let name = label.split(" · ").next().unwrap_or_default().to_owned();
+                    let pressed = name.clone();
+                    let ui = ui.clone();
+                    sapid::button()
+                        .class("nginx-segment")
+                        .label(label)
+                        .enabled(state.map(writable))
+                        .pressed(state.map(move |s| current(s).is_some_and(|l| l.zone == pressed)))
+                        .on_press(move || {
+                            let burst = ui.state.with(|s| current(s).map(|l| l.burst).unwrap_or_else(|| "20".into()));
+                            ui.nginx_change(Change::Limit(Some((name.clone(), burst))));
+                        })
+                }
+            }),
+        )),
+        when(state.map(move |s| current(s).is_some()), {
+            let ui = ui.clone();
+            move || {
+                col().class("form-stack").fill((
+                    input_field(
+                        &ui,
+                        "Extra requests allowed in a burst",
+                        |_| "burst".into(),
+                        move |s| shown(s, "burst", |_| current(s).map(|l| l.burst)),
+                        move |s, v| current(s).map(|l| Change::Limit(Some((l.zone, v)))),
+                    ),
+                    text().class("hint").content(i18n::bind(
+                        "Each visitor address may send requests at the limit's rate; a burst lets short peaks through at once. Requests over it get 429 Too Many Requests.",
+                    )),
+                ))
+            }
+        }),
+    ))
+}
+
+fn zones_editor(ui: &Ui) -> impl Widget + use<> {
+    let state = ui.state;
+    let add = ui.clone();
+    let new_input = |label: &'static str, placeholder: &'static str, rate: bool| {
+        input()
+            .class(if rate {
+                "nginx-row-args"
+            } else {
+                "nginx-row-name-input"
+            })
+            .name(i18n::bind(label))
+            .enabled(state.map(writable))
+            .semantics(Some(Box::new(Semantics {
+                placeholder: Some(i18n::translate(placeholder)),
+                ..Default::default()
+            })))
+            .value(state.map(move |s| {
+                s.nginx
+                    .editor
+                    .as_ref()
+                    .map(|e| {
+                        if rate {
+                            e.adding.zone_rate.clone()
+                        } else {
+                            e.adding.zone_name.clone()
+                        }
+                    })
+                    .unwrap_or_default()
+            }))
+            .on(value_changed, move |event| {
+                if let Event::ValueChanged { value, .. } = event {
+                    state.revise(|s| {
+                        if let Some(editor) = &mut s.nginx.editor {
+                            if rate {
+                                editor.adding.zone_rate = value;
+                            } else {
+                                editor.adding.zone_name = value;
+                            }
+                        }
+                    });
+                }
+            })
+    };
+    col().class("form-stack").fill((
+        text().class("hint").content(i18n::bind(
+            "A limit counts requests per visitor address. Sites choose a limit in their Access settings.",
+        )),
+        col().class("nginx-rows").fill(
+            each(state.map(|s| {
+                s.nginx
+                    .editor
+                    .as_ref()
+                    .and_then(|e| e.main.as_ref())
+                    .map(|m| m.zones.clone())
+                    .unwrap_or_default()
+            }))
+            .key(|z: &nginx_site::Zone| format!("{}|{}|{}", key(&z.path), z.name, z.rate))
+            .children({
+                let ui = ui.clone();
+                move |item| {
+                    let zone: nginx_site::Zone = item.value.get();
+                    let remove = ui.clone();
+                    let path = zone.path.clone();
+                    row().class("nginx-row").fill((
+                        text().class("nginx-row-name").content(zone.name.clone()),
+                        text().class("nginx-row-block").content(zone.rate.clone()),
+                        icon_action("Remove limit", Icon::Close)
+                            .class("icon-button")
+                            .enabled(state.map(writable))
+                            .on_press(move || remove.nginx_change(Change::RemoveRow(path.clone()))),
+                    ))
+                }
+            }),
+        ),
+        row().class("nginx-row nginx-row-new").fill((
+            new_input("Limit name", "name", false),
+            new_input("Rate", "10r/s", true),
+            sapid::button()
+                .class("button")
+                .label(i18n::bind("Add"))
+                .enabled(state.map(|s| {
+                    writable(s)
+                        && s.nginx.editor.as_ref().is_some_and(|e| {
+                            !e.adding.zone_name.trim().is_empty() && !e.adding.zone_rate.trim().is_empty()
+                        })
+                }))
+                .on_press(move || {
+                    let change = add.state.with(|s| {
+                        s.nginx
+                            .editor
+                            .as_ref()
+                            .map(|e| Change::AddZone(e.adding.zone_name.clone(), e.adding.zone_rate.clone()))
+                    });
+                    if let Some(change) = change {
+                        add.nginx_change(change);
+                    }
+                }),
+        )),
     ))
 }
 
@@ -1428,6 +1619,7 @@ fn global(ui: &Ui) -> impl Widget + use<> {
                         ),
                     )),
                 ),
+                section("Request rate limits", zones_editor(&ui)),
                 section(
                     "Other directives for every site",
                     col().class("form-stack").fill((

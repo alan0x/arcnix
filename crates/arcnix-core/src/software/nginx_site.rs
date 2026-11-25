@@ -127,6 +127,8 @@ pub struct Site {
     pub www_base: Option<String>,
     /// The www redirect, when one name of the pair is sent to the other.
     pub www: Option<Www>,
+    /// The site's request rate limit, when it has one.
+    pub limit: Option<Limit>,
     pub locations: Vec<Location>,
     /// The server block's other directives.
     pub rows: Vec<Row>,
@@ -201,6 +203,11 @@ pub enum Change {
     AccessLog(String),
     /// The site's error log (`error_log`).
     ErrorLog(String),
+    /// A request rate limit for every visitor address, in nginx.conf: name
+    /// and rate.
+    AddZone(String, String),
+    /// The site's rate limit: the limit's name and the burst, or off.
+    Limit(Option<(String, String)>),
     /// The www pair: `None` answers both names, `Some(true)` sends
     /// `www.example.com` to `example.com`, `Some(false)` the other way.
     Www(Option<bool>),
@@ -266,8 +273,79 @@ pub struct Main {
     pub gzip: bool,
     /// The path of the `http` block, for adding directives.
     pub http: Path,
+    /// Request rate limits sites can use, per visitor address.
+    pub zones: Vec<Zone>,
     /// The `http` block's other directives.
     pub rows: Vec<Row>,
+}
+
+/// A request rate limit: `limit_req_zone $binary_remote_addr zone=NAME:SIZE
+/// rate=RATE;` in nginx.conf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Zone {
+    pub path: Path,
+    pub name: String,
+    pub rate: String,
+}
+
+/// A site's use of a rate limit: `limit_req zone=NAME burst=N nodelay;`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Limit {
+    pub zone: String,
+    /// Requests over the rate that are still served; empty for none.
+    pub burst: String,
+}
+
+/// A limit per visitor address in the form the main settings write, or
+/// `None` for any other `limit_req_zone`, which stays a row.
+fn zone(d: &Directive) -> Option<(String, String)> {
+    let [key, zone, rate] = d.args.as_slice() else {
+        return None;
+    };
+    let (name, _size) = zone.strip_prefix("zone=")?.split_once(':')?;
+    let rate = rate.strip_prefix("rate=")?;
+    (key == "$binary_remote_addr").then(|| (name.to_owned(), rate.to_owned()))
+}
+
+/// A site's `limit_req`, when it is one this form wrote (or could have).
+fn limit(d: &Directive) -> Option<Limit> {
+    let mut out = Limit::default();
+    for arg in &d.args {
+        if let Some(name) = arg.strip_prefix("zone=") {
+            out.zone = name.to_owned();
+        } else if let Some(burst) = arg.strip_prefix("burst=") {
+            out.burst = burst.to_owned();
+        } else if arg != "nodelay" {
+            return None;
+        }
+    }
+    (!out.zone.is_empty()).then_some(out)
+}
+
+fn check_zone_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+        "A limit name has letters, digits, - and _"
+    );
+    Ok(())
+}
+
+fn check_rate(rate: &str) -> Result<()> {
+    let number = rate
+        .strip_suffix("r/s")
+        .or_else(|| rate.strip_suffix("r/m"));
+    ensure!(
+        number.is_some_and(|n| !n.is_empty()
+            && n.len() <= 6
+            && n.bytes().all(|b| b.is_ascii_digit())
+            && n != "0"),
+        "Enter a rate such as 10r/s or 60r/m"
+    );
+    Ok(())
 }
 
 const GZIP_TYPES: &str = "text/plain text/css text/xml application/json application/javascript application/xml image/svg+xml";
@@ -305,8 +383,23 @@ pub fn read_main(text: &str) -> Result<Option<Main>> {
             .first("gzip")
             .is_some_and(|d| d.args.first().is_some_and(|a| a == "on")),
         http: vec![index],
+        zones: http
+            .children()
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.name == "limit_req_zone")
+            .filter_map(|(i, d)| {
+                zone(d).map(|(name, rate)| Zone {
+                    path: vec![index, i],
+                    name,
+                    rate,
+                })
+            })
+            .collect(),
         rows: rows(text, http, &[index], |d| {
-            (d.name == "server" && d.block.is_some()) || managed.contains(&d.name.as_str())
+            (d.name == "server" && d.block.is_some())
+                || managed.contains(&d.name.as_str())
+                || (d.name == "limit_req_zone" && zone(d).is_some())
         }),
     }))
 }
@@ -637,6 +730,7 @@ pub fn read(text: &str) -> Result<Site> {
         .iter()
         .find(|n| n.contains('.') && !n.contains(['*', '~', '$']) && !n.starts_with('.'))
         .map(|n| n.strip_prefix("www.").unwrap_or(n).to_owned());
+    site.limit = server.first("limit_req").and_then(limit);
     site.deny_others = access
         .last()
         .is_some_and(|(_, d)| d.name == "deny" && d.args[0] == "all");
@@ -699,6 +793,13 @@ pub fn read(text: &str) -> Result<Site> {
                 }))
             || (matches!(d.name.as_str(), "access_log" | "error_log")
                 && server.find(&d.name).count() == 1)
+            || (d.name == "limit_req"
+                && server.find("limit_req").count() == 1
+                && limit(d).is_some())
+            || (d.name == "limit_req_status"
+                && server
+                    .first("limit_req")
+                    .is_some_and(|l| limit(l).is_some()))
     });
     Ok(site)
 }
@@ -1371,6 +1472,88 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                     }
                 }
                 (None, true) => {}
+            }
+        }
+        Change::AddZone(name, rate) => {
+            let (name, rate) = (name.trim(), rate.trim());
+            check_zone_name(name)?;
+            check_rate(rate)?;
+            let http = directives
+                .iter()
+                .find(|d| d.name == "http" && d.block.is_some())
+                .context("This is not the main configuration")?;
+            ensure!(
+                !http.find("limit_req_zone").any(|d| d
+                    .args
+                    .iter()
+                    .any(
+                        |a| a.strip_prefix("zone=").and_then(|z| z.split(':').next()) == Some(name)
+                    )),
+                "There is already a limit called {name}"
+            );
+            let line = format!("limit_req_zone $binary_remote_addr zone={name}:10m rate={rate};");
+            let anchor = http.find("limit_req_zone").last().or_else(|| {
+                http.children()
+                    .iter()
+                    .take_while(|d| d.block.is_none() && d.name != "include")
+                    .last()
+            });
+            match anchor {
+                Some(anchor) => edits.insert_after(anchor, &[line]),
+                None => edits.insert_first(http, &[line]),
+            }
+        }
+        Change::Limit(setting) => {
+            let server = single()?;
+            let existing = server.first("limit_req");
+            ensure!(
+                server.find("limit_req").count() <= 1
+                    && existing.is_none_or(|d| limit(d).is_some()),
+                "This site's rate limit is written in a way the form does not change; edit it in File"
+            );
+            let status = server.first("limit_req_status");
+            match setting {
+                Some((zone, burst)) => {
+                    let (zone, burst) = (zone.trim(), burst.trim());
+                    check_zone_name(zone)?;
+                    ensure!(
+                        burst.is_empty() || burst.parse::<u32>().is_ok_and(|n| n <= 100_000),
+                        "Enter how many extra requests to allow, such as 20, or leave it empty"
+                    );
+                    let value = if burst.is_empty() {
+                        format!("zone={zone}")
+                    } else {
+                        format!("zone={zone} burst={burst} nodelay")
+                    };
+                    match existing {
+                        Some(d) => edits.replace_args(d, &value),
+                        None => {
+                            // Visitors over the limit get 429 Too Many Requests
+                            // rather than the default 503.
+                            let mut lines = vec![format!("limit_req {value};")];
+                            if status.is_none() {
+                                lines.push("limit_req_status 429;".to_owned());
+                            }
+                            let anchor = server
+                                .children()
+                                .iter()
+                                .take_while(|d| d.block.is_none())
+                                .last();
+                            match anchor {
+                                Some(anchor) => edits.insert_after(anchor, &lines),
+                                None => edits.insert_first(server, &lines),
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if let Some(d) = existing {
+                        edits.remove(d);
+                    }
+                    if let Some(d) = status {
+                        edits.remove(d);
+                    }
+                }
             }
         }
         Change::Www(choice) => {
@@ -2336,5 +2519,75 @@ server {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn limits_request_rates() {
+        let main = "events {}\nhttp {\n    include mime.types;\n    limit_req_zone $binary_remote_addr$uri zone=custom:1m rate=1r/s;\n    include /etc/nginx/conf.d/*.conf;\n}\n";
+        let m = read_main(main).unwrap().unwrap();
+        assert!(
+            m.zones.is_empty(),
+            "a zone the form did not write stays a row"
+        );
+        assert!(m.rows.iter().any(|r| r.name == "limit_req_zone"));
+        let text = change(main, Change::AddZone("visitors".into(), "10r/s".into()));
+        assert!(
+            text.contains(
+                "rate=1r/s;\n    limit_req_zone $binary_remote_addr zone=visitors:10m rate=10r/s;\n"
+            ),
+            "{text}"
+        );
+        let m = read_main(&text).unwrap().unwrap();
+        assert_eq!(
+            m.zones
+                .iter()
+                .map(|z| (z.name.as_str(), z.rate.as_str()))
+                .collect::<Vec<_>>(),
+            [("visitors", "10r/s")]
+        );
+        assert!(apply(&text, &Change::AddZone("visitors".into(), "5r/s".into())).is_err());
+        for (name, rate) in [
+            ("bad name", "10r/s"),
+            ("x", "10/s"),
+            ("x", "0r/s"),
+            ("x", "fast"),
+        ] {
+            assert!(
+                apply(main, &Change::AddZone(name.into(), rate.into())).is_err(),
+                "{name} {rate}"
+            );
+        }
+        assert!(
+            !change(&text, Change::RemoveRow(m.zones[0].path.clone())).contains("zone=visitors")
+        );
+
+        let site = "server {\n    listen 80;\n    server_name a.com;\n    location / {\n        root /srv;\n    }\n}\n";
+        let limited = change(site, Change::Limit(Some(("visitors".into(), "20".into()))));
+        assert!(limited.contains("    server_name a.com;\n    limit_req zone=visitors burst=20 nodelay;\n    limit_req_status 429;\n"), "{limited}");
+        let s = read(&limited).unwrap();
+        assert_eq!(
+            s.limit,
+            Some(Limit {
+                zone: "visitors".into(),
+                burst: "20".into()
+            })
+        );
+        assert!(s.rows.is_empty(), "{:?}", s.rows);
+        let plain = change(
+            &limited,
+            Change::Limit(Some(("visitors".into(), String::new()))),
+        );
+        assert!(plain.contains("limit_req zone=visitors;"));
+        assert_eq!(change(&limited, Change::Limit(None)), site);
+        assert!(
+            apply(
+                site,
+                &Change::Limit(Some(("visitors".into(), "lots".into())))
+            )
+            .is_err()
+        );
+        let custom = "server { server_name a.com; limit_req zone=x delay=5; }";
+        assert!(read(custom).unwrap().limit.is_none());
+        assert!(apply(custom, &Change::Limit(None)).is_err());
     }
 }
