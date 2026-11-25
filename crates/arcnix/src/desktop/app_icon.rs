@@ -172,6 +172,15 @@ impl NativeLifecycle for DesktopWindow {
             self.icon_installed = true;
         }
         let state = self.ui.state;
+        #[cfg(windows)]
+        {
+            // Tao updates the native window theme on WM_SETTINGCHANGE. WebView2's
+            // profile can report a different color scheme from the Windows apps setting.
+            let dark = window.theme() == tao::window::Theme::Dark;
+            if state.with(|s| s.system_dark != dark) {
+                state.revise(|s| s.system_dark = dark);
+            }
+        }
         let fullscreen = state.with(crate::server_desktop::fullscreen);
         self.ui.player.sync_surface(&self.ui);
         #[cfg(target_os = "macos")]

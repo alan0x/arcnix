@@ -2176,6 +2176,7 @@ fn app(ui: Ui) -> impl Widget {
             text().class("terminal-workspace-epochs hidden").content(
                 state.map(|s| serde_json::to_string(&s.connected_epochs()).unwrap_or_default()),
             ),
+            #[cfg(not(windows))]
             input()
                 .class("system-theme-input hidden")
                 .value("")
@@ -2504,6 +2505,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             })),
             initialization_script: Some(
                 [
+                    #[cfg(not(windows))]
                     include_str!("../assets/system-theme.js"),
                     include_str!("../assets/desktop-frame.js"),
                     include_str!("../assets/shortcut-chords.js"),
