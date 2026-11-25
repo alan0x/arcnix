@@ -409,6 +409,8 @@ def container(docker, details):
         'directory': labels.get('com.docker.compose.project.working_dir', ''),
         'ports': sorted(set(ports))[:16],
         'args': options,
+        # Where server folders are mounted, for Let's Encrypt.
+        'mounts': [{'src': m['src'], 'dst': m['dst']} for m in mounts][:32],
     }
     return instance(files, 'nginx', version, None, info, extra, main_path)
 

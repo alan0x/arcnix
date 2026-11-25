@@ -3066,6 +3066,9 @@ button,
 .nginx-row-new { padding-top: 6px; border-top: 1px dashed var(--line); }
 .nginx-form-actions { display: flex !important; justify-content: flex-end; gap: 8px; }
 .nginx-codes { align-self: flex-start; }
+.nginx-mounts { white-space: pre-wrap; }
+.nginx-info { font-size: 13px; padding: 8px 12px; border-radius: 8px; color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); overflow-wrap: anywhere; }
+.nginx-badge.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
 .nginx-logs-view { display: flex !important; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; flex: 1; }
 .nginx-logs-controls { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; }
 .nginx-log-filter { flex: 1 1 220px; min-width: 0; max-width: 360px; }

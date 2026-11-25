@@ -479,6 +479,16 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 - 健康检查地址默认取站点的第一个域名。Nginx 应用的发布请求带 `local_probe`：向本服务器的 Nginx 请求该地址（连接本机地址、`Host` 为该域名；URL 中写的是 IP 时连接该 IP），任何非 5xx 响应都算通过，因此需要登录（401）或 `/` 没有页面（404）的站点不会被误回滚，域名尚未解析到本服务器也不影响。站点监听特定地址或处于停用状态时默认不填地址。
 - 服务器不允许私有挂载命名空间时（部分 OpenVZ、LXC 主机），站点文件无法在不改动生效目录的情况下检查，发布在检查前停止并说明原因。
 
+### 证书和 Let's Encrypt
+
+概览的“证书”部分列出各 HTTPS 站点实际提供的证书：以 SSH 账户在服务器上连接本机 443 端口（容器为其发布的 443 端口），按站点域名发送 SNI，读取证书的到期时间和签发者；14 天内到期时标明。证书文件本身只有 root 可读，因此不读取文件。同时检查 Certbot 是否安装、自动续期是否设置（`certbot.timer`、`snap.certbot.renew.timer` 或 cron）。
+
+站点编辑器的 HTTPS 部分可以从 Let's Encrypt 获取证书，分两步：
+1. “提供验证文件”：在每个响应普通 HTTP 的 `server` 块中加入 `location ^~ /.well-known/acme-challenge/ { root /var/www/letsencrypt; default_type text/plain; }`，然后发布。在 `server` 层直接 `return` 的跳转块会先于 location 执行，因此改为把跳转放进 `location /`、旁边是验证 location；这种形式仍视为只做跳转的块（`redirect_return`）。之后开启“普通 HTTP 跳转到 HTTPS”或 www 跳转时，新加的跳转块也保留验证 location，续期不受影响。验证 location 不在 location 列表中显示。站点不响应 80 端口的普通 HTTP 时说明原因。
+2. “获取证书…”：只在已发布的文件中有验证 location、且编辑器没有未发布的修改时可用。服务器任务运行 `certbot certonly --webroot -w /var/www/letsencrypt --cert-name <第一个域名> -d …`，域名为站点的域名加上跳转到这里的 www 名称，可选邮箱（否则 `--register-unsafely-without-email`）和测试服务器（`--staging`），并保存 `--deploy-hook`，续期后重新加载 Nginx（服务器上为 `systemctl reload nginx`；容器为 `sh -c '… docker exec <容器名> nginx -s reload'`，用容器名是因为 Compose 重建容器后 ID 会变；Certbot 要求钩子以 PATH 中的命令开头）。任务成功后，编辑器把站点的证书和私钥改为 `/etc/letsencrypt/live/<名称>/fullchain.pem`、`privkey.pem`（未开启 HTTPS 时一并开启），由用户检查并发布。
+
+容器中的 Nginx 由服务器上的 Certbot 获取证书：需要把服务器的 `/var/www/letsencrypt` 挂载到容器的同一路径，并把 `/etc/letsencrypt` 挂载到容器的 `/etc/letsencrypt`。读取器报告容器的挂载，缺少时界面列出需要添加的挂载，不会修改 Compose 文件。
+
 ### 日志
 
 “日志”页以 SSH 账户读取所选日志的最后 200／1000／5000 行，最新的在前，可按文字筛选。服务器上的 Nginx 读取 `http` 块中 `access_log`／`error_log` 指定的文件（默认 `/var/log/nginx/access.log` 和 `error.log`），以及自己写日志的站点的文件（`tail`）；Debian 和 Ubuntu 上需要账户属于 adm 组，读不到时说明原因。容器中的 Nginx 读取容器输出：官方镜像把访问日志写到标准输出、错误日志写到标准错误，分别用 `docker logs --tail` 取得；站点自己的日志文件用 `docker exec … tail` 读取。命令由 `nginx::logs_command` 生成，路径经过校验并加引号，`read_logs` 只执行这种命令。

@@ -29,6 +29,9 @@ pub(crate) struct Adding {
     /// A new request rate limit for nginx.conf.
     zone_name: String,
     zone_rate: String,
+    /// Let's Encrypt: the account email and whether to use the test servers.
+    pub(super) email: String,
+    pub(super) staging: bool,
 }
 
 fn key(path: &[usize]) -> String {
@@ -80,7 +83,7 @@ fn http2_directive(s: &State) -> bool {
 impl Ui {
     /// Applies one change to the file. A change that adds or removes parts
     /// moves the positions fields are known by, so typed values are dropped.
-    fn nginx_change(&self, change: Change) {
+    pub(super) fn nginx_change(&self, change: Change) {
         let structural = matches!(
             change,
             Change::AddLocation(..)
@@ -97,6 +100,7 @@ impl Ui {
                 | Change::Www(_)
                 | Change::AddZone(..)
                 | Change::Limit(_)
+                | Change::Acme(_)
                 | Change::Header(..)
         );
         self.state.revise(|s| {
@@ -187,6 +191,38 @@ where
 }
 
 /// A typed value for something not added yet.
+/// A typed value for something not done yet, for other parts of the editor.
+pub(super) fn adding_text(
+    ui: &Ui,
+    label: &'static str,
+    read: fn(&Adding) -> String,
+    write: fn(&mut Adding, String),
+) -> impl Widget + use<> {
+    adding_field(ui, label, read, write)
+}
+
+/// A switch for something not done yet.
+pub(super) fn adding_check(
+    ui: &Ui,
+    label: &'static str,
+    read: fn(&Adding) -> bool,
+    write: fn(&mut Adding, bool),
+) -> impl Widget + use<> {
+    let state = ui.state;
+    sapid::checkbox()
+        .class("preference-check")
+        .label(i18n::bind(label))
+        .enabled(state.map(writable))
+        .checked(state.map(move |s| s.nginx.editor.as_ref().is_some_and(|e| read(&e.adding))))
+        .on_checked_change(move |value| {
+            state.revise(|s| {
+                if let Some(editor) = &mut s.nginx.editor {
+                    write(&mut editor.adding, value);
+                }
+            })
+        })
+}
+
 fn adding_field(
     ui: &Ui,
     label: &'static str,
@@ -452,6 +488,7 @@ fn https(ui: &Ui) -> impl Widget + use<> {
                                 })),
                         ))
                     }),
+                    super::certificates::lets_encrypt(&ui),
                 )),
             )
         }

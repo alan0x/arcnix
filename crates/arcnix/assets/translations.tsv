@@ -3243,3 +3243,33 @@ SSH 账户无法读取此日志。在 Debian 和 Ubuntu 上，请将其加入 ad
 此日志文件尚不存在	This log file does not exist yet
 请选择日志	Choose a log
 无效的日志请求	Invalid log request
+于 {date} 过期	Expired on {date}
+{date} 到期，还有 {days} 天	Expires on {date}, in {days} days
+Let's Encrypt 已签发证书，站点已改用该证书。发布后开始使用。	Let's Encrypt issued the certificate, and the site now uses it. Publish to start serving it.
+未安装 Certbot。请从应用中心安装，以便从 Let's Encrypt 获取证书。	Certbot is not installed. Install it from App Center to get certificates from Let's Encrypt.
+Certbot 会自动续期证书（systemd 定时器），并在每次续期后重新加载 Nginx。	Certbot renews certificates automatically (systemd timer) and reloads Nginx after each renewal.
+Certbot 会自动续期证书（cron），并在每次续期后重新加载 Nginx。	Certbot renews certificates automatically (cron) and reloads Nginx after each renewal.
+已安装 Certbot，但没有设置自动续期。证书 90 天后过期。	Certbot is installed, but automatic renewal is not set up. Certificates expire after 90 days.
+证书	Certificates
+无法读取证书	Could not read the certificate
+即将到期	Renew soon
+Let's Encrypt	Let's Encrypt
+Let's Encrypt 要求站点有完整的域名，例如 example.com。	Let's Encrypt needs the site to have a full domain name such as example.com.
+Let's Encrypt 通过 80 端口的普通 HTTP 检查每个域名，而此站点不响应普通 HTTP。请添加 listen 80，或添加一个把普通 HTTP 跳转到 HTTPS 的 server 块。	Let's Encrypt checks each domain over plain HTTP on port 80, which this site does not answer. Add listen 80, or a server block that sends plain HTTP to HTTPS.
+第 1 步：提供 Let's Encrypt 的验证文件，然后发布站点。	Step 1: serve Let's Encrypt's challenge files, then publish the site.
+第 1 步：发布站点，让 Nginx 在 Let's Encrypt 检查之前提供验证文件。	Step 1: publish the site, so Nginx serves the challenge files before Let's Encrypt checks them.
+请把以下服务器目录挂载进容器，然后重新创建容器（docker compose up -d，或重新 docker run）：	Mount these server folders into the container, then recreate it (docker compose up -d, or docker run again):
+请先从应用中心安装 Certbot。	Install Certbot from App Center first.
+第 2 步：获取证书。Certbot 会检查下面的每个名称，把证书保存在服务器上，并在到期前续期。	Step 2: get the certificate. Certbot checks each name below, saves the certificate on the server and renews it before it expires.
+提供验证文件	Serve challenge files
+到期通知邮箱（可选）	Email for expiry notices (optional)
+使用 Let's Encrypt 的测试服务器（证书不被浏览器信任）	Use Let's Encrypt's test servers (the certificate is not trusted by browsers)
+获取证书…	Get a certificate…
+请先打开一个站点	Open a site first
+从 Let's Encrypt 获取证书	Get a certificate from Let's Encrypt
+请先把以下服务器目录挂载进容器：{}	Mount these server folders into the container first: {}
+请输入邮箱，例如 admin@example.com，或留空	Enter an email address such as admin@example.com, or leave it empty
+Let's Encrypt 需要完整的域名，例如 example.com：{name}	Let's Encrypt needs full domain names such as example.com: {name}
+一张证书最多包含 100 个名称	A certificate covers at most 100 names
+Let's Encrypt 通过普通 HTTP 检查域名，而此站点不响应普通 HTTP	Let's Encrypt checks domains over plain HTTP, which this site does not answer
+无效的证书请求	Invalid certificate request

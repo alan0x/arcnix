@@ -11,6 +11,7 @@ use crate::i18n::desktop::{btn, icon_action, text_action};
 use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
 
+mod certificates;
 mod form;
 mod logs;
 
@@ -48,6 +49,11 @@ pub(crate) struct Editor {
     error: String,
     /// Why the last publication of this file failed, from the server.
     failure: String,
+    /// What happened that the operator should know, such as a certificate
+    /// that is ready to publish.
+    info: String,
+    /// The certificate name being issued for this site.
+    issuing: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -74,6 +80,7 @@ pub(crate) struct NginxState {
     editor: Option<Editor>,
     new_site: NewSite,
     logs: logs::Logs,
+    certificates: certificates::CertificateState,
 }
 
 /// What a row in the sites list needs, without the file's text.
@@ -335,9 +342,14 @@ impl Ui {
                 failed,
                 private,
                 target.output.clone(),
+                record.script_id == "builtin:nginx:certificate",
+                target.status == arcnix_core::tasks::Status::Succeeded,
             ))
         });
-        if let Some((path, name, failed, private, output)) = finished {
+        if let Some((_, _, _, _, _, true, succeeded)) = &finished {
+            self.nginx_issued(*succeeded);
+        }
+        if let Some((path, name, failed, private, output, ..)) = finished {
             self.state.revise(|s| match path {
                 Some(path) => {
                     let message = match (failed, private) {
@@ -429,6 +441,8 @@ impl Ui {
                 create: false,
                 error: String::new(),
                 failure: String::new(),
+                info: String::new(),
+                issuing: None,
             })
         });
         if editor.is_some() {
@@ -471,6 +485,8 @@ impl Ui {
                 create: true,
                 error: String::new(),
                 failure: String::new(),
+                info: String::new(),
+                issuing: None,
             })
         });
         match result {
@@ -557,9 +573,11 @@ pub(crate) fn event(
     result: std::result::Result<Reply, String>,
 ) -> Option<std::result::Result<Reply, String>> {
     let result = logs::event(ui, serial, result)?;
+    let result = certificates::event(ui, serial, result)?;
     if !ui.state.with(|s| s.nginx.pending == Some(serial)) {
         return Some(result);
     }
+    let read = matches!(result, Ok(Reply::Nginx(_)));
     ui.state.revise(|s| {
         s.nginx.pending = None;
         match result {
@@ -593,6 +611,9 @@ pub(crate) fn event(
             _ => s.nginx.error = "Invalid Nginx response".into(),
         }
     });
+    if read {
+        ui.nginx_certificates();
+    }
     None
 }
 
@@ -673,6 +694,7 @@ fn navigation(ui: Ui) -> impl Widget {
                             s.nginx.notice.clear();
                             s.nginx.logs.source.clear();
                         });
+                        logs_ui.nginx_certificates();
                         if logs_ui.state.with(|s| s.nginx.view == View::Logs) {
                             logs_ui.nginx_logs();
                         }
@@ -843,6 +865,7 @@ fn overview(ui: Ui) -> impl Widget {
                 },
             ),
         )),
+        certificates::overview(&ui),
         text().class("hint").content(i18n::bind(
             "Changes run as server tasks with administrator rights. You review each one before it runs, and it is kept in task history.",
         )),
@@ -1113,6 +1136,11 @@ fn editor(ui: Ui) -> impl Widget {
                     .map(|e| if e.error.is_empty() { e.failure.clone() } else { e.error.clone() })
                     .unwrap_or_default()
             })),
+        text()
+            .class(state.map(|s| {
+                if s.nginx.editor.as_ref().is_some_and(|e| !e.info.is_empty()) { "nginx-info" } else { "hidden" }.to_owned()
+            }))
+            .content(state.map(|s| s.nginx.editor.as_ref().map(|e| e.info.clone()).unwrap_or_default())),
         text()
             .class(state.map(|s| {
                 if s.nginx.editor.as_ref().is_some_and(|e| e.target.is_empty()) {

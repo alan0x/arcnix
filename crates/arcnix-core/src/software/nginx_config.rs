@@ -299,8 +299,37 @@ fn addressed(listen: &Directive) -> bool {
     )
 }
 
+/// The path Let's Encrypt (ACME HTTP-01) fetches challenge files from.
+pub const ACME_PATH: &str = "/.well-known/acme-challenge/";
+
+/// A location that serves ACME challenge files.
+pub(crate) fn acme_location(server: &Directive) -> Option<&Directive> {
+    server.find("location").find(|l| {
+        l.block.is_some() && matches!(l.args.as_slice(), [m, p] if m == "^~" && p == ACME_PATH)
+            || l.args.as_slice() == [ACME_PATH]
+    })
+}
+
+/// The `return` of a server block that only redirects: at the server level,
+/// or in `location /` next to nothing but an ACME challenge location (the
+/// shape a redirect needs for Let's Encrypt to reach the challenge).
+pub(crate) fn redirect_return(server: &Directive) -> Option<&Directive> {
+    let locations: Vec<&Directive> = server.find("location").collect();
+    if locations.is_empty() {
+        return server.first("return");
+    }
+    let root = locations.iter().find(|l| l.args.as_slice() == ["/"])?;
+    let only_acme = locations.iter().all(|l| {
+        l.args.as_slice() == ["/"] || acme_location(server).is_some_and(|a| a.span == l.span)
+    });
+    let only_return = root.children().len() == 1 && root.children()[0].name == "return";
+    (only_acme && only_return && server.first("return").is_none() && server.first("root").is_none())
+        .then(|| root.first("return"))
+        .flatten()
+}
+
 pub(crate) fn redirect_only(server: &Directive) -> bool {
-    server.first("return").is_some() && server.first("location").is_none()
+    redirect_return(server).is_some()
 }
 
 pub(crate) fn root_location(server: &Directive) -> Option<&Directive> {
@@ -586,6 +615,22 @@ impl<'a> Edits<'a> {
             text.push('\n');
         }
         self.changes.push((start..start, text));
+    }
+    /// Replaces a directive with lines, the first at its position and the
+    /// rest at its indentation.
+    pub(crate) fn replace_with(&mut self, d: &Directive, lines: &[String]) {
+        let indent = self.indent(d);
+        let mut text = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+                if !line.is_empty() {
+                    text.push_str(indent);
+                }
+            }
+            text.push_str(line);
+        }
+        self.changes.push((d.span.clone(), text));
     }
     pub(crate) fn finish(mut self) -> Result<String> {
         self.changes

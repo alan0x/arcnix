@@ -129,6 +129,15 @@ pub struct Site {
     pub www: Option<Www>,
     /// The site's request rate limit, when it has one.
     pub limit: Option<Limit>,
+    /// Some server block answers plain HTTP on port 80, which Let's
+    /// Encrypt needs to check the domains.
+    pub plain_http: bool,
+    /// The folder challenge files are served from, when every server
+    /// block that answers plain HTTP serves them.
+    pub acme: Option<String>,
+    /// The names a certificate for the site covers: its domains, and the
+    /// other www name when that one is sent here.
+    pub certificate_names: Vec<String>,
     pub locations: Vec<Location>,
     /// The server block's other directives.
     pub rows: Vec<Row>,
@@ -208,6 +217,9 @@ pub enum Change {
     AddZone(String, String),
     /// The site's rate limit: the limit's name and the burst, or off.
     Limit(Option<(String, String)>),
+    /// Serves Let's Encrypt challenge files from the folder in every server
+    /// block that answers plain HTTP, or stops (`None`).
+    Acme(Option<String>),
     /// The www pair: `None` answers both names, `Some(true)` sends
     /// `www.example.com` to `example.com`, `Some(false)` the other way.
     Www(Option<bool>),
@@ -514,13 +526,45 @@ fn ssl_listen(listen: &Directive) -> bool {
 /// A server block that only sends plain HTTP to HTTPS.
 /// A server block that only sends plain HTTP to HTTPS on the same host.
 fn https_redirect(server: &Directive) -> bool {
-    config::redirect_only(server)
-        && server.first("return").is_some_and(|r| {
-            r.args.len() == 2
-                && r.args[0].starts_with('3')
-                && (r.args[1].starts_with("https://$host")
-                    || r.args[1].starts_with("https://$server_name"))
-        })
+    config::redirect_return(server).is_some_and(|r| {
+        r.args.len() == 2
+            && r.args[0].starts_with('3')
+            && (r.args[1].starts_with("https://$host")
+                || r.args[1].starts_with("https://$server_name"))
+    })
+}
+
+/// The folder Let's Encrypt challenge files are served from, as Nginx sees it.
+pub const ACME_ROOT: &str = "/var/www/letsencrypt";
+
+/// A challenge location, for a server block that answers plain HTTP.
+fn acme_lines(unit: &str, root: &str) -> Vec<String> {
+    vec![
+        format!("location ^~ {} {{", config::ACME_PATH),
+        format!("{unit}root {root};"),
+        format!("{unit}default_type text/plain;"),
+        "}".to_owned(),
+    ]
+}
+
+/// The body of a redirect: a plain `return`, or with a challenge location
+/// in front when Let's Encrypt must still reach the challenge files.
+fn redirect_body(unit: &str, target: &str, acme: Option<&str>) -> Vec<String> {
+    match acme {
+        None => vec![format!("return 301 {target};")],
+        Some(root) => {
+            let mut lines = acme_lines(unit, root);
+            lines.push("location / {".to_owned());
+            lines.push(format!("{unit}return 301 {target};"));
+            lines.push("}".to_owned());
+            lines
+        }
+    }
+}
+
+/// Whether a server block answers plain HTTP.
+fn plain_http(server: &Directive) -> bool {
+    server.find("listen").any(|l| !ssl_listen(l))
 }
 
 /// The other half of a www pair: `www.example.com` for `example.com`, and
@@ -535,11 +579,8 @@ fn www_twin(name: &str) -> String {
 /// A server block that sends one name of a www pair to the other:
 /// `server_name www.example.com; return 301 $scheme://example.com$request_uri;`
 fn www_redirect(server: &Directive) -> Option<Www> {
-    if !config::redirect_only(server) {
-        return None;
-    }
+    let ret = config::redirect_return(server)?;
     let names = &server.first("server_name")?.args;
-    let ret = server.first("return")?;
     let [from] = names.as_slice() else {
         return None;
     };
@@ -731,6 +772,41 @@ pub fn read(text: &str) -> Result<Site> {
         .find(|n| n.contains('.') && !n.contains(['*', '~', '$']) && !n.starts_with('.'))
         .map(|n| n.strip_prefix("www.").unwrap_or(n).to_owned());
     site.limit = server.first("limit_req").and_then(limit);
+    let plain: Vec<&Directive> = all
+        .iter()
+        .map(server_at)
+        .filter(|s| plain_http(s))
+        .collect();
+    site.plain_http = plain.iter().any(|s| {
+        s.find("listen")
+            .filter_map(config::port)
+            .any(|(port, ssl)| port == 80 && !ssl)
+    });
+    let roots: Vec<Option<String>> = plain
+        .iter()
+        .map(|s| {
+            config::acme_location(s)
+                .and_then(|l| l.first("root").or_else(|| l.first("alias")))
+                .map(|d| joined(Some(d)))
+        })
+        .collect();
+    site.acme = match roots.split_first() {
+        Some((Some(first), rest)) if rest.iter().all(|r| r.as_ref() == Some(first)) => {
+            Some(first.clone())
+        }
+        _ => None,
+    };
+    let mut names: Vec<String> = main_names
+        .iter()
+        .filter(|n| n.contains('.') && !n.contains(['*', '~', '$']) && !n.starts_with('.'))
+        .map(|n| n.to_string())
+        .collect();
+    if let Some(www) = &site.www
+        && !names.contains(&www.from)
+    {
+        names.push(www.from.clone());
+    }
+    site.certificate_names = names;
     site.deny_others = access
         .last()
         .is_some_and(|(_, d)| d.name == "deny" && d.args[0] == "all");
@@ -746,6 +822,10 @@ pub fn read(text: &str) -> Result<Site> {
     let mut inherited_root = false;
     for (i, d) in server.children().iter().enumerate() {
         if d.name != "location" || d.block.is_none() {
+            continue;
+        }
+        // The Let's Encrypt section manages the challenge location.
+        if config::acme_location(server).is_some_and(|a| a.span == d.span) {
             continue;
         }
         let kind = kind(server, d);
@@ -1331,7 +1411,13 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                 if let Some(names) = names {
                     lines.push(format!("{unit}server_name {names};"));
                 }
-                lines.push(format!("{unit}return 301 https://$host$request_uri;"));
+                // Keep serving challenge files on plain HTTP, or renewal breaks.
+                let acme = config::acme_location(server)
+                    .and_then(|l| l.first("root"))
+                    .map(|d| joined(Some(d)));
+                for line in redirect_body(&unit, "https://$host$request_uri", acme.as_deref()) {
+                    lines.push(format!("{unit}{line}"));
+                }
                 lines.push("}".to_owned());
                 edits.insert_before(server, &lines);
                 for l in plain {
@@ -1556,6 +1642,63 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                 }
             }
         }
+        Change::Acme(root) => {
+            let plain: Vec<&Directive> = all
+                .iter()
+                .map(|p| get(p))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .filter(|s| plain_http(s))
+                .collect();
+            ensure!(
+                !plain.is_empty(),
+                "Let's Encrypt checks domains over plain HTTP, which this site does not answer"
+            );
+            match root {
+                Some(root) => {
+                    let root = root.trim();
+                    check_path(root, "The folder")?;
+                    for server in plain {
+                        let (_, unit) = deeper(&edits, server);
+                        match (
+                            config::acme_location(server),
+                            server.find("location").next(),
+                        ) {
+                            (Some(l), _) => match l.first("root") {
+                                Some(d) => edits.replace_args(d, root),
+                                None => edits.insert_first(l, &[format!("root {root};")]),
+                            },
+                            // A redirect at the server level runs before any
+                            // location; it moves into `location /`.
+                            (None, None) if server.first("return").is_some() => {
+                                let ret = server.first("return").expect("a return");
+                                let target = ret.args.get(1).cloned().unwrap_or_default();
+                                let code =
+                                    ret.args.first().cloned().unwrap_or_else(|| "301".into());
+                                let body: Vec<String> = redirect_body(&unit, &target, Some(root))
+                                    .into_iter()
+                                    .map(|l| l.replace("return 301 ", &format!("return {code} ")))
+                                    .collect();
+                                edits.replace_with(ret, &body);
+                            }
+                            (None, Some(first)) => {
+                                let mut lines = acme_lines(&unit, root);
+                                lines.push(String::new());
+                                edits.insert_lines_before(first, &lines, false);
+                            }
+                            (None, None) => edits.insert_last(server, &acme_lines(&unit, root)),
+                        }
+                    }
+                }
+                None => {
+                    for server in plain {
+                        if let Some(l) = config::acme_location(server) {
+                            edits.remove(l);
+                        }
+                    }
+                }
+            }
+        }
         Change::Www(choice) => {
             let path = match content.as_slice() {
                 [path] => path.clone(),
@@ -1607,7 +1750,17 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                         }
                     }
                 }
-                lines.push(format!("{unit}return 301 $scheme://{to}$request_uri;"));
+                let acme = config::acme_location(server)
+                    .and_then(|l| l.first("root"))
+                    .map(|d| joined(Some(d)))
+                    .filter(|_| plain_http(server));
+                for line in redirect_body(
+                    &unit,
+                    &format!("$scheme://{to}$request_uri"),
+                    acme.as_deref(),
+                ) {
+                    lines.push(format!("{unit}{line}"));
+                }
                 lines.push("}".to_owned());
                 edits.insert_before(server, &lines);
             }
@@ -2589,5 +2742,79 @@ server {
         let custom = "server { server_name a.com; limit_req zone=x delay=5; }";
         assert!(read(custom).unwrap().limit.is_none());
         assert!(apply(custom, &Change::Limit(None)).is_err());
+    }
+
+    #[test]
+    fn serves_lets_encrypt_challenges() {
+        // A plain site gets the location in its own block.
+        let plain = "server {\n    listen 80;\n    server_name a.example.com www.a.example.com;\n    location / {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
+        let site = read(plain).unwrap();
+        assert!(site.plain_http && site.acme.is_none());
+        assert_eq!(
+            site.certificate_names,
+            ["a.example.com", "www.a.example.com"]
+        );
+        let ready = change(plain, Change::Acme(Some(ACME_ROOT.into())));
+        assert!(
+            ready.contains("    server_name a.example.com www.a.example.com;\n    location ^~ /.well-known/acme-challenge/ {\n        root /var/www/letsencrypt;\n        default_type text/plain;\n    }\n\n    location / {"),
+            "{ready}"
+        );
+        let site = read(&ready).unwrap();
+        assert_eq!(site.acme.as_deref(), Some(ACME_ROOT));
+        assert_eq!(
+            site.locations.len(),
+            1,
+            "the challenge location is not listed"
+        );
+        assert_eq!(
+            change(&ready, Change::Acme(None)),
+            plain
+                .replace("    location / {", "\n    location / {")
+                .replacen("\n\n    location", "\n    location", 1)
+        );
+
+        // A site that sends plain HTTP to HTTPS: the redirect moves into
+        // `location /` next to the challenge, and is still a redirect.
+        let forced = "server {\n    listen 80;\n    server_name a.example.com;\n    return 301 https://$host$request_uri;\n}\n\nserver {\n    listen 443 ssl;\n    server_name a.example.com;\n    ssl_certificate /c.pem;\n    ssl_certificate_key /c.key;\n    root /srv;\n}\n";
+        let text = change(forced, Change::Acme(Some(ACME_ROOT.into())));
+        assert!(
+            text.starts_with("server {\n    listen 80;\n    server_name a.example.com;\n    location ^~ /.well-known/acme-challenge/ {\n        root /var/www/letsencrypt;\n        default_type text/plain;\n    }\n    location / {\n        return 301 https://$host$request_uri;\n    }\n}\n"),
+            "{text}"
+        );
+        let site = read(&text).unwrap();
+        assert_eq!(
+            site.server,
+            Some(vec![1]),
+            "the redirect block still only redirects"
+        );
+        assert!(site.https.as_ref().unwrap().force);
+        assert_eq!(site.acme.as_deref(), Some(ACME_ROOT));
+        // Turning the redirect off and on again keeps the challenge.
+        let off = change(&text, Change::ForceHttps(false));
+        assert!(
+            read(&off).unwrap().acme.is_none(),
+            "the HTTPS block now answers plain HTTP without it"
+        );
+        let ready = change(&off, Change::Acme(Some(ACME_ROOT.into())));
+        let again = change(&ready, Change::ForceHttps(true));
+        assert!(
+            again
+                .contains("    location / {\n        return 301 https://$host$request_uri;\n    }"),
+            "{again}"
+        );
+        assert_eq!(read(&again).unwrap().acme.as_deref(), Some(ACME_ROOT));
+
+        // A www redirect keeps the challenge too, and its name is covered.
+        let paired = change(&ready, Change::Www(Some(true)));
+        let site = read(&paired).unwrap();
+        assert_eq!(
+            site.certificate_names,
+            ["a.example.com", "www.a.example.com"]
+        );
+        assert_eq!(site.acme.as_deref(), Some(ACME_ROOT));
+
+        let secure_only = "server { listen 443 ssl; server_name a.example.com; ssl_certificate /c; ssl_certificate_key /k; root /srv; }";
+        assert!(!read(secure_only).unwrap().plain_http);
+        assert!(apply(secure_only, &Change::Acme(Some(ACME_ROOT.into()))).is_err());
     }
 }
