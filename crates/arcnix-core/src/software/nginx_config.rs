@@ -22,13 +22,16 @@ impl Directive {
     pub fn children(&self) -> &[Directive] {
         self.block.as_deref().unwrap_or_default()
     }
-    fn find<'a, 'n>(&'a self, name: &'n str) -> impl Iterator<Item = &'a Directive> + use<'a, 'n> {
+    pub(crate) fn find<'a, 'n>(
+        &'a self,
+        name: &'n str,
+    ) -> impl Iterator<Item = &'a Directive> + use<'a, 'n> {
         self.children().iter().filter(move |d| d.name == name)
     }
-    fn first(&self, name: &str) -> Option<&Directive> {
+    pub(crate) fn first(&self, name: &str) -> Option<&Directive> {
         self.children().iter().find(|d| d.name == name)
     }
-    fn header(&self, name: &str) -> Option<&Directive> {
+    pub(crate) fn header(&self, name: &str) -> Option<&Directive> {
         self.find("proxy_set_header").find(|d| {
             d.args
                 .first()
@@ -251,7 +254,7 @@ fn servers(directives: &[Directive]) -> Vec<&Directive> {
     out
 }
 
-fn port(listen: &Directive) -> Option<(u16, bool)> {
+pub(crate) fn port(listen: &Directive) -> Option<(u16, bool)> {
     let address = listen.args.first()?;
     let ssl = listen
         .args
@@ -296,11 +299,11 @@ fn addressed(listen: &Directive) -> bool {
     )
 }
 
-fn redirect_only(server: &Directive) -> bool {
+pub(crate) fn redirect_only(server: &Directive) -> bool {
     server.first("return").is_some() && server.first("location").is_none()
 }
 
-fn root_location(server: &Directive) -> Option<&Directive> {
+pub(crate) fn root_location(server: &Directive) -> Option<&Directive> {
     server.find("location").find(|l| l.args.as_slice() == ["/"])
 }
 
@@ -448,7 +451,7 @@ pub fn settings(text: &str) -> Result<Settings> {
     Ok(out)
 }
 
-fn plain_value(value: &str, what: &str) -> Result<()> {
+pub(crate) fn plain_value(value: &str, what: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
             && value.len() <= 1024
@@ -520,16 +523,22 @@ pub fn check_size(value: &str) -> Result<()> {
     Ok(())
 }
 
-struct Edits<'a> {
+pub(crate) struct Edits<'a> {
     text: &'a str,
     changes: Vec<(Range<usize>, String)>,
 }
 
 impl<'a> Edits<'a> {
+    pub(crate) fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            changes: Vec::new(),
+        }
+    }
     fn line_start(&self, at: usize) -> usize {
         self.text[..at].rfind('\n').map_or(0, |i| i + 1)
     }
-    fn indent(&self, d: &Directive) -> &'a str {
+    pub(crate) fn indent(&self, d: &Directive) -> &'a str {
         let start = self.line_start(d.span.start);
         let prefix = &self.text[start..d.span.start];
         if prefix.chars().all(|c| c == ' ' || c == '\t') {
@@ -539,13 +548,13 @@ impl<'a> Edits<'a> {
         }
     }
     /// The indentation for a new directive at the top of a block.
-    fn inner_indent(&self, block: &Directive) -> String {
+    pub(crate) fn inner_indent(&self, block: &Directive) -> String {
         if let Some(child) = block.children().first() {
             return self.indent(child).to_owned();
         }
         format!("{}    ", self.indent(block))
     }
-    fn replace_args(&mut self, d: &Directive, value: &str) {
+    pub(crate) fn replace_args(&mut self, d: &Directive, value: &str) {
         let range = if d.args_span.is_empty() {
             d.args_span.start..d.args_span.start
         } else {
@@ -559,7 +568,7 @@ impl<'a> Edits<'a> {
         self.changes.push((range, value));
     }
     /// Removes the directive, with its line when nothing else is on it.
-    fn remove(&mut self, d: &Directive) {
+    pub(crate) fn remove(&mut self, d: &Directive) {
         let start = self.line_start(d.span.start);
         let end = self.text[d.span.end..]
             .find('\n')
@@ -567,19 +576,31 @@ impl<'a> Edits<'a> {
         let before_blank = self.text[start..d.span.start].trim().is_empty();
         let after_blank = self.text[d.span.end..end].trim().is_empty();
         if before_blank && after_blank {
+            // A block usually has an empty line around it; take one with it
+            // so no double empty line is left behind.
+            let (mut start, mut end) = (start, end);
+            if d.block.is_some() {
+                if self.text[end..].starts_with('\n') {
+                    end += 1;
+                } else if start >= 2 && &self.text[start - 2..start] == "\n\n" {
+                    start -= 1;
+                }
+            }
             self.changes.push((start..end, String::new()));
         } else {
             self.changes.push((d.span.clone(), String::new()));
         }
     }
     /// Adds lines after `anchor`, at its indentation.
-    fn insert_after(&mut self, anchor: &Directive, lines: &[String]) {
+    pub(crate) fn insert_after(&mut self, anchor: &Directive, lines: &[String]) {
         let indent = self.indent(anchor);
         let mut text = String::new();
         for line in lines {
             text.push('\n');
-            text.push_str(indent);
-            text.push_str(line);
+            if !line.is_empty() {
+                text.push_str(indent);
+                text.push_str(line);
+            }
         }
         // Keep a comment at the end of the anchor's line with it.
         let rest = &self.text[anchor.span.end..];
@@ -593,18 +614,41 @@ impl<'a> Edits<'a> {
         self.changes.push((at..at, text));
     }
     /// Adds lines at the top of a block.
-    fn insert_first(&mut self, block: &Directive, lines: &[String]) {
+    pub(crate) fn insert_first(&mut self, block: &Directive, lines: &[String]) {
         let indent = self.inner_indent(block);
         let mut text = String::new();
         for line in lines {
             text.push('\n');
-            text.push_str(&indent);
-            text.push_str(line);
+            if !line.is_empty() {
+                text.push_str(&indent);
+                text.push_str(line);
+            }
         }
         self.changes
             .push((block.body.start..block.body.start, text));
     }
-    fn finish(mut self) -> Result<String> {
+    /// Adds lines at the end of a block, before its closing brace.
+    pub(crate) fn insert_last(&mut self, block: &Directive, lines: &[String]) {
+        let Some(last) = block.children().last() else {
+            return self.insert_first(block, lines);
+        };
+        self.insert_after(last, lines);
+    }
+    /// Adds lines before `anchor`, at its indentation, followed by an empty
+    /// line; for a new block in front of an existing one.
+    pub(crate) fn insert_before(&mut self, anchor: &Directive, lines: &[String]) {
+        let start = self.line_start(anchor.span.start);
+        let indent = self.indent(anchor);
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(indent);
+            text.push_str(line);
+            text.push('\n');
+        }
+        text.push('\n');
+        self.changes.push((start..start, text));
+    }
+    pub(crate) fn finish(mut self) -> Result<String> {
         self.changes
             .sort_by_key(|(range, _)| (range.start, range.end));
         for pair in self.changes.windows(2) {

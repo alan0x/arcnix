@@ -5,6 +5,7 @@ pub mod installers;
 mod native_packages;
 pub mod nginx;
 pub mod nginx_config;
+pub mod nginx_site;
 pub mod packages;
 pub mod pgadmin;
 pub mod server_inventory;
