@@ -157,12 +157,15 @@ fn rail(ui: Ui) -> impl Widget {
                     "rail-backups",
                 ),
             )),
-            col().class("rail-bottom").fill(rail_button(
-                &ui,
-                Page::Settings,
-                "Settings",
-                Icon::Settings,
-                "settings-link",
+            col().class("rail-bottom").fill((
+                updates_ui::rail_item(ui.clone()),
+                rail_button(
+                    &ui,
+                    Page::Settings,
+                    "Settings",
+                    Icon::Settings,
+                    "settings-link",
+                ),
             )),
         ))
 }

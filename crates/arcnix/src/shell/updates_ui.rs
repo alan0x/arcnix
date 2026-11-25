@@ -61,7 +61,6 @@ pub(crate) enum Event {
 pub(crate) struct Controller {
     source: Source,
     events: async_channel::Sender<Event>,
-    automatic: bool,
 }
 pub(crate) fn start() -> anyhow::Result<(Arc<Controller>, async_channel::Receiver<Event>)> {
     let source = Source::github();
@@ -71,16 +70,8 @@ pub(crate) fn start() -> anyhow::Result<(Arc<Controller>, async_channel::Receive
     } else {
         source
     };
-    let automatic = !cfg!(debug_assertions) || source.is_fixture();
     let (events, rx) = async_channel::bounded(32);
-    Ok((
-        Arc::new(Controller {
-            source,
-            events,
-            automatic,
-        }),
-        rx,
-    ))
+    Ok((Arc::new(Controller { source, events }), rx))
 }
 fn supported() -> bool {
     cfg!(all(windows, target_arch = "x86_64"))
@@ -89,22 +80,34 @@ pub(crate) fn applying(s: &State) -> bool {
     s.updates.phase == Phase::Applying
 }
 fn idle(s: &State) -> bool {
-    if !s.inflight_transfers.is_empty() {
+    s.dialog.is_none() && restart_safe(s)
+}
+fn restart_safe(s: &State) -> bool {
+    if s.pgadmin_component.installing() || !s.inflight_transfers.is_empty() {
         return false;
     }
     !s.connected
         && !s.connecting
-        && !s
-            .parked
-            .values()
-            .any(|p| p.connected || p.connecting || p.file_pending.is_some())
+        && !s.parked.values().any(|p| {
+            p.connected
+                || p.connecting
+                || p.file_pending.is_some()
+                || p.system_task_running
+                || p.office.dirty
+                || p.office.is_saving()
+                || p.code.dirty
+                || !p.code.pending.is_empty()
+                || text_editor::has_pending_work(&p.desktop_editor, p.remote_editor.as_ref())
+        })
         && !s.system_task_running
         && !scripts_ui::busy(s)
         && s.scripts.refreshing.is_empty()
         && s.file_pending.is_none()
-        && s.dialog.is_none()
+        && !s.office.dirty
+        && !s.office.is_saving()
         && s.code.pending.is_empty()
         && !s.code.dirty
+        && !text_editor::has_pending_work(&s.desktop_editor, s.remote_editor.as_ref())
         && s.cancels.is_empty()
         && !s
             .jobs
@@ -145,34 +148,43 @@ pub(crate) fn restore(ui: &Ui) {
         });
     }
 }
+fn check_due(now: u64, last: u64, hours: u16) -> bool {
+    last > now || now - last >= u64::from(hours) * 3600
+}
+
+fn schedule_due(s: &State, now: u64, at: Instant) -> bool {
+    s.config.settings.updates.automatic_checks
+        && matches!(
+            s.updates.phase,
+            Phase::Idle
+                | Phase::Current
+                | Phase::NoRelease
+                | Phase::Error
+                | Phase::Available
+                | Phase::Ready
+        )
+        && s.dialog != Some(Dialog::Update)
+        && at >= s.updates.next_check
+        && (s.updates.pending_hint
+            || s.config
+                .settings
+                .updates
+                .last_check
+                .is_none_or(|last| check_due(now, last, s.config.settings.updates.interval_hours)))
+}
+
 pub(crate) fn tick(ui: &Ui) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let due = ui.state.with(|s| {
-        ui.writable.get()
-            && ui.update_controller.automatic
-            && s.config.settings.updates.automatic_checks
-            && matches!(
-                s.updates.phase,
-                Phase::Idle | Phase::Current | Phase::NoRelease | Phase::Error
-            )
-            && Instant::now() >= s.updates.next_check
-            && (s.updates.pending_hint
-                || s.config.settings.updates.last_check.is_none_or(|last| {
-                    last > now + 86400
-                        || now.saturating_sub(last)
-                            >= u64::from(s.config.settings.updates.interval_days) * 86400
-                }))
-    });
+    let due = ui.writable.get() && ui.state.with(|s| schedule_due(s, now, Instant::now()));
     if due {
         check(ui);
     }
     let install = ui.state.revise(|s| {
-        let eligible = ui.update_controller.automatic
-            && supported()
-            && s.config.settings.updates.automatic_install
+        let eligible = supported()
+            && s.config.settings.updates.install_when_idle
             && s.updates.phase == Phase::Ready
             && idle(s)
             && !s.updates.deferred
@@ -303,10 +315,12 @@ pub(crate) fn event(ui: &Ui, event: Event) {
             ui.state.revise(|s| match result {
                 Ok(Check::Current) => {
                     s.updates.phase = Phase::Current;
+                    s.updates.prepared = None;
                     s.updates.release = None;
                 }
                 Ok(Check::NoRelease) => {
                     s.updates.phase = Phase::NoRelease;
+                    s.updates.prepared = None;
                     s.updates.release = None;
                 }
                 Ok(Check::Available(release)) => {
@@ -318,16 +332,35 @@ pub(crate) fn event(ui: &Ui, event: Event) {
                         s.updates.failed_version = None;
                         s.updates.error.clear();
                     }
-                    automatic_download = ui.update_controller.automatic
-                        && supported()
-                        && s.config.settings.updates.automatic_install
+                    let unchanged = s.updates.release.as_ref().is_some_and(|known| {
+                        known.version == release.version
+                            && known.asset.as_ref().map(|a| &a.digest)
+                                == release.asset.as_ref().map(|a| &a.digest)
+                    });
+                    if !unchanged {
+                        s.updates.prepared = None;
+                        s.updates.deferred = false;
+                    }
+                    automatic_download = supported()
+                        && s.updates.prepared.is_none()
+                        && s.config.settings.updates.automatic_download
                         && release.asset.is_some()
                         && s.updates.failed_version.as_ref() != Some(&release.version);
-                    s.updates.phase = Phase::Available;
+                    s.updates.phase = if s.updates.prepared.is_some() {
+                        Phase::Ready
+                    } else {
+                        Phase::Available
+                    };
                     s.updates.release = Some(release);
                 }
                 Err(error) => {
-                    s.updates.phase = Phase::Error;
+                    s.updates.phase = if s.updates.prepared.is_some() {
+                        Phase::Ready
+                    } else if s.updates.release.is_some() {
+                        Phase::Available
+                    } else {
+                        Phase::Error
+                    };
                     s.updates.error = error;
                 }
             });
@@ -353,7 +386,6 @@ pub(crate) fn event(ui: &Ui, event: Event) {
                 Ok(prepared) => {
                     s.updates.prepared = Some(prepared);
                     s.updates.phase = Phase::Ready;
-                    s.updates.deferred = false;
                     s.updates.auto_at = None;
                 }
                 Err(error) => {
@@ -404,53 +436,269 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
         navigation::SettingsSection::Updates,
         "Updates",
         settings::local_reset(&ui, false, |s, defaults| {
-            s.updates.automatic_checks = defaults.updates.automatic_checks;
-            s.updates.automatic_install = defaults.updates.automatic_install;
-            s.updates.interval_days = defaults.updates.interval_days;
+            let last_check = s.updates.last_check;
+            s.updates = defaults.updates.clone();
+            s.updates.last_check = last_check;
         }),
         controls(ui.clone()),
     )
 }
+
 fn controls(ui: Ui) -> impl Widget {
     let state = ui.state;
     let automatic = ui.clone();
+    let fetch = ui.clone();
     let install = ui.clone();
     let check_ui = ui.clone();
+    col().class("preferences-stack update-panel").fill((
+        sapid::checkbox()
+            .class("preference-check")
+            .label(i18n::bind("Check for updates automatically"))
+            .checked(state.map(|s| s.config.settings.updates.automatic_checks))
+            .on_checked_change(move |v| {
+                automatic.update_preferences(|s| s.updates.automatic_checks = v)
+            }),
+        preferences_ui::preference_select(
+            &ui,
+            false,
+            "Update check interval",
+            [
+                (3, "Every 3 hours"),
+                (6, "Every 6 hours"),
+                (12, "Every 12 hours"),
+                (24, "Daily"),
+                (168, "Weekly"),
+                (720, "Monthly"),
+            ],
+            |s| s.updates.interval_hours,
+            |s, hours| s.updates.interval_hours = hours,
+        ),
+        when(supported(), move || {
+            let fetch = fetch.clone();
+            let install = install.clone();
+            col().fill((
+                sapid::checkbox()
+                    .class("preference-check")
+                    .label(i18n::bind("Download verified updates automatically"))
+                    .checked(state.map(|s| s.config.settings.updates.automatic_download))
+                    .on_checked_change(move |v| {
+                        fetch.update_preferences(|s| s.updates.automatic_download = v)
+                    }),
+                sapid::checkbox()
+                    .class("preference-check")
+                    .label(i18n::bind("Restart and install automatically when idle"))
+                    .checked(state.map(|s| s.config.settings.updates.install_when_idle))
+                    .on_checked_change(move |v| {
+                        install.update_preferences(|s| s.updates.install_when_idle = v)
+                    }),
+            ))
+        }),
+        when(
+            state.map(|s| s.config.settings.updates.last_check.is_some()),
+            move || {
+                text().class("subtle").content(state.map(|s| {
+                    s.config
+                        .settings
+                        .updates
+                        .last_check
+                        .map(|t| {
+                            format!(
+                                "{} {}",
+                                i18n::translate("Last checked:"),
+                                formatting::timestamp(Some(t))
+                            )
+                        })
+                        .unwrap_or_default()
+                }))
+            },
+        ),
+        sapid::button()
+            .class("button")
+            .label(i18n::bind("Check now"))
+            .enabled(state.map(|s| {
+                !matches!(
+                    s.updates.phase,
+                    Phase::Checking | Phase::Downloading | Phase::Applying
+                )
+            }))
+            .on_press(move || check(&check_ui)),
+        release_controls(ui, false),
+    ))
+}
+
+fn open_confirmation(ui: &Ui) {
+    if ui
+        .state
+        .with(|s| s.dialog.is_none() && s.updates.release.is_some())
+    {
+        ui.open_dialog(Dialog::Update);
+        ui.state.revise(|s| {
+            if s.dialog == Some(Dialog::Update) {
+                s.updates.auto_at = None;
+                s.updates.deferred = true;
+            }
+        });
+    }
+}
+
+pub(crate) fn rail_item(ui: Ui) -> impl Widget {
+    when(
+        ui.state
+            .map(|s| s.updates.release.is_some() && !applying(s)),
+        move || {
+            let ui = ui.clone();
+            sapid::button()
+                .class("rail-item rail-update")
+                .name(i18n::bind("Update available"))
+                .fill(icons::glyph(Icon::Download))
+                .on_press(move || open_confirmation(&ui))
+        },
+    )
+}
+
+pub(crate) fn dialog(ui: Ui) -> impl Widget {
+    when(
+        ui.state.map(|s| s.dialog == Some(Dialog::Update)),
+        move || {
+            let later = ui.clone();
+            modal(
+                ui.clone(),
+                "Software update",
+                release_controls(ui.clone(), true),
+                btn("Later", move || later.close_dialog()),
+            )
+        },
+    )
+}
+
+fn release_controls(ui: Ui, confirming: bool) -> impl Widget {
+    let state = ui.state;
     let download_ui = ui.clone();
     let apply = ui.clone();
     let cancel = ui.clone();
     let page = ui.clone();
-    col().class("preferences-stack update-panel").fill((
-        sapid::checkbox().class("preference-check").label(i18n::bind("Check for updates automatically")).checked(state.map(|s|s.config.settings.updates.automatic_checks)).on_checked_change(move|v|automatic.update_preferences(|s|s.updates.automatic_checks=v)),
-        preferences_ui::preference_select(&ui, false, "Update check interval", [(1,"Daily"),(7,"Weekly"),(30,"Monthly")],
-            |s| s.updates.interval_days, |s,days| s.updates.interval_days=days),
-        sapid::checkbox().class("preference-check").label(i18n::bind("Download and install verified updates when idle")).checked(state.map(|s|s.config.settings.updates.automatic_install)).on_checked_change(move|v|install.update_preferences(|s|s.updates.automatic_install=v)),
-        text().class("subtle").content(i18n::bind(if ui.update_controller.automatic{"Checks contact the official GitHub release service. Installation waits until SSH is disconnected and all tasks are finished."}else{"Development build: background updates are paused. Manual update checks and installation are available."})),
-        text().class("update-status").content(i18n::bind(state.map(|s|status(s).to_owned()))),
-        when(state.map(|s|s.config.settings.updates.last_check.is_some()), move||text().class("subtle").content(state.map(|s|s.config.settings.updates.last_check.map(|t|format!("{} {}",i18n::translate("Last checked:"),formatting::timestamp(Some(t)))).unwrap_or_default()))),
-        when(state.map(|s|s.updates.phase==Phase::Downloading),move||{let cancel=cancel.clone();col().class("update-download").fill((
-            text().content(state.map(|s|format!("{} / {}",formatting::bytes(s.updates.done),formatting::bytes(s.updates.total)))),
-            view().class("update-progress").fill(view().style(state.map(|s|glory::style::Style::new().width(glory::style::Length::Percent(if s.updates.total==0{0.}else{s.updates.done as f64/s.updates.total as f64*100.}))))),
-            sapid::button().class("button").label(i18n::bind("Cancel download")).on_press(move||cancel.state.with(|s|s.updates.cancel.store(true,Ordering::Relaxed))),
-        ))}),
-        when(state.map(|s|s.updates.release.is_some()),move||col().class("update-release").fill((
-            text().class("section-title").content(state.map(|s|s.updates.release.as_ref().map(|r|format!("Arcnix {}",r.version)).unwrap_or_default())),
-            text().class("update-notes").selectable(true).content(state.map(|s|s.updates.release.as_ref().map(|r|r.notes.clone()).unwrap_or_default())),
-            text().class("subtle").content(state.map(|s|s.updates.release.as_ref().map(|r|r.reason.clone()).unwrap_or_default())),
-        ))),
-        settings::feedback(&ui, |s|s.updates.error.clone(), "software-error update-error"),
-        fragment((when(state.map(|s| s.updates.phase == Phase::Ready && !idle(s)), move || {
-            row().class("help-heading").fill((
-                text().class("subtle").content(i18n::bind("Waiting for connections and pending work to finish")),
-                crate::help_ui::tip("Restart readiness", "Restart waits for disconnected SSH, completed work and closed dialogs."),
+    col().class("preferences-stack update-details").fill((
+        text()
+            .class("update-status")
+            .content(i18n::bind(state.map(|s| status(s).to_owned()))),
+        when(state.map(|s| s.updates.release.is_some()), move || {
+            col().class("update-release").fill((
+                text().class("section-title").content(state.map(|s| {
+                    s.updates
+                        .release
+                        .as_ref()
+                        .map(|r| format!("Arcnix {}", r.version))
+                        .unwrap_or_default()
+                })),
+                text()
+                    .class("update-notes")
+                    .selectable(true)
+                    .content(state.map(|s| {
+                        s.updates
+                            .release
+                            .as_ref()
+                            .map(|r| r.notes.clone())
+                            .unwrap_or_default()
+                    })),
+                text().class("subtle").content(i18n::bind(state.map(|s| {
+                    if supported() {
+                        s.updates
+                            .release
+                            .as_ref()
+                            .map(|r| r.reason.clone())
+                            .unwrap_or_default()
+                    } else {
+                        "Download the update for this platform from the releases page.".into()
+                    }
+                }))),
             ))
         }),
+        when(
+            state.map(|s| s.updates.phase == Phase::Downloading),
+            move || {
+                let cancel = cancel.clone();
+                col().class("update-download").fill((
+                    text().content(state.map(|s| {
+                        format!(
+                            "{} / {}",
+                            formatting::bytes(s.updates.done),
+                            formatting::bytes(s.updates.total)
+                        )
+                    })),
+                    view()
+                        .class("update-progress")
+                        .fill(view().style(state.map(|s| {
+                            glory::style::Style::new().width(glory::style::Length::Percent(
+                                if s.updates.total == 0 {
+                                    0.
+                                } else {
+                                    s.updates.done as f64 / s.updates.total as f64 * 100.
+                                },
+                            ))
+                        }))),
+                    btn("Cancel download", move || {
+                        cancel
+                            .state
+                            .with(|s| s.updates.cancel.store(true, Ordering::Relaxed))
+                    }),
+                ))
+            },
+        ),
+        settings::feedback(
+            &ui,
+            |s| s.updates.error.clone(),
+            "software-error update-error",
+        ),
+        when(
+            state.map(|s| s.updates.phase == Phase::Ready && !restart_safe(s)),
+            || {
+                text().class("subtle").content(i18n::bind(
+                    "Waiting for connections and pending work to finish",
+                ))
+            },
+        ),
+        when(
+            state.map(move |s| confirming && s.updates.phase == Phase::Ready),
+            || text().content(i18n::bind("Arcnix will restart to install this update.")),
+        ),
         row().class("choice-list").fill((
-            sapid::button().class("button").label(i18n::bind("Check now")).enabled(state.map(|s|!matches!(s.updates.phase,Phase::Checking|Phase::Downloading|Phase::Applying))).on_press(move||check(&check_ui)),
-            sapid::button().class("button").label(i18n::bind("Open releases")).on_press(move||if let Err(error)=open_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/releases")){page.state.revise(|s|s.updates.error=error.to_string());}),
-            when(state.map(|s|supported()&&s.updates.phase==Phase::Available&&s.updates.release.as_ref().is_some_and(|r|r.asset.is_some())),move||{let ui=download_ui.clone();sapid::button().class("button").label(i18n::bind("Download update")).on_press(move||download(&ui))}),
-            when(state.map(|s|supported()&&s.updates.phase==Phase::Ready),move||{let ui=apply.clone();sapid::button().class("button primary").label(i18n::bind("Restart and install")).enabled(state.map(idle)).on_press(move||install_update(&ui))}),
-        )))),
+            btn("Open releases", move || {
+                if let Err(error) = open_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/releases")) {
+                    page.state.revise(|s| s.updates.error = error.to_string());
+                }
+            }),
+            when(
+                state.map(|s| {
+                    supported()
+                        && s.updates.phase == Phase::Available
+                        && s.updates
+                            .release
+                            .as_ref()
+                            .is_some_and(|r| r.asset.is_some())
+                }),
+                move || {
+                    let ui = download_ui.clone();
+                    btn("Download update", move || download(&ui))
+                        .enabled(download_ui.writable.get())
+                },
+            ),
+            when(
+                state.map(|s| supported() && s.updates.phase == Phase::Ready),
+                move || {
+                    let ui = apply.clone();
+                    btn("Restart and install", move || {
+                        if confirming {
+                            ui.close_dialog();
+                            install_update(&ui);
+                        } else {
+                            open_confirmation(&ui);
+                        }
+                    })
+                    .class("button primary")
+                    .enabled(state.map(restart_safe))
+                },
+            ),
+        )),
     ))
 }
 pub(crate) fn overlay(ui: Ui) -> impl Widget {
@@ -510,4 +758,43 @@ pub(crate) fn banner(ui: Ui) -> impl Widget {
             ))
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_checks_repeat_and_respect_active_operations() {
+        let mut s = State::new(AppConfig::default(), String::new(), String::new());
+        let at = s.updates.next_check;
+        let period = 6 * 3600;
+        assert!(schedule_due(&s, 0, at));
+        for last in [0, period, 2 * period] {
+            s.config.settings.updates.last_check = Some(last);
+            for phase in [
+                Phase::Current,
+                Phase::NoRelease,
+                Phase::Error,
+                Phase::Available,
+                Phase::Ready,
+            ] {
+                s.updates.phase = phase;
+                assert!(!schedule_due(&s, last + period - 1, at));
+                assert!(schedule_due(&s, last + period, at));
+            }
+        }
+        assert!(schedule_due(&s, 1, at)); // Recover if the system clock moved backwards.
+        assert!(!schedule_due(&s, 1, at - Duration::from_secs(1)));
+        s.dialog = Some(Dialog::Update);
+        assert!(!schedule_due(&s, 1, at));
+        s.dialog = None;
+        for phase in [Phase::Checking, Phase::Downloading, Phase::Applying] {
+            s.updates.phase = phase;
+            assert!(!schedule_due(&s, 1, at));
+        }
+        s.updates.phase = Phase::Idle;
+        s.config.settings.updates.automatic_checks = false;
+        assert!(!schedule_due(&s, 1, at));
+    }
 }

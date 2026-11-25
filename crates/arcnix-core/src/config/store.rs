@@ -35,6 +35,31 @@ impl ConfigStore {
         Ok(Self::at(dirs.config_dir().join("config.json")))
     }
 
+    /// Local application data follows the configuration for portable installs.
+    pub fn local_data_root(&self) -> Result<PathBuf> {
+        if self.path != Self::default_location()?.path {
+            return Ok(self
+                .path
+                .parent()
+                .context("Configuration directory is unavailable")?
+                .to_owned());
+        }
+        #[cfg(windows)]
+        {
+            Ok(directories::BaseDirs::new()
+                .context("Cannot find the local application data directory")?
+                .data_local_dir()
+                .join("Arcnix"))
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(ProjectDirs::from("org", "arcnix", "Arcnix")
+                .context("Cannot find the application data directory")?
+                .data_local_dir()
+                .to_owned())
+        }
+    }
+
     /// A real SSH session writes its Linux user data under ~/.arcnix. Keep
     /// this host's simulated server state in its own namespace. Portable
     /// configurations and test runs keep their demo data beside the config.
@@ -298,8 +323,8 @@ impl AppConfig {
             "Use 0–2 decimal places"
         );
         ensure!(
-            [1, 7, 30].contains(&self.settings.updates.interval_days),
-            "Update interval must be 1, 7 or 30 days"
+            [3, 6, 12, 24, 168, 720].contains(&self.settings.updates.interval_hours),
+            "Invalid update check interval"
         );
         ensure!(
             crate::AppSettings::RESOURCE_INTERVALS
@@ -1054,7 +1079,7 @@ mod tests {
         config.settings.display.timezone = DisplayTimezone::Utc;
         config.settings.logging.timestamps = false;
         config.settings.logging.max_size_mib = 50;
-        config.settings.updates.interval_days = 7;
+        config.settings.updates.interval_hours = 168;
         config.settings.upload_conflict = Some(crate::ExistingFileAction::Skip);
         store.save(&config).unwrap();
         let loaded = store.load().unwrap();

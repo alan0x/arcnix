@@ -45,6 +45,7 @@ use workers::*;
 
 #[derive(Clone, PartialEq, Eq)]
 enum Dialog {
+    Update,
     OpenDesktopFile(desktop_file_picker::Purpose),
     TextEditor,
     DesktopTimeZone,
@@ -304,6 +305,7 @@ define_state! {
     }
     shared {
         config: AppConfig = config,
+        pgadmin_component: pgadmin_ui::ComponentState = Default::default(),
         group: Option<String> = None,
         collapsed_groups: HashSet<String> = HashSet::new(),
         search: String = String::new(),
@@ -954,6 +956,7 @@ impl Ui {
             #[cfg(windows)]
             Update::WslFiles(result)=>wsl_workspace::receive(events,response.serial,result),
             Update::PgAdmin(reply)=>pgadmin_ui::reply(events,response.serial,reply),
+            Update::OfficePending(result)=>office_reader::pending_received(events,response.serial,result),
             Update::OfficeSaved(result)=>office_reader::saved(events,response.serial,result),
             Update::Office(result)=>office_reader::received(events,response.serial,result),
             Update::Pdf(event)=>pdf_reader::received(events,response.serial,event),
@@ -2203,9 +2206,12 @@ fn app(ui: Ui) -> impl Widget {
                     })
                 }),
             fragment((
-                updates_ui::banner(ui.clone()),
+                fragment((
+                    updates_ui::banner(ui.clone()),
+                    updates_ui::dialog(ui.clone()),
+                    updates_ui::overlay(ui.clone()),
+                )),
                 servers::dialogs(ui.clone()),
-                updates_ui::overlay(ui.clone()),
                 settings::files_dialog(ui.clone()),
                 desktop_file_picker::dialog(ui.clone()),
                 files_ui::folder_icon_dialog(ui.clone()),
@@ -2529,6 +2535,24 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn office_and_pgadmin_are_listed_on_every_desktop() {
+        use local_desktop::Target;
+        let mut state = State::new(AppConfig::default(), String::new(), String::new());
+        for target in [
+            None,
+            Some(Target::Native),
+            Some(Target::ReadOnlyHost),
+            #[cfg(windows)]
+            Some(Target::Wsl("Ubuntu".into())),
+        ] {
+            state.local_desktop = target;
+            let apps = server_desktop::available_apps(&state);
+            assert!(apps.contains(&WorkspacePage::Office));
+            assert!(apps.contains(&WorkspacePage::PgAdmin));
+        }
+    }
+
     #[test]
     fn terminal_launchers_follow_the_session_capability() {
         let mut state = State::new(AppConfig::default(), String::new(), String::new());

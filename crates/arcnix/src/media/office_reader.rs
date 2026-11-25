@@ -21,10 +21,13 @@ pub(crate) fn local_target(target: &local_desktop::Target) -> bool {
 }
 
 pub(crate) fn available(s: &State) -> bool {
-    s.local_desktop.as_ref().is_some_and(local_target)
+    s.local_desktop
+        .as_ref()
+        .map_or(s.connected && s.sftp_available, local_target)
 }
 
 pub(crate) struct Document {
+    pub remote: Option<office_cache::Copy>,
     pub html: String,
     writer: Option<Arc<str>>,
     pub width_px: f64,
@@ -46,6 +49,7 @@ pub(crate) fn render(path: &str, bytes: &[u8]) -> Result<Document, String> {
     let writer = (kind == "writer").then(|| Arc::from(model.to_string()));
     let print = pdf::document_to_print_html(&model, kind)?;
     Ok(Document {
+        remote: None,
         html: print.html,
         writer,
         width_px: print.width_mm * 96. / 25.4,
@@ -55,6 +59,7 @@ pub(crate) fn render(path: &str, bytes: &[u8]) -> Result<Document, String> {
 
 #[derive(Clone, Default)]
 pub(crate) struct Reader {
+    remote: Option<office_cache::Copy>,
     pub document: Option<Arc<Document>>,
     pub viewport: Option<native_viewport::Viewport>,
     pub error: String,
@@ -62,6 +67,8 @@ pub(crate) struct Reader {
     pub dirty: bool,
     saving: Option<u64>,
     request: Option<u64>,
+    list_request: Option<u64>,
+    pending_paths: Vec<String>,
     path: String,
 }
 
@@ -75,6 +82,10 @@ pub(crate) fn browse(ui: &Ui) {
 }
 
 pub(crate) fn open(ui: &Ui, path: &str) {
+    load(ui, path, None);
+}
+
+fn load(ui: &Ui, path: &str, replace: Option<office_cache::Record>) {
     if !ui
         .state
         .with(|s| available(s) && code_workbench::available(s))
@@ -86,7 +97,13 @@ pub(crate) fn open(ui: &Ui, path: &str) {
         return;
     }
     let supported = supports(path);
-    let request = supported.then(|| ui.send(Action::OpenOffice(path.into())));
+    let request = supported.then(|| {
+        ui.send(Action::OpenOffice(
+            path.into(),
+            ui.store.as_ref().clone(),
+            replace,
+        ))
+    });
     ui.state.revise(|s| {
         s.office = Reader {
             request,
@@ -111,7 +128,7 @@ pub(crate) fn received(ui: &Ui, serial: u64, result: Result<Document, String>) {
         reader.request = None;
         match result {
             Ok(document) => {
-                reader.document = Some(Arc::new(document));
+                reader.set_document(document, "");
                 Some(reader.path.clone())
             }
             Err(message) => {
@@ -125,38 +142,156 @@ pub(crate) fn received(ui: &Ui, serial: u64, result: Result<Document, String>) {
     }
 }
 
+pub(crate) fn pending_received(ui: &Ui, serial: u64, result: Result<Vec<String>, String>) {
+    ui.state.revise(|s| {
+        if s.office.list_request != Some(serial) {
+            return;
+        }
+        s.office.list_request = None;
+        match result {
+            Ok(paths) => {
+                s.office.error = if paths.is_empty() {
+                    "No pending uploads.".into()
+                } else {
+                    String::new()
+                };
+                s.office.pending_paths = paths;
+            }
+            Err(error) => s.office.error = error,
+        }
+    });
+}
+
+fn pending_uploads(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let browse = ui.clone();
+    when(
+        state.map(|s| {
+            s.local_desktop.is_none()
+                && available(s)
+                && s.office.draft.is_none()
+                && !s.office.is_saving()
+        }),
+        move || {
+            let ui = ui.clone();
+            let browse = browse.clone();
+            fragment((
+                i18n::btn("Pending uploads", move || {
+                    let serial = browse.send(Action::PendingOffice(browse.store.as_ref().clone()));
+                    state.revise(|s| s.office.list_request = Some(serial));
+                })
+                .enabled(state.map(|s| s.office.list_request.is_none())),
+                when(
+                    state.map(|s| !s.office.pending_paths.is_empty()),
+                    move || {
+                        let ui = ui.clone();
+                        col().class("office-pending-files").fill(
+                            each(state.map(|s| s.office.pending_paths.clone()))
+                                .key(|path| path.clone())
+                                .children(move |item| {
+                                    let path = item.value.get();
+                                    let ui = ui.clone();
+                                    sapid::button()
+                                        .class("button")
+                                        .label(path.clone())
+                                        .on_press(move || open(&ui, &path))
+                                }),
+                        )
+                    },
+                ),
+            ))
+        },
+    )
+}
+
+fn sync_actions(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let visible = state.map(|s| {
+        s.office.draft.is_none()
+            && !s.office.is_saving()
+            && s.office.remote().is_some_and(|c| c.recovery_path.is_some())
+    });
+    let pending = |s: &State| s.office.remote().is_some_and(office_cache::Copy::pending);
+    when(visible, move || {
+        let ui = ui.clone();
+        let retry = ui.clone();
+        row().class("viewer-toolbar").fill((
+            text().content(i18n::bind(state.map(move |s| {
+                if pending(s) {
+                    "Local copy pending upload".to_owned()
+                } else {
+                    "Preserved local copy".to_owned()
+                }
+            }))),
+            text()
+                .class("office-cache-path")
+                .selectable(true)
+                .content(state.map(|s| {
+                    s.office
+                        .remote()
+                        .and_then(|c| c.recovery_path.as_ref())
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default()
+                })),
+            when(state.map(pending), move || {
+                let retry = retry.clone();
+                let server = ui.clone();
+                fragment((
+                    i18n::btn("Retry upload", move || sync_remote(&retry, true)),
+                    i18n::btn("Open server version", move || {
+                        if let Some(record) = server
+                            .state
+                            .with(|s| s.office.remote().map(|c| c.record.clone()))
+                        {
+                            load(&server, &record.path.clone(), Some(record));
+                        }
+                    }),
+                ))
+            }),
+        ))
+    })
+}
+
+pub(super) fn can_edit(s: &State) -> bool {
+    (s.local_desktop == Some(local_desktop::Target::Native) || s.office.remote().is_some())
+        && s.office.draft.is_none()
+        && !s.office.is_saving()
+        && s.office
+            .document
+            .as_ref()
+            .is_some_and(|d| d.writer.is_some())
+}
+
+pub(super) fn begin_edit(ui: &Ui) {
+    ui.state.revise(|s| {
+        if can_edit(s) {
+            s.office.draft = s.office.document.as_ref().and_then(|d| d.writer.clone());
+            s.office.error.clear();
+        }
+    });
+}
+
 pub(crate) fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let browse_ui = ui.clone();
+    let pending_files = ui.clone();
     let recover_ui = ui.clone();
+    let pending_ui = ui.clone();
     col().class("office-reader").fill((
-        row().class("viewer-toolbar").fill((
-            i18n::text_action("Open Office document", Icon::Folder)
-                .enabled(state.map(|s| s.office.draft.is_none()))
-                .on_press(move || browse(&browse_ui)),
-            when(
-                state.map(|s| {
-                    s.local_desktop == Some(local_desktop::Target::Native)
-                        && s.office.draft.is_none()
-                        && s.office
-                            .document
-                            .as_ref()
-                            .is_some_and(|d| d.writer.is_some())
-                }),
+        row().class("office-document-strip").fill((
+            when(state.map(|s| s.office.document.is_none() && s.office.draft.is_none()), {
+                let ui = ui.clone();
                 move || {
-                    i18n::btn("Edit Word document", move || {
-                        state.revise(|s| {
-                            s.office.draft =
-                                s.office.document.as_ref().and_then(|d| d.writer.clone());
-                            s.office.error.clear();
-                        })
-                    })
-                },
-            ),
-            text()
-                .class("viewer-filename")
-                .content(state.map(|s| filename(&s.office.path).to_owned())),
+                    let ui = ui.clone();
+                    sapid::dropdown_menu("office-file").label(i18n::bind("File")).item(
+                        sapid::menu_item("open-office").label(i18n::bind("Open Office document"))
+                            .enabled(state.map(available)).on_activate(move || browse(&ui)))
+                }
+            }),
+            text().class("viewer-filename").content(state.map(|s| filename(&s.office.path).to_owned())),
+            pending_uploads(pending_files),
         )),
+        sync_actions(pending_ui),
         when(
             state.map(|s| s.office.document.is_some() && !s.office.error.is_empty()),
             move || {
@@ -171,7 +306,9 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
                 let save = recover_ui.clone();
                 let discard = recover_ui.clone();
                 row().class("viewer-toolbar").fill((
-                    i18n::btn("Save as…", move || save_dialog(&save)),
+                    i18n::btn(if state.with(|s| s.office.remote().is_some()) {
+                        "Save to server"
+                    } else { "Save as…" }, move || save_dialog(&save)),
                     i18n::btn("Discard edits", move || {
                         let path = discard.state.revise(|s| {
                             s.office.draft = None;
@@ -202,14 +339,23 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
         col().class("browser-surface").fill(when(
             state.map(|s| s.office.document.is_none()),
             move || {
+                let browse_ui = browse_ui.clone();
                 col().class("viewer-placeholder").fill((
-                    icons::glyph(Icon::File),
+                    icons::glyph(Icon::Syntra),
+                    when(state.map(|s| available(s) && s.office.draft.is_none() && s.office.request.is_none()), move || {
+                        let ui = browse_ui.clone();
+                        i18n::text_action("Open Office document", Icon::Folder).on_press(move || browse(&ui))
+                    }),
                     text().content(i18n::bind(state.map(|s| {
                         if !s.office.error.is_empty() {
                             return s.office.error.clone();
                         }
                         if s.office.request.is_some() {
                             "Opening Office document…"
+                        } else if s.local_desktop.is_none() && !s.sftp_available {
+                            "Connect to a server with SFTP to open remote Office files."
+                        } else if !available(s) {
+                            "To read a file on this computer, select “Try the local desktop” in the server list, then open Office."
                         } else {
                             "Open a DOCX, XLSX or PPTX file to read it."
                         }
@@ -234,7 +380,32 @@ pub(crate) fn can_leave(ui: &Ui) -> bool {
     })
 }
 
+fn sync_remote(ui: &Ui, retry: bool) {
+    let Some((record, model)) = ui.state.with(|s| {
+        if s.office.is_saving() || !available(s) {
+            return None;
+        }
+        let remote = s.office.remote()?;
+        let model = if retry {
+            None
+        } else {
+            Some(s.office.draft.clone()?)
+        };
+        Some((remote.record.clone(), model))
+    }) else {
+        return;
+    };
+    let serial = ui.send(Action::SyncOffice(ui.store.as_ref().clone(), record, model));
+    ui.state.revise(|s| {
+        s.office.saving = Some(serial);
+        s.office.error = "Saving and uploading…".into();
+    });
+}
+
 pub(crate) fn save_dialog(ui: &Ui) {
+    if ui.state.with(|s| s.office.remote().is_some()) {
+        return sync_remote(ui, false);
+    }
     let Some(path) = ui.state.with(|s| {
         (s.local_desktop == Some(local_desktop::Target::Native)
             && s.office.draft.is_some()
@@ -310,13 +481,7 @@ pub(crate) fn save_copy(
     let dest = std::path::PathBuf::from(path);
     ensure!(dest.is_absolute(), "Expected an absolute local path.");
     ensure!(!dest.try_exists()?, "Choose a new DOCX file name.");
-    ensure!(
-        model.len() <= syntra_doc_engine::MAX_DOCUMENT_CONTENT_BYTES,
-        "Document exceeds the editing limit."
-    );
-    let writer = serde_json::from_str(model)?;
-    let bytes = syntra_export::docx::writer_to_docx(&writer).map_err(anyhow::Error::msg)?;
-    ensure!(bytes.len() <= LIMIT, "Exported DOCX exceeds 32 MiB.");
+    let bytes = encode(model)?;
     let document = render(path, &bytes).map_err(anyhow::Error::msg)?;
     let mut tmp =
         tempfile::NamedTempFile::new_in(dest.parent().context("Missing destination directory")?)?;
@@ -324,6 +489,18 @@ pub(crate) fn save_copy(
     tmp.as_file().sync_all()?;
     tmp.persist_noclobber(dest)?;
     Ok(document)
+}
+
+pub(crate) fn encode(model: &str) -> anyhow::Result<Vec<u8>> {
+    use anyhow::ensure;
+    ensure!(
+        model.len() <= syntra_doc_engine::MAX_DOCUMENT_CONTENT_BYTES,
+        "Document exceeds the editing limit."
+    );
+    let writer = serde_json::from_str(model)?;
+    let bytes = syntra_export::docx::writer_to_docx(&writer).map_err(anyhow::Error::msg)?;
+    ensure!(bytes.len() <= LIMIT, "Exported DOCX exceeds 32 MiB.");
+    Ok(bytes)
 }
 
 pub(crate) fn saved(ui: &Ui, serial: u64, result: Result<(String, Document), String>) {
@@ -335,10 +512,9 @@ pub(crate) fn saved(ui: &Ui, serial: u64, result: Result<(String, Document), Str
         match result {
             Ok((path, document)) => {
                 s.office.path = path;
-                s.office.document = Some(Arc::new(document));
+                s.office.set_document(document, "Saved DOCX copy.");
                 s.office.draft = None;
                 s.office.dirty = false;
-                s.office.error = "Saved DOCX copy.".into();
                 true
             }
             Err(error) => {
@@ -353,16 +529,30 @@ pub(crate) fn saved(ui: &Ui, serial: u64, result: Result<(String, Document), Str
 }
 
 impl Reader {
+    fn set_document(&mut self, mut document: Document, local_notice: &str) {
+        self.pending_paths.clear();
+        self.list_request = None;
+        self.remote = document.remote.take();
+        self.error = self
+            .remote
+            .as_ref()
+            .map_or(local_notice, |c| &c.notice)
+            .to_owned();
+        self.document = Some(Arc::new(document));
+    }
+
+    pub(super) fn remote(&self) -> Option<&office_cache::Copy> {
+        self.remote.as_ref()
+    }
     pub(crate) fn is_saving(&self) -> bool {
         self.saving.is_some()
     }
 }
 
 pub(crate) fn edit_message(ui: &Ui, web: &wry::WebView, message: &str) {
-    if !ui
-        .state
-        .with(|s| s.local_desktop == Some(local_desktop::Target::Native))
-    {
+    if !ui.state.with(|s| {
+        s.local_desktop == Some(local_desktop::Target::Native) || s.office.remote().is_some()
+    }) {
         return;
     }
     match message {

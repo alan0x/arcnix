@@ -76,13 +76,21 @@ def main():
             expect(page.locator('.desktop-menubar')).to_have_count(0)
             assert page.locator('.workspace-header').bounding_box()['height'] <= 46
             expect(page.locator('.desktop-shortcuts .desktop-app-label')).to_have_text([
-                'Files', 'Terminal', 'Browser', 'Monitor', 'App Center', 'Settings',
+                'Files', 'Terminal', 'Browser', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings',
             ])
             expect(page.locator('.server-desktop .files-module')).to_have_count(0)
             expect(page.locator('.desktop-window.active')).to_be_hidden()
             app.screenshot('desktop-light.png')
             checks.append('Home is always first; files and desktop open once in activation order and share SSH')
             checks.append('Edit server is an accessible gear in the upper-right of the overview and opens the existing editor')
+
+            launch('Office')
+            office = page.locator('.desktop-window.active.app-office')
+            expect(office.locator('.viewer-placeholder')).to_contain_text(
+                'Open a DOCX, XLSX or PPTX file to read it.'
+            )
+            expect(office.get_by_role('button', name='Open Office document')).to_be_enabled()
+            office.locator('.window-close').click()
 
             def fullscreen():
                 tabs.get_by_role('button', name='Fullscreen desktop', exact=True).click()
@@ -256,6 +264,7 @@ def main():
             contents = page.locator('.app-editor.active .remote-editor-content')
             expect(contents).to_have_value('remote file')
             contents.fill('Edited from desktop Files\n')
+            expect(page.locator('.app-editor.active .remote-editor-save')).to_be_enabled()
             contents.press('Control+s')
             eventually(lambda: (peer.root / 'work' / 'renamed.txt').read_text() == 'Edited from desktop Files\n')
             page.locator('.desktop-window.active .window-close').click()
@@ -417,6 +426,11 @@ def main():
             expect(page.get_by_role('button', name='退出桌面全屏', exact=True)).to_be_visible()
             app.screenshot('desktop-chinese-dark.png')
             page.keyboard.press('Escape')
+            launch('Office')
+            expect(office.locator('.viewer-placeholder')).to_contain_text(
+                '打开 DOCX、XLSX 或 PPTX 文件进行阅读。'
+            )
+            office.locator('.window-close').click()
             checks.append('Light/dark themes, live Chinese localization and 900/1100px layouts render without overflow')
 
             # Explicit disconnect affects only its server.

@@ -81,19 +81,39 @@ pub fn local_package() -> Option<PathBuf> {
 /// Arcnix-managed storage, separate from any pgAdmin the user installed.
 /// Portable configurations and test runs keep it beside their configuration.
 pub fn base(store: &ConfigStore) -> Result<PathBuf> {
+    let root = store.local_data_root()?;
     if store.path() != ConfigStore::default_location()?.path() {
-        return Ok(store
-            .path()
-            .parent()
-            .context("Configuration directory is unavailable")?
-            .join("components")
-            .join("pgadmin"));
+        return app_directory(&root, &root);
     }
-    Ok(ProjectDirs::from("org", "arcnix", "Arcnix")
-        .context("Cannot find the application data directory")?
-        .data_local_dir()
-        .join("components")
-        .join("pgadmin"))
+    let project = ProjectDirs::from("org", "arcnix", "Arcnix")
+        .context("Cannot find the application data directory")?;
+    app_directory(&root, project.data_local_dir())
+}
+
+fn app_directory(root: &Path, legacy_root: &Path) -> Result<PathBuf> {
+    let apps = root.join("apps");
+    let target = apps.join("pgadmin");
+    let legacy = legacy_root.join("components").join("pgadmin");
+    if !target.try_exists()? && legacy.try_exists()? {
+        ensure!(
+            !backend_running(&legacy)?,
+            "Close the running pgAdmin session to move its app folder."
+        );
+        fs::create_dir_all(apps)?;
+        if let Err(error) = fs::rename(&legacy, &target) {
+            // Another Arcnix process may have completed the same move.
+            if legacy.try_exists()? || !target.is_dir() {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Cannot move pgAdmin from {} to {}",
+                        legacy.display(),
+                        target.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(target)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,6 +176,38 @@ pub fn installed(base: &Path) -> Option<Component> {
     read_component(&base.join(VERSION)).ok()
 }
 
+/// Serialize changes to one component directory, including across app processes.
+/// The lock file stays in place so all contenders lock the same file.
+fn install_once(
+    base: &Path,
+    check: &impl Fn() -> Result<()>,
+    install: impl FnOnce(&Stage) -> Result<Component>,
+) -> Result<Component> {
+    check()?;
+    if let Some(component) = installed(base) {
+        return Ok(component);
+    }
+    fs::create_dir_all(base)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(base.join("install.lock"))?;
+    loop {
+        check()?;
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(100)),
+            Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+    if let Some(component) = installed(base) {
+        return Ok(component);
+    }
+    install(&Stage::new(base)?)
+}
+
 /// Download, verify, unpack and activate the component.
 pub fn install(
     base: &Path,
@@ -164,16 +216,16 @@ pub fn install(
     check: impl Fn() -> Result<()>,
     progress: impl FnMut(u64, u64),
 ) -> Result<Component> {
-    fs::create_dir_all(base)?;
-    let stage = Stage::new(base)?;
-    let archive = updates::download(
-        source,
-        asset,
-        &stage.0.join("component.zip"),
-        &check,
-        progress,
-    )?;
-    activate(base, &stage, archive, &check)
+    install_once(base, &check, |stage| {
+        let archive = updates::download(
+            source,
+            asset,
+            &stage.0.join("component.zip"),
+            &check,
+            progress,
+        )?;
+        activate(base, stage, archive, &check)
+    })
 }
 
 /// Install from a package already on this computer. Development builds only:
@@ -183,9 +235,9 @@ pub fn install_local(
     package: &Path,
     check: impl Fn() -> Result<()>,
 ) -> Result<Component> {
-    fs::create_dir_all(base)?;
-    let stage = Stage::new(base)?;
-    activate(base, &stage, fs::File::open(package)?, &check)
+    install_once(base, &check, |stage| {
+        activate(base, stage, fs::File::open(package)?, &check)
+    })
 }
 
 struct Stage(PathBuf);
@@ -741,6 +793,45 @@ mod tests {
     }
 
     #[test]
+    fn portable_install_uses_apps_beside_the_config() {
+        let directory = Temporary::new();
+        let store = ConfigStore::at(directory.0.join("config.json"));
+        let target = base(&store).unwrap();
+        assert_eq!(target, directory.0.join("apps/pgadmin"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn moves_the_previous_installation_and_server_data_together() {
+        let directory = Temporary::new();
+        let root = &directory.0;
+        let old_root = root.join("old-project/data");
+        let legacy = old_root.join("components/pgadmin");
+        let data = legacy.join("servers/server/database");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("pgadmin4.db"), b"saved database").unwrap();
+        let manifest = manifest(VERSION);
+        let mut entries = vec![(MANIFEST, manifest.as_str())];
+        entries.extend(FILES);
+        let archive = package(root, &entries).unwrap();
+        install_local(&legacy, &archive, || Ok(())).unwrap();
+
+        let held = lock(&data, &|| false).unwrap();
+        assert!(app_directory(root, &old_root).is_err());
+        assert!(installed(&legacy).is_some());
+        drop(held);
+        let target = app_directory(root, &old_root).unwrap();
+        assert_eq!(target, root.join("apps/pgadmin"));
+        assert!(installed(&target).is_some());
+        assert_eq!(
+            fs::read(target.join("servers/server/database/pgadmin4.db")).unwrap(),
+            b"saved database"
+        );
+        assert!(!legacy.exists());
+        assert_eq!(app_directory(root, &old_root).unwrap(), target);
+    }
+
+    #[test]
     fn installs_a_complete_component_and_removes_its_staging_folder() {
         let manifest = manifest(VERSION);
         let mut entries = vec![(MANIFEST, manifest.as_str())];
@@ -749,7 +840,7 @@ mod tests {
         let component = result.unwrap();
         let base = directory.0.join("base");
         assert_eq!(installed(&base), Some(component.clone()));
-        assert_eq!(fs::read_dir(&base).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&base).unwrap().count(), 2); // version and install.lock
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -757,6 +848,39 @@ mod tests {
             assert_ne!(mode(&component.python) & 0o100, 0);
             assert_eq!(mode(&component.root.join("setup.py")) & 0o111, 0);
         }
+    }
+
+    #[test]
+    fn concurrent_requests_prepare_one_package_and_reuse_the_result() {
+        use std::sync::Barrier;
+        use std::sync::atomic::AtomicUsize;
+        let directory = Temporary::new();
+        let base = directory.0.join("base");
+        let manifest = manifest(VERSION);
+        let mut entries = vec![(MANIFEST, manifest.as_str())];
+        entries.extend(FILES);
+        let package = package(&directory.0, &entries).unwrap();
+        let starts = AtomicUsize::new(0);
+        let barrier = Barrier::new(4);
+        std::thread::scope(|threads| {
+            for _ in 0..4 {
+                threads.spawn(|| {
+                    barrier.wait();
+                    install_once(&base, &|| Ok(()), |stage| {
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(50));
+                        activate(&base, stage, fs::File::open(&package)?, &|| Ok(()))
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        fs::remove_file(&package).unwrap();
+        assert_eq!(
+            install_local(&base, &package, || Ok(())).unwrap(),
+            installed(&base).unwrap()
+        );
     }
 
     #[test]
@@ -798,6 +922,7 @@ mod tests {
         left.sort();
         let mut expected = vec![
             VERSION,
+            "install.lock",
             "999.0",
             "servers",
             ".installing-other",
@@ -835,7 +960,7 @@ mod tests {
             assert!(result.is_err());
             assert!(installed(&directory.0.join("base")).is_none());
             assert!(!directory.0.join("escaped").exists());
-            assert_eq!(fs::read_dir(directory.0.join("base")).unwrap().count(), 0);
+            assert_eq!(fs::read_dir(directory.0.join("base")).unwrap().count(), 1); // install.lock
         }
     }
 

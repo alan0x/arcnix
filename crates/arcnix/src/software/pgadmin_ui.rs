@@ -8,18 +8,108 @@ use crate::i18n::desktop::{btn, icon_action};
 use crate::*;
 
 #[derive(Clone, Default)]
+pub(crate) enum ComponentState {
+    #[default]
+    Missing,
+    Installing {
+        cancel: Arc<AtomicBool>,
+        percent: u64,
+    },
+    Failed(String),
+    Ready,
+}
+
+impl ComponentState {
+    pub fn installing(&self) -> bool {
+        matches!(self, Self::Installing { .. })
+    }
+
+    fn begin(&mut self) -> Option<Arc<AtomicBool>> {
+        if !matches!(self, Self::Missing | Self::Failed(_)) {
+            return None;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self = Self::Installing {
+            cancel: cancel.clone(),
+            percent: 0,
+        };
+        Some(cancel)
+    }
+
+    pub fn refresh(&mut self, installed: bool) {
+        if self.installing() {
+            return;
+        }
+        if installed {
+            *self = Self::Ready;
+        } else if matches!(self, Self::Ready) {
+            *self = Self::Missing;
+        }
+    }
+
+    fn event(&mut self, event: InstallEvent) {
+        let Self::Installing { percent, .. } = self else {
+            return;
+        };
+        match event {
+            InstallEvent::Progress(value) => *percent = value,
+            InstallEvent::Finished(result) => {
+                *self = match result {
+                    Ok(()) => Self::Ready,
+                    Err(error) => Self::Failed(error),
+                }
+            }
+        }
+    }
+}
+
+enum InstallEvent {
+    Progress(u64),
+    Finished(std::result::Result<(), String>),
+}
+
+fn download_size() -> Option<u64> {
+    pgadmin::local_package()
+        .map(|_| 0)
+        .or_else(|| pgadmin::package().map(|asset| asset.size))
+}
+
+fn install_component(base: &Path, cancel: &AtomicBool, reply: impl Fn(InstallEvent)) {
+    use arcnix_core::{pgadmin, updates};
+
+    let check = || {
+        anyhow::ensure!(!cancel.load(Ordering::Acquire), "Installation cancelled");
+        Ok(())
+    };
+    let mut shown = 0;
+    let result = if let Some(package) = pgadmin::local_package() {
+        pgadmin::install_local(base, &package, check)
+    } else if let Some(asset) = pgadmin::package() {
+        pgadmin::install(
+            base,
+            &updates::Source::github(),
+            &asset,
+            check,
+            |done, total| {
+                let percent = done * 100 / total.max(1);
+                if percent != shown {
+                    shown = percent;
+                    reply(InstallEvent::Progress(percent));
+                }
+            },
+        )
+    } else {
+        Err(anyhow::anyhow!("pgAdmin is not available for this system"))
+    };
+    reply(InstallEvent::Finished(
+        result.map(|_| ()).map_err(|error| format!("{error:#}")),
+    ));
+}
+#[derive(Clone, Default)]
 pub(crate) enum Stage {
     #[default]
     Closed,
     Checking(u64),
-    Missing {
-        size: Option<u64>,
-    },
-    Installing {
-        serial: u64,
-        cancel: Arc<AtomicBool>,
-        percent: u64,
-    },
     Connect,
     Starting {
         serial: u64,
@@ -53,9 +143,9 @@ impl PgAdmin {
 
     fn stop(&self) {
         match &self.stage {
-            Stage::Installing { cancel: flag, .. }
-            | Stage::Starting { stop: flag, .. }
-            | Stage::Running { stop: flag, .. } => flag.store(true, Ordering::Release),
+            Stage::Starting { stop: flag, .. } | Stage::Running { stop: flag, .. } => {
+                flag.store(true, Ordering::Release)
+            }
             _ => {}
         }
     }
@@ -64,7 +154,6 @@ impl PgAdmin {
     fn awaits(&self, reply: u64) -> bool {
         match self.stage {
             Stage::Checking(serial)
-            | Stage::Installing { serial, .. }
             | Stage::Starting { serial, .. }
             | Stage::Running { serial, .. } => serial == reply,
             _ => false,
@@ -135,13 +224,7 @@ const REVEAL_LABEL: &str = if cfg!(windows) {
 };
 
 pub(crate) enum Reply {
-    Opened {
-        installed: bool,
-        size: Option<u64>,
-        connection: Connection,
-    },
-    Progress(u64),
-    Installed(std::result::Result<(), String>),
+    Opened(Connection),
     Ready(String),
     Unreachable(Diagnosis),
     Ended(std::result::Result<(), String>),
@@ -165,6 +248,7 @@ impl Ui {
         }
         match pgadmin::base(&self.store) {
             Ok(base) => {
+                self.refresh_pgadmin_component(&base);
                 let serial = self.send(Action::PgAdminOpen(base));
                 self.state
                     .revise(|s| s.pgadmin.stage = Stage::Checking(serial));
@@ -175,31 +259,73 @@ impl Ui {
         }
     }
 
+    pub(crate) fn refresh_pgadmin_component(&self, base: &std::path::Path) {
+        if !self.state.with(|s| s.pgadmin_component.installing()) {
+            let installed = pgadmin::installed(base).is_some();
+            self.state
+                .revise(|s| s.pgadmin_component.refresh(installed));
+        }
+    }
+
     fn pgadmin_install(&self) {
-        let Ok(base) = pgadmin::base(&self.store) else {
-            return;
-        };
-        if !self
-            .state
-            .with(|s| matches!(s.pgadmin.stage, Stage::Missing { size: Some(_) }))
-        {
+        if download_size().is_none() {
             return;
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        let serial = self.send(Action::PgAdminInstall(base, cancel.clone()));
-        self.state.revise(|s| {
-            s.pgadmin.error.clear();
-            s.pgadmin.stage = Stage::Installing {
-                serial,
-                cancel,
-                percent: 0,
-            };
-        });
+        let base = match pgadmin::base(&self.store) {
+            Ok(base) => base,
+            Err(error) => {
+                self.state
+                    .revise(|s| s.pgadmin.error = format!("{error:#}"));
+                return;
+            }
+        };
+        let Some(cancel) = self.state.revise(|s| s.pgadmin_component.begin()) else {
+            return;
+        };
+        let (tx, rx) = async_channel::bounded(16);
+        let state = self.state;
+        if self
+            .scope
+            .spawn(async move {
+                while let Ok(event) = rx.recv().await {
+                    let finished = matches!(event, InstallEvent::Finished(_));
+                    state.revise(|s| s.pgadmin_component.event(event));
+                    if finished {
+                        return;
+                    }
+                }
+                state.revise(|s| {
+                    s.pgadmin_component
+                        .event(InstallEvent::Finished(Err("Installation stopped".into())))
+                });
+            })
+            .is_err()
+        {
+            state.revise(|s| {
+                s.pgadmin_component
+                    .event(InstallEvent::Finished(Err("Installation stopped".into())))
+            });
+            return;
+        }
+        let worker_tx = tx.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("pgadmin-install".into())
+            .spawn(move || {
+                install_component(&base, &cancel, |event| {
+                    let _ = worker_tx.send_blocking(event);
+                });
+            })
+        {
+            let _ = tx.try_send(InstallEvent::Finished(Err(error.to_string())));
+        }
     }
 
     fn pgadmin_start(&self) {
         let connection = self.state.revise(|s| {
-            if !s.connected || !matches!(s.pgadmin.stage, Stage::Connect) {
+            if !s.connected
+                || !matches!(s.pgadmin.stage, Stage::Connect)
+                || !matches!(s.pgadmin_component, ComponentState::Ready)
+            {
                 return None;
             }
             let mut connection = s.pgadmin.connection.clone();
@@ -230,54 +356,26 @@ impl Ui {
             .revise(|s| s.pgadmin.stage = Stage::Starting { serial, stop });
     }
 
-    /// Return to the connection form, or to the install prompt.
     fn pgadmin_stop(&self) {
-        let reopen = self.state.revise(|s| {
+        self.state.revise(|s| {
             s.pgadmin.stop();
             s.pgadmin.error.clear();
-            let installing = matches!(s.pgadmin.stage, Stage::Installing { .. });
-            s.pgadmin.stage = if installing {
-                Stage::Closed
-            } else {
-                Stage::Connect
-            };
-            installing
+            s.pgadmin.stage = Stage::Connect;
         });
-        if reopen {
-            self.pgadmin_enter();
-        }
     }
 }
 
 pub(crate) fn reply(ui: &Ui, serial: u64, reply: Reply) {
-    let reopen = ui.state.revise(|s| {
+    ui.state.revise(|s| {
         let pgadmin = &mut s.pgadmin;
         if !pgadmin.awaits(serial) {
-            return false;
+            return;
         }
         match reply {
-            Reply::Opened {
-                installed,
-                size,
-                connection,
-            } => {
+            Reply::Opened(connection) => {
                 pgadmin.port = connection.port.to_string();
                 pgadmin.connection = connection;
-                pgadmin.stage = if installed {
-                    Stage::Connect
-                } else {
-                    Stage::Missing { size }
-                };
-            }
-            Reply::Progress(value) => {
-                if let Stage::Installing { percent, .. } = &mut pgadmin.stage {
-                    *percent = value;
-                }
-            }
-            Reply::Installed(result) => {
-                pgadmin.stage = Stage::Closed;
-                pgadmin.error = result.err().unwrap_or_default();
-                return true;
+                pgadmin.stage = Stage::Connect;
             }
             Reply::Ready(url) => {
                 if let Stage::Starting { serial, stop } = &pgadmin.stage {
@@ -302,13 +400,7 @@ pub(crate) fn reply(ui: &Ui, serial: u64, reply: Reply) {
                 pgadmin.error = result.err().unwrap_or_default();
             }
         }
-        false
     });
-    if reopen {
-        // App Center shows whether the component is downloaded.
-        ui.app_center_local_status();
-        ui.pgadmin_enter();
-    }
 }
 
 fn field(
@@ -338,16 +430,25 @@ fn field(
 fn panel(ui: Ui) -> impl Widget {
     let state = ui.state;
     let install = ui.clone();
-    let cancel = ui.clone();
+    let size = download_size();
     let connect = ui.clone();
     let stop = ui.clone();
     col().class("pgadmin-panel form-stack").fill((
         when(
             state.map(|s| matches!(s.pgadmin.stage, Stage::Closed | Stage::Checking(_))),
-            || text().class("subtle").content(i18n::bind("Checking pgAdmin…")),
+            move || {
+                text().class("subtle").content(i18n::bind(state.map(|s| {
+                    if s.local_desktop.is_some() {
+                        "Open pgAdmin from a connected SSH server to use its PostgreSQL tunnel."
+                    } else {
+                        "Checking pgAdmin…"
+                    }
+                    .to_owned()
+                })))
+            },
         ),
         when(
-            state.map(|s| matches!(s.pgadmin.stage, Stage::Missing { .. })),
+            state.map(|s| matches!(s.pgadmin.stage, Stage::Connect) && matches!(s.pgadmin_component, ComponentState::Missing | ComponentState::Failed(_))),
             move || {
                 let install = install.clone();
                 fragment((
@@ -355,52 +456,46 @@ fn panel(ui: Ui) -> impl Widget {
                         .class("section-title")
                         .content(i18n::bind("pgAdmin is not installed")),
                     text().class("subtle").content(i18n::bind(
-                        "Arcnix keeps its own copy of pgAdmin on this computer. Nothing is installed on the server.",
+                        "Install pgAdmin once on this computer to use it from all your server desktops.",
                     )),
                     when(
-                        state.map(|s| matches!(s.pgadmin.stage, Stage::Missing { size: None })),
+                        size.is_none(),
                         || {
                             text().class("subtle").content(i18n::bind(
                                 "This version of Arcnix has no pgAdmin download for this system yet.",
                             ))
                         },
                     ),
-                    text().class("subtle").content(state.map(|s| match s.pgadmin.stage {
-                        Stage::Missing { size: Some(size) } if size > 0 => {
-                            format!("{} MB", size.div_ceil(1_000_000))
-                        }
-                        _ => String::new(),
-                    })),
-                    btn("Install pgAdmin", move || install.pgadmin_install()).enabled(
-                        state.map(|s| {
-                            matches!(s.pgadmin.stage, Stage::Missing { size: Some(_) })
-                        }),
-                    ),
+                    text().class("subtle").content(size.filter(|&size| size > 0).map(|size| format!("{} MB", size.div_ceil(1_000_000))).unwrap_or_default()),
+                    btn("Install pgAdmin", move || install.pgadmin_install()).enabled(size.is_some()),
                 ))
             },
         ),
         when(
-            state.map(|s| matches!(s.pgadmin.stage, Stage::Installing { .. })),
+            state.map(|s| matches!(s.pgadmin.stage, Stage::Connect) && s.pgadmin_component.installing()),
             move || {
-                let cancel = cancel.clone();
                 fragment((
                     text()
                         .class("section-title")
                         .content(i18n::bind("Installing pgAdmin…")),
                     text().class("subtle").content(state.map(|s| {
-                        match s.pgadmin.stage {
-                            Stage::Installing { percent, .. } if percent < 100 => {
+                        match s.pgadmin_component {
+                            ComponentState::Installing { percent, .. } if percent < 100 => {
                                 format!("{percent}%")
                             }
                             _ => String::new(),
                         }
                     })),
-                    btn("Cancel", move || cancel.pgadmin_stop()),
+                    btn("Cancel installation for all servers", move || state.with(|s| {
+                        if let ComponentState::Installing { cancel, .. } = &s.pgadmin_component {
+                            cancel.store(true, Ordering::Release);
+                        }
+                    })),
                 ))
             },
         ),
         when(
-            state.map(|s| matches!(s.pgadmin.stage, Stage::Connect)),
+            state.map(|s| matches!(s.pgadmin.stage, Stage::Connect) && matches!(s.pgadmin_component, ComponentState::Ready)),
             move || {
                 let start = connect.clone();
                 fragment((
@@ -510,7 +605,12 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
             .content(state.map(|s| s.epoch.to_string())),
         text()
             .class("pgadmin-error form-error")
-            .content(i18n::bind(state.map(|s| s.pgadmin.error.clone()))),
+            .content(i18n::bind(state.map(|s| {
+                match (&s.pgadmin.stage, &s.pgadmin_component) {
+                    (Stage::Connect, ComponentState::Failed(error)) => error.clone(),
+                    _ => s.pgadmin.error.clone(),
+                }
+            }))),
         when(state.map(|s| s.pgadmin.url().is_some()), || {
             col().class("browser-surface").fill(
                 text()
@@ -525,6 +625,35 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installing_is_shared_across_workspace_switches_and_retries() {
+        let mut state = State::new(AppConfig::default(), String::new(), String::new());
+        let mut other = ServerSession::new(String::new());
+        state.pgadmin.stage = Stage::Connect;
+        let first = state.pgadmin_component.begin().unwrap();
+        state.pgadmin_component.event(InstallEvent::Progress(43));
+        state.swap_session(&mut other);
+        reset(&mut state);
+        assert!(!first.load(Ordering::Acquire));
+        state.pgadmin_component.refresh(false);
+        assert!(matches!(
+            state.pgadmin_component,
+            ComponentState::Installing { percent: 43, .. }
+        ));
+        assert!(state.pgadmin_component.begin().is_none());
+        state
+            .pgadmin_component
+            .event(InstallEvent::Finished(Err("failed".into())));
+        assert!(state.pgadmin_component.begin().is_some());
+        state
+            .pgadmin_component
+            .event(InstallEvent::Finished(Ok(())));
+        state.swap_session(&mut other);
+        assert!(matches!(state.pgadmin.stage, Stage::Connect));
+        assert!(matches!(state.pgadmin_component, ComponentState::Ready));
+        assert!(state.pgadmin_component.begin().is_none());
+    }
 
     #[test]
     fn replies_from_an_earlier_request_are_ignored() {

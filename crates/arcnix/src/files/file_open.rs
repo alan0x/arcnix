@@ -45,7 +45,7 @@ fn icon(app: FileApp) -> Icon {
         FileApp::Player => Icon::Play,
         FileApp::ImageViewer => Icon::Image,
         FileApp::PdfReader => Icon::File,
-        FileApp::Office => Icon::File,
+        FileApp::Office => server_desktop::app_icon(WorkspacePage::Office),
         FileApp::Browser => Icon::Browser,
     }
 }

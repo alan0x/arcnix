@@ -82,7 +82,7 @@ cargo run --locked -p arcnix --bin arcnix -- --config ./my-config.json
 - **Connection**：连接超时与 SSH 保活，支持站点覆盖，下次连接生效；连接中断不会自动重放命令或文件修改。
 - **Transfers**：上传／下载分别配置询问、覆盖或跳过；文件操作菜单的 **Transfer defaults** 可以按服务器覆盖或恢复继承。
 - **Logging / Operation log、Log files**：操作日志的时间戳／导出与文件持久化分开。默认关闭写文件，开启后才显示目录、容量和轮转数量，默认目录位于配置旁的 `logs`；空错误不渲染，真实 I/O 错误仍显示。队列拥塞时提示丢弃记录，不能充当完整审计日志。
-- **About / Application、Updates**：当前程序版本、稳定版检查、后台下载与空闲自动安装；正式版默认开启，开发版保留手动检查。更新通知的入口也跳转此页，仅在相应状态显示下载或重启操作。见[更新通道](releasing.md#desktop-update-channel)。
+- **About / Application、Updates**：显示当前版本和更新设置。新配置默认每 6 小时检查稳定版。发现更新后，左侧设置上方显示下载图标，点击可查看版本、发行说明和进度。Windows x64 默认后台下载并校验，用户确认后重启安装；可另行开启空闲自动安装。见[更新通道](releasing.md#desktop-update-channel)。
 
 设置自动保存在当前本地配置中，重新启动后恢复；每台服务器的文件栏比例和已记忆的传输冲突选择仍独立保存。
 
@@ -151,7 +151,23 @@ Ctrl+C 在有选中文字时复制，否则向远程程序发送中断；Ctrl+Sh
 
 采样与日志命令依据 [Linux proc 文档](https://www.kernel.org/doc/html/latest/filesystems/proc.html) 和 [journalctl 官方手册](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html)。
 
+## Office 菜单与工具栏
+
+Arcnix 使用同一 Syntra Git 提交中的文档引擎、导出器和共享界面组件。Syntra 网页端与桌面端复用菜单定义和 Writer 编辑表面。打开文档后，菜单和工具栏在文档自己的 WebView 中渲染，文件选择、本地另存和 SFTP 同步由 Arcnix 处理。
+
+阅读时支持查找、打印、缩放和适应宽度。表格可切换工作表，演示文稿可翻页。Word 编辑支持撤销、重做、正文和标题样式，以及加粗和斜体。退出编辑时可选择继续编辑或放弃未保存的修改。
+
+## 远程 Office 工作副本
+
+在支持 SFTP 的服务器桌面双击 DOCX、XLSX 或 PPTX，会在本机解析最大 32 MiB 的工作副本。Windows 默认使用 `%LOCALAPPDATA%\Arcnix\servers\<服务器键>\files\<路径摘要>`，便携配置使用配置文件旁的 `servers`。服务器键包含配置 ID、主机、端口、用户名和已验证的 SSH 主机指纹。完整远端路径存入 `sync.json`，路径摘要用于区分不同目录和大小写。缓存文件名包含内容摘要，安全且长度合适时还包含原文件名。
+
+保存 DOCX 时，客户端先持有该文件的本机锁，核对打开时的缓存记录，落盘新 DOCX 并原子更新待上传记录。上传前检查内容 SHA-256、大小、修改时间、权限及可用的属主和组信息。通过检查后写入远端同目录的私有临时文件，在发布前再次检查版本，沿用 SFTP 文件替换流程并核对发布后的内容。常规 SFTP 没有按版本比较并替换的指令，其他工具在最终检查和重命名之间仍有极短的竞争窗口。
+
+同步成功后记录新的基线，并保留上次被替换的本地版本。遇到冲突、删除或网络错误，待上传记录与本地副本保留。重启后可从 Office 的「待上传文件」找回副本，即使远端文件已经删除。选择「打开服务器版本」会保留冲突副本并显示其本地路径。回归测试 `tools/remote_office_smoke.py` 使用相互隔离的 SSH 配置验证三格式打开、DOCX 保存、上传中的冲突及重试。
+
 ## pgAdmin
+
+Windows 将 pgAdmin 安装在 `%LOCALAPPDATA%\Arcnix\apps\pgadmin\<版本>`。指定便携配置文件时，安装目录为配置文件旁的 `apps/pgadmin/<版本>`。升级后首次检查 pgAdmin 时，Arcnix 会将旧的 `components/pgadmin` 目录连同已保存的连接和数据库设置一起迁移。
 
 macOS 和 Windows 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随 Arcnix 管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层。下载先写入该窗口的临时目录，完成后由系统保存对话框（macOS 为附在窗口上的面板）选择位置，再在后台线程移动过去；窗口关闭时尚未询问的下载移到「下载」。保存的数据库密码由 pgAdmin 加密，密钥由 Arcnix 生成并存放在系统钥匙串（`org.arcnix.pgadmin`），启动时交给后端；pgAdmin 自己的钥匙串存储保持关闭，因为它的桌面模式探测超时会在运行中改用另一把密钥。密钥变化（例如钥匙串条目被删除）时启动器清除已保存的密码，pgAdmin 会重新询问；本次读不到钥匙串时不改动已保存的密码。更换数据库用户时清除为原用户保存的密码。
 
@@ -253,7 +269,7 @@ Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口�
 
 新版读取旧配置或缺少配置文件的服务器时，保留已有设置，缺失项使用当前客户端的默认值。没有可用的主题时沿用旧配置中的壁纸和明暗模式，缺失的明暗模式跟随客户端。默认值在读取时生效，配置在用户保存修改时写入服务器。
 
-App Center 目录包括 Docker、Nginx、Caddy、Redis、PostgreSQL、pgAdmin、Git、htop 和 Certbot。pgAdmin 是本机应用（目录中的 `local`），只在提供 pgAdmin 窗口的平台列出，状态取自本机组件是否已下载，不参与服务器清单。连接目标服务器后，检查服务器任务的运行条件、系统包仓库、Snap 稳定渠道和 Docker Compose 可用性。普通用户可以浏览和搜索整个目录，卡片按本机仓库和运行环境显示可用来源。APT 候选还经过依赖模拟。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。按名称安装和仓库搜索保留为辅助入口。
+App Center 目录包括 Docker、Nginx、Caddy、Redis、PostgreSQL、pgAdmin、Git、htop 和 Certbot。pgAdmin 是本机应用（目录中的 `local`），在所有平台列出，卡片显示本机组件的下载状态或提示当前平台没有可用来源。启动器在本机、WSL 和 SSH 桌面始终列出 pgAdmin 和 Office。连接目标服务器后，检查服务器任务的运行条件、系统包仓库、Snap 稳定渠道和 Docker Compose 可用性。普通用户可以浏览和搜索整个目录，卡片按本机仓库和运行环境显示可用来源。APT 候选还经过依赖模拟。Docker 的安装入口进入同一目录，初始筛选 Compose 应用，可切回全部。按名称安装和仓库搜索保留为辅助入口。
 
 卡片和应用页使用同一套状态：检查中、已安装、未安装、暂无可用安装来源；本机应用显示「本机可用」或「首次打开时下载」。卡片按钮随状态变化：未安装为「安装…」，已安装且有对应窗口（Docker、Nginx、pgAdmin）为「打开」，其余已安装应用为「管理」，进入应用页。应用页依次显示标题区的状态和主要操作、「在此服务器上」的每份安装及其升级、卸载等操作（本机应用为「在本机上」）、各安装方式的可用性（已安装时为「其他安装方式」，可另选来源安装）、介绍、常见用途和网站，以及「相关应用」。相关应用在目录中双向声明，例如 PostgreSQL 与 pgAdmin。
 
