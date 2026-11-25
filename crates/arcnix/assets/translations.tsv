@@ -2936,3 +2936,19 @@ Office 文件同步	Office file sync
 文档已保存。	Document saved.
 文件在打开后已被修改。请另存副本。	This file changed since it was opened. Save a copy instead.
 该文档为只读。请另存副本。	The document is read-only. Save a copy instead.
+GPU 使用率	GPU utilization
+专用 GPU 内存	Dedicated GPU memory
+共享 GPU 内存	Shared GPU memory
+温度	Temperature
+驱动程序	Driver
+视频编码	Video encode
+视频解码	Video decode
+此主机未报告 GPU	No GPU reported by this host
+此显卡未提供实时性能数据。	This adapter does not report live counters.
+渲染器使用率	Renderer utilization
+分块引擎使用率	Tiler utilization
+系统应用图标	System app icons
+固定到程序坞	Pin to Dock
+从程序坞取消固定	Unpin from Dock
+在桌面显示	Show on desktop
+从桌面隐藏	Hide from desktop

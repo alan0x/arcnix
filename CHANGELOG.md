@@ -1,6 +1,11 @@
 # 改进记录
 
-## 未发布
+## 0.3.7 — 2026-11-25
+
+- Monitor 在 CPU 下方新增 GPU 面板，支持本机和 SSH 主机，可按显卡查看实时利用率、引擎曲线和内存用量。可用指标取决于操作系统和驱动。
+- Launcher 支持右键将应用固定到程序坞或显示在桌面。Dock 和桌面设置只列出系统应用图标，Text Editor 排在 Code Editor 前，Monitor 排在 Settings 前。pgAdmin 可从 Launcher 打开并单独固定。
+- Office 可打开本机和远程的 Word、Excel、PowerPoint 文件，支持编辑和保存 DOCX。远程文件使用本地缓存，保存后可查看同步进度。
+- 运行期间会定期检查更新，有新版本时可从侧栏打开更新窗口。
 
 - Windows 新增 pgAdmin 窗口，功能与 macOS 相同。
 - pgAdmin 保存查询结果和导出文件时弹出保存对话框，可选择位置，标题栏提示保存到的文件夹。

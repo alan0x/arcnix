@@ -37,7 +37,7 @@ pub use maintenance::{
 };
 pub use model::*;
 pub use observability::{
-    disks, host_capabilities, metric_history, metrics, network, processes, resource_ports,
+    disks, gpu, host_capabilities, metric_history, metrics, network, processes, resource_ports,
     system_logs,
 };
 pub use software::{

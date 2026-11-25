@@ -219,7 +219,7 @@ def main():
 
             app.connect()
             app.workspace('Desktop')
-            default_apps = ['Files', 'Terminal', 'Browser', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings']
+            default_apps = ['Files', 'Terminal', 'Browser', 'Office', 'App Center', 'Monitor', 'Settings']
             expect(p.locator('.desktop-shortcuts .desktop-app-label').filter(
                 has_text=re.compile('^(' + '|'.join(default_apps) + ')$'),
             )).to_have_text(default_apps)
@@ -308,9 +308,9 @@ def main():
             position = settings().get_by_role('radiogroup', name='Dock position')
             expect(position.get_by_text('Bottom', exact=True)).to_have_css('user-select', 'none')
             expect(settings().locator('.dock-icons-settings').get_by_role('slider', name='Dock icon size', exact=True)).to_be_visible()
-            pinned = shortcut_options('App icons')
-            pinned_order = ['Home', 'Files', 'Terminal', 'Code Editor', 'Browser', 'Player',
-                            'Image Viewer', 'PDF Reader', 'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings', 'Text Editor', 'Trash']
+            pinned = shortcut_options('System app icons')
+            pinned_order = ['Home', 'Files', 'Terminal', 'Text Editor', 'Code Editor', 'Browser', 'Player',
+                            'Image Viewer', 'PDF Reader', 'Office', 'App Center', 'Monitor', 'Settings', 'Trash']
             expect(pinned.locator('.preference-check')).to_have_text(pinned_order)
             for label in ('Player', 'Text Editor', 'Code Editor'):
                 expect(pinned.get_by_role('checkbox', name=label, exact=True)).not_to_be_checked()
@@ -319,7 +319,7 @@ def main():
             settings().get_by_role('switch', name='Show server info', exact=True).click()
             saved()
             expect(p.locator('.desktop-wallpaper-copy')).to_have_count(0)
-            shortcuts = shortcut_options('App icons')
+            shortcuts = shortcut_options('System app icons')
             monitor = shortcuts.get_by_role('checkbox', name='Monitor', exact=True)
             terminal = shortcuts.get_by_role('checkbox', name='Terminal', exact=True)
             expect(monitor).not_to_be_checked()
@@ -332,14 +332,14 @@ def main():
             expect(dock_button('Terminal')).to_be_visible()
             expect(notes).to_be_visible()
             eventually(lambda: set(preferences()['hidden']) == {'monitor', 'terminal'})
-            shortcut_options('App icons')
+            shortcut_options('System app icons')
             monitor.check()
             saved()
             close_dialog(shortcuts)
             expect(desktop_button('Monitor')).to_be_visible()
             expect(desktop_button('Terminal')).to_have_count(0)
             eventually(lambda: preferences()['hidden'] == ['terminal'])
-            shortcut_options('App icons')
+            shortcut_options('System app icons')
             shortcuts.locator('.modal-header').get_by_role('button', name='Reset', exact=True).click()
             saved()
             expect(terminal).to_be_checked()
@@ -445,7 +445,7 @@ def main():
             eventually(lambda: p.locator('.desktop-dock').bounding_box()['y'] < canvas['y'] + canvas['height'] - 30)
             app.application('Settings')
             settings().get_by_role('button', name='Dock', exact=True).click()
-            pinned = shortcut_options('App icons')
+            pinned = shortcut_options('System app icons')
             expect(pinned.locator('.preference-check')).to_have_text(pinned_order)
             close_dialog(pinned)
             settings().get_by_role('switch', name='Automatically hide the dock', exact=True).click()
@@ -539,7 +539,7 @@ def main():
             app.application('Settings')
             settings().get_by_role('button', name='Desktop', exact=True).click()
             expect(desktop_button('Files')).to_have_count(0)
-            shortcuts = shortcut_options('App icons')
+            shortcuts = shortcut_options('System app icons')
             files_shortcut = shortcuts.get_by_role('checkbox', name='Files', exact=True)
             expect(files_shortcut).not_to_be_checked()
             files_shortcut.check()

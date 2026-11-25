@@ -129,7 +129,7 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
     let mut icons: Vec<_> = server_desktop::available_apps(s)
         .into_iter()
         .filter_map(server_desktop::app_id)
-        .filter(|&app| default_app_shortcut(s, app) && shortcut_visible(settings, app))
+        .filter(|&app| shortcut_visible(s, app))
         .map(Shortcut::App)
         .collect();
     if s.sftp_available {
@@ -151,8 +151,15 @@ fn desktop_icons(s: &State) -> Vec<Shortcut> {
     ordered(icons, &settings.order)
 }
 
-fn shortcut_visible(prefs: &Appearance, app: DesktopApp) -> bool {
-    prefs.show_apps && !prefs.hidden.contains(&app)
+fn system_app(app: DesktopApp) -> bool {
+    app != DesktopApp::PgAdmin
+}
+
+pub(super) fn shortcut_visible(s: &State, app: DesktopApp) -> bool {
+    let prefs = appearance(s);
+    prefs.show_apps
+        && !prefs.hidden.contains(&app)
+        && (default_app_shortcut(s, app) || prefs.extra_shortcuts.contains(&app))
 }
 
 fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
@@ -160,42 +167,40 @@ fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
         DesktopApp::Code | DesktopApp::Player | DesktopApp::ImageViewer | DesktopApp::PdfReader => {
             s.local_desktop.is_some()
         }
-        DesktopApp::Editor => false,
+        DesktopApp::Editor | DesktopApp::PgAdmin => false,
         _ => true,
     }
 }
 
-fn set_shortcut_visible(ui: &Ui, app: DesktopApp, visible: bool) {
+pub(super) fn set_shortcut_visible(ui: &Ui, app: DesktopApp, visible: bool) {
+    if ui.state.with(|s| shortcut_visible(s, app)) == visible {
+        return;
+    }
     update(ui, |prefs| {
-        if shortcut_visible(prefs, app) == visible {
-            return;
-        }
         if !prefs.show_apps {
-            // Preserve the old all-hidden setting as individual launcher choices.
-            for app in server_desktop::APP_LAUNCHERS
+            // Convert the legacy master switch into per-app choices first.
+            prefs.extra_shortcuts.clear();
+            prefs.hidden = server_desktop::APP_LAUNCHERS
                 .into_iter()
                 .filter_map(server_desktop::app_id)
-                .filter(|&app| ui.state.with(|s| default_app_shortcut(s, app)))
-            {
-                if !prefs.hidden.contains(&app) {
-                    prefs.hidden.push(app);
-                }
-            }
+                .filter(|&id| ui.state.with(|s| default_app_shortcut(s, id)))
+                .collect();
             prefs.show_apps = true;
         }
-        if visible {
-            prefs.hidden.retain(|&hidden| hidden != app);
-        } else {
-            prefs.hidden.push(app);
+        prefs.hidden.retain(|&id| id != app);
+        prefs.extra_shortcuts.retain(|&id| id != app);
+        match (ui.state.with(|s| default_app_shortcut(s, app)), visible) {
+            (false, true) => prefs.extra_shortcuts.push(app),
+            (true, false) => prefs.hidden.push(app),
+            _ => {}
         }
     });
 }
 
-fn available_shortcuts(s: &State, zone: Zone) -> Vec<DockItem> {
+fn available_shortcuts(s: &State) -> Vec<DockItem> {
     let apps = server_desktop::available_apps(s)
         .into_iter()
         .filter_map(server_desktop::app_id)
-        .filter(|&app| zone == Zone::Dock || default_app_shortcut(s, app))
         .map(DockItem::App);
     let system_icons = [SystemIcon::Home, SystemIcon::Trash]
         .into_iter()
@@ -205,10 +210,7 @@ fn available_shortcuts(s: &State, zone: Zone) -> Vec<DockItem> {
 }
 
 fn dock_choices(s: &State) -> Vec<DockItem> {
-    ordered(
-        available_shortcuts(s, Zone::Dock),
-        &appearance(s).dock.order,
-    )
+    ordered(available_shortcuts(s), &appearance(s).dock.order)
 }
 
 fn dock_icons(s: &State) -> Vec<Shortcut> {
@@ -234,7 +236,7 @@ fn dock_icons(s: &State) -> Vec<Shortcut> {
     icons
 }
 
-fn dock_pinned(s: &State, item: DockItem) -> bool {
+pub(super) fn dock_pinned(s: &State, item: DockItem) -> bool {
     let dock = &appearance(s).dock;
     match item {
         DockItem::App(app) => {
@@ -255,7 +257,7 @@ fn set_app_pin(s: &State, dock: &mut Dock, app: DesktopApp, pinned: bool) {
     }
 }
 
-fn toggle_dock_pin(ui: &Ui, item: DockItem) {
+pub(super) fn toggle_dock_pin(ui: &Ui, item: DockItem) {
     update(ui, |prefs| {
         let dock = &mut prefs.dock;
         let pinned = ui.state.with(|s| dock_pinned(s, item));
@@ -263,7 +265,7 @@ fn toggle_dock_pin(ui: &Ui, item: DockItem) {
             DockItem::App(app) => ui.state.with(|s| set_app_pin(s, dock, app, !pinned)),
             _ if pinned => dock.order.retain(|&id| id != item),
             _ => ui.state.with(|s| {
-                for candidate in available_shortcuts(s, Zone::Dock) {
+                for candidate in available_shortcuts(s) {
                     if (candidate == item || dock_pinned(s, candidate))
                         && !dock.order.contains(&candidate)
                     {
@@ -1345,7 +1347,7 @@ const SETTINGS_SECTIONS: [(SettingsPage, &str, Icon, &[&str]); 10] = [
         &[
             "Desktop layout",
             "Desktop icon size",
-            "App icons",
+            "System app icons",
             "Show server info",
         ],
     ),
@@ -1371,7 +1373,7 @@ const SETTINGS_SECTIONS: [(SettingsPage, &str, Icon, &[&str]); 10] = [
             "Time format",
             "Date",
             "Seconds",
-            "App icons",
+            "System app icons",
         ],
     ),
     (
@@ -1616,12 +1618,11 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
             let change = ui.clone();
             modal_with_header(
                 ui.clone(),
-                "App icons",
+                "System app icons",
                 settings::desktop_reset(&ui, move |prefs| {
                     let appearance = &mut prefs.appearance;
                     if dock {
-                        appearance.dock.unpinned.clear();
-                        appearance.dock.extra_pins.clear();
+                        reset_system_pins(&mut appearance.dock);
                         appearance
                             .dock
                             .order
@@ -1632,22 +1633,16 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                 }),
                 col().class("desktop-shortcut-options").fill(
                     each(state.map(move |s| {
-                        let zone = if dock { Zone::Dock } else { Zone::Desktop };
-                        let choices = available_shortcuts(s, zone);
-                        if dock {
-                            ordered(
-                                choices,
-                                &[
-                                    DockItem::System {
-                                        system: SystemIcon::Home,
-                                    },
-                                    DockItem::App(DesktopApp::Files),
-                                    DockItem::App(DesktopApp::Terminal),
-                                ],
-                            )
-                        } else {
-                            choices
-                        }
+                        let choices = available_shortcuts(s)
+                            .into_iter()
+                            .filter(|item| !matches!(item, DockItem::App(app) if !system_app(*app)))
+                            .collect();
+                        ordered(
+                            choices,
+                            &[DockItem::System {
+                                system: SystemIcon::Home,
+                            }],
+                        )
                     }))
                     .key(|item| *item)
                     .children(move |item| {
@@ -1679,7 +1674,7 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
                                         dock_pinned(s, item)
                                     } else {
                                         match item {
-                                            DockItem::App(app) => shortcut_visible(prefs, app),
+                                            DockItem::App(app) => shortcut_visible(s, app),
                                             DockItem::System { system } => {
                                                 system_visible(prefs, system)
                                             }
@@ -1712,9 +1707,17 @@ pub(crate) fn shortcut_settings_dialog(ui: Ui) -> impl Widget {
     )
 }
 
+fn reset_system_pins(dock: &mut Dock) {
+    dock.unpinned.retain(|&app| !system_app(app));
+    dock.extra_pins.retain(|&app| !system_app(app));
+}
+
 fn reset_desktop_app_icons(prefs: &mut Appearance) {
     let defaults = Appearance::default();
-    prefs.hidden = defaults.hidden;
+    prefs.hidden.retain(|&app| !system_app(app));
+    prefs
+        .extra_shortcuts
+        .retain(|&app| prefs.show_apps && !system_app(app));
     prefs.show_apps = defaults.show_apps;
     prefs.layout.show_home = defaults.layout.show_home;
     prefs.layout.show_trash = defaults.layout.show_trash;
@@ -1819,7 +1822,7 @@ pub(crate) fn icon_settings(ui: Ui) -> impl Widget {
                 |prefs, value| prefs.layout.set_icon_pixels(value),
             ),
         ),
-        settings_dialog_link(ui.clone(), "App icons", Dialog::DesktopIcons),
+        settings_dialog_link(ui.clone(), "System app icons", Dialog::DesktopIcons),
         settings_row(
             "Show server info",
             toggle(
@@ -2021,8 +2024,7 @@ fn dock_icons_settings(ui: Ui) -> impl Widget {
                     let defaults = Dock::default();
                     let dock = &mut prefs.appearance.dock;
                     dock.order = defaults.order;
-                    dock.unpinned = defaults.unpinned;
-                    dock.extra_pins = defaults.extra_pins;
+                    reset_system_pins(dock);
                     dock.size = defaults.size;
                     dock.icon_size = defaults.icon_size;
                     dock.panel_centered = defaults.panel_centered;
@@ -2066,7 +2068,7 @@ fn dock_icons_settings(ui: Ui) -> impl Widget {
                     |prefs, value| prefs.dock.set_icon_pixels(value),
                 ),
             ),
-            settings_dialog_link(ui, "App icons", Dialog::DockShortcuts),
+            settings_dialog_link(ui, "System app icons", Dialog::DockShortcuts),
         ))
 }
 

@@ -497,7 +497,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .desktop-app-catalog-item {
   display: flex !important; flex-direction: column; align-items: center; justify-content: flex-start;
-  gap: 8px; min-height: 92px; min-width: 0; padding: 10px 4px !important; border-radius: 10px !important;
+  gap: 8px; min-height: 92px; min-width: 0; width: 100%; padding: 10px 4px !important; border-radius: 10px !important;
 }
 .desktop-app-catalog-item:is(:hover, :focus-visible) { background: var(--raised) !important; }
 .desktop-app-catalog-item .desktop-app-icon { --app-tile-size: 48px; border-radius: 13px; }
@@ -3018,3 +3018,18 @@ button,
 .desktop-shortcut:has(.file-upload-badge) { position: relative; }
 .desktop-shortcut .file-upload-badge { position: absolute; top: 0; inset-inline-end: 2px; }
 .desktop-shortcut:has(.file-upload-badge) .desktop-app-icon { opacity: .55; }
+
+.monitor-gpu-header { display:flex; flex-direction:column; gap:8px; }
+.gpu-details,.gpu-adapters { display:flex; flex-wrap:wrap; gap:8px 18px; }
+.gpu-detail { display:flex; flex-direction:column; gap:3px; }
+.gpu-adapters .choice[aria-pressed="true"] { background:var(--accent-bg); border-color:var(--accent)!important; }
+.monitor-content.monitor-gpu { container: monitor-gpu / inline-size; }
+.resource-trend-plots.plot-gpu { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.plot-gpu .resource-trend-chart { display:grid; grid-template-columns:1fr auto; align-items:center; padding:7px 10px; }
+.plot-gpu .resource-trend-legend { margin:0; }
+.plot-gpu .resource-trend-chart svg { grid-column:1/-1; height:126px; }
+.plot-gpu :is(.resource-trend-dedicated,.resource-trend-shared) svg { height:96px; }
+@container monitor-gpu (max-width:420px) { .resource-trend-plots.plot-gpu { grid-template-columns:1fr; } }
+.plot-gpu .resource-trend-dedicated { grid-column-start:1; }
+.plot-gpu:not(:has(> .resource-trend-shared)) > .resource-trend-dedicated,
+.plot-gpu:not(:has(> .resource-trend-dedicated)) > .resource-trend-shared { grid-column:1/-1; }

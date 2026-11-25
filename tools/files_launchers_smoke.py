@@ -112,9 +112,20 @@ def main():
             search = catalog.get_by_role('textbox', name='Search apps', exact=True)
             expect(search).to_be_focused()
             app_tiles = catalog.locator('.desktop-app-catalog-grid').get_by_role('button')
-            expected_apps = ['Files', 'Terminal', 'Code Editor', 'Browser', 'Player', 'Image Viewer', 'PDF Reader',
-                             'Office', 'Monitor', 'pgAdmin', 'App Center', 'Settings', 'Text Editor']
+            expected_apps = ['Files', 'Terminal', 'Text Editor', 'Code Editor', 'Browser', 'Player', 'Image Viewer', 'PDF Reader',
+                             'Office', 'App Center', 'Monitor', 'Settings', 'pgAdmin']
             expect(app_tiles).to_have_text(expected_apps)
+            pgadmin = catalog.get_by_role('button', name='pgAdmin', exact=True)
+            for action in ('Pin to Dock', 'Show on desktop', 'Unpin from Dock', 'Hide from desktop'):
+                pgadmin.click(button='right')
+                page.get_by_role('menuitem', name=action, exact=True).click()
+                expect(catalog).to_be_visible()
+                zone = '.desktop-dock' if action.endswith('Dock') else '.desktop-shortcuts'
+                expect(page.locator(zone + ' .app-pgadmin')).to_have_count(int(action in ('Pin to Dock', 'Show on desktop')))
+                if zone == '.desktop-shortcuts':
+                    eventually(lambda: ('pg_admin' in read_desktop_settings(prefs).get('appearance', {})
+                                        .get('extra_shortcuts', [])) == (action == 'Show on desktop'))
+            expect(page.locator('.desktop-window.app-pgadmin')).to_have_count(0)
             search.fill('not an app')
             expect(catalog.get_by_text('No matching apps')).to_be_visible()
             search.fill('player')
@@ -228,8 +239,8 @@ def main():
             active.locator('.window-close').click()
             icon('.desktop-dock', 'Settings').click(button='right')
             choose('Dock settings')
-            settings.get_by_role('button', name='App icons', exact=True).click()
-            pins = page.get_by_role('dialog', name='App icons', exact=True)
+            settings.get_by_role('button', name='System app icons', exact=True).click()
+            pins = page.get_by_role('dialog', name='System app icons', exact=True)
             options = pins.locator('.preference-check')
             expect(options.first).to_be_visible()
             initial_order = options.all_text_contents()

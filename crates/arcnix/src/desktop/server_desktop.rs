@@ -223,18 +223,18 @@ fn focus_window(ui: &Ui, input: &str) {
 pub(crate) const APP_LAUNCHERS: [WorkspacePage; 14] = [
     WorkspacePage::Files(0),
     WorkspacePage::Terminal,
+    WorkspacePage::Editor,
     WorkspacePage::Code,
     WorkspacePage::Browser,
     WorkspacePage::Player,
     WorkspacePage::ImageViewer,
     WorkspacePage::PdfReader,
     WorkspacePage::Office,
-    WorkspacePage::Monitor,
     WorkspacePage::Docker,
-    WorkspacePage::PgAdmin,
     WorkspacePage::AppCenter,
+    WorkspacePage::Monitor,
     WorkspacePage::Settings,
-    WorkspacePage::Editor,
+    WorkspacePage::PgAdmin,
 ];
 
 fn local_app(s: &State, page: WorkspacePage) -> bool {

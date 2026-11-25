@@ -5,6 +5,18 @@ use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::btn;
 use crate::*;
 
+pub(super) const GPU_CHARTS: [(&str, &str); 9] = [
+    ("graphics", "3D"),
+    ("renderer", "Renderer utilization"),
+    ("tiler", "Tiler utilization"),
+    ("copy", "Copy"),
+    ("encode", "Video encode"),
+    ("decode", "Video decode"),
+    ("utilization", "GPU utilization"),
+    ("dedicated", "Dedicated GPU memory"),
+    ("shared", "Shared GPU memory"),
+];
+
 fn payload(s: &State, section: monitor_ui::Section) -> String {
     let m = &s.metrics;
     let range = match m.window {
@@ -29,8 +41,37 @@ fn payload(s: &State, section: monitor_ui::Section) -> String {
             );
         }
     }
+    let gpu = monitor_ui::selected_gpu(s).filter(|_| section == monitor_ui::Section::Gpu);
+    let mut samples = serde_json::to_value(&points).unwrap_or_default();
+    let mut gpu_labels = serde_json::Map::new();
+    if let Some(g) = gpu {
+        for (key, title) in GPU_CHARTS {
+            if g.value(key).is_none() || (key == "utilization" && g.graphics.is_some()) {
+                continue;
+            }
+            let maximum = match key {
+                "dedicated" => g.dedicated_total.map(|v| v as f64),
+                "shared" => g.shared_total.map(|v| v as f64),
+                _ => Some(100.),
+            };
+            plots.insert(
+                key.into(),
+                serde_json::json!(plot::gpu_layout(&points, domain, &g.id, key, maximum).ok()),
+            );
+            gpu_labels.insert(key.into(), label(title).into());
+            for (row, p) in samples.as_array_mut().into_iter().flatten().zip(&points) {
+                row[key] = serde_json::json!(
+                    p.gpus
+                        .iter()
+                        .find(|card| card.id == g.id)
+                        .and_then(|card| card.value(key))
+                );
+            }
+        }
+    }
     serde_json::json!({
-        "range":range,"points":points,"domain":domain,"plots":plots,
+        "gpuLabels":gpu_labels,"adapter":gpu.map(|g|&g.id),
+        "range":range,"points":samples,"domain":domain,"plots":plots,
         "labels":{
             "cpu":label("CPU usage"),"memory":label("Memory usage"),"network":label("Network rate"),
             "receive":label("Receive"),"transmit":label("Transmit"),"missing":label("Unavailable"),
@@ -51,6 +92,7 @@ pub(crate) fn panel(ui: Ui, section: monitor_ui::Section) -> impl Widget {
     let chart_data = state.map(move |s| {
         let key = (
             s.metrics.completed,
+            s.metrics.gpu_id.clone(),
             s.metrics.origin,
             s.metrics.window,
             s.config.settings.display,
@@ -83,6 +125,7 @@ pub(crate) fn panel(ui: Ui, section: monitor_ui::Section) -> impl Widget {
         )),
         text().class("resource-trend-data hidden").content(chart_data),
         view().class(match section {
+            monitor_ui::Section::Gpu => "resource-trend-plots plot-gpu",
             monitor_ui::Section::Cpu => "resource-trend-plots plot-cpu",
             monitor_ui::Section::Memory => "resource-trend-plots plot-memory",
             monitor_ui::Section::Network => "resource-trend-plots plot-network",

@@ -1151,7 +1151,16 @@ class Authentication(paramiko.ServerInterface):
                     channel.sendall("Fixture command completed · 中文\n".encode())
                     channel.send_exit_status(0)
             elif text == "uname -s":
-                channel.sendall(b"Linux\n")
+                platform = self.fixture_root / 'host-uname.txt'
+                channel.sendall(platform.read_bytes() if platform.exists() else b"Linux\n")
+                channel.send_exit_status(0)
+            elif text.startswith("# arcnix:metrics:darwin"):
+                channel.sendall((self.fixture_root / 'darwin-metrics.txt').read_bytes())
+                channel.send_exit_status(0)
+            elif text.startswith(("# arcnix:gpu:linux", "# arcnix:gpu:macos")):
+                counters = self.fixture_root / 'gpu-counters.txt'
+                if counters.exists():
+                    channel.sendall(counters.read_bytes())
                 channel.send_exit_status(0)
             elif text.startswith("# arcnix:metrics:sample"):
                 self.metrics_sample += 1

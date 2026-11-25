@@ -476,7 +476,11 @@ pub(crate) fn confirm_save_dialog(ui: Ui) -> impl Widget {
             let save = ui.clone();
             let focus = scope.cage(None);
             let path = state.with(|s| {
-                s.office.files.get(&id).map(|doc| doc.path.clone()).unwrap_or_default()
+                s.office
+                    .files
+                    .get(&id)
+                    .map(|doc| doc.path.clone())
+                    .unwrap_or_default()
             });
             modal(
                 ui.clone(),

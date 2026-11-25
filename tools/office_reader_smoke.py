@@ -135,7 +135,7 @@ def run():
             p.get_by_role('button', name='Try the local desktop', exact=True).click()
             p.get_by_role('button', name='Read-only mode', exact=True).click()
             expect(p.locator('.connection-state')).to_have_text('Connected locally')
-            p.locator('.desktop-shortcuts').get_by_role('button', name='pgAdmin', exact=True).dblclick()
+            app.application('pgAdmin')
             pgadmin = p.locator('.desktop-window.active.app-pgadmin')
             expect(pgadmin).to_contain_text('Open pgAdmin from a connected SSH server')
             pgadmin.locator('.window-close').click()

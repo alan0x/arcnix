@@ -65,6 +65,66 @@ fn search(ui: Ui, query: Cage<String>, field: Option<Cage<Option<NodeId>>>) -> i
         .fill((icons::glyph(Icon::Search), input))
 }
 
+fn catalog_tile(ui: Ui, page: WorkspacePage, in_files: bool) -> impl Widget {
+    let state = ui.state;
+    let label = i18n::bind(server_desktop::app_label(page));
+    let open = ui.clone();
+    let tile = sapid::button()
+        .class(format!(
+            "desktop-app-catalog-item {}",
+            server_desktop::app_class(page)
+        ))
+        .name(label.clone())
+        .fill((
+            text().class("desktop-app-icon").content(""),
+            text().class("desktop-app-label").content(label.clone()),
+        ))
+        .on_press(move || launch(&open, page));
+    if in_files {
+        return fragment(tile);
+    }
+    let app = server_desktop::app_id(page).expect("catalog app");
+    let dock = arcnix_core::desktop_customization::DockItem::App(app);
+    let pin = ui.clone();
+    let desktop = ui.clone();
+    fragment(
+        sapid::context_menu(format!("launcher-{}", server_desktop::app_class(page)))
+            .name(label.clone())
+            .target_name(label)
+            .target(tile)
+            .item(
+                sapid::menu_item("pin")
+                    .label(i18n::bind(state.map(move |s| {
+                        if desktop_customization_ui::dock_pinned(s, dock) {
+                            "Unpin from Dock"
+                        } else {
+                            "Pin to Dock"
+                        }
+                        .to_owned()
+                    })))
+                    .enabled(state.map(server_apps_ui::preferences_ready))
+                    .on_activate(move || desktop_customization_ui::toggle_dock_pin(&pin, dock)),
+            )
+            .item(
+                sapid::menu_item("desktop")
+                    .label(i18n::bind(state.map(move |s| {
+                        if desktop_customization_ui::shortcut_visible(s, app) {
+                            "Hide from desktop"
+                        } else {
+                            "Show on desktop"
+                        }
+                        .to_owned()
+                    })))
+                    .enabled(state.map(server_apps_ui::preferences_ready))
+                    .on_activate(move || {
+                        let show =
+                            !state.with(|s| desktop_customization_ui::shortcut_visible(s, app));
+                        desktop_customization_ui::set_shortcut_visible(&desktop, app, show);
+                    }),
+            ),
+    )
+}
+
 fn catalog(ui: Ui, query: Cage<String>, in_files: bool) -> impl Widget {
     widget(move |scope| {
         let state = ui.state;
@@ -77,22 +137,7 @@ fn catalog(ui: Ui, query: Cage<String>, in_files: bool) -> impl Widget {
                         .key(|page| server_desktop::app_class(*page))
                         .children({
                             let ui = ui.clone();
-                            move |item| {
-                                let page = item.value.get();
-                                let label = i18n::bind(server_desktop::app_label(page));
-                                let open = ui.clone();
-                                sapid::button()
-                                    .class(format!(
-                                        "desktop-app-catalog-item {}",
-                                        server_desktop::app_class(page)
-                                    ))
-                                    .name(label.clone())
-                                    .fill((
-                                        text().class("desktop-app-icon").content(""),
-                                        text().class("desktop-app-label").content(label),
-                                    ))
-                                    .on_press(move || launch(&open, page))
-                            }
+                            move |item| catalog_tile(ui.clone(), item.value.get(), in_files)
                         }),
                 ),
                 when(scope.bond(move || matches.with(Vec::is_empty)), move || {

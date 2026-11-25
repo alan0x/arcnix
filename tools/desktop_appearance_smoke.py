@@ -312,7 +312,7 @@ def main():
             dock_presets.get_by_role('radio', name='Medium', exact=True).check()
             button('Desktop').click()
             expect(desktop_size).to_be_visible()
-            visible = shortcut_options('App icons')
+            visible = shortcut_options('System app icons')
             expect(visible.get_by_role('checkbox', name='Files', exact=True)).to_be_checked()
             visible.get_by_role('checkbox', name='Home', exact=True).check()
             visible.get_by_role('checkbox', name='Trash', exact=True).check()
@@ -522,7 +522,7 @@ def main():
                     check_desktop_icon(pixels)
                     check_shortcut_gutter()
                     panel.screenshot(path=str(out / 'compact-desktop-settings.png'))
-                    visible = shortcut_options('App icons')
+                    visible = shortcut_options('System app icons')
                     expect(visible.get_by_role('checkbox', name='Home', exact=True)).to_be_checked()
                     assert visible.evaluate('''dialog => {
                         const box = dialog.getBoundingClientRect();
@@ -587,7 +587,7 @@ def main():
 
             app.application('Settings')
             button('Dock').click()
-            pinned = shortcut_options('App icons')
+            pinned = shortcut_options('System app icons')
             home_pin = pinned.get_by_role('checkbox', name='Home', exact=True)
             trash_pin = pinned.get_by_role('checkbox', name='Trash', exact=True)
             expect(home_pin).not_to_be_checked()

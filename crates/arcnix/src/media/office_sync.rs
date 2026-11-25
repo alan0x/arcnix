@@ -199,7 +199,7 @@ pub(crate) fn listing(state: Cage<State>) -> impl Widget {
                     .sort_by_key(|(_, _, e)| (!e.stage.outstanding(), std::cmp::Reverse(e.serial)));
                 entries
             }))
-            .key(|(key, _, _)| key.clone())
+            .key(|(key, ..)| key.clone())
             .children(|item| {
                 let entry = item.value;
                 col().class("office-sync-row").fill((

@@ -196,7 +196,7 @@ pub enum Action {
     PackageDetect,
     PackageSearch(String),
     PackageInstalled,
-    MetricsSample,
+    MetricsSample(bool),
     PortsRead {
         administrator: bool,
         sudo: zeroize::Zeroizing<String>,
@@ -1334,10 +1334,10 @@ pub(crate) fn start_with_limiter(
             }
             if matches!(
                 action,
-                Action::MetricsSample | Action::LogsDiscover | Action::LogsRead(_)
+                Action::MetricsSample(_) | Action::LogsDiscover | Action::LogsRead(_)
             ) {
                 let kind = match &action {
-                    Action::MetricsSample => 0,
+                    Action::MetricsSample(_) => 0,
                     Action::LogsDiscover => 1,
                     _ => 2,
                 };
@@ -1350,7 +1350,9 @@ pub(crate) fn start_with_limiter(
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("请先连接服务器"))?;
                     send(match action {
-                        Action::MetricsSample => Update::Metrics(Ok(remote.sample_resources()?)),
+                        Action::MetricsSample(gpu) => {
+                            Update::Metrics(Ok(remote.sample_monitor(gpu)?))
+                        }
                         Action::LogsDiscover => {
                             Update::LogCapabilities(Ok(remote.discover_system_logs()?))
                         }
@@ -2075,7 +2077,7 @@ mod tests {
     fn disconnected_observation_requests_have_terminal_results() -> Result<()> {
         let (tx, rx) = start();
         for (serial, action) in [
-            Action::MetricsSample,
+            Action::MetricsSample(false),
             Action::LogsDiscover,
             Action::LogsRead(LogQuery::default()),
             Action::PortsRead {
@@ -2247,12 +2249,12 @@ mod tests {
             },
         )?;
         assert!(matches!(receive(&rx)?.update, Update::Connected(false, _)));
-        send(88, 3, Action::MetricsSample)?;
+        send(88, 3, Action::MetricsSample(false))?;
         let first = match receive(&rx)?.update {
             Update::Metrics(Ok(snapshot)) => snapshot,
             _ => anyhow::bail!("expected resource snapshot"),
         };
-        send(88, 4, Action::MetricsSample)?;
+        send(88, 4, Action::MetricsSample(false))?;
         let second = match receive(&rx)?.update {
             Update::Metrics(Ok(snapshot)) => snapshot,
             _ => anyhow::bail!("expected second resource snapshot"),
@@ -2272,7 +2274,7 @@ mod tests {
         }
         send(89, 7, Action::Disconnect)?;
         assert!(matches!(receive(&rx)?.update, Update::Disconnected));
-        send(88, 8, Action::MetricsSample)?;
+        send(88, 8, Action::MetricsSample(false))?;
         let stale = receive(&rx)?;
         assert_eq!(stale.epoch, 88);
         assert!(matches!(stale.update, Update::Metrics(Err(_))));

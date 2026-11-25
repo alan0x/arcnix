@@ -107,11 +107,17 @@ pub fn strip(ui: Ui, app: DesktopApp, window: u32) -> impl Widget {
         .name(i18n::desktop::bind("Open files"))
         .fill(
             each(state.map(move |s| {
-                let tabs = if pdf { s.pdf.tabs(window) } else { s.office.tabs(window) };
-                tabs.into_iter().map(|(id, path)| {
-                    let dirty = !pdf && s.office.files.get(&id).is_some_and(|doc| doc.dirty);
-                    (id, path, dirty)
-                }).collect::<Vec<_>>()
+                let tabs = if pdf {
+                    s.pdf.tabs(window)
+                } else {
+                    s.office.tabs(window)
+                };
+                tabs.into_iter()
+                    .map(|(id, path)| {
+                        let dirty = !pdf && s.office.files.get(&id).is_some_and(|doc| doc.dirty);
+                        (id, path, dirty)
+                    })
+                    .collect::<Vec<_>>()
             }))
             .key(|t| t.0)
             .children(move |item| {
@@ -138,22 +144,30 @@ pub fn strip(ui: Ui, app: DesktopApp, window: u32) -> impl Widget {
                             .pressed(active)
                             .name(item.value.map(|(_, path, dirty)| {
                                 if *dirty {
-                                    format!("{path} · {}", i18n::desktop::translate("Unsaved changes"))
+                                    format!(
+                                        "{path} · {}",
+                                        i18n::desktop::translate("Unsaved changes")
+                                    )
                                 } else {
                                     path.clone()
                                 }
                             }))
-                            .fill(
-                                text()
-                                    .class("editor-tab-label")
-                                    .content(item.value.map(|(_, path, dirty)| {
-                                        let name = filename(path);
-                                        if *dirty { format!("*{name}") } else { name.to_owned() }
-                                    })),
-                            )
+                            .fill(text().class("editor-tab-label").content(item.value.map(
+                                |(_, path, dirty)| {
+                                    let name = filename(path);
+                                    if *dirty {
+                                        format!("*{name}")
+                                    } else {
+                                        name.to_owned()
+                                    }
+                                },
+                            )))
                             .on_press(move || select(&select_ui, app, window, id)),
                         office_sync::upload_badge(state.map(move |s| {
-                            !pdf && s.office.files.get(&id)
+                            !pdf && s
+                                .office
+                                .files
+                                .get(&id)
                                 .is_some_and(|doc| office_sync::uploading(s, doc.path()))
                         })),
                         sapid::button()
