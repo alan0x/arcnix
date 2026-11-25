@@ -3126,3 +3126,33 @@ HTTPS 已经开启	HTTPS is already on
 请重定向到 /new/ 这样的路径，或以 http:// 或 https:// 开头的地址	Redirect to a path such as /new/ or an address starting with http:// or https://
 此站点已有 {matching} 的 location	This site already has a location for {matching}
 添加指令…	Add directive…
+更改…	Change…
+将此 location 改为	Make this location
+更改	Change
+只适用于原用途的指令会被删除，其他指令保留。	Directives that only make sense for the old purpose are removed; the others stay.
+浏览器缓存时长	Browsers keep files for
+地址	Addresses
+Nginx 从上到下检查规则，使用第一条与访问者地址匹配的规则。	Nginx checks the rules from top to bottom and uses the first that matches the visitor's address.
+允许	Allow
+拒绝	Deny
+删除规则	Remove rule
+地址或网段	Address or network
+203.0.113.5 或 10.0.0.0/8	203.0.113.5 or 10.0.0.0/8
+拒绝其他所有地址	Refuse every other address
+全局设置	Global settings
+工作进程数	Worker processes
+每个进程的连接数	Connections per worker
+auto 表示每个 CPU 核心启动一个工作进程。每个工作进程最多同时处理给定数量的连接。	auto starts one worker per CPU core. Each worker handles up to the given number of connections at once.
+空闲连接保持时长	Keep idle connections open for
+所有站点的最大上传大小	Largest upload for every site
+压缩文本、CSS、JavaScript 和 JSON 响应（gzip）	Compress text, CSS, JavaScript and JSON responses (gzip)
+在响应头和错误页中显示 Nginx 版本	Show the Nginx version in headers and error pages
+适用于所有站点的其他指令	Other directives for every site
+http 块中的指令，除非站点自行设置，否则对所有站点生效。	Directives in the http block, which apply to every site unless a site sets its own.
+请输入地址（如 203.0.113.5）、网段（如 10.0.0.0/8）或 all	Enter an address such as 203.0.113.5, a network such as 10.0.0.0/8, or all
+请输入时长，例如 7d 或 12h，或 max	Enter a time such as 7d or 12h, or max
+请先允许一个地址，否则没有人能访问此站点	Allow an address first, or nobody can open the site
+请输入 auto 或 1 到 1024 之间的进程数	Enter auto or a number of processes from 1 to 1024
+请输入连接数，例如 1024	Enter a number of connections, such as 1024
+文件中没有 events 块；请在“文件”中编辑	The file has no events block; edit it in File
+这不是主配置文件	This is not the main configuration

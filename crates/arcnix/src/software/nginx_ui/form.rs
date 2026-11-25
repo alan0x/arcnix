@@ -1,7 +1,9 @@
 //! The Settings view of the site editor: domains, HTTPS, locations, access,
 //! the upload limit and every other directive, each change written straight
 //! into the file text by `nginx_site`.
-use arcnix_core::nginx_site::{self, Change, Kind as Serve, Location, NewKind, Path, Row, Site};
+use arcnix_core::nginx_site::{
+    self, Change, Kind as Serve, Location, MainField, NewKind, Path, Row, Site,
+};
 
 use super::*;
 
@@ -18,6 +20,12 @@ pub(crate) struct Adding {
     key: String,
     realm: String,
     file: String,
+    /// A location being changed to do something else: its key, the new
+    /// purpose and its main value.
+    convert: Option<(String, NewKind, String)>,
+    /// A new IP rule: allow (true) or deny, and the address.
+    rule_allow: bool,
+    rule_address: String,
 }
 
 fn key(path: &[usize]) -> String {
@@ -79,17 +87,26 @@ impl Ui {
                 | Change::EnableHttps(..)
                 | Change::ForceHttps(_)
                 | Change::Auth(_)
+                | Change::LocationKind(..)
+                | Change::AddRule(..)
+                | Change::DenyOthers(_)
+                | Change::Gzip(_)
         );
         self.state.revise(|s| {
             let Some(editor) = &mut s.nginx.editor else {
                 return;
             };
-            match nginx_site::apply(&editor.text, &change)
-                .and_then(|text| Ok((nginx_site::read(&text)?, text)))
-            {
-                Ok((site, text)) => {
+            match nginx_site::apply(&editor.text, &change).and_then(|text| {
+                Ok((
+                    nginx_site::read(&text)?,
+                    nginx_site::read_main(&text)?,
+                    text,
+                ))
+            }) {
+                Ok((site, main, text)) => {
                     editor.text = text;
                     editor.site = site;
+                    editor.main = main;
                     editor.error.clear();
                     if structural {
                         editor.drafts.clear();
@@ -394,6 +411,28 @@ fn location_card(ui: Ui, path: Path) -> impl Widget {
                 let path = p();
                 move |s| location(s, &path).map(|l| kind_label(&l.kind)).unwrap_or_default().to_owned()
             }))),
+            sapid::button()
+                .class("button quiet compact")
+                .label(i18n::bind("Change…"))
+                .enabled(state.map(writable))
+                .on_press({
+                    let path = p();
+                    let ui = ui.clone();
+                    move || {
+                        let path = path.clone();
+                        ui.state.revise(move |s| {
+                            let current = location(s, &path).map(|l| match l.kind {
+                                Serve::Static { .. } => NewKind::Static,
+                                Serve::Redirect { .. } => NewKind::Redirect,
+                                Serve::Respond { .. } => NewKind::Respond,
+                                _ => NewKind::Proxy,
+                            });
+                            if let Some(editor) = &mut s.nginx.editor {
+                                editor.adding.convert = Some((key(&path), current.unwrap_or_default(), String::new()));
+                            }
+                        })
+                    }
+                }),
             icon_action("Remove location", Icon::Close)
                 .class("icon-button")
                 .enabled(state.map(writable))
@@ -423,8 +462,107 @@ fn location_card(ui: Ui, path: Path) -> impl Widget {
                 .class("hint")
                 .content(i18n::bind("The form has no fields for what this location does; its directives are listed below."))
         }),
+        convert_row(&ui, p()),
         rows_editor(ui.clone(), p()),
     ))
+}
+
+fn converting(s: &State, path: &[usize]) -> Option<(NewKind, String)> {
+    let (k, kind, value) = s.nginx.editor.as_ref()?.adding.convert.clone()?;
+    (k == key(path)).then_some((kind, value))
+}
+
+/// Changing what a location does: its new purpose and main value.
+fn convert_row(ui: &Ui, path: Path) -> impl Widget + use<> {
+    let state = ui.state;
+    let shown = path.clone();
+    when(state.map(move |s| converting(s, &shown).is_some()), {
+        let ui = ui.clone();
+        move || {
+            let path = path.clone();
+            let segment = |label: &'static str, kind: NewKind| {
+                let path = path.clone();
+                let pressed = path.clone();
+                sapid::button()
+                    .class("nginx-segment")
+                    .label(i18n::bind(label))
+                    .pressed(
+                        state.map(move |s| converting(s, &pressed).is_some_and(|c| c.0 == kind)),
+                    )
+                    .on_press(move || {
+                        let path = path.clone();
+                        state.revise(move |s| {
+                            if let Some(editor) = &mut s.nginx.editor {
+                                editor.adding.convert = Some((key(&path), kind, String::new()));
+                            }
+                        })
+                    })
+            };
+            let (label_path, value_path, input_path, apply_path) =
+                (path.clone(), path.clone(), path.clone(), path.clone());
+            let apply = ui.clone();
+            let cancel = ui.clone();
+            col().class("nginx-convert form-stack").fill((
+                text().class("field-label").content(i18n::bind("Make this location")),
+                row().class("nginx-segments").fill((
+                    segment("Forward", NewKind::Proxy),
+                    segment("Folder", NewKind::Static),
+                    segment("Redirect", NewKind::Redirect),
+                    segment("Text", NewKind::Respond),
+                )),
+                col().class("field").fill((
+                    text().class("field-label").content(i18n::bind(state.map(move |s| {
+                        match converting(s, &label_path).map(|c| c.0).unwrap_or_default() {
+                            NewKind::Proxy => "Forward to",
+                            NewKind::Static => "Folder",
+                            NewKind::Redirect => "Redirect to",
+                            NewKind::Respond => "Response text",
+                        }
+                        .to_owned()
+                    }))),
+                    input()
+                        .name(i18n::bind("Target"))
+                        .value(state.map(move |s| converting(s, &value_path).map(|c| c.1).unwrap_or_default()))
+                        .on(value_changed, move |event| {
+                            if let Event::ValueChanged { value, .. } = event {
+                                let path = input_path.clone();
+                                state.revise(move |s| {
+                                    if let Some(editor) = &mut s.nginx.editor
+                                        && let Some(convert) = &mut editor.adding.convert
+                                        && convert.0 == key(&path)
+                                    {
+                                        convert.2 = value;
+                                    }
+                                });
+                            }
+                        }),
+                )),
+                text().class("hint").content(i18n::bind(
+                    "Directives that only make sense for the old purpose are removed; the others stay.",
+                )),
+                row().class("nginx-form-actions").fill((
+                    sapid::button()
+                        .class("button")
+                        .label(i18n::bind("Cancel"))
+                        .on_press(move || {
+                            cancel.state.revise(|s| {
+                                if let Some(editor) = &mut s.nginx.editor {
+                                    editor.adding.convert = None;
+                                }
+                            })
+                        }),
+                    sapid::button()
+                        .class("button primary")
+                        .label(i18n::bind("Change"))
+                        .on_press(move || {
+                            if let Some((kind, value)) = apply.state.with(|s| converting(s, &apply_path)) {
+                                apply.nginx_change(Change::LocationKind(apply_path.clone(), kind, value));
+                            }
+                        }),
+                )),
+            ))
+        }
+    })
 }
 
 fn proxy_fields(ui: &Ui, path: Path) -> impl Widget + use<> {
@@ -505,19 +643,36 @@ fn static_fields(ui: &Ui, path: Path) -> impl Widget + use<> {
             folder,
             inherited,
             spa,
+            expires,
             ..
-        }) => Some((folder.clone(), *inherited, *spa)),
+        }) => Some((folder.clone(), *inherited, *spa, expires.clone())),
         _ => None,
     };
-    let (a, b, c, d, e) = (path.clone(), path.clone(), path.clone(), path.clone(), path);
+    let (a, b, c, d, e) = (
+        path.clone(),
+        path.clone(),
+        path.clone(),
+        path.clone(),
+        path.clone(),
+    );
+    let (f, g, h) = (path.clone(), path.clone(), path);
     col().class("form-stack").fill((
-        input_field(
-            ui,
-            "Folder",
-            move |_| format!("folder:{}", key(&a)),
-            move |s| shown(s, &format!("folder:{}", key(&b)), |_| get(s, &b).map(|v| v.0)),
-            move |_, v| Some(Change::Folder(c.clone(), v)),
-        ),
+        row().class("nginx-form-grid").fill((
+            input_field(
+                ui,
+                "Folder",
+                move |_| format!("folder:{}", key(&a)),
+                move |s| shown(s, &format!("folder:{}", key(&b)), |_| get(s, &b).map(|v| v.0)),
+                move |_, v| Some(Change::Folder(c.clone(), v)),
+            ),
+            input_field(
+                ui,
+                "Browsers keep files for",
+                move |_| format!("expires:{}", key(&f)),
+                move |s| shown(s, &format!("expires:{}", key(&g)), |_| get(s, &g).map(|v| v.3)),
+                move |_, v| Some(Change::Expires(h.clone(), v)),
+            ),
+        )),
         when(
             state.map({
                 let path = d.clone();
@@ -617,6 +772,14 @@ fn block_rows(s: &State, path: &[usize]) -> Vec<Row> {
     };
     if path.is_empty() {
         site.rows.clone()
+    } else if let Some(main) = s
+        .nginx
+        .editor
+        .as_ref()
+        .and_then(|e| e.main.as_ref())
+        .filter(|m| m.http == path)
+    {
+        main.rows.clone()
     } else {
         site.location(path)
             .map(|l| l.rows.clone())
@@ -928,6 +1091,8 @@ fn access(ui: &Ui) -> impl Widget + use<> {
             section(
                 "Access",
                 col().class("form-stack").fill((
+                    rules(&ui),
+                    text().class("field-label nginx-subsection").content(i18n::bind("Password")),
                     when(state.map(on), {
                         let ui = ui.clone();
                         move || {
@@ -996,6 +1161,191 @@ fn access(ui: &Ui) -> impl Widget + use<> {
     })
 }
 
+fn rules(ui: &Ui) -> impl Widget + use<> {
+    let state = ui.state;
+    let add = ui.clone();
+    let segment = |label: &'static str, allow: bool| {
+        sapid::button()
+            .class("nginx-segment")
+            .label(i18n::bind(label))
+            .enabled(state.map(writable))
+            .pressed(state.map(move |s| {
+                s.nginx
+                    .editor
+                    .as_ref()
+                    .is_some_and(|e| e.adding.rule_allow == allow)
+            }))
+            .on_press(move || {
+                state.revise(|s| {
+                    if let Some(editor) = &mut s.nginx.editor {
+                        editor.adding.rule_allow = allow;
+                    }
+                })
+            })
+    };
+    col().class("form-stack").fill((
+        text().class("field-label").content(i18n::bind("Addresses")),
+        text().class("hint").content(i18n::bind(
+            "Nginx checks the rules from top to bottom and uses the first that matches the visitor's address.",
+        )),
+        col().class("nginx-rows").fill(
+            each(state.map(|s| site(s).map(|site| site.rules.clone()).unwrap_or_default()))
+                .key(|r| format!("{}|{}|{}", key(&r.path), r.allow, r.address))
+                .children({
+                    let ui = ui.clone();
+                    move |item| {
+                        let rule: nginx_site::Rule = item.value.get();
+                        let remove = ui.clone();
+                        let path = rule.path.clone();
+                        row().class("nginx-row").fill((
+                            text()
+                                .class("nginx-row-name")
+                                .content(i18n::bind(if rule.allow { "Allow" } else { "Deny" })),
+                            text().class("nginx-row-block").content(rule.address.clone()),
+                            icon_action("Remove rule", Icon::Close)
+                                .class("icon-button")
+                                .enabled(state.map(writable))
+                                .on_press(move || remove.nginx_change(Change::RemoveRow(path.clone()))),
+                        ))
+                    }
+                }),
+        ),
+        row().class("nginx-row nginx-row-new").fill((
+            row().class("nginx-segments").fill((segment("Allow", true), segment("Deny", false))),
+            input()
+                .class("nginx-row-args")
+                .name(i18n::bind("Address or network"))
+                .enabled(state.map(writable))
+                .semantics(Some(Box::new(Semantics {
+                    placeholder: Some(i18n::translate("203.0.113.5 or 10.0.0.0/8")),
+                    ..Default::default()
+                })))
+                .value(state.map(|s| s.nginx.editor.as_ref().map(|e| e.adding.rule_address.clone()).unwrap_or_default()))
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event {
+                        state.revise(|s| {
+                            if let Some(editor) = &mut s.nginx.editor {
+                                editor.adding.rule_address = value;
+                            }
+                        });
+                    }
+                }),
+            sapid::button()
+                .class("button")
+                .label(i18n::bind("Add"))
+                .enabled(state.map(|s| writable(s) && s.nginx.editor.as_ref().is_some_and(|e| !e.adding.rule_address.trim().is_empty())))
+                .on_press(move || {
+                    let change = add
+                        .state
+                        .with(|s| s.nginx.editor.as_ref().map(|e| Change::AddRule(e.adding.rule_allow, e.adding.rule_address.clone())));
+                    if let Some(change) = change {
+                        add.nginx_change(change);
+                    }
+                }),
+        )),
+        check(
+            ui,
+            "Refuse every other address",
+            |s| site(s).is_some_and(|site| site.deny_others),
+            |_, on| Some(Change::DenyOthers(on)),
+        ),
+    ))
+}
+
+fn global(ui: &Ui) -> impl Widget + use<> {
+    let state = ui.state;
+    let has_main = |s: &State| s.nginx.editor.as_ref().is_some_and(|e| e.main.is_some());
+    when(state.map(has_main), {
+        let ui = ui.clone();
+        move || {
+            let value = |s: &State, field: &str, read: fn(&nginx_site::Main) -> String| {
+                let Some(editor) = &s.nginx.editor else {
+                    return String::new();
+                };
+                editor
+                    .drafts
+                    .get(field)
+                    .cloned()
+                    .or_else(|| editor.main.as_ref().map(read))
+                    .unwrap_or_default()
+            };
+            let main_check = |s: &State, read: fn(&nginx_site::Main) -> bool| {
+                s.nginx
+                    .editor
+                    .as_ref()
+                    .and_then(|e| e.main.as_ref())
+                    .is_some_and(read)
+            };
+            col().class("nginx-form").fill((
+                section(
+                    "Global settings",
+                    col().class("form-stack").fill((
+                        row().class("nginx-form-grid").fill((
+                            input_field(
+                                &ui,
+                                "Worker processes",
+                                |_| "workers".into(),
+                                move |s| value(s, "workers", |m| m.worker_processes.clone()),
+                                |_, v| Some(Change::Main(MainField::WorkerProcesses, v)),
+                            ),
+                            input_field(
+                                &ui,
+                                "Connections per worker",
+                                |_| "connections".into(),
+                                move |s| value(s, "connections", |m| m.worker_connections.clone()),
+                                |_, v| Some(Change::Main(MainField::WorkerConnections, v)),
+                            ),
+                        )),
+                        text().class("hint").content(i18n::bind(
+                            "auto starts one worker per CPU core. Each worker handles up to the given number of connections at once.",
+                        )),
+                        row().class("nginx-form-grid").fill((
+                            input_field(
+                                &ui,
+                                "Keep idle connections open for",
+                                |_| "keepalive".into(),
+                                move |s| value(s, "keepalive", |m| m.keepalive.clone()),
+                                |_, v| Some(Change::Main(MainField::Keepalive, v)),
+                            ),
+                            input_field(
+                                &ui,
+                                "Largest upload for every site",
+                                |_| "main-upload".into(),
+                                move |s| value(s, "main-upload", |m| m.upload.clone()),
+                                |_, v| Some(Change::Main(MainField::Upload, v)),
+                            ),
+                        )),
+                        check(
+                            &ui,
+                            "Compress text, CSS, JavaScript and JSON responses (gzip)",
+                            move |s| main_check(s, |m| m.gzip),
+                            |_, on| Some(Change::Gzip(on)),
+                        ),
+                        check(
+                            &ui,
+                            "Show the Nginx version in headers and error pages",
+                            move |s| main_check(s, |m| m.server_tokens),
+                            |_, on| Some(Change::ServerTokens(on)),
+                        ),
+                    )),
+                ),
+                section(
+                    "Other directives for every site",
+                    col().class("form-stack").fill((
+                        text().class("hint").content(i18n::bind(
+                            "Directives in the http block, which apply to every site unless a site sets its own.",
+                        )),
+                        rows_editor(
+                            ui.clone(),
+                            state.with(|s| s.nginx.editor.as_ref().and_then(|e| e.main.as_ref()).map(|m| m.http.clone()).unwrap_or_default()),
+                        ),
+                    )),
+                ),
+            ))
+        }
+    })
+}
+
 fn requests(ui: &Ui) -> impl Widget + use<> {
     let state = ui.state;
     when(
@@ -1044,6 +1394,7 @@ fn other(ui: &Ui) -> impl Widget + use<> {
 pub(super) fn settings_form(ui: Ui) -> impl Widget {
     let state = ui.state;
     col().class("nginx-form").fill((
+        global(&ui),
         domains(&ui),
         https(&ui),
         locations(&ui),

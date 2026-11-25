@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use arcnix_core::nginx::{self, Control, Kind, Layout, Serves, Snapshot, Style};
-use arcnix_core::nginx_site::{self, Site};
+use arcnix_core::nginx_site::{self, Main, Site};
 
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, icon_action, text_action};
@@ -34,6 +34,8 @@ pub(crate) struct Editor {
     text: String,
     /// The text as the Settings view shows it.
     site: Site,
+    /// The main configuration's settings, for nginx.conf.
+    main: Option<Main>,
     /// Values typed into Settings fields, by field, so typing is not lost
     /// while a value is not valid yet.
     drafts: std::collections::HashMap<String, String>,
@@ -283,8 +285,8 @@ fn tail(output: &str) -> String {
 }
 
 /// The form needs at least one field it can show.
-fn has_form(site: &Site) -> bool {
-    site.names.is_some() || site.server.is_some() || site.upload.is_some()
+fn has_form(site: &Site, main: Option<&Main>) -> bool {
+    site.names.is_some() || site.server.is_some() || site.upload.is_some() || main.is_some()
 }
 
 impl Ui {
@@ -405,6 +407,7 @@ impl Ui {
             };
             let text = file.text.clone()?;
             let site = nginx_site::read(&text).unwrap_or_default();
+            let main = nginx_site::read_main(&text).ok().flatten();
             // A site's domain does not reach a container from the server, so
             // a containerized Nginx checks only that it keeps running.
             let summary = summary.filter(|_| snapshot.docker.is_none());
@@ -413,8 +416,9 @@ impl Ui {
                 path: file.path.clone(),
                 target: file.target.clone(),
                 original: text.clone(),
-                file_view: !has_form(&site),
+                file_view: !has_form(&site, main.as_ref()),
                 site,
+                main,
                 drafts: Default::default(),
                 adding: Default::default(),
                 text,
@@ -446,6 +450,7 @@ impl Ui {
             let text = nginx::new_site(new.kind, &new.names, new.target.trim())?;
             let (path, target) = nginx::new_site_path(snapshot, &new.names)?;
             let site = nginx_site::read(&text).unwrap_or_default();
+            let main = nginx_site::read_main(&text).ok().flatten();
             Ok(Editor {
                 instance: snapshot.key(),
                 path,
@@ -454,6 +459,7 @@ impl Ui {
                 text,
                 file_view: false,
                 site,
+                main,
                 drafts: Default::default(),
                 adding: Default::default(),
                 // A new site that is not on yet cannot answer, so only check
@@ -488,6 +494,7 @@ impl Ui {
                 match nginx_site::read(&editor.text) {
                     Ok(site) => {
                         editor.site = site;
+                        editor.main = nginx_site::read_main(&editor.text).ok().flatten();
                         editor.drafts.clear();
                         editor.error.clear();
                     }
@@ -1062,7 +1069,7 @@ fn editor(ui: Ui) -> impl Widget {
                     .class("nginx-segment")
                     .label(i18n::bind("Settings"))
                     .pressed(state.map(move |s| !file(s)))
-                    .enabled(state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| has_form(&e.site) || !e.file_view)))
+                    .enabled(state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| has_form(&e.site, e.main.as_ref()) || !e.file_view)))
                     .on_press(move || form_view.nginx_file_view(false)),
                 sapid::button()
                     .class("nginx-segment")
@@ -1182,6 +1189,7 @@ fn editor(ui: Ui) -> impl Widget {
                             } else if let Some(editor) = &mut s.nginx.editor {
                                 editor.text = editor.original.clone();
                                 editor.site = nginx_site::read(&editor.text).unwrap_or_default();
+                                editor.main = nginx_site::read_main(&editor.text).ok().flatten();
                                 editor.drafts.clear();
                                 editor.error.clear();
                                 editor.failure.clear();
@@ -1360,10 +1368,12 @@ mod tests {
 
     #[test]
     fn forms_appear_only_for_files_with_common_settings() {
-        assert!(!has_form(&Site::default()));
+        assert!(!has_form(&Site::default(), None));
         let site = nginx_site::read("server { server_name a.com; root /srv; }").unwrap();
-        assert!(has_form(&site));
-        let main = nginx_site::read("events {}\nhttp { include mime.types; }\n").unwrap();
-        assert!(!has_form(&main));
+        assert!(has_form(&site, None));
+        let text = "events {}\nhttp { include mime.types; }\n";
+        let main = nginx_site::read_main(text).unwrap();
+        assert!(has_form(&nginx_site::read(text).unwrap(), main.as_ref()));
+        assert!(!has_form(&nginx_site::read("events {}\n").unwrap(), None));
     }
 }

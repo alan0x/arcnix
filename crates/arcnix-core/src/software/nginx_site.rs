@@ -39,6 +39,8 @@ pub enum Kind {
         alias: bool,
         /// Unknown paths fall back to `/index.html`, for single-page apps.
         spa: bool,
+        /// How long browsers may keep the files (`expires`); empty for none.
+        expires: String,
     },
     Redirect {
         code: String,
@@ -70,6 +72,14 @@ pub struct Https {
     pub force: bool,
 }
 
+/// An `allow` or `deny` rule for the whole site.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rule {
+    pub path: Path,
+    pub allow: bool,
+    pub address: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Auth {
     pub realm: String,
@@ -92,6 +102,10 @@ pub struct Site {
     pub https: Option<Https>,
     /// Basic authentication, when it is on for the whole site.
     pub auth: Option<Auth>,
+    /// `allow` and `deny` rules in order, without a final `deny all`.
+    pub rules: Vec<Rule>,
+    /// The rules end with `deny all`: everyone not allowed is refused.
+    pub deny_others: bool,
     pub locations: Vec<Location>,
     /// The server block's other directives.
     pub rows: Vec<Row>,
@@ -145,6 +159,117 @@ pub enum Change {
     ForceHttps(bool),
     /// Basic authentication: the realm and the password file, or off.
     Auth(Option<(String, String)>),
+    /// Makes a location do something else, with the new main value.
+    LocationKind(Path, NewKind, String),
+    /// `expires` in a location that serves files; empty removes it.
+    Expires(Path, String),
+    /// An `allow` (true) or `deny` rule for an address or network.
+    AddRule(bool, String),
+    /// Ends the rules with `deny all`, or removes it.
+    DenyOthers(bool),
+    /// A setting of the main configuration.
+    Main(MainField, String),
+    /// Show the Nginx version in headers and error pages.
+    ServerTokens(bool),
+    /// Compress text responses.
+    Gzip(bool),
+}
+
+/// Settings of the main configuration, in nginx.conf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MainField {
+    /// `worker_processes`, at the top level.
+    WorkerProcesses,
+    /// `worker_connections`, in `events`.
+    WorkerConnections,
+    /// `keepalive_timeout`, in `http`.
+    Keepalive,
+    /// `client_max_body_size`, in `http`.
+    Upload,
+}
+
+/// The main configuration as the form shows it: the file has an `http` block.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Main {
+    pub worker_processes: String,
+    pub worker_connections: String,
+    pub keepalive: String,
+    pub upload: String,
+    /// Nginx shows its version unless `server_tokens off`.
+    pub server_tokens: bool,
+    pub gzip: bool,
+    /// The path of the `http` block, for adding directives.
+    pub http: Path,
+    /// The `http` block's other directives.
+    pub rows: Vec<Row>,
+}
+
+const GZIP_TYPES: &str = "text/plain text/css text/xml application/json application/javascript application/xml image/svg+xml";
+
+/// The main configuration's settings, or `None` when the file has no `http`
+/// block (a site file).
+pub fn read_main(text: &str) -> Result<Option<Main>> {
+    let directives = parse(text)?;
+    let Some(index) = directives
+        .iter()
+        .position(|d| d.name == "http" && d.block.is_some())
+    else {
+        return Ok(None);
+    };
+    let http = &directives[index];
+    let top = |name: &str| joined(directives.iter().find(|d| d.name == name));
+    let events = directives
+        .iter()
+        .find(|d| d.name == "events" && d.block.is_some());
+    let managed = [
+        "keepalive_timeout",
+        "client_max_body_size",
+        "server_tokens",
+        "gzip",
+    ];
+    Ok(Some(Main {
+        worker_processes: top("worker_processes"),
+        worker_connections: joined(events.and_then(|e| e.first("worker_connections"))),
+        keepalive: joined(http.first("keepalive_timeout")),
+        upload: joined(http.first("client_max_body_size")),
+        server_tokens: http
+            .first("server_tokens")
+            .is_none_or(|d| d.args.first().is_none_or(|a| a != "off")),
+        gzip: http
+            .first("gzip")
+            .is_some_and(|d| d.args.first().is_some_and(|a| a == "on")),
+        http: vec![index],
+        rows: rows(text, http, &[index], |d| {
+            (d.name == "server" && d.block.is_some()) || managed.contains(&d.name.as_str())
+        }),
+    }))
+}
+
+fn check_address(address: &str) -> Result<()> {
+    let (ip, prefix) = address.split_once('/').unwrap_or((address, ""));
+    let parsed: Option<std::net::IpAddr> = ip.parse().ok();
+    let bits = if parsed.is_some_and(|ip| ip.is_ipv4()) {
+        32
+    } else {
+        128
+    };
+    ensure!(
+        address == "all"
+            || (parsed.is_some()
+                && (prefix.is_empty() || prefix.parse::<u8>().is_ok_and(|p| p <= bits))),
+        "Enter an address such as 203.0.113.5, a network such as 10.0.0.0/8, or all"
+    );
+    Ok(())
+}
+
+fn check_expires(value: &str) -> Result<()> {
+    if matches!(value, "" | "off" | "max" | "epoch") {
+        return Ok(());
+    }
+    config::check_timeout(value.strip_prefix('-').unwrap_or(value))
+        .map_err(|_| anyhow::anyhow!("Enter a time such as 7d or 12h, or max"))?;
+    ensure!(!value.is_empty(), "Enter a time such as 7d or 12h, or max");
+    Ok(())
 }
 
 const HSTS: &str = "Strict-Transport-Security";
@@ -270,6 +395,7 @@ fn kind(server: &Directive, location: &Directive) -> Kind {
             spa: location
                 .first("try_files")
                 .is_some_and(|t| t.args.join(" ") == SPA),
+            expires: joined(location.first("expires")),
         },
         _ => Kind::Other,
     }
@@ -290,6 +416,7 @@ fn managed_in_location(kind: &Kind, d: &Directive) -> bool {
         Kind::Static { inherited, spa, .. } => {
             (!inherited && matches!(d.name.as_str(), "root" | "alias"))
                 || (*spa && d.name == "try_files")
+                || d.name == "expires"
         }
         Kind::Redirect { .. } | Kind::Respond { .. } => d.name == "return",
         Kind::Other => false,
@@ -370,6 +497,24 @@ pub fn read(text: &str) -> Result<Site> {
             file: joined(server.first("auth_basic_user_file")),
         });
     }
+    let access: Vec<(usize, &Directive)> = server
+        .children()
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| matches!(d.name.as_str(), "allow" | "deny") && d.args.len() == 1)
+        .collect();
+    site.deny_others = access
+        .last()
+        .is_some_and(|(_, d)| d.name == "deny" && d.args[0] == "all");
+    let listed = access.len() - usize::from(site.deny_others);
+    site.rules = access[..listed]
+        .iter()
+        .map(|(i, d)| Rule {
+            path: [path.as_slice(), &[*i]].concat(),
+            allow: d.name == "allow",
+            address: d.args[0].clone(),
+        })
+        .collect();
     let mut inherited_root = false;
     for (i, d) in server.children().iter().enumerate() {
         if d.name != "location" || d.block.is_none() {
@@ -411,6 +556,7 @@ pub fn read(text: &str) -> Result<Site> {
                 && d.args.first().is_some_and(|h| h.eq_ignore_ascii_case(HSTS)))
             || (auth && matches!(d.name.as_str(), "auth_basic" | "auth_basic_user_file"))
             || (inherited_root && d.name == "root")
+            || (matches!(d.name.as_str(), "allow" | "deny") && d.args.len() == 1)
     });
     Ok(site)
 }
@@ -776,18 +922,24 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
             let block = if path.is_empty() {
                 single()?
             } else {
-                location(path)?
+                let d = get(path)?;
+                ensure!(
+                    d.block.is_some(),
+                    "This part of the file changed; reopen it"
+                );
+                d
             };
             let line = if value.trim().is_empty() {
                 format!("{name};")
             } else {
                 format!("{name} {};", value.trim())
             };
-            // Before the locations, where server-wide directives usually are.
+            // Before the first block (locations, servers), where block-wide
+            // directives usually are.
             let anchor = block
                 .children()
                 .iter()
-                .take_while(|d| !(d.name == "location" && d.block.is_some()))
+                .take_while(|d| d.block.is_none())
                 .last();
             match anchor {
                 Some(anchor) => edits.insert_after(anchor, &[line]),
@@ -1006,6 +1158,221 @@ pub fn apply(text: &str, change: &Change) -> Result<String> {
                             edits.remove(d);
                         }
                     }
+                }
+            }
+        }
+        Change::LocationKind(path, new, value) => {
+            let l = location(path)?;
+            let server = get(&path[..path.len() - 1])?;
+            let current = kind(server, l);
+            let matching = args_text(text, l);
+            let body = location_body(*new, &matching, value)?;
+            // What only made sense for the old purpose goes; other directives
+            // stay as rows.
+            let leaving = |d: &Directive| match current {
+                Kind::Proxy { .. } => d.name.starts_with("proxy_"),
+                Kind::Static { .. } => {
+                    matches!(d.name.as_str(), "root" | "alias" | "try_files" | "expires")
+                }
+                Kind::Redirect { .. } | Kind::Respond { .. } => d.name == "return",
+                Kind::Other => false,
+            };
+            for d in l.children().iter().filter(|d| leaving(d)) {
+                edits.remove(d);
+            }
+            // Keep headers the location already sets for itself.
+            let body: Vec<String> = body
+                .into_iter()
+                .filter(|line| {
+                    !(line.starts_with("proxy_set_header")
+                        && l.children().iter().any(|d| {
+                            !leaving(d)
+                                && d.name == "proxy_set_header"
+                                && line.starts_with(&format!(
+                                    "proxy_set_header {} ",
+                                    d.args.first().map(String::as_str).unwrap_or_default()
+                                ))
+                        }))
+                })
+                .collect();
+            edits.insert_first(l, &body);
+        }
+        Change::Expires(path, value) => {
+            let value = value.trim();
+            check_expires(value)?;
+            let l = location(path)?;
+            match (l.first("expires"), value.is_empty()) {
+                (Some(d), true) => edits.remove(d),
+                (Some(d), false) => edits.replace_args(d, value),
+                (None, false) => {
+                    let line = format!("expires {value};");
+                    match l
+                        .first("root")
+                        .or_else(|| l.first("alias"))
+                        .or_else(|| l.first("try_files"))
+                    {
+                        Some(anchor) => edits.insert_after(anchor, &[line]),
+                        None => edits.insert_first(l, &[line]),
+                    }
+                }
+                (None, true) => {}
+            }
+        }
+        Change::AddRule(allow, address) => {
+            let address = address.trim();
+            check_address(address)?;
+            let server = single()?;
+            let line = format!("{} {address};", if *allow { "allow" } else { "deny" });
+            let access: Vec<&Directive> = server
+                .children()
+                .iter()
+                .filter(|d| matches!(d.name.as_str(), "allow" | "deny") && d.args.len() == 1)
+                .collect();
+            let final_deny = access
+                .last()
+                .filter(|d| d.name == "deny" && d.args[0] == "all");
+            match (final_deny, access.last()) {
+                // A new rule must come before `deny all`, or it never applies.
+                (Some(deny), _) => edits.insert_lines_before(deny, &[line], false),
+                (None, Some(last)) => edits.insert_after(last, &[line]),
+                (None, None) => {
+                    let anchor = server
+                        .children()
+                        .iter()
+                        .take_while(|d| d.block.is_none())
+                        .last();
+                    match anchor {
+                        Some(anchor) => edits.insert_after(anchor, &[line]),
+                        None => edits.insert_first(server, &[line]),
+                    }
+                }
+            }
+        }
+        Change::DenyOthers(on) => {
+            let server = single()?;
+            let access: Vec<&Directive> = server
+                .children()
+                .iter()
+                .filter(|d| matches!(d.name.as_str(), "allow" | "deny") && d.args.len() == 1)
+                .collect();
+            let final_deny = access
+                .last()
+                .copied()
+                .filter(|d| d.name == "deny" && d.args[0] == "all");
+            match (on, final_deny) {
+                (true, None) => {
+                    ensure!(
+                        access.iter().any(|d| d.name == "allow"),
+                        "Allow an address first, or nobody can open the site"
+                    );
+                    edits.insert_after(
+                        access.last().expect("an allow rule"),
+                        &["deny all;".to_owned()],
+                    );
+                }
+                (false, Some(deny)) => edits.remove(deny),
+                _ => {}
+            }
+        }
+        Change::Main(field, value) => {
+            let value = value.trim();
+            let http_index = directives
+                .iter()
+                .position(|d| d.name == "http" && d.block.is_some())
+                .context("This is not the main configuration")?;
+            let http = &directives[http_index];
+            let (block, name): (Option<&Directive>, &str) = match field {
+                MainField::WorkerProcesses => {
+                    ensure!(
+                        value.is_empty()
+                            || value == "auto"
+                            || value.parse::<u16>().is_ok_and(|n| (1..=1024).contains(&n)),
+                        "Enter auto or a number of processes from 1 to 1024"
+                    );
+                    (None, "worker_processes")
+                }
+                MainField::WorkerConnections => {
+                    ensure!(
+                        value.is_empty()
+                            || value
+                                .parse::<u32>()
+                                .is_ok_and(|n| (1..=1_048_576).contains(&n)),
+                        "Enter a number of connections, such as 1024"
+                    );
+                    let events = directives
+                        .iter()
+                        .find(|d| d.name == "events" && d.block.is_some())
+                        .context("The file has no events block; edit it in File")?;
+                    (Some(events), "worker_connections")
+                }
+                MainField::Keepalive => {
+                    config::check_timeout(value)?;
+                    (Some(http), "keepalive_timeout")
+                }
+                MainField::Upload => {
+                    config::check_size(value)?;
+                    (Some(http), "client_max_body_size")
+                }
+            };
+            let existing = match block {
+                Some(b) => b.first(name),
+                None => directives.iter().find(|d| d.name == name),
+            };
+            let line = format!("{name} {value};");
+            match (existing, value.is_empty(), block) {
+                (Some(d), true, _) => edits.remove(d),
+                (Some(d), false, _) => edits.replace_args(d, value),
+                (None, true, _) => {}
+                (None, false, Some(b)) => {
+                    let anchor = b.first("default_type").or_else(|| {
+                        b.children()
+                            .iter()
+                            .take_while(|d| d.block.is_none() && d.name != "include")
+                            .last()
+                    });
+                    match anchor {
+                        Some(anchor) => edits.insert_after(anchor, &[line]),
+                        None => edits.insert_first(b, &[line]),
+                    }
+                }
+                (None, false, None) => match directives.iter().find(|d| d.name == "user") {
+                    Some(user) => edits.insert_after(user, &[line]),
+                    None => edits.insert_lines_before(&directives[0], &[line], false),
+                },
+            }
+        }
+        Change::ServerTokens(on) | Change::Gzip(on) => {
+            let http = directives
+                .iter()
+                .find(|d| d.name == "http" && d.block.is_some())
+                .context("This is not the main configuration")?;
+            let name = if matches!(change, Change::Gzip(_)) {
+                "gzip"
+            } else {
+                "server_tokens"
+            };
+            let value = if *on { "on" } else { "off" };
+            let mut lines = Vec::new();
+            match http.first(name) {
+                Some(d) => edits.replace_args(d, value),
+                None => lines.push(format!("{name} {value};")),
+            }
+            if name == "gzip" && *on && http.first("gzip_types").is_none() {
+                lines.push(format!("gzip_types {GZIP_TYPES};"));
+            }
+            if !lines.is_empty() {
+                let anchor = http
+                    .first(name)
+                    .or_else(|| http.first("default_type"))
+                    .or_else(|| {
+                        http.children()
+                            .iter()
+                            .take_while(|d| d.block.is_none() && d.name != "include")
+                            .last()
+                    });
+                match anchor {
+                    Some(anchor) => edits.insert_after(anchor, &lines),
+                    None => edits.insert_first(http, &lines),
                 }
             }
         }
@@ -1407,5 +1774,183 @@ server {
         );
         assert_eq!(change(&login, Change::Auth(None)), shared);
         assert!(apply(shared, &Change::Auth(Some(("x".into(), "htpasswd".into())))).is_err());
+    }
+
+    #[test]
+    fn changes_what_a_location_does() {
+        let path = read(SHOP).unwrap().locations[0].path.clone();
+        let folder = change(
+            SHOP,
+            Change::LocationKind(path.clone(), NewKind::Static, "/srv/shop".into()),
+        );
+        assert!(
+            folder.contains("    location / {\n        root /srv/shop;\n    }"),
+            "{folder}"
+        );
+        assert!(
+            matches!(&read(&folder).unwrap().locations[0].kind, Kind::Static { folder, .. } if folder == "/srv/shop")
+        );
+        let back = change(
+            &folder,
+            Change::LocationKind(path.clone(), NewKind::Proxy, "http://127.0.0.1:9000".into()),
+        );
+        let site = read(&back).unwrap();
+        assert!(
+            matches!(&site.locations[0].kind, Kind::Proxy { target, forwarded: true, .. } if target == "http://127.0.0.1:9000")
+        );
+        assert!(!back.contains("root /srv/shop"));
+        let text = change(
+            SHOP,
+            Change::LocationKind(path.clone(), NewKind::Respond, "maintenance".into()),
+        );
+        assert!(
+            text.contains("location / {\n        return 200 \"maintenance\";\n    }"),
+            "{text}"
+        );
+        // A header the location already sets is not added twice.
+        let other = "server { server_name a.com; location / { add_header X-Kept yes; proxy_set_header Host $http_host; root /srv; } }";
+        let p = read(other).unwrap().locations[0].path.clone();
+        let proxied = change(
+            other,
+            Change::LocationKind(p, NewKind::Proxy, "http://a".into()),
+        );
+        assert_eq!(
+            proxied.matches("proxy_set_header Host").count(),
+            1,
+            "{proxied}"
+        );
+        assert!(proxied.contains("add_header X-Kept yes;"));
+
+        let images = read(SHOP).unwrap().locations[1].path.clone();
+        let cached = change(
+            SHOP,
+            Change::LocationKind(images, NewKind::Static, "/srv/images".into()),
+        );
+        let site = read(&cached).unwrap();
+        let p = site.locations[1].path.clone();
+        assert!(matches!(&site.locations[1].kind, Kind::Static { expires, .. } if expires == "7d"));
+        let longer = change(&cached, Change::Expires(p.clone(), "30d".into()));
+        assert!(longer.contains("expires 30d;"));
+        assert!(!change(&cached, Change::Expires(p.clone(), String::new())).contains("expires"));
+        assert!(change(&cached, Change::Expires(p.clone(), "max".into())).contains("expires max;"));
+        assert!(apply(&cached, &Change::Expires(p, "a week".into())).is_err());
+    }
+
+    #[test]
+    fn keeps_ip_rules_in_order() {
+        let plain = "server {\n    listen 80;\n    server_name a.com;\n    location / {\n        root /srv;\n    }\n}\n";
+        assert!(
+            apply(plain, &Change::DenyOthers(true)).is_err(),
+            "nobody would get in"
+        );
+        let one = change(plain, Change::AddRule(true, "10.0.0.0/8".into()));
+        assert!(
+            one.contains("    server_name a.com;\n    allow 10.0.0.0/8;\n    location"),
+            "{one}"
+        );
+        let closed = change(&one, Change::DenyOthers(true));
+        assert!(closed.contains("    allow 10.0.0.0/8;\n    deny all;\n"));
+        let more = change(&closed, Change::AddRule(false, "10.0.0.5".into()));
+        assert!(
+            more.contains("    allow 10.0.0.0/8;\n    deny 10.0.0.5;\n    deny all;\n"),
+            "{more}"
+        );
+        let site = read(&more).unwrap();
+        assert!(site.deny_others);
+        let rules: Vec<_> = site
+            .rules
+            .iter()
+            .map(|r| (r.allow, r.address.as_str()))
+            .collect();
+        assert_eq!(rules, [(true, "10.0.0.0/8"), (false, "10.0.0.5")]);
+        assert!(site.rows.is_empty(), "{:?}", site.rows);
+        let fewer = change(&more, Change::RemoveRow(site.rules[1].path.clone()));
+        assert!(!fewer.contains("deny 10.0.0.5"));
+        assert!(!change(&fewer, Change::DenyOthers(false)).contains("deny all"));
+        for bad in [
+            "10.0.0.0/33",
+            "example.com",
+            "10.0.0.1; deny all",
+            "::1/129",
+        ] {
+            assert!(
+                apply(plain, &Change::AddRule(true, bad.into())).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(apply(plain, &Change::AddRule(true, "2001:db8::/32".into())).is_ok());
+    }
+
+    #[test]
+    fn edits_the_main_configuration() {
+        let main = "user www-data;\nworker_processes auto;\npid /run/nginx.pid;\n\nevents {\n\tworker_connections 768;\n}\n\nhttp {\n\tsendfile on;\n\tinclude /etc/nginx/mime.types;\n\tdefault_type application/octet-stream;\n\tkeepalive_timeout 65;\n\t# gzip on;\n\tinclude /etc/nginx/conf.d/*.conf;\n}\n";
+        assert_eq!(read_main("server { listen 80; }").unwrap(), None);
+        let m = read_main(main).unwrap().unwrap();
+        assert_eq!(
+            (
+                m.worker_processes.as_str(),
+                m.worker_connections.as_str(),
+                m.keepalive.as_str(),
+                m.upload.as_str()
+            ),
+            ("auto", "768", "65", "")
+        );
+        assert!(m.server_tokens && !m.gzip);
+        let names: Vec<_> = m.rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["sendfile", "include", "default_type", "include"]);
+        let text = change(
+            main,
+            Change::Main(MainField::WorkerConnections, "4096".into()),
+        );
+        assert!(text.contains("\tworker_connections 4096;"));
+        let text = change(&text, Change::Main(MainField::Upload, "100m".into()));
+        assert!(
+            text.contains(
+                "\tdefault_type application/octet-stream;\n\tclient_max_body_size 100m;\n"
+            ),
+            "{text}"
+        );
+        let text = change(&text, Change::ServerTokens(false));
+        let text = change(&text, Change::Gzip(true));
+        assert!(
+            text.contains("\tserver_tokens off;")
+                && text.contains("\tgzip on;\n\tgzip_types text/plain"),
+            "{text}"
+        );
+        let m = read_main(&text).unwrap().unwrap();
+        assert!(!m.server_tokens && m.gzip && m.upload == "100m");
+        let off = change(&text, Change::Gzip(false));
+        assert!(off.contains("\tgzip off;"));
+        let added = change(
+            &text,
+            Change::AddRow(m.http.clone(), "client_body_timeout".into(), "30s".into()),
+        );
+        assert!(
+            added.contains("\tinclude /etc/nginx/conf.d/*.conf;\n\tclient_body_timeout 30s;\n}"),
+            "{added}"
+        );
+        let workers = change(main, Change::Main(MainField::WorkerProcesses, "4".into()));
+        assert!(workers.contains("worker_processes 4;"));
+        let without = change(
+            main,
+            Change::Main(MainField::WorkerProcesses, String::new()),
+        );
+        let restored = change(
+            &without,
+            Change::Main(MainField::WorkerProcesses, "2".into()),
+        );
+        assert!(
+            restored.starts_with("user www-data;\nworker_processes 2;\n"),
+            "{restored}"
+        );
+        assert!(
+            apply(
+                main,
+                &Change::Main(MainField::WorkerProcesses, "lots".into())
+            )
+            .is_err()
+        );
+        assert!(apply(main, &Change::Main(MainField::Keepalive, "1 minute".into())).is_err());
+        assert!(apply("server { listen 80; }", &Change::Gzip(true)).is_err());
     }
 }

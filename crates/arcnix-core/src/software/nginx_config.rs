@@ -491,7 +491,9 @@ impl<'a> Edits<'a> {
             .find('\n')
             .map_or(self.text.len(), |i| d.span.end + i + 1);
         let before_blank = self.text[start..d.span.start].trim().is_empty();
-        let after_blank = self.text[d.span.end..end].trim().is_empty();
+        // A comment at the end of the line belongs to the directive.
+        let rest = self.text[d.span.end..end].trim();
+        let after_blank = rest.is_empty() || rest.starts_with('#');
         if before_blank && after_blank {
             // A block usually has an empty line around it; take one with it
             // so no double empty line is left behind.
@@ -554,15 +556,29 @@ impl<'a> Edits<'a> {
     /// Adds lines before `anchor`, at its indentation, followed by an empty
     /// line; for a new block in front of an existing one.
     pub(crate) fn insert_before(&mut self, anchor: &Directive, lines: &[String]) {
+        self.insert_lines_before(anchor, lines, true);
+    }
+    /// Adds lines before `anchor`, at its indentation; `spaced` adds an empty
+    /// line after them.
+    pub(crate) fn insert_lines_before(
+        &mut self,
+        anchor: &Directive,
+        lines: &[String],
+        spaced: bool,
+    ) {
         let start = self.line_start(anchor.span.start);
         let indent = self.indent(anchor);
         let mut text = String::new();
         for line in lines {
-            text.push_str(indent);
-            text.push_str(line);
+            if !line.is_empty() {
+                text.push_str(indent);
+                text.push_str(line);
+            }
             text.push('\n');
         }
-        text.push('\n');
+        if spaced {
+            text.push('\n');
+        }
         self.changes.push((start..start, text));
     }
     pub(crate) fn finish(mut self) -> Result<String> {

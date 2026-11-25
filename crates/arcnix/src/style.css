@@ -2973,6 +2973,8 @@ button,
 .nginx-row-new { padding-top: 6px; border-top: 1px dashed var(--line); }
 .nginx-form-actions { display: flex !important; justify-content: flex-end; gap: 8px; }
 .nginx-codes { align-self: flex-start; }
+.nginx-subsection { padding-top: 10px; border-top: 1px solid var(--line); }
+.nginx-convert { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 @media (max-width: 700px) {
   .nginx-row { flex-wrap: wrap; }
   .nginx-row-name, .nginx-row-name-input { flex-basis: 100%; }
