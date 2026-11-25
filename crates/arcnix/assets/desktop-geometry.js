@@ -12,6 +12,7 @@ const desktopGeometry = (() => {
     let lastDragEnd = -Infinity;
     const pending = new Map();
     const openingAreas = new Map();
+    const fullSpanOffsets = new WeakMap();
 
     function reachable(limits, titlebarHeight) {
         const width = Math.min(titlebarWidthToKeep, limits.width);
@@ -57,7 +58,22 @@ const desktopGeometry = (() => {
         return { bounds, reference: bounds.reference ?? opening };
     }
 
-    function projectAxis(position, size, reference, extent, hasSnapshot) {
+    function projectAxis(position, size, reference, extent, hasSnapshot, offsets, axis) {
+        const center = (position + size / 2) / reference;
+        const centered = Math.round(center * extent - size / 2);
+        if (hasSnapshot && size === reference && position !== 0) {
+            // A full-span window has no free space to scale its offset against.
+            // Honor a manual overhang at the saved size. Resizing reveals it
+            // progressively; reversing direction must not hide the controls again.
+            const previous = offsets[axis];
+            const overhang = previous?.position === position && previous.size === size
+                ? Math.max(0, previous.overhang - Math.abs(extent - previous.extent))
+                : extent === reference ? Math.abs(position) : 0;
+            offsets[axis] = {position, size, extent, overhang};
+            const space = Math.max(0, extent - size);
+            return clamp(centered, position < 0 ? -overhang : 0, position > 0 ? space + overhang : space);
+        }
+        delete offsets[axis];
         if (extent < size) return 0;
         const space = extent - size;
         const originalSpace = reference - size;
@@ -68,17 +84,18 @@ const desktopGeometry = (() => {
             const revealed = position < 0 ? Math.min(0, position + extent - reference) : position;
             if (revealed < 0 || revealed > space) return revealed;
         }
-        const center = (position + size / 2) / reference;
-        return clamp(Math.round(center * extent - size / 2), 0, space);
+        return clamp(centered, 0, space);
     }
 
-    function place({bounds, reference}, limits, range) {
+    function place(element, {bounds, reference}, limits, range) {
         const width = Math.min(bounds.width, limits.width);
         const height = Math.min(bounds.height, limits.height);
         const hasSnapshot = Boolean(bounds.reference);
+        const offsets = fullSpanOffsets.get(element) ?? {};
+        fullSpanOffsets.set(element, offsets);
         return fit({
-            x: projectAxis(bounds.x, bounds.width, reference.width, limits.width, hasSnapshot),
-            y: projectAxis(bounds.y, bounds.height, reference.height, limits.height, hasSnapshot),
+            x: projectAxis(bounds.x, bounds.width, reference.width, limits.width, hasSnapshot, offsets, 'x'),
+            y: projectAxis(bounds.y, bounds.height, reference.height, limits.height, hasSnapshot, offsets, 'y'),
             width,
             height,
         }, range);
@@ -131,7 +148,7 @@ const desktopGeometry = (() => {
             const range = reachable(limits, element.querySelector('.desktop-window-titlebar').offsetHeight);
             draw(element, item.maximized
                 ? {x: 0, y: 0, width: limits.width, height: limits.height}
-                : place(bounds, limits, range), limits);
+                : place(element, bounds, limits, range), limits);
         }
     }
 
@@ -163,6 +180,7 @@ const desktopGeometry = (() => {
         if (commit && !Object.keys(drag.start).every(key => drag.start[key] === drag.current[key])) {
             // Save the displayed rectangle and the workspace it belongs to as one snapshot.
             const bounds = { ...drag.current, reference: {width: drag.limits.width, height: drag.limits.height} };
+            fullSpanOffsets.delete(drag.element);
             const earlier = pending.get(drag.app);
             const previous = earlier?.previous ?? new Set();
             previous.add(drag.original);

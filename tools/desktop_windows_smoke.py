@@ -219,7 +219,7 @@ def main():
             expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             p.locator('.desktop-window.active .window-maximize').click()
             settled()
-            assert same(positioned, bounds())
+            eventually(lambda: same(positioned, bounds()))
             p.set_viewport_size(dict(width=1920, height=1200))
             eventually(lambda: projected(positioned, reference))
             p.set_viewport_size(dict(width=760, height=650))
@@ -604,7 +604,7 @@ def main():
             app.settings('General')
             p.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
             app.servers()
-            expect(p.locator('.files-sidebar').get_by_role('button', name='下载目录', exact=True)).to_be_visible()
+            expect(p.locator('.files-sidebar').get_by_role('button', name='下载文件夹', exact=True)).to_be_visible()
             assert not errors, errors
     print(json.dumps(dict(output=str(out), checks=[
         'Eight resize handles, captured titlebar movement and Escape cancellation',
