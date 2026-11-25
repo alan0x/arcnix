@@ -269,13 +269,13 @@ fn can_publish(s: &State) -> bool {
         })
 }
 
-/// The form needs at least one field it can show.
 /// The end of a task's output, where the reason for a failure is.
 fn tail(output: &str) -> String {
     let lines: Vec<&str> = output.trim_end().lines().collect();
     lines[lines.len().saturating_sub(8)..].join("\n")
 }
 
+/// The form needs at least one field it can show.
 fn has_form(form: &Settings) -> bool {
     form.names.is_some() || form.proxy.is_some() || form.folder.is_some() || form.upload.is_some()
 }
@@ -390,8 +390,9 @@ impl Ui {
     fn nginx_open(&self, path: &str) {
         let editor = self.state.with(|s| {
             let snapshot = s.nginx.snapshot.as_ref()?;
+            // A site that is off cannot answer, so it gets no health address.
             let (file, summary) = match snapshot.site(path) {
-                Some(site) => (&site.file, Some(&site.summary)),
+                Some(site) => (&site.file, site.enabled.then_some(&site.summary)),
                 None if snapshot.main.path == path => (&snapshot.main, None),
                 None => return None,
             };
@@ -1310,7 +1311,7 @@ fn editor(ui: Ui) -> impl Widget {
                     }),
             ),
             text().class("hint").content(i18n::bind(
-                "Arcnix checks the complete configuration before replacing the file. After the reload, the address must answer with a 2xx status within 30 seconds, or the previous file is put back. Leave it empty to check only that Nginx keeps running.",
+                "Arcnix checks the complete configuration before replacing the file. After the reload, it asks this server's Nginx for the address. If there is no answer, or only server errors (5xx), for 30 seconds, the previous file is put back. Leave it empty to check only that Nginx keeps running.",
             )),
             row().class("nginx-publish-row").fill((
                 text().class("nginx-change subtle").content(i18n::bind(state.map(|s| {

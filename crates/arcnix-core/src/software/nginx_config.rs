@@ -233,6 +233,9 @@ pub struct Summary {
     pub serves: Serves,
     pub certificate: Option<String>,
     pub servers: usize,
+    /// Some `listen` names an address other than all addresses or loopback,
+    /// so a request to this server's local address may not reach the site.
+    pub addressed: bool,
 }
 
 fn servers(directives: &[Directive]) -> Vec<&Directive> {
@@ -271,6 +274,26 @@ fn port(listen: &Directive) -> Option<(u16, bool)> {
         80
     };
     Some((port, ssl || port == 443))
+}
+
+/// Whether `listen` names a specific address that is not loopback.
+fn addressed(listen: &Directive) -> bool {
+    let Some(address) = listen.args.first() else {
+        return false;
+    };
+    if address.starts_with("unix:") || address.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let host = match address.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or_default(),
+        None => address
+            .rsplit_once(':')
+            .map_or(address.as_str(), |(host, _)| host),
+    };
+    !matches!(
+        host,
+        "*" | "0.0.0.0" | "::" | "127.0.0.1" | "::1" | "localhost"
+    )
 }
 
 fn redirect_only(server: &Directive) -> bool {
@@ -319,6 +342,7 @@ pub fn summary(directives: &[Directive]) -> Summary {
                 out.names.push(name.clone());
             }
         }
+        out.addressed |= server.find("listen").any(addressed);
         for (port, ssl) in server.find("listen").filter_map(port) {
             if !out.ports.contains(&port) {
                 out.ports.push(port);

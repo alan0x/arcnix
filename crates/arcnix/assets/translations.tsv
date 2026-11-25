@@ -2961,7 +2961,7 @@ WebSocket 连接	WebSocket connections
 设置页涵盖常用指令。文件中的其他内容保持原样；切换到“文件”可查看或修改。	Settings covers common directives. Anything else in the file is kept as written; switch to File to see or change it.
 ‹ 站点	‹ Sites
 重新加载后检查此地址	After reloading, check this address
-Arcnix 会在替换文件前检查完整配置。重新加载后，此地址必须在 30 秒内返回 2xx 状态，否则会恢复之前的文件。留空则只检查 Nginx 是否仍在运行。	Arcnix checks the complete configuration before replacing the file. After the reload, the address must answer with a 2xx status within 30 seconds, or the previous file is put back. Leave it empty to check only that Nginx keeps running.
+Arcnix 会在替换文件前检查完整配置。重新加载后，会向本服务器上的 Nginx 请求此地址；如果 30 秒内没有响应或只返回服务器错误（5xx），会恢复之前的文件。留空则只检查 Nginx 是否仍在运行。	Arcnix checks the complete configuration before replacing the file. After the reload, it asks this server's Nginx for the address. If there is no answer, or only server errors (5xx), for 30 seconds, the previous file is put back. Leave it empty to check only that Nginx keeps running.
 新文件。发布前服务器上不会有任何变化。	New file. Nothing changes on the server until you publish.
 已修改。发布前线上文件保持不变。	Changed. The live file is unchanged until you publish.
 没有更改	No changes

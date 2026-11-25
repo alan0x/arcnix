@@ -3,6 +3,7 @@ server itself or running in a Docker container, with its state and site files.
 
 Runs as the SSH account. Containers are read with the docker command, which
 needs the account to be allowed to use Docker."""
+import concurrent.futures
 import datetime
 import json
 import os
@@ -11,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 # The root argument exists for tests that read a fixture tree.
@@ -22,6 +24,8 @@ SITE_LIMIT = 200
 CONTAINER_LIMIT = 20
 SKIPPED_SUFFIXES = ('~', '.bak', '.swp', '.save', '.orig', '.dpkg-dist', '.dpkg-old', '.dpkg-new', '.rpmnew', '.rpmsave')
 total = 0
+# Containers are read in parallel; they share the output budget.
+total_lock = threading.Lock()
 
 
 def decode(data):
@@ -29,15 +33,16 @@ def decode(data):
     global total
     if len(data) > FILE_LIMIT:
         return None, 'large'
-    if total + len(data) > TOTAL_LIMIT:
-        return None, 'limit'
     try:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         return None, 'encoding'
     if '\0' in text:
         return None, 'encoding'
-    total += len(data)
+    with total_lock:
+        if total + len(data) > TOTAL_LIMIT:
+            return None, 'limit'
+        total += len(data)
     return text, ''
 
 
@@ -268,8 +273,8 @@ def layout(files):
     return 'none'
 
 
-def instance(files, tool, version, service_state, docker, extra=()):
-    main_path = os.path.join(files.root, 'nginx.conf')
+def instance(files, tool, version, service_state, docker, extra=(), main_path=None):
+    main_path = main_path or os.path.join(files.root, 'nginx.conf')
     text, error = files.read(main_path)
     found, truncated = sites(files, extra)
     return {
@@ -309,6 +314,30 @@ def is_nginx(details):
     return 'nginx' in name.lower() or any(os.path.basename(part) == 'nginx' for part in command)
 
 
+def nginx_options(details):
+    """The options a container starts Nginx with that choose or add to its
+    configuration (-c, -p, -g); every nginx command run in it uses them too."""
+    command = [details.get('Path') or ''] + list(details.get('Args') or [])
+    rest = None
+    for index, part in enumerate(command):
+        if os.path.basename(part) in ('nginx', 'nginx-debug'):
+            rest = command[index + 1:]
+            break
+    out = []
+    index = 0
+    while rest and index < len(rest):
+        flag = rest[index]
+        if flag in ('-c', '-p', '-g') and index + 1 < len(rest):
+            out += [flag, rest[index + 1]]
+            index += 2
+        elif flag[:2] in ('-c', '-p', '-g') and len(flag) > 2:
+            out += [flag[:2], flag[2:]]
+            index += 1
+        else:
+            index += 1
+    return out[:8]
+
+
 def started(value):
     # Docker reports nanoseconds, which older Pythons cannot parse.
     match = re.match(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?$', value or '')
@@ -346,9 +375,13 @@ def container(docker, details):
     identifier = details.get('Id', '')
     loaded = {}
     version = ''
+    options = nginx_options(details)
+    settings = dict(zip(options[::2], options[1::2]))
+    prefix = settings.get('-p', CONTAINER_ROOT)
+    main_path = os.path.normpath(os.path.join(prefix, settings.get('-c', os.path.join(CONTAINER_ROOT, 'nginx.conf'))))
     if running:
         version = version_line(run([docker, 'exec', identifier, 'nginx', '-v'], timeout=10))
-        dump = run([docker, 'exec', identifier, 'nginx', '-T'], timeout=10, limit=TOTAL_LIMIT)
+        dump = run([docker, 'exec', identifier, 'nginx', *options, '-T'], timeout=10, limit=TOTAL_LIMIT)
         if dump is not None and dump.returncode == 0:
             loaded = loaded_files(dump.stdout.decode('utf-8', 'replace'))
     mounts = [{'src': m.get('Source', ''), 'dst': m.get('Destination', '')}
@@ -356,7 +389,7 @@ def container(docker, details):
               if m.get('Type') in ('bind', 'volume') and m.get('Source') and m.get('Destination', '').startswith('/')]
     files = ContainerFiles(CONTAINER_ROOT, mounts, loaded)
     # Other files Nginx loads that hold sites, such as a custom include folder.
-    known = {os.path.join(CONTAINER_ROOT, 'nginx.conf')}
+    known = {main_path}
     extra = [p for p, text in sorted(loaded.items())
              if p not in known and re.search(r'^\s*server\s*\{', text, re.M)]
     ports = []
@@ -375,8 +408,9 @@ def container(docker, details):
         'service': labels.get('com.docker.compose.service', ''),
         'directory': labels.get('com.docker.compose.project.working_dir', ''),
         'ports': sorted(set(ports))[:16],
+        'args': options,
     }
-    return instance(files, 'nginx', version, None, info, extra)
+    return instance(files, 'nginx', version, None, info, extra, main_path)
 
 
 def containers():
@@ -397,7 +431,13 @@ def containers():
         return [], 'unavailable'
     found = [d for d in json.loads(inspected.stdout) if is_nginx(d)]
     found.sort(key=lambda d: (not (d.get('State') or {}).get('Running'), d.get('Name', '')))
-    return [container(docker, d) for d in found[:CONTAINER_LIMIT]], ''
+    # docker exec can be slow on a busy server; reading containers one after
+    # another could use up the whole time limit.
+    chosen = found[:CONTAINER_LIMIT]
+    if not chosen:
+        return [], ''
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(chosen))) as pool:
+        return list(pool.map(lambda d: container(docker, d), chosen)), ''
 
 
 def main():

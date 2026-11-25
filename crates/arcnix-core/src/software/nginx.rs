@@ -65,6 +65,10 @@ pub struct Container {
     pub directory: String,
     /// Published ports, as `host:container/protocol`.
     pub ports: Vec<String>,
+    /// The options the container starts Nginx with that choose or add to its
+    /// configuration (`-c`, `-p`, `-g`), for every nginx command run in it.
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 impl Container {
@@ -339,6 +343,18 @@ fn checked_container(container: &Container) -> Result<()> {
                 .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
         "Invalid Docker container name"
     );
+    ensure!(
+        container.args.len() <= 8
+            && container.args.chunks(2).all(|pair| {
+                matches!(pair[0].as_str(), "-c" | "-p" | "-g")
+                    && pair.get(1).is_some_and(|value| {
+                        !value.is_empty()
+                            && value.len() <= 1024
+                            && !value.contains(char::is_control)
+                    })
+            }),
+        "Invalid Nginx options in the container"
+    );
     Ok(())
 }
 
@@ -475,10 +491,15 @@ fn commands(snapshot: &Snapshot) -> Result<Commands> {
         Some(container) => {
             checked_container(container)?;
             let id = quote(&container.id);
+            let options: String = container
+                .args
+                .iter()
+                .map(|a| format!(" {}", quote(a)))
+                .collect();
             Commands {
                 prelude: format!("{DOCKER_PATH}\n"),
-                test: format!("docker exec {id} nginx -t"),
-                reload: format!("docker exec {id} nginx -s reload"),
+                test: format!("docker exec {id} nginx{options} -t"),
+                reload: format!("docker exec {id} nginx{options} -s reload"),
             }
         }
     })
@@ -699,6 +720,8 @@ pub fn publish(
         path: target.into(),
         health_url: health_url.trim().into(),
         container,
+        check_as: check_place(snapshot, target, create),
+        local_probe: true,
         ..Default::default()
     };
     let job = if create {
@@ -709,8 +732,45 @@ pub fn publish(
     job.template()
 }
 
-/// The address a site most likely answers on, for the health check.
+/// Where Nginx reads a file once its site is on, when it does not read the file
+/// now: a site that is off, or a new site in sites-available. Empty when Nginx
+/// already reads it, or the place is not known.
+fn check_place(snapshot: &Snapshot, target: &str, create: bool) -> String {
+    let site = snapshot.sites.iter().find(|s| s.file.target == target);
+    if let Some(site) = site
+        && (site.enabled || site.style == Style::Fixed)
+    {
+        return String::new();
+    }
+    let (folder, name) = target.rsplit_once('/').unwrap_or_default();
+    let renamed = || {
+        name.strip_suffix(".disabled")
+            .filter(|base| base.ends_with(".conf"))
+            .map(|base| format!("{folder}/{base}"))
+    };
+    let linked = || {
+        folder
+            .strip_suffix("/sites-available")
+            .map(|root| format!("{root}/sites-enabled/{name}"))
+    };
+    let place = match site {
+        Some(site) if site.style == Style::Renamed => renamed(),
+        Some(site) if !site.link_target.is_empty() => Some(site.link_target.clone()),
+        Some(_) => linked(),
+        None if create => linked(),
+        None => renamed().or_else(linked),
+    };
+    place
+        .filter(|p| p != target && checked_path(p).is_ok())
+        .unwrap_or_default()
+}
+
+/// The address a site most likely answers on, for the health check. Empty when
+/// the site listens on a specific address, which the check may not reach.
 pub fn health_address(summary: &Summary) -> String {
+    if summary.addressed {
+        return String::new();
+    }
     let Some(name) = summary
         .names
         .iter()
@@ -1096,5 +1156,96 @@ mod tests {
             "http://app.example.com:8080/"
         );
         assert_eq!(health_address(&summary(&["localhost"], &[80], false)), "");
+        let bound = nginx_config::summary(
+            &nginx_config::parse("server { listen 203.0.113.5:80; server_name a.example.com; }")
+                .unwrap(),
+        );
+        assert!(bound.addressed);
+        assert_eq!(health_address(&bound), "");
+        for listen in ["80", "[::]:80", "127.0.0.1:8080", "*:80"] {
+            let local = nginx_config::summary(
+                &nginx_config::parse(&format!(
+                    "server {{ listen {listen}; server_name a.example.com; }}"
+                ))
+                .unwrap(),
+            );
+            assert!(!local.addressed, "{listen}");
+        }
+    }
+
+    #[test]
+    fn files_nginx_skips_are_checked_where_they_go_when_on() {
+        let s = snapshot();
+        let spec = |s: &Snapshot, target: &str, create| {
+            publish(s, target, "server { listen 80; }\n", "", create)
+                .unwrap()
+                .configuration
+                .unwrap()
+                .record
+                .spec
+        };
+        // A site that is on is checked where it is.
+        let on = spec(&s, "/etc/nginx/sites-available/shop", false);
+        assert_eq!(on.check_as, "");
+        assert!(on.local_probe);
+        assert_eq!(
+            spec(&s, "/etc/nginx/sites-available/default", false).check_as,
+            "/etc/nginx/sites-enabled/default"
+        );
+        assert_eq!(
+            spec(&s, "/etc/nginx/conf.d/old.conf.disabled", false).check_as,
+            "/etc/nginx/conf.d/old.conf"
+        );
+        assert_eq!(
+            spec(&s, "/etc/nginx/sites-available/blog.example.com", true).check_as,
+            "/etc/nginx/sites-enabled/blog.example.com"
+        );
+        assert_eq!(spec(&s, "/etc/nginx/conf.d/new.conf", true).check_as, "");
+        assert_eq!(spec(&s, "/etc/nginx/nginx.conf", false).check_as, "");
+        let review = publish(
+            &s,
+            "/etc/nginx/sites-available/default",
+            "server { listen 80; }\n",
+            "http://a.example.com/",
+            false,
+        )
+        .unwrap()
+        .configuration
+        .unwrap()
+        .review();
+        assert!(
+            review.contains("as if it were at /etc/nginx/sites-enabled/default"),
+            "{review}"
+        );
+        assert!(
+            review.contains("any answer but a 5xx error passes"),
+            "{review}"
+        );
+    }
+
+    #[test]
+    fn container_commands_use_the_containers_own_nginx_options() {
+        let mut custom = compose();
+        custom["docker"]["args"] =
+            serde_json::json!(["-c", "/etc/nginx/custom.conf", "-g", "daemon off;"]);
+        let c = reading(serde_json::json!([custom]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let test = control(&c, Control::Test).unwrap().snippet.command;
+        assert!(
+            test.contains("nginx '-c' '/etc/nginx/custom.conf' '-g' 'daemon off;' -t"),
+            "{test}"
+        );
+        for args in [
+            serde_json::json!(["-s", "stop"]),
+            serde_json::json!(["-c"]),
+            serde_json::json!(["-c", "a\nb"]),
+            serde_json::json!(["-g", "", "-c", "/x"]),
+        ] {
+            let mut odd = compose();
+            odd["docker"]["args"] = args;
+            assert!(reading(serde_json::json!([odd])).is_err());
+        }
     }
 }

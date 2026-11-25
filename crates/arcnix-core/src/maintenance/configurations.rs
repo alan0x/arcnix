@@ -31,6 +31,14 @@ pub struct Spec {
     /// the server. Empty for Nginx on the server.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub container: String,
+    /// For an Nginx file that Nginx does not load yet, such as a site that is
+    /// off: where it goes when turned on, so the check tests it there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub check_as: String,
+    /// Ask this server's Nginx for the health address instead of whatever the
+    /// name resolves to, and accept any answer except a server error.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_probe: bool,
 }
 impl Default for Spec {
     fn default() -> Self {
@@ -46,6 +54,8 @@ impl Default for Spec {
             health: String::new(),
             sha256: String::new(),
             container: String::new(),
+            check_as: String::new(),
+            local_probe: false,
         }
     }
 }
@@ -87,6 +97,22 @@ impl Spec {
                         .bytes()
                         .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "Invalid Docker container ID"
+        );
+        ensure!(
+            self.check_as.is_empty()
+                || (self.kind == Kind::Nginx
+                    && self.check_as != self.path
+                    && self.check_as.starts_with('/')
+                    && self.check_as.len() <= 1024
+                    && !self.check_as.chars().any(char::is_control)
+                    && self.check_as[1..]
+                        .split('/')
+                        .all(|s| !matches!(s, "" | "." | ".."))),
+            "Invalid configuration check path"
+        );
+        ensure!(
+            !self.local_probe || self.kind == Kind::Nginx,
+            "Invalid health check settings"
         );
         match self.kind {
             Kind::Nginx => {
@@ -236,14 +262,27 @@ impl Job {
     }
     pub fn review(&self) -> String {
         let s = &self.record.spec;
+        let place = if s.check_as.is_empty() {
+            String::new()
+        } else {
+            format!(", as if it were at {}", s.check_as)
+        };
+        let address = if s.local_probe && !s.health_url.is_empty() {
+            format!(
+                "{} [asked of this server's Nginx; any answer but a 5xx error passes]",
+                s.health_url
+            )
+        } else {
+            s.health_url.clone()
+        };
         let steps = match s.kind {
             Kind::Nginx if !s.container.is_empty() => format!(
-                "Validate: Nginx complete configuration, in a temporary container with the same image and mounts\nReload: nginx -s reload in container {}\nHTTP health: {}\nExpected response text: {}",
+                "Validate: Nginx complete configuration{place}, in a temporary container with the same image and mounts\nReload: nginx -s reload in container {}\nHTTP health: {}\nExpected response text: {}",
                 &s.container[..12],
                 if s.health_url.is_empty() {
                     "[container still running after reload]"
                 } else {
-                    &s.health_url
+                    &address
                 },
                 if self.record.restore_from.is_some() {
                     "[previous-version health; no new-response expectation]"
@@ -252,12 +291,12 @@ impl Job {
                 }
             ),
             Kind::Nginx => format!(
-                "Validate: Nginx complete configuration\nReload: {}\nHTTP health: {}\nExpected response text: {}",
+                "Validate: Nginx complete configuration{place}\nReload: {}\nHTTP health: {}\nExpected response text: {}",
                 s.service,
                 if s.health_url.is_empty() {
                     "[service still running after reload]"
                 } else {
-                    &s.health_url
+                    &address
                 },
                 if self.record.restore_from.is_some() {
                     "[previous-version health; no new-response expectation]"

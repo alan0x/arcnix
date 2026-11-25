@@ -8,12 +8,36 @@ LOG_LIMIT = 256 * 1024
 class ServerInterrupted(BaseException): pass
 # The log of a failed check, which a preview reports to the operator.
 FAILED_LOG = None
+# Whether the last reload of a container signalled a running Nginx; a stopped
+# container is not reloaded and reads the file when it starts.
+CONTAINER_RELOADED = None
 
 HTTP_PROBE = """import sys,urllib.request
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 with opener.open(sys.argv[1],timeout=3) as response:
  data=response.read(65537)
  ok=200<=response.status<300 and len(data)<=65536 and sys.argv[2].encode() in data
+sys.exit(0 if ok else 1)
+"""
+
+# Asks this server's Nginx for a site by name: the request goes to the local
+# address (or an address written in the URL), not to whatever the name
+# resolves to. Any answer except a server error shows that the site is served;
+# a site behind a login or without a page at / still answers 401 or 404.
+LOCAL_PROBE = """import http.client,ipaddress,socket,ssl,sys,urllib.parse
+url=urllib.parse.urlsplit(sys.argv[1])
+secure=url.scheme=='https'
+port=url.port or (443 if secure else 80)
+try: ipaddress.ip_address(url.hostname); address=url.hostname
+except ValueError: address='127.0.0.1'
+sock=socket.create_connection((address,port),3)
+if secure:
+ context=ssl.create_default_context();context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
+ sock=context.wrap_socket(sock,server_hostname=url.hostname)
+connection=http.client.HTTPConnection(url.hostname,port,timeout=3);connection.sock=sock
+connection.request('GET',(url.path or '/')+('?'+url.query if url.query else ''),headers={'Host':url.hostname+(':%d'%url.port if url.port else '')})
+response=connection.getresponse();data=response.read(65537)
+ok=response.status<500 and len(data)<=65536 and sys.argv[2].encode() in data
 sys.exit(0 if ok else 1)
 """
 
@@ -124,12 +148,27 @@ def nginx_main(tool):
     if not path.is_absolute(): path = pathlib.Path(prefix.group(1) if prefix else '/usr/local/nginx') / path
     return pathlib.Path(os.path.realpath(path))
 
+def check_place(spec):
+    # Where Nginx would read the file: the file itself, or for a site that is
+    # off, the place it takes when turned on (its sites-enabled link, or its
+    # name without .disabled), so that a file Nginx skips is still checked.
+    path = pathlib.Path(spec['path'])
+    place = spec.get('check_as') or ''
+    if not place: return path
+    place = pathlib.Path(place)
+    require(place.is_absolute() and place != path and '..' not in place.parts, 'Invalid configuration settings')
+    return place if place.parent.is_dir() and place.parent.resolve() == place.parent else path
+
 def check_included(tool, path, candidate, record):
-    # Test the complete configuration as if the candidate replaced the file,
-    # inside a private mount namespace: the running server and every other
-    # process keep seeing the live directory.
+    # Test the complete configuration as if the candidate were the file at
+    # `path`, inside a private mount namespace: the running server and every
+    # other process keep seeing the live directory.
+    global FAILED_LOG
     unshare = shutil.which('unshare')
     require(unshare, 'Checking an included Nginx file requires unshare from util-linux')
+    if not run_tool([unshare, '--mount', '--propagation', 'private', '--', '/bin/true'], record / 'validation.log'):
+        FAILED_LOG = record / 'validation.log'
+        raise RuntimeError('This server does not allow private mount namespaces (common on OpenVZ and some LXC servers), so Arcnix cannot check a site file without changing the live one')
     work = pathlib.Path(tempfile.mkdtemp(prefix='arcnix-nginx-check-'))
     try:
         view = work / 'view'; original = work / 'original'
@@ -181,6 +220,34 @@ def docker_mount(details, path):
 def docker_running(details):
     return bool((details.get('State') or {}).get('Running'))
 
+def nginx_options(details):
+    # The options a container starts Nginx with that decide which
+    # configuration it reads (-c, -p) and add to it (-g). Every nginx command
+    # for the container uses them too.
+    command = [details.get('Path') or ''] + list(details.get('Args') or [])
+    rest = None
+    for index, part in enumerate(command):
+        if os.path.basename(part) in ('nginx', 'nginx-debug'):
+            rest = command[index + 1:]; break
+    out = []; index = 0
+    while rest and index < len(rest):
+        flag = rest[index]
+        if flag in ('-c', '-p', '-g') and index + 1 < len(rest): out += [flag, rest[index + 1]]; index += 2
+        elif flag[:2] in ('-c', '-p', '-g') and len(flag) > 2: out += [flag[:2], flag[2:]]; index += 1
+        else: index += 1
+    return out
+
+def same_owner(source, destination, folder=None):
+    # Give a copy the owner and mode of what it stands for, so a container that
+    # runs Nginx as another user reads it as it reads the live file. A new file
+    # gets what publishing gives it: the folder's owner and mode 644.
+    try: info = os.lstat(source); mode = stat.S_IMODE(info.st_mode)
+    except FileNotFoundError:
+        if folder is None: return
+        info = os.stat(folder); mode = 0o644
+    os.lchown(destination, info.st_uid, info.st_gid)
+    if not stat.S_ISLNK(os.lstat(destination).st_mode): os.chmod(destination, mode)
+
 def mount_value(value):
     require(',' not in value and '"' not in value and '\n' not in value, 'Mounted paths with commas or quotes cannot be checked')
     return value
@@ -190,26 +257,37 @@ def check_container(spec, candidate, record):
     # same mounts, where the candidate replaces the file. The live container
     # and the live folder are never touched.
     details = docker_inspect(spec['container'])
-    path = pathlib.Path(spec['path'])
-    _, changed, whole = docker_mount(details, path)
+    path = check_place(spec)
+    try: _, changed, whole = docker_mount(details, path)
+    except RuntimeError:
+        # The place a site takes when turned on is not mounted; check it where it is.
+        path = pathlib.Path(spec['path']); _, changed, whole = docker_mount(details, path)
     work = pathlib.Path(tempfile.mkdtemp(prefix='arcnix-nginx-check-'))
     try:
+        os.chmod(work, 0o755)
         mounts = []
         for mount in details.get('Mounts') or []:
             kind, destination = mount.get('Type'), mount.get('Destination', '')
             if kind not in ('bind', 'volume') or not destination.startswith('/'): continue
             if mount is changed:
-                if whole: source = str(candidate)
+                if whole:
+                    copy = work / 'file'
+                    shutil.copyfile(candidate, copy)
+                    same_owner(path, copy)
+                    source = str(copy)
                 else:
                     folder = pathlib.Path(mount['Source'])
                     size = sum(f.stat().st_size for f in folder.rglob('*') if f.is_file() and not f.is_symlink())
                     require(size <= 64 * 1024 * 1024, 'The mounted folder is too large to copy for the check')
                     copy = work / 'mount'
                     shutil.copytree(folder, copy, symlinks=True, ignore=shutil.ignore_patterns('.arcnix-config-*'))
+                    for item in [copy, *copy.rglob('*')]:
+                        same_owner(folder / item.relative_to(copy), item)
                     inside = copy / path.relative_to(folder)
                     inside.parent.mkdir(parents=True, exist_ok=True)
+                    if inside.is_symlink(): inside.unlink()
                     shutil.copyfile(candidate, inside)
-                    os.chmod(work, 0o755)
+                    same_owner(path, inside, folder=path.parent if path.parent.is_dir() else folder)
                     source = str(copy)
                 mounts += ['--mount', 'type=bind,src=' + mount_value(source) + ',dst=' + mount_value(destination) + ',readonly']
             elif kind == 'bind':
@@ -225,7 +303,7 @@ def check_container(spec, candidate, record):
             network = mode if mode in ('host', 'none') else (networks[0] if networks else 'none')
         user = (details.get('Config') or {}).get('User') or ''
         argv = [docker_tool(), 'run', '--rm', '--pull', 'never', '--log-driver', 'none', '--network', network,
-                '--label', 'arcnix.check=nginx', '--entrypoint', 'nginx'] + (['--user', user] if user else []) + mounts + [details['Image'], '-t']
+                '--label', 'arcnix.check=nginx', '--entrypoint', 'nginx'] + (['--user', user] if user else []) + mounts + [details['Image']] + nginx_options(details) + ['-t']
         validation_tool(argv, record)
     finally: shutil.rmtree(work, ignore_errors=True)
 
@@ -237,20 +315,21 @@ def validate(spec, candidate, record):
         tool = shutil.which('nginx') or '/usr/sbin/nginx'
         path = pathlib.Path(spec['path'])
         if path != nginx_main(tool):
-            check_included(tool, path, candidate, record)
+            check_included(tool, check_place(spec), candidate, record)
             return
         argv = [tool, '-t', '-e', 'stderr', '-c', str(candidate)]
     else: argv = ['/bin/sh', '-c', spec['validation'], 'arcnix', str(candidate)]
     validation_tool(argv, record)
 
-def container_master(container):
+def container_namespace(details):
+    # The PID namespace of a running container, found once per check.
+    try: return os.readlink('/proc/%d/ns/pid' % int((details.get('State') or {}).get('Pid') or 0))
+    except Exception: return None
+
+def namespace_master(namespace):
     # The Nginx master in a container: the process in the container's PID
     # namespace whose title says so.
-    try:
-        details = docker_inspect(container)
-        first = int((details.get('State') or {}).get('Pid') or 0)
-        namespace = os.readlink('/proc/%d/ns/pid' % first)
-    except Exception: return 0
+    if not namespace: return 0
     for entry in os.listdir('/proc'):
         if not entry.isdigit(): continue
         try:
@@ -260,9 +339,9 @@ def container_master(container):
         if title.startswith(b'nginx: master'): return int(entry)
     return 0
 
-def nginx_processes(spec):
+def nginx_processes(spec, namespace=None):
     # The Nginx master and its children (workers, cache processes).
-    if spec.get('container'): master = container_master(spec['container'])
+    if spec.get('container'): master = namespace_master(namespace)
     else:
         try:
             shown = subprocess.run(['systemctl','--no-pager','show','--property=MainPID','--value','--',spec['service']],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
@@ -279,16 +358,21 @@ def nginx_processes(spec):
     return master, children
 
 def reload_service(spec, record):
+    global CONTAINER_RELOADED
     if spec['kind'] != 'Nginx':
         return run_tool(['/bin/sh', '-c', spec['reload'], 'arcnix', spec['path']], record / 'reload.log')
+    namespace = None
     if spec.get('container'):
-        if not docker_running(docker_inspect(spec['container'])):
+        details = docker_inspect(spec['container'])
+        CONTAINER_RELOADED = docker_running(details)
+        if not CONTAINER_RELOADED:
             with (record / 'reload.log').open('ab') as log:
                 log.write(b'The container is not running; Nginx reads the file when it starts\n')
             return True
-        argv = [docker_tool(), 'exec', spec['container'], 'nginx', '-s', 'reload']
+        namespace = container_namespace(details)
+        argv = [docker_tool(), 'exec', spec['container'], 'nginx'] + nginx_options(details) + ['-s', 'reload']
     else: argv = ['systemctl', '--no-ask-password', 'reload', '--', spec['service']]
-    before = nginx_processes(spec)
+    before = nginx_processes(spec, namespace)
     if not run_tool(argv, record / 'reload.log'): return False
     if not before or not before[1]: return True
     # systemctl returns once Nginx has the signal, and the old workers keep
@@ -296,7 +380,7 @@ def reload_service(spec, record):
     # new ones. A health check before then would test the old configuration.
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        now = nginx_processes(spec)
+        now = nginx_processes(spec, namespace)
         if now and (now[0] != before[0] or now[1] - before[1]):
             # Give the old workers a moment to close their listening sockets.
             time.sleep(.5)
@@ -313,17 +397,20 @@ def health(spec, record, previous=False):
             if spec['kind'] == 'Custom':
                 if run_tool(['/bin/sh','-c',spec['health'],'arcnix',spec['path']], record / 'health.log', min(10, max(1,deadline-time.monotonic()))): return True
             elif spec.get('container') and not spec['health_url']:
-                # Without an address, the container and its Nginx still
-                # running is the check; a stopped container was not reloaded.
+                # Without an address, the check is that the container and its
+                # Nginx are still running. A container that was stopped was
+                # not reloaded, so there is nothing to check yet.
+                if CONTAINER_RELOADED is False: return True
                 details = docker_inspect(spec['container'])
-                if not docker_running(details) or container_master(spec['container']): return True
+                if docker_running(details) and namespace_master(container_namespace(details)): return True
             elif not spec['health_url']:
                 # Without an address, the service still running is the check.
                 if run_tool(['systemctl','--no-ask-password','is-active','--quiet','--',spec['service']],record/'health.log',min(5,max(.01,deadline-time.monotonic()))): return True
             else:
                 # Bound the whole child process, including DNS, TLS and a slow
                 # streaming body. A socket timeout alone does not cover these.
-                argv=[sys.executable,'-I','-c',HTTP_PROBE,spec['health_url'],'' if previous else spec['expected_body']]
+                probe=LOCAL_PROBE if spec.get('local_probe') else HTTP_PROBE
+                argv=[sys.executable,'-I','-c',probe,spec['health_url'],'' if previous else spec['expected_body']]
                 if run_tool(argv,record/'health.log',min(3,max(.01,deadline-time.monotonic()))): return True
         except Exception: pass
         time.sleep(min(.5,max(0,deadline-time.monotonic())))
@@ -460,12 +547,14 @@ def install(path, data, metadata_source, create_only=False, on_install=None, gua
         if guard is not None: guard()
         fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW)
         try:
+            # The live file changes from the first byte written, so a failure
+            # partway must restore it; count it as installed before writing.
+            if on_install is not None: on_install()
             os.ftruncate(fd, 0)
             view = memoryview(data)
             while view: view = view[os.write(fd, view):]
             os.fsync(fd)
         finally: os.close(fd)
-        if on_install is not None: on_install()
         return
     candidate = candidate_file(path,data)
     try:
@@ -518,7 +607,20 @@ def execute(identifier, request_sha):
         require(verified==installed_version,'Configuration changed during the health check')
         save(record,manifest,'restored' if manifest['request']['restore_from'] else 'published')
     except BaseException:
-        if installed:
+        if installed and in_place and installed_version is None:
+            # An in-place write stopped partway: the file holds part of the
+            # candidate, which may not even be valid UTF-8. Under the lock and
+            # on the same inode, write the original back.
+            try:
+                save(record,manifest,'rolling_back')
+                info=path.lstat()
+                require((info.st_dev,info.st_ino)==installed_node,'Concurrent replacement prevents automatic restore')
+                install(path,(record / 'original').read_bytes(),record / 'original',in_place=True)
+                restored,_ = identity(path); require(restored['sha256'] == manifest['before']['sha256'], 'Restored file hash mismatch')
+                save(record,manifest,'file_restored')
+                save(record,manifest,'rolled_back')
+            except BaseException: save(record,manifest,'rollback_failed')
+        elif installed:
             try:
                 save(record,manifest,'rolling_back')
                 if not is_missing(path):
