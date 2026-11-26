@@ -220,6 +220,8 @@ pub struct AppSettings {
     pub theme: Theme,
     pub show_hidden_files: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_sidebar_width: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_sidebar_width: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_picker_sidebar_width: Option<u16>,
@@ -265,6 +267,7 @@ impl Default for AppSettings {
             language: Language::English,
             theme: Theme::System,
             show_hidden_files: true,
+            server_sidebar_width: None,
             files_sidebar_width: None,
             file_picker_sidebar_width: None,
             folder_defaults: Default::default(),
