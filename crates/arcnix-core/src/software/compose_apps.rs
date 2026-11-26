@@ -348,6 +348,8 @@ pub fn list(remote: &RemoteSession) -> Result<Projects> {
 #[derive(Clone, Copy)]
 pub enum Action {
     Apply,
+    /// Pull newer images, then recreate what changed.
+    Update,
     Stop,
     Restart,
     Remove,
@@ -360,10 +362,16 @@ pub fn action(project: &Project, action: Action) -> Result<Template> {
     );
     let name = project.definition.name();
     let verb = match action {
-        Action::Apply => "up --detach --no-build --wait --wait-timeout 120",
+        Action::Apply | Action::Update => "up --detach --no-build --wait --wait-timeout 120",
         Action::Stop => "stop --timeout 10",
         Action::Restart => "restart --timeout 10",
         Action::Remove => "down --timeout 10",
+    };
+    let pull = match action {
+        Action::Update => format!(
+            "timeout -k 5s 1800s docker --host \"$arcnix_socket\" compose --project-name 'arcnix-{name}' --file compose.yaml pull\n"
+        ),
+        _ => String::new(),
     };
     let archive = match action {
         Action::Remove => format!(
@@ -380,7 +388,7 @@ test -f "$arcnix_dir/compose.yaml" && test ! -L "$arcnix_dir/compose.yaml"
 arcnix_digest=$(sha256sum "$arcnix_dir/compose.yaml" | cut -d' ' -f1)
 test "$arcnix_digest" = '{digest}' || {{ printf 'Compose file changed; refresh and review again\n' >&2; exit 1; }}
 cd "$arcnix_dir"
-timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml {verb}
+{pull}timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml {verb}
 {archive}
 "#,
         digest = project.digest
@@ -390,6 +398,7 @@ timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix
             "Compose {name}: {}",
             match action {
                 Action::Apply => "apply",
+                Action::Update => "pull newer images and recreate",
                 Action::Stop => "stop",
                 Action::Restart => "restart",
                 Action::Remove => "remove and keep volumes, images and project files",
@@ -459,5 +468,26 @@ mod tests {
         assert_eq!(projects.entries[1].definition.kind(), None);
         assert_eq!(projects.entries[1].definition.image(), "redis:7");
         assert!(list_command().contains("arcnix-container.json"));
+    }
+
+    #[test]
+    fn updating_a_project_pulls_before_recreating_it() {
+        let d = Definition::default();
+        let project = Project {
+            yaml: d.yaml().unwrap(),
+            digest: "a".repeat(64),
+            definition: Manifest::Template(d),
+        };
+        let command = action(&project, Action::Update).unwrap().snippet.command;
+        let pull = command.find("compose.yaml pull").expect("pulls");
+        let up = command.find("compose.yaml up --detach").expect("recreates");
+        assert!(pull < up, "{command}");
+        assert!(
+            !action(&project, Action::Apply)
+                .unwrap()
+                .snippet
+                .command
+                .contains("compose.yaml pull")
+        );
     }
 }

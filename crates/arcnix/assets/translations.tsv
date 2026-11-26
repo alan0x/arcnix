@@ -3453,3 +3453,14 @@ Arcnix 会在 ~/.arcnix/apps 中写入一个 Compose 项目并启动它，和 Ap
 最多添加 16 个端口	Add at most 16 ports
 最多添加 16 个卷	Add at most 16 volumes
 最多添加 64 个环境变量	Add at most 64 environment variables
+检查更新	Check for updates
+更新…	Update…
+正在检查镜像仓库是否有更新的镜像…	Checking registries for newer images…
+所有已拉取的镜像都是最新的。	Every pulled image is up to date.
+{n} 个镜像有更新。“更新”会拉取新镜像；容器在重新创建前仍使用旧镜像。Arcnix 项目可在“项目”中更新。	{n} images have updates. Update pulls the new image; a container keeps the old one until it is recreated. Arcnix projects are updated in Projects.
+{unknown} 个无法检查。	{unknown} couldn't be checked.
+未检查：一次要检查的镜像太多	Not checked: too many images at once
+标签 {tag} 已不再发布	The tag {tag} is no longer published
+镜像仓库 {host} 需要登录后才回应	The registry {host} only answers after you log in
+镜像仓库 {host} 没有说明该标签指向哪个镜像	The registry {host} didn't say which image the tag points to
+1 个镜像有更新。“更新”会拉取新镜像；容器在重新创建前仍使用旧镜像。Arcnix 项目可在“项目”中更新。	1 image has an update. Update pulls the new image; a container keeps the old one until it is recreated. Arcnix projects are updated in Projects.

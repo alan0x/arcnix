@@ -8,12 +8,14 @@ use crate::*;
 mod mirrors;
 mod pull;
 mod run;
+mod updates;
 
 #[derive(Clone, Default)]
 pub(crate) struct DockerState {
     pub(crate) mirrors: mirrors::MirrorState,
     pub(crate) pull: pull::PullState,
     pub(crate) run: run::RunState,
+    pub(crate) updates: updates::UpdatesState,
     snapshot: Option<Snapshot>,
     images: Vec<docker::Image>,
     stats: Option<docker::Stats>,
@@ -40,6 +42,11 @@ pub(crate) struct DockerState {
     memory: String,
     original_cpu: String,
     original_memory: String,
+}
+impl DockerState {
+    pub(crate) fn updates_checking(&self) -> bool {
+        self.updates.checking()
+    }
 }
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum DetailTab {
@@ -665,6 +672,17 @@ fn container_list(ui: Ui) -> impl Widget {
                                     text().class("docker-resource-image").content(
                                         container.map(|row| row.container().image.clone()),
                                     ),
+                                    text()
+                                        .class(state.map(move |s| {
+                                            if updates::newer(s, &container.get().container().image)
+                                            {
+                                                "docker-badge update"
+                                            } else {
+                                                "hidden"
+                                            }
+                                            .to_owned()
+                                        }))
+                                        .content(i18n::bind("Update available")),
                                 ))
                                 .on_press(move || {
                                     select.docker_select(container.get().container().id.clone())
@@ -1402,6 +1420,16 @@ fn header(ui: Ui) -> impl Widget {
                 let ui = ui.clone();
                 move || {
                     let ui = ui.clone();
+                    text_action("Check for updates", Icon::Refresh)
+                        .class("button with-icon compact")
+                        .enabled(state.map(|s| ready(s) && !s.docker.updates_checking()))
+                        .on_press(move || ui.docker_check_updates())
+                }
+            }),
+            when(state.map(|s| s.docker.view == 4), {
+                let ui = ui.clone();
+                move || {
+                    let ui = ui.clone();
                     text_action("Registry mirrors", Icon::Settings)
                         .class("button with-icon compact")
                         .enabled(state.map(ready))
@@ -1588,89 +1616,136 @@ fn image_in_use(s: &State, image: &docker::Image) -> bool {
 }
 fn images(ui: Ui) -> impl Widget {
     let state = ui.state;
-    col().class("docker-inventory docker-table").fill((
-        column_titles(
-            &["Image repository", "Tag", "Image ID", "Size"],
-            "docker-image-row docker-columns",
-        ),
-        each(state.map(|s| {
-            let filter = s.docker.filter.to_lowercase();
-            s.docker
-                .images
-                .iter()
-                .filter(|image| {
-                    [&image.repository, &image.tag, &image.id]
-                        .into_iter()
-                        .any(|value| value.to_lowercase().contains(&filter))
-                })
-                .map(|image| (image.clone(), image_in_use(s, image)))
-                .collect::<Vec<_>>()
-        }))
-        .key(|(image, _)| {
-            (
-                image.id.clone(),
-                image.repository.clone(),
-                image.tag.clone(),
-            )
-        })
-        .children(move |item| {
-            let image = item.value;
-            let run = ui.clone();
-            row().class("docker-image-row").fill((
-                row().class("docker-image-name").fill((
-                    text()
-                        .class(image.map(|(image, _)| {
-                            if image.repository == "<none>" {
-                                "docker-resource-name untagged"
-                            } else {
-                                "docker-resource-name"
-                            }
-                            .to_owned()
-                        }))
-                        .selectable(true)
-                        .content(image.map(|(image, _)| image.repository.clone())),
-                    text()
-                        .class(image.map(|(_, used)| {
-                            if *used {
-                                "docker-badge published"
-                            } else {
-                                "hidden"
-                            }
-                            .to_owned()
-                        }))
-                        .content(i18n::bind("In use")),
-                    // An untagged image has no name to run it by.
-                    when(
-                        image.map(|(image, _)| {
-                            image.repository != "<none>" && image.tag != "<none>"
-                        }),
-                        move || {
-                            let run = run.clone();
-                            let image = image;
-                            btn("Run", move || {
+    fragment((
+        text()
+            .class("docker-updates-summary hint")
+            .content(state.map(updates::summary)),
+        col().class("docker-inventory docker-table").fill((
+            column_titles(
+                &["Image repository", "Tag", "Image ID", "Size"],
+                "docker-image-row docker-columns",
+            ),
+            each(state.map(|s| {
+                let filter = s.docker.filter.to_lowercase();
+                s.docker
+                    .images
+                    .iter()
+                    .filter(|image| {
+                        [&image.repository, &image.tag, &image.id]
+                            .into_iter()
+                            .any(|value| value.to_lowercase().contains(&filter))
+                    })
+                    .map(|image| (image.clone(), image_in_use(s, image)))
+                    .collect::<Vec<_>>()
+            }))
+            .key(|(image, _)| {
+                (
+                    image.id.clone(),
+                    image.repository.clone(),
+                    image.tag.clone(),
+                )
+            })
+            .children(move |item| {
+                let image = item.value;
+                let run = ui.clone();
+                row().class("docker-image-row").fill((
+                    row().class("docker-image-name").fill((
+                        text()
+                            .class(image.map(|(image, _)| {
+                                if image.repository == "<none>" {
+                                    "docker-resource-name untagged"
+                                } else {
+                                    "docker-resource-name"
+                                }
+                                .to_owned()
+                            }))
+                            .selectable(true)
+                            .content(image.map(|(image, _)| image.repository.clone())),
+                        text()
+                            .class(image.map(|(_, used)| {
+                                if *used {
+                                    "docker-badge published"
+                                } else {
+                                    "hidden"
+                                }
+                                .to_owned()
+                            }))
+                            .content(i18n::bind("In use")),
+                        text()
+                            .class(state.map(move |s| {
                                 let (image, _) = image.get();
-                                run.docker_run_open(format!("{}:{}", image.repository, image.tag));
-                            })
-                            .class("button compact docker-image-run")
-                        },
-                    ),
-                )),
-                text()
-                    .class("docker-image-tag")
-                    .selectable(true)
-                    .content(image.map(|(image, _)| image.tag.clone())),
-                text()
-                    .class("docker-image-id")
-                    .selectable(true)
-                    .content(image.map(|(image, _)| {
-                        let id = image.id.strip_prefix("sha256:").unwrap_or(&image.id);
-                        id.chars().take(12).collect::<String>()
-                    })),
-                text()
-                    .class("docker-image-size")
-                    .content(image.map(|(image, _)| image.size.clone())),
-            ))
-        }),
+                                let reference = format!("{}:{}", image.repository, image.tag);
+                                if updates::newer(s, &reference) {
+                                    "docker-badge update"
+                                } else {
+                                    "hidden"
+                                }
+                                .to_owned()
+                            }))
+                            .content(i18n::bind("Update available")),
+                        text()
+                            .class("docker-image-unchecked subtle")
+                            .content(state.map(move |s| {
+                                let (image, _) = image.get();
+                                updates::reason(s, &format!("{}:{}", image.repository, image.tag))
+                            })),
+                        when(
+                            state.map(move |s| {
+                                let (image, _) = image.get();
+                                updates::newer(s, &format!("{}:{}", image.repository, image.tag))
+                            }),
+                            {
+                                let update = run.clone();
+                                move || {
+                                    let update = update.clone();
+                                    btn("Update", move || {
+                                        let (image, _) = image.get();
+                                        update.docker_update_image(format!(
+                                            "{}:{}",
+                                            image.repository, image.tag
+                                        ));
+                                    })
+                                    .class("button compact docker-image-update")
+                                    .enabled(state.map(|s| s.connected && !scripts_ui::busy(s)))
+                                }
+                            },
+                        ),
+                        // An untagged image has no name to run it by.
+                        when(
+                            image.map(|(image, _)| {
+                                image.repository != "<none>" && image.tag != "<none>"
+                            }),
+                            move || {
+                                let run = run.clone();
+                                let image = image;
+                                btn("Run", move || {
+                                    let (image, _) = image.get();
+                                    run.docker_run_open(format!(
+                                        "{}:{}",
+                                        image.repository, image.tag
+                                    ));
+                                })
+                                .class("button compact docker-image-run")
+                            },
+                        ),
+                    )),
+                    text()
+                        .class("docker-image-tag")
+                        .selectable(true)
+                        .content(image.map(|(image, _)| image.tag.clone())),
+                    text()
+                        .class("docker-image-id")
+                        .selectable(true)
+                        .content(image.map(|(image, _)| {
+                            let id = image.id.strip_prefix("sha256:").unwrap_or(&image.id);
+                            id.chars().take(12).collect::<String>()
+                        })),
+                    text()
+                        .class("docker-image-size")
+                        .content(image.map(|(image, _)| image.size.clone())),
+                ))
+            }),
+        )),
     ))
 }
 pub(crate) fn dialogs(ui: Ui) -> impl Widget {

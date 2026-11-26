@@ -79,6 +79,19 @@ pub struct Image {
     pub repository: String,
     pub tag: String,
     pub size: String,
+    /// The digest Docker recorded when it pulled this tag from a registry,
+    /// or `<none>` for an image built or loaded on the server.
+    #[serde(default)]
+    pub digest: String,
+}
+
+impl Image {
+    /// The `repository:tag` a registry knows this image by, when it was
+    /// pulled from one.
+    pub fn pulled_reference(&self) -> Option<String> {
+        (self.repository != "<none>" && self.tag != "<none>" && self.digest.starts_with("sha256:"))
+            .then(|| format!("{}:{}", self.repository, self.tag))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -434,8 +447,9 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
             "image",
             "ls",
             "--no-trunc",
+            "--digests",
             "--format",
-            r#"{"id":{{json .ID}},"repository":{{json .Repository}},"tag":{{json .Tag}},"size":{{json .Size}}}"#,
+            r#"{"id":{{json .ID}},"repository":{{json .Repository}},"tag":{{json .Tag}},"size":{{json .Size}},"digest":{{json .Digest}}}"#,
         ],
     );
     request

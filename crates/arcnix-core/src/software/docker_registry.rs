@@ -448,6 +448,131 @@ fn registry_tags(host: &str, name: &str, filter: &str) -> Result<Tags> {
     })
 }
 
+/// Whether a registry publishes a newer image for a tag than the one pulled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Freshness {
+    Current,
+    /// The registry serves another digest for the tag now.
+    Newer(String),
+    /// The registry couldn't be asked; the reason is shown.
+    Unknown(String),
+}
+
+/// How many images one check asks about, and how long it may take.
+const CHECK_LIMIT: usize = 50;
+const CHECK_BUDGET: Duration = Duration::from_secs(90);
+
+/// The digest a registry serves for `reference`'s tag now, from a `HEAD`
+/// request for its manifest (which downloads nothing and doesn't count
+/// against Docker Hub's pull limit). None for a reference pinned by digest,
+/// which never changes.
+pub fn current_digest(reference: &str) -> Result<Option<String>> {
+    let reference = crate::docker_pull::checked_reference(reference)?;
+    if reference.contains('@') {
+        return Ok(None);
+    }
+    let repository = repository(&reference)?;
+    let tag = reference[repository.len()..]
+        .strip_prefix(':')
+        .unwrap_or("latest")
+        .to_owned();
+    let (host, name, hub) = match source(&reference)? {
+        Source::Hub { namespace, name } => (
+            "registry-1.docker.io".to_owned(),
+            format!("{namespace}/{name}"),
+            true,
+        ),
+        Source::Registry { host, name } => (host, name, false),
+    };
+    let place = if hub {
+        Place::Hub
+    } else {
+        Place::Registry(&host)
+    };
+    let deadline = Instant::now() + DEADLINE;
+    let client = client()?;
+    let mut url = Url::parse(&format!("https://{host}/"))?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow::anyhow!("Invalid registry address"))?
+        .push("v2")
+        .extend(name.split('/'))
+        .extend(["manifests", &tag]);
+    const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json";
+    let request = |token: &Option<String>| {
+        let request = client
+            .head(url.clone())
+            .header(reqwest::header::ACCEPT, ACCEPT);
+        match token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    };
+    let mut response = send(request(&None), deadline, place)?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let token = Some(anonymous_token(
+            client,
+            response.headers(),
+            &host,
+            &name,
+            deadline,
+        )?);
+        response = send(request(&token), deadline, place)?;
+    }
+    match response.status() {
+        StatusCode::NOT_FOUND => bail!("The tag {tag} is no longer published"),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            bail!("The registry {host} only answers after you log in")
+        }
+        status if !status.is_success() => {
+            let status = status.as_u16();
+            bail!("The registry {host} answered with HTTP {status}")
+        }
+        _ => {}
+    }
+    let digest = response
+        .headers()
+        .get("docker-content-digest")
+        .and_then(|v| v.to_str().ok())
+        .filter(|d| {
+            d.strip_prefix("sha256:")
+                .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        })
+        .map(str::to_owned);
+    digest.map(Some).ok_or_else(|| {
+        anyhow::anyhow!("The registry {host} didn't say which image the tag points to")
+    })
+}
+
+/// Checks each pulled image, given as `(repository:tag, local digest)`,
+/// against its registry, each reference once. Images past the limit or the
+/// time budget are reported as not checked.
+pub fn check(images: &[(String, String)]) -> Vec<(String, Freshness)> {
+    let started = Instant::now();
+    let mut seen = std::collections::HashSet::new();
+    let mut results = Vec::new();
+    for (reference, local) in images {
+        if !seen.insert(reference.clone()) {
+            continue;
+        }
+        let freshness = if results.len() >= CHECK_LIMIT || started.elapsed() > CHECK_BUDGET {
+            Freshness::Unknown("Not checked: too many images at once".into())
+        } else {
+            freshness(current_digest(reference), local)
+        };
+        results.push((reference.clone(), freshness));
+    }
+    results
+}
+
+fn freshness(current: Result<Option<String>>, local: &str) -> Freshness {
+    match current {
+        Ok(Some(remote)) if remote == local => Freshness::Current,
+        Ok(Some(remote)) => Freshness::Newer(remote),
+        Ok(None) => Freshness::Current,
+        Err(error) => Freshness::Unknown(format!("{error:#}")),
+    }
+}
+
 /// The next page on the same repository endpoint.
 fn next_page(response: &Response) -> Option<Url> {
     response
@@ -885,5 +1010,24 @@ mod tests {
             bearer_params(&headers),
             challenge_params("Bearer realm=https://auth.example.com/token")
         );
+    }
+
+    #[test]
+    fn freshness_compares_the_registry_digest_with_the_pulled_one() {
+        let a = format!("sha256:{}", "a".repeat(64));
+        let b = format!("sha256:{}", "b".repeat(64));
+        assert_eq!(freshness(Ok(Some(a.clone())), &a), Freshness::Current);
+        assert_eq!(freshness(Ok(Some(b.clone())), &a), Freshness::Newer(b));
+        // A reference pinned by digest never changes.
+        assert_eq!(freshness(Ok(None), &a), Freshness::Current);
+        assert!(matches!(
+            freshness(Err(anyhow::anyhow!("offline")), &a),
+            Freshness::Unknown(reason) if reason == "offline"
+        ));
+        assert_eq!(
+            current_digest(&format!("nginx@sha256:{}", "c".repeat(64))).unwrap(),
+            None
+        );
+        assert!(current_digest("Nginx").is_err());
     }
 }
