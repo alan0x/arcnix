@@ -3524,3 +3524,6 @@ Shell	Shell
 所有镜像都无法检查。	None of the images could be checked.
 正在运行旧镜像	Running an older image
 Docker Hub 没有发布 {repository}；它可能是在服务器上构建的	Docker Hub doesn't publish {repository}; it may have been built on the server
+无法读取 Docker 的登录信息：{error}	Docker's logins can't be read: {error}
+密码或访问令牌超过 4000 个字符	The password or access token is longer than 4000 characters
+镜像仓库在 25 秒内没有响应	The registry didn't answer within 25 seconds

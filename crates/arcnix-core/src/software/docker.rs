@@ -634,9 +634,14 @@ pub struct Login {
 }
 
 /// Project the configuration on the server; only registry and helper names cross SSH.
+/// Docker installed as a snap keeps its configuration under ~/snap/docker.
 const LOGINS_SCRIPT: &str = concat!(
     r#"set -eu
-config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then PATH="$PATH:/snap/bin"; fi
+case "${DOCKER_CONFIG:-}:$(command -v docker 2>/dev/null || true)" in
+    :/snap/*) config="$HOME/snap/docker/current/.docker/config.json" ;;
+    *) config="${DOCKER_CONFIG:-$HOME/.docker}/config.json" ;;
+esac
 [ -e "$config" ] || { printf '{}'; exit 0; }
 [ -f "$config" ] || { printf "Invalid Docker configuration file\n" >&2; exit 1; }
 command -v python3 >/dev/null || { printf 'Reading Docker logins requires Python 3 on the server\n' >&2; exit 1; }
@@ -692,10 +697,10 @@ pub fn logins(session: &RemoteSession) -> Result<Vec<Login>> {
         &format!("# arcnix:docker:logins\n{LOGINS_SCRIPT}"),
         128 * 1024,
     )?;
+    let error = output.stderr.trim();
     ensure!(
         output.exit_code == 0,
-        "Docker's logins can't be read: {}",
-        output.stderr.trim()
+        "Docker's logins can't be read: {error}"
     );
     parse_logins(&output.stdout)
 }
@@ -764,8 +769,12 @@ pub fn login(
         "Registry logins are managed in Docker Desktop on Windows"
     );
     ensure!(
-        !password.is_empty() && password.len() <= 4000 && !password.contains(['\n', '\r', '\0']),
+        !password.is_empty() && !password.contains(['\n', '\r', '\0']),
         "Enter the password or access token"
+    );
+    ensure!(
+        password.len() <= 4000,
+        "The password or access token is longer than 4000 characters"
     );
     let command = login_request(registry, username)?.command(session)?;
     let mut stdout = Vec::new();
@@ -789,6 +798,10 @@ pub fn login(
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
         exit_code: output.exit_code,
     };
+    ensure!(
+        output.exit_code != 124,
+        "The registry didn't answer within 25 seconds"
+    );
     let output = check(output, merged_failure)?;
     Ok(output.stdout.trim().to_owned())
 }
@@ -806,6 +819,10 @@ fn logout_request(registry: &str) -> Result<DockerRequest> {
 }
 
 pub fn logout(session: &RemoteSession, registry: &str) -> Result<String> {
+    ensure!(
+        session.host_os()? != HostOs::Windows,
+        "Registry logins are managed in Docker Desktop on Windows"
+    );
     let output = check(
         execute_lossy(session, &logout_request(registry)?.command(session)?, LIMIT)?,
         merged_failure,
