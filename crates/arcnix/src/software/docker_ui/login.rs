@@ -11,11 +11,17 @@ pub(crate) struct LoginState {
     logins: Option<Vec<Login>>,
     registry: String,
     username: String,
-    password: String,
+    password: zeroize::Zeroizing<String>,
     pending: Option<u64>,
     /// Docker's message after a login or logout.
     message: String,
     error: String,
+}
+
+impl LoginState {
+    pub(crate) fn clear_password(&mut self) {
+        self.password = Default::default();
+    }
 }
 
 fn idle(s: &State) -> bool {
@@ -76,7 +82,7 @@ impl Ui {
         self.docker_login_send(AppAction::DockerLogin {
             registry,
             username,
-            password: zeroize::Zeroizing::new(password),
+            password,
         });
     }
 
@@ -200,11 +206,11 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
                     input()
                         .purpose(Purpose::Password)
                         .name(i18n::bind("Password or access token"))
-                        .value(state.map(|s| s.docker.login.password.clone()))
+                        .value(state.map(|s| s.docker.login.password.to_string()))
                         .on(value_changed, move |event| {
                             if let Event::ValueChanged { value, .. } = event {
                                 state.revise(|s| {
-                                    s.docker.login.password = value;
+                                    s.docker.login.password = zeroize::Zeroizing::new(value);
                                     s.docker.login.error.clear();
                                 });
                             }

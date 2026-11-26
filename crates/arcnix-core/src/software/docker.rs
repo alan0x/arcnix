@@ -482,6 +482,7 @@ const LOGINS_SCRIPT: &str = concat!(
     r#"set -eu
 config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
 [ -e "$config" ] || { printf '{}'; exit 0; }
+[ -f "$config" ] || { printf "Invalid Docker configuration file\n" >&2; exit 1; }
 command -v python3 >/dev/null || { printf 'Reading Docker logins requires Python 3 on the server\n' >&2; exit 1; }
 python3 -I - "$config" <<'PY'
 "#,
@@ -1234,6 +1235,40 @@ mod tests {
             ]
         );
         assert!(parse_logins("{}").unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_inventory_returns_only_registry_and_helper_names() {
+        let dir = std::env::temp_dir().join(crate::new_id());
+        std::fs::create_dir(&dir).unwrap();
+        let config = dir.join("config.json");
+        std::fs::write(
+            &config,
+            r#"{
+            "auths": {"ghcr.io": {"auth": "sample", "extra": "sample"}},
+            "credsStore": "pass",
+            "HttpHeaders": {"custom": "sample"}
+        }"#,
+        )
+        .unwrap();
+        let output = std::process::Command::new("sh")
+            .args(["-c", LOGINS_SCRIPT])
+            .env("DOCKER_CONFIG", &dir)
+            .output()
+            .unwrap();
+        std::fs::remove_file(config).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            metadata,
+            serde_json::json!({"auths":{"ghcr.io":{}}, "credsStore":"pass", "credHelpers":{}})
+        );
     }
 
     #[test]
