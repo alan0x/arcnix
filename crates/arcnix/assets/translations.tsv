@@ -3300,3 +3300,6 @@ Arcnix 未发现可识别的自动续期方式（Certbot、acme.sh、lego 或续
 APFS 容器 {}	APFS container {}
 分区 {}	Partition {}
 每个环形图显示此系统可见磁盘的分区大小比例。条形图显示文件系统的可用空间。APFS 宗卷共享容器中的空间。选择挂载点可浏览文件。	Each ring shows the partition sizes on a disk visible to this system. Bars show available filesystem space. APFS volumes share space in their container. Select a mount to browse its files.
+已通过 Snap 安装。	Already installed from Snap.
+已通过系统软件包安装。	Already installed from system packages.
+两份副本会续期同一批证书。请先移除另一份，再安装这一份。	Both copies would renew the same certificates. Remove the other one before installing this one.

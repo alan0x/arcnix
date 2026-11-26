@@ -502,6 +502,30 @@ fn compose_form(ui: Ui) -> impl Widget {
   when(state.map(|s|s.install.preview),move||text().class("compose-preview").selectable(true).content(state.map(|s|{let mut d=s.install.compose.clone();d.port=s.install.port.parse().unwrap_or(0);d.yaml().unwrap_or_else(|e|e.to_string())}))),
  ))
 }
+/// A warning when the selected source would add a package or snap copy of an
+/// app that conflicts with the copy already installed the other way.
+fn conflict_note(s: &State) -> String {
+    let Some(app) = selected_app(s) else {
+        return String::new();
+    };
+    let Some(reason) = app.single else {
+        return String::new();
+    };
+    let (other, installed) = match s.install.source {
+        0 => (1, "Already installed from Snap."),
+        1 => (0, "Already installed from system packages."),
+        _ => return String::new(),
+    };
+    if !super::app_center_ui::source_in_use(s, app, other) {
+        return String::new();
+    }
+    // A line break, not a space, so Chinese has no space after its full stop.
+    format!(
+        "{}\n{}",
+        i18n::translate(installed),
+        i18n::translate(reason)
+    )
+}
 /// Where `source` would install `app` from, or why it can't.
 pub(crate) fn source_note(
     s: &State,
@@ -579,6 +603,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             text().class("install-method-heading").content(i18n::bind("Installation method")),
             row().class("install-sources").fill([(0,"System packages",Icon::Server),(1,"Snap",Icon::Grid),(2,"Docker Compose",Icon::Docker)].into_iter().map(move|(source,label,icon)|sapid::button().class("button install-source-card").name(i18n::bind(label)).label("").pressed(state.map(move|s|s.install.source==source)).enabled(state.map(move|s|source_available(s,source))).fill((icons::glyph(icon),text().class("install-source-name").content(i18n::bind(label)),text().class("install-source-note").content(state.map(move|s|source_note(s,selected_app(s),source))))).on_press(move||state.revise(|s|set_source(s,source)))).collect::<Vec<_>>()),
             text().class("install-provider subtle").content(i18n::bind(state.map(|s|match s.install.source{0=>s.software.environment.as_ref().map(|e|format!("{} · {}",e.distribution,e.manager.label())).unwrap_or_else(||"Detecting system…".into()),1=>"Snap Store".into(),_=>"Docker Compose v2".into()}))),
+            text().class("observability-warning install-conflict").content(state.map(conflict_note)),
             when(state.map(|s|s.install.source==2),{let ui=ui.clone();move||compose_form(ui.clone())}).otherwise(move||col().class("native-install-fields").fill((
                 when(state.map(|s|s.install.catalog_id.is_none()),{let fields=fields.clone();move||field("Package names",&fields,|s|s.install.names.clone(),|s,v|s.install.names=v)}).otherwise(move||text().class("install-package-name").selectable(true).content(state.map(|s|selected_app(s).and_then(|a|if s.install.source==1{a.snap.map(|v|v.name)}else{native_catalog_package(s,a)}).unwrap_or_default().to_owned()))),
                 when(state.map(|s|s.install.source==1),{let fields=fields.clone();move||col().fill((field("Snap channel",&fields,|s|s.install.channel.clone(),|s,v|s.install.channel=v),sapid::checkbox().label(i18n::bind("Allow classic confinement")).checked(state.map(|s|s.install.classic)).on_checked_change(move|v|state.revise(|s|s.install.classic=v)),when(state.map(|s|selected_app(s).and_then(|a|a.snap).is_some_and(|v|v.classic)&&!s.install.classic),move||text().class("subtle").content(i18n::bind("This snap requires classic confinement"))),help_ui::tip("Snap confinement","Classic snaps have traditional host access. Enable only when the publisher requires it and you trust the package.")))}),

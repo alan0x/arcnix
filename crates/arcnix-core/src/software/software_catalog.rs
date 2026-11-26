@@ -63,6 +63,9 @@ pub struct App {
     pub local: bool,
     /// Applications that are commonly used together with this one.
     pub related: &'static [&'static str],
+    /// Set when a package copy and a snap copy can't run side by side: the
+    /// reason App Center shows before installing the second copy.
+    pub single: Option<&'static str>,
 }
 impl App {
     pub fn package(self, manager: Manager) -> Option<&'static str> {
@@ -78,7 +81,7 @@ impl App {
         (!name.is_empty()).then_some(name)
     }
 }
-macro_rules! app { ($id:literal,$name:literal,$mark:literal,$category:ident,$color:literal,$summary:literal,$uses:literal,$description:literal,$url:literal,[$($package:literal),+],$snap:expr,$compose:expr) => { App{id:$id,name:$name,mark:$mark,category:Category::$category,color:$color,summary:$summary,uses:$uses,description:$description,website:$url,native:[$($package),+],snap:$snap,compose:$compose,local:false,related:&[]} }; }
+macro_rules! app { ($id:literal,$name:literal,$mark:literal,$category:ident,$color:literal,$summary:literal,$uses:literal,$description:literal,$url:literal,[$($package:literal),+],$snap:expr,$compose:expr) => { App{id:$id,name:$name,mark:$mark,category:Category::$category,color:$color,summary:$summary,uses:$uses,description:$description,website:$url,native:[$($package),+],snap:$snap,compose:$compose,local:false,related:&[],single:None} }; }
 pub const APPS: &[App] = &[
     app!(
         "docker",
@@ -354,6 +357,10 @@ pub const APPS: &[App] = &[
     ),
     App {
         related: &["nginx"],
+        // Certbot's own instructions remove the package before installing the snap.
+        single: Some(
+            "Both copies would renew the same certificates. Remove the other one before installing this one.",
+        ),
         ..app!(
             "certbot",
             "Certbot",

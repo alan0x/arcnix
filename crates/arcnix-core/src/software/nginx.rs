@@ -833,7 +833,7 @@ pub fn certificate(
     };
     let (live, _) = certificate_files(&names[0]);
     let command = format!(
-        "# arcnix:nginx:certificate\nset -eu\n{prelude}if ! command -v certbot >/dev/null 2>&1; then\n  echo 'Certbot is not installed on this server. Install it from App Center, then try again.' >&2\n  exit 1\nfi\nmkdir -p -- {webroot}\ncertbot certonly --webroot -w {webroot} --cert-name {name}{domains} --non-interactive --agree-tos {account} --keep-until-expiring --deploy-hook {hook}{staging}\necho {saved}\n",
+        "# arcnix:nginx:certificate\nset -eu\n{prelude}{SNAP_CERTBOT}\nif ! command -v certbot >/dev/null 2>&1; then\n  echo 'Certbot is not installed on this server. Install it from App Center, then try again.' >&2\n  exit 1\nfi\nmkdir -p -- {webroot}\ncertbot certonly --webroot -w {webroot} --cert-name {name}{domains} --non-interactive --agree-tos {account} --keep-until-expiring --deploy-hook {hook}{staging}\necho {saved}\n",
         prelude = c.prelude,
         webroot = quote(&webroot),
         name = quote(&names[0]),
@@ -1053,6 +1053,10 @@ pub fn read_certificates(session: &RemoteSession, command: &str) -> Result<Certi
 /// Finds the docker command for administrator tasks, which may not have the
 /// snap folder in PATH.
 const DOCKER_PATH: &str = "if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then PATH=\"$PATH:/snap/bin\"; fi\nunset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH";
+
+/// Adds the snap folder to PATH when Certbot is only installed as a snap. Sudo
+/// resets PATH, and on Debian its secure_path leaves out /snap/bin.
+const SNAP_CERTBOT: &str = "if ! command -v certbot >/dev/null 2>&1 && test -x /snap/bin/certbot; then PATH=\"$PATH:/snap/bin\"; fi";
 
 /// How a task tests and reloads one instance.
 struct Commands {
@@ -1982,6 +1986,11 @@ mod tests {
         assert!(command.contains(
             "certbot certonly --webroot -w '/var/www/letsencrypt' --cert-name 'shop.example.com' -d 'shop.example.com' -d 'www.shop.example.com' --non-interactive --agree-tos -m 'admin@example.com' --keep-until-expiring --deploy-hook 'systemctl reload nginx.service'\n"
         ), "{command}");
+        // A snap-only Certbot is found although sudo's PATH leaves out /snap/bin.
+        assert!(
+            command.contains(&format!("{SNAP_CERTBOT}\nif ! command -v certbot")),
+            "{command}"
+        );
         assert!(task.parameters().unwrap().is_empty());
         let staging = certificate(&s, &names[..1], "", true)
             .unwrap()
@@ -2032,6 +2041,13 @@ mod tests {
         assert!(letsencrypt_mounts(c.docker.as_ref().unwrap()).is_empty());
         let command = certificate(&c, &names, "", false).unwrap().snippet.command;
         assert!(command.contains("-w '/srv/web/letsencrypt'"), "{command}");
+        // Docker's PATH line runs first; the snap Certbot line still precedes the check.
+        assert!(
+            command.contains(&format!(
+                "{DOCKER_PATH}\n{SNAP_CERTBOT}\nif ! command -v certbot"
+            )),
+            "{command}"
+        );
         assert!(
             command.contains("--deploy-hook 'sh -c ")
                 && command.contains("web-web-1")
