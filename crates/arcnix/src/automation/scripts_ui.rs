@@ -35,6 +35,8 @@ pub(crate) struct ScriptsState {
     pub refreshing: HashSet<(String, String)>,
     pub batch_refresh: crate::task_refresh_ui::RefreshState,
     pub private_previews: HashMap<(String, String), String>,
+    /// Why a configuration preview failed, from the server; session only.
+    pub private_failures: HashMap<(String, String), String>,
 }
 pub(crate) fn busy(s: &State) -> bool {
     s.scripts.active.is_some()
@@ -229,6 +231,9 @@ impl Ui {
                     if let Some(job)=&template.recovery {job.target(profile,&fingerprint)?;}
                     let (secret, sudo) = s.scripts.credentials.get(&profile.id).cloned().unwrap_or_default();
                     anyhow::ensure!([&secret, &sudo].iter().all(|value| value.len() <= 1024 && !value.contains(['\0','\r','\n'])), "Invalid credential");
+                    // Tasks never reuse the connection's password, and an empty
+                    // one only comes back from the server as a generic refusal.
+                    anyhow::ensure!(profile.auth != arcnix_core::AuthMethod::Password || !secret.is_empty(), "Enter the SSH password for {} in SSH password or key passphrase", profile.name);
                     let mut profile = profile.clone(); if profile.connection.is_none() { profile.connection=Some(s.config.settings.connection); }
                     records.push(tasks::Target { id: profile.id.clone(), name: profile.name.clone(), endpoint: format!("{}@{}:{}", profile.username, profile.host, profile.port), fingerprint: fingerprint.clone(), status: Status::Checking, preview: String::new(), output: String::new(), exit_code: None, remote_directory: String::new(), result_read_at: None });
                     targets.push(batch_worker::Target { profile, fingerprint, secret: Zeroizing::new(secret), sudo: Zeroizing::new(sudo) });
@@ -252,6 +257,7 @@ impl Ui {
                 self.state.revise(|s| {
                     s.scripts.tasks = history;
                     s.scripts.private_previews.clear();
+                    s.scripts.private_failures.clear();
                     s.scripts.active = Some(id.clone());
                     s.scripts.selected_task = Some(id.clone());
                     s.scripts.prepared = false;
@@ -384,9 +390,35 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
         }
         _ => false,
     };
+    // Service, site and configuration tasks can change what Nginx shows.
+    let refresh_nginx = match &event {
+        batch_worker::Event::Complete(id)
+            if ui.state.with(|s| {
+                s.scripts
+                    .tasks
+                    .iter()
+                    .find(|task| &task.id == id)
+                    .is_some_and(|task| {
+                        (task.script_id.starts_with("builtin:nginx:")
+                            || task.script_id == arcnix_core::configurations::SCRIPT_ID
+                            || task.script_id == "builtin:service-operation")
+                            && task
+                                .targets
+                                .iter()
+                                .any(|target| s.selected.as_ref() == Some(&target.id))
+                    })
+            }) =>
+        {
+            Some(id.clone())
+        }
+        _ => None,
+    };
     ui.state.revise(|s| match event {
         batch_worker::Event::ConfigurationPreview { task, id, diff } => {
             s.scripts.private_previews.insert((task, id), diff);
+        }
+        batch_worker::Event::ConfigurationFailure { task, id, detail } => {
+            s.scripts.private_failures.insert((task, id), detail);
         }
         batch_worker::Event::Observed { task, id, snapshot } => {
             if let Some(record) = s.scripts.tasks.iter_mut().find(|record| record.id == task) {
@@ -477,6 +509,9 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
     }
     if !ui.state.with(busy) {
         ui.batch_controller.borrow_mut().take();
+    }
+    if let Some(id) = refresh_nginx {
+        ui.nginx_task_finished(&id);
     }
     if refresh_software {
         ui.refresh_software_inventory();
@@ -785,7 +820,7 @@ fn recent_tasks(ui: Ui) -> impl Widget {
                             row().class(t.map(|t|if t.remote_directory.is_empty() || t.result_read_at.is_none() && matches!(t.status,Status::Checking|Status::Ready|Status::Queued|Status::Submitting|Status::Cancelled){"hidden"}else{"help-heading task-result-age"}.to_owned())).fill((text().class("subtle task-result-read").content(t.map(|t|t.result_read_at.map(|at|i18n::translate(&format!("Snapshot read: {}",formatting::timestamp(Some(at))))).unwrap_or_else(||i18n::translate("Read time unavailable")))),crate::help_ui::tip("Result snapshot","Time this client received the displayed server snapshot, using this computer's clock. This is not the task completion time or continuous confirmation of its state. Failed queries retain the previous read time. Older history may have no recorded time."))),
                             )),
                             text().class("script-code").selectable(true).content(t.map(|t|t.preview.clone())),
-                            text().class("script-code configuration-diff").selectable(true).content(state.map(move|s|s.scripts.private_previews.get(&(diff_task.clone(),diff_id.clone())).map(|d|format!("{}\n{}",i18n::translate("Session-only configuration diff"),d)).unwrap_or_default())),
+                            text().class("script-code configuration-diff").selectable(true).content(state.map(move|s|configuration_report(s,&(diff_task.clone(),diff_id.clone())))),
                             text().class("subtle").content(t.map(|t|arcnix_core::backups::progress(&t.output).map(|p|i18n::translate(&format!("{:.0}% · {} / {} · {} / {} files",p.fraction*100.0,formatting::bytes(p.bytes),formatting::bytes(p.total_bytes),p.files,p.total_files))).unwrap_or_default())),
                             col().class(t.map(|t|if arcnix_core::backups::progress(&t.output).is_some(){"backup-progress-track"}else{"hidden"}.to_owned())).name(i18n::bind("Backup progress")).role(glory::render::Role::ProgressBar).semantics(t.map(|t|Some(Box::new(glory::render::Semantics{progress:Some(glory::render::ProgressValue{min:0.0,max:100.0,current:arcnix_core::backups::progress(&t.output).map(|p|p.fraction*100.0),value_text:None}),..Default::default()})))).fill(col().class("backup-progress-fill").style(t.map(|t|glory::style::Style::new().width(glory::style::Length::Percent(arcnix_core::backups::progress(&t.output).map(|p|p.fraction*100.0).unwrap_or(0.0)))))),
                             text().class("script-code installation-report").selectable(true).content(t.map(move|t|if has_installation {crate::installation_ui::summary(&t.output,&install_id,&install_revision,install_definition.as_ref(),matches!(t.status,Status::Succeeded|Status::Failed).then_some(t.exit_code).flatten())}else{String::new()})),
@@ -890,6 +925,13 @@ fn desktop_task(ui: Ui, id: String) -> impl Widget {
                         },
                     ),
                     text()
+                        .class("script-code configuration-diff")
+                        .selectable(true)
+                        .content(state.map({
+                            let key = (id.clone(), target_id.clone());
+                            move |s| configuration_report(s, &key)
+                        })),
+                    text()
                         .class("script-code installation-report")
                         .selectable(true)
                         .content(target.map(move |t| {
@@ -983,6 +1025,43 @@ fn desktop_task(ui: Ui, id: String) -> impl Widget {
     )
 }
 
+/// What a configuration task's operator should read: how it ended, then the
+/// server's reason for a failed check or the diff under review. The reason
+/// and the diff live in session memory only.
+fn configuration_report(s: &State, key: &(String, String)) -> String {
+    let outcome = s
+        .scripts
+        .tasks
+        .iter()
+        .find(|task| task.id == key.0)
+        .and_then(|task| task.targets.iter().find(|target| target.id == key.1))
+        .and_then(|target| arcnix_core::configurations::outcome(&target.output))
+        .map(i18n::translate);
+    let detail = s
+        .scripts
+        .private_failures
+        .get(key)
+        .map(|d| {
+            format!(
+                "{}\n{d}",
+                i18n::translate("Server details, shown for this session only")
+            )
+        })
+        .or_else(|| {
+            s.scripts.private_previews.get(key).map(|d| {
+                format!(
+                    "{}\n{d}",
+                    i18n::translate("Session-only configuration diff")
+                )
+            })
+        });
+    [outcome, detail]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn desktop_output(target: &tasks::Target) -> String {
     let output = target.output.trim();
     match output {
@@ -1037,6 +1116,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
             text().class("installation-scope hint").content(state.map(|s|s.scripts.template.as_ref().and_then(|t|t.installation.as_ref()).map(|_|i18n::translate("Failed installation can leave partial changes. Review results before retrying; no automatic rollback or removal.")).unwrap_or_default())),
             crate::installation_ui::options(ui.clone()),
             )),
+            when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.configuration.is_some())),||text().class("hint").content(i18n::bind("Check targets reads the file on the server and shows the changes here. Nothing changes on the server until you run the task."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.service.is_some())),||text().class("hint").content(i18n::bind("Service changes may interrupt connections. Check the unit on every target before running."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.is_cross_server_recovery())),||text().class("hint cross-server-recovery-scope").content(i18n::bind("Cross-server recovery: trusted restore targets may be outside the original backup policy. Each target must access the same repository and prepared credential files. The source server is not contacted; backup and retention target scopes are unchanged."))),
             when(state.map(|s|s.scripts.template.as_ref().is_some_and(|t|t.cleanup.is_some()||t.audit_cleanup.is_some()||t.recovery.as_ref().is_some_and(|j|j.targets.iter().any(|target|target.plan.action==arcnix_core::record_recovery::Action::Release)))),||text().class("hint").content(i18n::bind("Deletion cannot be undone. Review the exact file plan before execution."))),

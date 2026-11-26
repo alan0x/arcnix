@@ -167,7 +167,9 @@ fn default_app_shortcut(s: &State, app: DesktopApp) -> bool {
         DesktopApp::Code | DesktopApp::Player | DesktopApp::ImageViewer | DesktopApp::PdfReader => {
             s.local_desktop.is_some()
         }
-        DesktopApp::Editor | DesktopApp::PgAdmin => false,
+        // Older Arcnix versions reject desktop settings that name Nginx, so
+        // it is saved only when someone pins it.
+        DesktopApp::Editor | DesktopApp::PgAdmin | DesktopApp::Nginx => false,
         _ => true,
     }
 }

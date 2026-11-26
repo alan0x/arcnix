@@ -36,7 +36,7 @@ use monitoring::*;
 use shared::*;
 use shell::*;
 use software::{
-    app_center_ui, compose_ui, docker_ui, installation_ui, pgadmin_native, pgadmin_ui,
+    app_center_ui, compose_ui, docker_ui, installation_ui, nginx_ui, pgadmin_native, pgadmin_ui,
     software_install_ui,
 };
 use terminals::{terminal, *};
@@ -80,6 +80,7 @@ enum Dialog {
     },
     DockerAction,
     DockerConfigure,
+    NginxNewSite,
     TerminalRename {
         id: u64,
     },
@@ -160,6 +161,7 @@ enum WorkspacePage {
     Browser,
     Settings,
     PgAdmin,
+    Nginx,
 }
 
 impl WorkspacePage {
@@ -286,6 +288,7 @@ define_state! {
         web_browser: web_browser::Browser = Default::default(),
         server_apps: server_apps_ui::DesktopState = Default::default(),
         docker: docker_ui::DockerState = Default::default(),
+        nginx: nginx_ui::NginxState = Default::default(),
         disks: disks_ui::DiskState = Default::default(),
         compose: compose_ui::ComposeState = Default::default(),
         install: software_install_ui::InstallState = Default::default(),
@@ -2257,6 +2260,7 @@ fn app(ui: Ui) -> impl Widget {
                     )),
                     software_install_ui::dialogs(ui.clone()),
                     fragment(docker_ui::dialogs(ui.clone())),
+                    fragment(nginx_ui::dialogs(ui.clone())),
                     terminal_menu::dialogs(ui.clone()),
                     resource_ports_ui::dialog(ui.clone()),
                 )),

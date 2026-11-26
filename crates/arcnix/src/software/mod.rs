@@ -2,6 +2,7 @@ pub(crate) mod app_center_ui;
 pub(crate) mod compose_ui;
 pub(crate) mod docker_ui;
 pub(crate) mod installation_ui;
+pub(crate) mod nginx_ui;
 mod package_browser;
 pub(crate) mod pgadmin_native;
 pub(crate) mod pgadmin_ui;
