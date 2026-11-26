@@ -434,10 +434,12 @@ pub(crate) fn launchers(ui: Ui, dock: bool) -> impl Widget {
     })
 }
 
-const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 6] = [
+const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 8] = [
     (Wallpaper::Prism, "Prism", "wallpaper-prism"),
     (Wallpaper::Valley, "Valley", "wallpaper-valley"),
     (Wallpaper::Tide, "Tide", "wallpaper-tide"),
+    (Wallpaper::Clay, "Clay", "wallpaper-clay"),
+    (Wallpaper::Meadow, "Meadow", "wallpaper-meadow"),
     (Wallpaper::Fjord, "Fjord", "wallpaper-fjord"),
     (Wallpaper::Aurora, "Aurora", "wallpaper-aurora"),
     (Wallpaper::Seaside, "Seaside", "wallpaper-seaside"),
@@ -486,6 +488,10 @@ pub(crate) fn wallpaper_preview_class(wallpaper: &Wallpaper, dark: bool) -> &'st
         Wallpaper::Valley => "wallpaper-valley-light",
         Wallpaper::Tide if dark => "wallpaper-tide-dark",
         Wallpaper::Tide => "wallpaper-tide-light",
+        Wallpaper::Clay if dark => "wallpaper-clay-dark",
+        Wallpaper::Clay => "wallpaper-clay-light",
+        Wallpaper::Meadow if dark => "wallpaper-meadow-dark",
+        Wallpaper::Meadow => "wallpaper-meadow-light",
         Wallpaper::Fjord if dark => "wallpaper-fjord-dark",
         Wallpaper::Fjord => "wallpaper-fjord-light",
         Wallpaper::Aurora if dark => "wallpaper-aurora-dark",

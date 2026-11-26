@@ -579,6 +579,18 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-dark .wallpaper-tide, .wallpaper-tide-dark {
   background: #2d1508 url("/wallpapers/tide-dark.webp") center / cover no-repeat;
 }
+.wallpaper-clay, .wallpaper-clay-light {
+  background: #f5e5d3 url("/wallpapers/clay-light.webp") center / cover no-repeat;
+}
+.desktop-dark .wallpaper-clay, .wallpaper-clay-dark {
+  background: #241b26 url("/wallpapers/clay-dark.webp") center / cover no-repeat;
+}
+.wallpaper-meadow, .wallpaper-meadow-light {
+  background: #adb4aa url("/wallpapers/meadow-light.webp") center / cover no-repeat;
+}
+.desktop-dark .wallpaper-meadow, .wallpaper-meadow-dark {
+  background: #243243 url("/wallpapers/meadow-dark.webp") center / cover no-repeat;
+}
 .wallpaper-seaside, .wallpaper-seaside-sunrise {
   background: #dfb99e url("/wallpapers/seaside-sunrise.webp") center / cover no-repeat;
 }
@@ -616,12 +628,11 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-wallpaper-mode { color: var(--desktop-ink); margin-top: 3px; font-size: 15px; line-height: 1.35; font-weight: 500; }
 .desktop-wallpaper-mode:empty { display: none; }
 .desktop-wallpaper-address { color: var(--desktop-ink); opacity: .9; margin-top: 7px; font-size: 12px; line-height: 1.45; text-wrap: pretty; overflow-wrap: anywhere; }
-.desktop-light .desktop-canvas:has(.wallpaper-prism, .wallpaper-tide) {
+.desktop-light .desktop-canvas:has(> .desktop-wallpaper-art:is(.wallpaper-prism, .wallpaper-tide, .wallpaper-clay)) {
   --wallpaper-ink: #171921;
   --wallpaper-text-shadow: 0 0 2px #fffc, 0 0 6px #fff9;
 }
-.desktop-canvas:has(.desktop-wallpaper-image, .wallpaper-prism, .wallpaper-valley, .wallpaper-tide,
-  .wallpaper-seaside, .wallpaper-aurora, .wallpaper-fjord)
+.desktop-canvas:has(> .desktop-wallpaper-art, .desktop-wallpaper-image)
   :is(.desktop-wallpaper-name, .desktop-wallpaper-mode, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
   color: var(--wallpaper-ink, #fff);
   text-shadow: var(--wallpaper-text-shadow, 0 1px 3px #000, 0 1px 12px #000c);
@@ -1316,7 +1327,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 }
 .preference-select-row > span { color: var(--text); font-size: var(--font-label); }
 .icon-size-options > .settings-segment-field { align-self: flex-end; }
-.theme-preset-grid {
+.theme-preset-grid, .wallpaper-choices {
   display: grid !important; grid-template-columns: repeat(auto-fit, minmax(min(100%, 125px), 1fr)); gap: 8px;
 }
 .desktop-appearance .theme-preview-choice {
@@ -1540,7 +1551,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-shortcut-extra { display: inline-flex; align-items: center; gap: 3px; }
 .desktop-shortcut-error:not(:empty) { position: sticky; top: 0; z-index: 1; padding: 8px; background: var(--surface); }
 .desktop-settings-status:empty, .desktop-settings-page .error:empty { display: none; }
-.wallpaper-choices { display: grid !important; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; }
 .wallpaper-choice { display: flex !important; min-width: 0; flex-direction: column; align-items: stretch; gap: 6px; padding: 5px 5px 7px !important; }
 .wallpaper-swatch { height: auto; aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden; }
 .wallpaper-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1556,8 +1566,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   .desktop-settings-pane .desktop-setting-controls:has([role=switch]) { justify-content: flex-end; }
   .desktop-date-time .desktop-setting-controls { justify-content: flex-end; }
   .desktop-date-time .desktop-setting-row:has(.desktop-time-zone-controls) { grid-template-columns: minmax(0, 1fr); }
-  .theme-preset-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 105px), 1fr)); }
-  .wallpaper-choices { grid-template-columns: repeat(auto-fit, minmax(min(100%, 105px), 1fr)); }
+  .theme-preset-grid, .wallpaper-choices { grid-template-columns: repeat(auto-fit, minmax(min(100%, 105px), 1fr)); }
 }
 @container desktop-preferences (max-width: 370px) {
   .network-settings .network-interface { grid-template-columns: minmax(0, 1fr); gap: 4px; }

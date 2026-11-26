@@ -65,28 +65,33 @@ def check_appearance_choices(panel):
 
     scheme = panel.get_by_role('radiogroup', name='Color scheme')
     icons = panel.get_by_role('radiogroup', name='Icon family')
-    segment = scheme.locator('.sapid-segment').first
-    track = scheme.locator('.sapid-radio-group-items')
-    anchored = panel.page.evaluate("CSS.supports('(anchor-scope: --sp-selected) and (width: anchor-size(--sp-selected width))')")
-    indicator = track if anchored else segment
-    pseudo = '::after' if anchored else None
+    indicator = scheme.locator('.sapid-segment-indicator.is-positioned')
     panel.page.emulate_media(reduced_motion='no-preference')
-    assert indicator.evaluate("""(el, pseudo) => {
-        const style = getComputedStyle(el, pseudo);
-        return style.transitionProperty.includes(pseudo ? 'left' : 'background-color') &&
+    assert indicator.evaluate("""el => {
+        const style = getComputedStyle(el);
+        return style.transitionProperty.includes('left') &&
             style.transitionDuration.split(',').some(duration => parseFloat(duration) > 0);
-    }""", pseudo)
+    }""")
     panel.page.emulate_media(reduced_motion='reduce')
-    assert indicator.evaluate('(el, pseudo) => getComputedStyle(el, pseudo).transitionDuration', pseudo) == '0s'
+    expect(indicator).to_have_css('transition-duration', '0s')
     panel.page.emulate_media(reduced_motion=None)
     gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
-    presets = ('Prism', 'Valley', 'Tide', 'Fjord', 'Aurora', 'Seaside')
+    presets = {
+        'Prism': ('prism-light', 'prism-dark'),
+        'Valley': ('valley-light', 'valley-dark'),
+        'Tide': ('tide-light', 'tide-dark'),
+        'Clay': ('clay-light', 'clay-dark'),
+        'Meadow': ('meadow-light', 'meadow-dark'),
+        'Fjord': ('fjord-daylight', 'fjord'),
+        'Aurora': ('aurora-twilight', 'aurora-night'),
+        'Seaside': ('seaside-sunrise', 'seaside-moonrise'),
+    }
     expect(gallery.locator('.wallpaper-choice')).to_have_text(list(presets))
     selected_wallpaper = gallery.locator('.wallpaper-choice[aria-pressed=true]')
     background = panel.page.locator('.desktop-wallpaper-art')
     preset_accents = set()
     for mode in ('Light', 'Dark'):
-        for preset in presets:
+        for preset, assets in presets.items():
             card = button(preset).locator('..')
             card.click(position={'x': 20, 'y': 20})
             expect(button(preset)).to_have_attribute('aria-pressed', 'true')
@@ -97,12 +102,9 @@ def check_appearance_choices(panel):
             )
             accent = card.evaluate("el => getComputedStyle(el).getPropertyValue('--accent-fill').trim()")
             red, green, blue = (int(accent[i:i + 2], 16) for i in (1, 3, 5))
-            selected = scheme.locator('.sapid-segment:has(input:checked)')
-            fill = track if anchored else selected
             expected_color = f'rgb({red}, {green}, {blue})'
-            eventually(lambda: fill.evaluate('(el, pseudo) => getComputedStyle(el, pseudo).backgroundColor', pseudo) == expected_color)
+            expect(indicator).to_have_css('background-color', expected_color)
             expect(panel.get_by_role('textbox', name='Accent color', exact=True)).to_have_value(accent)
-            if preset == 'Fjord': assert accent == {'Light': '#87ceeb', 'Dark': '#79b9d5'}[mode]
             readable = card.evaluate("el => getComputedStyle(el).getPropertyValue('--accent').trim()")
             expect(card).to_have_css('border-top-color', f'rgb{tuple(bytes.fromhex(readable[1:]))}')
             preset_accents.add(accent)
@@ -124,15 +126,14 @@ def check_appearance_choices(panel):
             gallery.get_by_role('button', name='Reset', exact=True).click()
             expect(selected_wallpaper).to_have_text(preset)
             expect(background).to_have_class(f'desktop-wallpaper-art wallpaper-{preset.lower()}')
+            swatches = card.locator('.theme-wallpaper-swatch')
+            images = swatches.evaluate_all('els => els.map(el => getComputedStyle(el).backgroundImage)')
+            for image, asset in zip(images, assets, strict=True):
+                assert image.endswith(f'/wallpapers/{asset}.webp")'), image
+            active_image = images[0 if mode == 'Light' else 1]
+            expect(background).to_have_css('background-image', active_image)
+            expect(selected_wallpaper.locator('.wallpaper-swatch')).to_have_css('background-image', active_image)
             if preset == 'Aurora':
-                swatches = card.locator('.theme-wallpaper-swatch')
-                images = swatches.evaluate_all('els => els.map(el => getComputedStyle(el).backgroundImage)')
-                assert len(images) == 2 and images[0] != images[1]
-                for image, asset in zip(images, ['aurora-twilight', 'aurora-night'], strict=True):
-                    assert image.endswith(f'/wallpapers/{asset}.webp")'), image
-                active_image = images[0 if mode == 'Light' else 1]
-                expect(background).to_have_css('background-image', active_image)
-                expect(selected_wallpaper.locator('.wallpaper-swatch')).to_have_css('background-image', active_image)
                 assert background.evaluate('el => el.getAnimations({subtree: true}).length') == 0
             if preset == 'Aurora' and mode == 'Dark':
                 panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Auto', exact=True).check()

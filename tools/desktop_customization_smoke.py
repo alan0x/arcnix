@@ -347,7 +347,7 @@ def main():
             expect(desktop_button('Monitor')).to_be_visible()
             expect(desktop_button('Terminal')).to_be_visible()
             settings().get_by_role('button', name='Appearance', exact=True).click()
-            new_presets = ['Prism', 'Valley', 'Tide']
+            new_presets = ['Prism', 'Valley', 'Tide', 'Clay', 'Meadow']
             expect(settings().locator('.theme-preset-select')).to_have_text(new_presets + ['Fjord', 'Aurora', 'Seaside'])
             art = p.locator('.desktop-wallpaper-art')
             scheme = settings().get_by_role('radiogroup', name='Color scheme', exact=True)
@@ -697,7 +697,7 @@ def main():
                 assert preferences_pane.evaluate('el => el.scrollTop === 0'), label
                 if label == 'Appearance':
                     gallery = settings().get_by_role('group', name='Wallpaper', exact=True)
-                    expect(gallery.locator('.wallpaper-choice')).to_have_count(6)
+                    expect(gallery.locator('.wallpaper-choice')).to_have_count(8)
                     gallery.scroll_into_view_if_needed()
                     app.screenshot('compact-wallpaper-settings.png')
             p.set_viewport_size(dict(width=1440, height=980))
