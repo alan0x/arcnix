@@ -65,6 +65,7 @@ pub enum Action {
         password: zeroize::Zeroizing<String>,
     },
     DockerLogout(String),
+    DockerNetworks,
     NginxRead,
     /// A command from `nginx::logs_command`.
     NginxLogs(String),
@@ -111,6 +112,7 @@ pub enum Reply {
     Cleaned(String),
     Logins(Vec<docker::Login>),
     LoggedIn(String),
+    Networks(Vec<docker::Network>),
     Nginx(arcnix_core::nginx::Reading),
     NginxLogs(String),
     NginxCertificates(arcnix_core::nginx::Certificates),
@@ -202,6 +204,7 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             password,
         } => Reply::LoggedIn(docker::login(session, &registry, &username, &password)?),
         Action::DockerLogout(registry) => Reply::LoggedIn(docker::logout(session, &registry)?),
+        Action::DockerNetworks => Reply::Networks(docker::networks(session)?),
         Action::NginxRead => Reply::Nginx(arcnix_core::nginx::read(session)?),
         Action::NginxLogs(command) => {
             Reply::NginxLogs(arcnix_core::nginx::read_logs(session, &command)?)

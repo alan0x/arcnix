@@ -104,6 +104,7 @@ pub struct Stats {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub platform: Option<HostOs>,
     pub version: String,
     pub containers: Vec<Container>,
     pub volumes: Vec<Volume>,
@@ -438,7 +439,9 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot> {
     Ok(snapshot)
 }
 pub fn snapshot(session: &RemoteSession) -> Result<Snapshot> {
-    parse_snapshot(&snapshot_request().run(session)?.stdout)
+    let mut snapshot = parse_snapshot(&snapshot_request().run(session)?.stdout)?;
+    snapshot.platform = Some(session.host_os()?);
+    Ok(snapshot)
 }
 pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
     let request = DockerRequest::single(
@@ -463,6 +466,102 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
             Ok(serde_json::from_str(row)?)
         })
         .collect()
+}
+
+/// Prepare an interactive shell on the same local daemon and container as the inventory.
+pub fn shell_command(id: &str, os: HostOs) -> Result<String> {
+    ensure!(id_valid(id), "Invalid container ID");
+    let (path, preferred_socket) = match os {
+        HostOs::Windows => {
+            return Ok(format!(
+                "docker --host npipe:////./pipe/docker_engine exec -it {id} sh"
+            ));
+        }
+        HostOs::Linux => (
+            "/snap/bin",
+            r#"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"#,
+        ),
+        HostOs::MacOs => (
+            "/usr/local/bin:/opt/homebrew/bin",
+            "$HOME/.docker/run/docker.sock",
+        ),
+        HostOs::Unknown => anyhow::bail!("Unknown Docker host platform"),
+    };
+    let script = format!(
+        r#"unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH; export PATH="$PATH:{path}"; sock="{preferred_socket}"; [ -S "$sock" ] || sock=/var/run/docker.sock; exec docker --host "unix://$sock" exec -it {id} sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'"#
+    );
+    Ok(format!("sh -c {}", crate::remote_tasks::quote(&script)))
+}
+
+/// A Docker network and the subnets it hands out.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    #[serde(default)]
+    pub internal: bool,
+    #[serde(default)]
+    pub subnets: Vec<String>,
+}
+impl Network {
+    /// bridge, host and none, which Docker creates and keeps.
+    pub fn built_in(&self) -> bool {
+        matches!(self.name.as_str(), "bridge" | "host" | "none")
+    }
+}
+const NETWORK_LIMIT: usize = 64;
+pub fn parse_networks(text: &str) -> Result<Vec<Network>> {
+    let networks: Vec<Network> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(NETWORK_LIMIT)
+        .map(|line| Ok(serde_json::from_str(line)?))
+        .collect::<Result<_>>()?;
+    Ok(networks)
+}
+fn inspect_networks(ids: &[&str]) -> DockerRequest {
+    let mut args = vec![
+        "network".to_owned(),
+        "inspect".into(),
+        "--format".into(),
+        r#"{"id":{{json .Id}},"name":{{json .Name}},"driver":{{json .Driver}},"scope":{{json .Scope}},"internal":{{json .Internal}},"subnets":[{{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{json $c.Subnet}}{{end}}]}"#.into(),
+    ];
+    args.extend(ids.iter().map(|id| (*id).to_owned()));
+    DockerRequest {
+        operation: "networks",
+        steps: vec![Step::Call(args, false)],
+    }
+}
+
+pub fn networks(session: &RemoteSession) -> Result<Vec<Network>> {
+    let ids = DockerRequest::single(
+        "networks",
+        &["network", "ls", "--no-trunc", "--format", "{{.ID}}"],
+    )
+    .run(session)?
+    .stdout;
+    let ids: Vec<&str> = ids
+        .lines()
+        .map(str::trim)
+        .filter(|id| {
+            !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+        .take(NETWORK_LIMIT)
+        .collect();
+    // PowerShell's encoded command has an 8191-character limit on Windows.
+    let batch = if session.host_os()? == HostOs::Windows {
+        8
+    } else {
+        NETWORK_LIMIT
+    };
+    let mut networks = Vec::new();
+    for ids in ids.chunks(batch) {
+        networks.extend(parse_networks(&inspect_networks(ids).run(session)?.stdout)?);
+    }
+    networks.sort_by(|a, b| (!a.built_in(), &a.name).cmp(&(!b.built_in(), &b.name)));
+    Ok(networks)
 }
 
 /// A registry this SSH user is logged in to, and where Docker keeps the
@@ -1312,5 +1411,29 @@ mod tests {
                 .shell(PREFIX)
                 .ends_with("arcnix_docker logout ghcr.io 2>&1")
         );
+    }
+
+    #[test]
+    fn shells_and_networks_are_read_safely() {
+        let id = "a".repeat(64);
+        for os in [HostOs::Linux, HostOs::MacOs, HostOs::Windows] {
+            let command = shell_command(&id, os).unwrap();
+            assert!(command.contains("--host") && command.contains(&id));
+            assert!(!command.chars().any(char::is_control));
+            assert!(shell_command("web", os).is_err());
+        }
+        assert!(inspect_networks(&[id.as_str(); 8]).windows().is_ok());
+        let networks = parse_networks(concat!(
+            r#"{"id":"a","name":"repro_default","driver":"bridge","scope":"local","internal":false,"subnets":["172.18.0.0/16"]}"#,
+            "\n",
+            r#"{"id":"b","name":"host","driver":"host","scope":"local","internal":false,"subnets":[]}"#,
+            "\n",
+            r#"{"id":"c","name":"bridge","driver":"bridge","scope":"local","internal":false,"subnets":["172.17.0.0/16","fd00::/64"]}"#,
+        ))
+        .unwrap();
+        let names: Vec<_> = networks.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["repro_default", "host", "bridge"]);
+        assert_eq!(networks[2].subnets, ["172.17.0.0/16", "fd00::/64"]);
+        assert!(networks[2].built_in() && !networks[0].built_in());
     }
 }
