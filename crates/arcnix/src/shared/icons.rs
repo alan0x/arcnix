@@ -83,6 +83,10 @@ icons! {
     ExitFullscreen => "exit-fullscreen";
     Pin => "pin";
     Docker => "docker", "docker";
+    Container => "box";
+    Layers => "layers";
+    Plug => "plug";
+    Stop => "stop";
     Database => "database", "pgadmin";
     WebServer => "web-server", "nginx";
     Disks => "disks", "disks";

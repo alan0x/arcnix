@@ -3293,3 +3293,26 @@ Arcnix 未发现可识别的自动续期方式（Certbot、acme.sh、lego 或续
 APFS 容器 {}	APFS container {}
 分区 {}	Partition {}
 每个环形图显示此系统可见磁盘的分区大小比例。条形图显示文件系统的可用空间。APFS 宗卷共享容器中的空间。选择挂载点可浏览文件。	Each ring shows the partition sizes on a disk visible to this system. Bars show available filesystem space. APFS volumes share space in their container. Select a mount to browse its files.
+{} 个运行中，共 {} 个	{} of {} running
+{} 个运行中 · {} 个已停止	{} running · {} stopped
+{} 个未使用	{} unused
+未使用	Unused
+容器	Container
+镜像 ID	Image ID
+容器 ID	Container ID
+内存限制	Memory limit
+不限	Unlimited
+没有暴露的端口	No ports are exposed
+没有挂载	No mounts
+读写	Read-write
+只读	Read-only
+资源用量	Resource usage
+CPU	CPU
+使用中	In use
+挂载点	Mount point
+按名称、镜像或端口搜索	Search by name, image or port
+搜索卷	Search volumes
+按容器或端口搜索	Search by container or port
+搜索镜像	Search images
+暂无 Compose 项目	No Compose projects
+用 Docker Compose 安装应用后，可在这里管理。	Install an application with Docker Compose to manage it here.

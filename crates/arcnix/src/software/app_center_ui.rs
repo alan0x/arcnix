@@ -96,27 +96,32 @@ fn items(s: &State) -> Vec<Item> {
         })
         .collect()
 }
-fn apps(s: &State) -> Vec<App> {
+/// Whether an application fits the search and the Compose filter.
+fn matches_search(s: &State, app: App) -> bool {
     let app_center = &s.software.app_center;
+    offered(s, app)
+        && (!app_center.compose_only || app.compose.is_some())
+        && format!(
+            "{} {} {} {} {}",
+            app.name,
+            app.summary,
+            app.uses,
+            i18n::translate(app.summary),
+            i18n::translate(app.category.label())
+        )
+        .to_lowercase()
+        .contains(&app_center.query.to_lowercase())
+}
+/// Searched applications in `category`, or in every category.
+fn in_category(s: &State, category: Option<Category>) -> Vec<App> {
     catalog::DISCOVERABLE
         .iter()
         .filter_map(|id| catalog::get(id))
-        .filter(|a| {
-            offered(s, *a)
-                && app_center.category.is_none_or(|c| a.category == c)
-                && (!app_center.compose_only || a.compose.is_some())
-                && format!(
-                    "{} {} {} {} {}",
-                    a.name,
-                    a.summary,
-                    a.uses,
-                    i18n::translate(a.summary),
-                    i18n::translate(a.category.label())
-                )
-                .to_lowercase()
-                .contains(&app_center.query.to_lowercase())
-        })
+        .filter(|a| category.is_none_or(|c| a.category == c) && matches_search(s, *a))
         .collect()
+}
+fn apps(s: &State) -> Vec<App> {
+    in_category(s, s.software.app_center.category)
 }
 fn installed(s: &State, app: App) -> bool {
     s.software.app_center.inventory.as_ref().is_some_and(|i| {
@@ -449,24 +454,43 @@ fn categories(state: Cage<State>) -> impl Widget {
             std::iter::once(None)
                 .chain(Category::ALL.into_iter().map(Some))
                 .map(move |category| {
+                    let label = category.map_or("All applications", Category::label);
+                    // A page shows where its application is filed.
+                    let pressed = move |s: &State| {
+                        let app_center = &s.software.app_center;
+                        if app_center.view == 2 {
+                            app_center
+                                .selected
+                                .and_then(catalog::get)
+                                .map(|a| a.category)
+                                == category
+                        } else {
+                            app_center.category == category
+                        }
+                    };
                     sapid::button()
-                        .class("button compact")
-                        .label(i18n::bind(
-                            category.map_or("All applications", Category::label),
-                        ))
-                        .pressed(state.map(move |s| {
-                            let app_center = &s.software.app_center;
-                            // A page shows where its application is filed.
-                            if app_center.view == 2 {
-                                app_center
-                                    .selected
-                                    .and_then(catalog::get)
-                                    .map(|a| a.category)
-                                    == category
+                        .class(state.map(move |s| {
+                            // Categories without a matching application are left out.
+                            if category.is_some()
+                                && !pressed(s)
+                                && in_category(s, category).is_empty()
+                            {
+                                "button compact hidden"
                             } else {
-                                app_center.category == category
+                                "button compact"
                             }
+                            .to_owned()
                         }))
+                        .name(i18n::bind(label))
+                        .fill((
+                            text()
+                                .class("app-center-category-label")
+                                .content(i18n::bind(label)),
+                            text().class("app-center-category-count").content(
+                                state.map(move |s| in_category(s, category).len().to_string()),
+                            ),
+                        ))
+                        .pressed(state.map(pressed))
                         .on_press(move || {
                             state.revise(|s| {
                                 s.software.app_center.category = category;
@@ -500,9 +524,15 @@ fn discover(ui: Ui) -> impl Widget {
         row().class("app-center-section-heading").fill((
             text()
                 .class("section-title")
-                .content(i18n::bind("Explore applications")),
+                .content(i18n::bind(state.map(|s| {
+                    s.software
+                        .app_center
+                        .category
+                        .map_or("Explore applications", Category::label)
+                        .to_owned()
+                }))),
             text()
-                .class("subtle")
+                .class("app-center-count")
                 .content(state.map(|s| apps(s).len().to_string())),
         )),
         when(
@@ -555,7 +585,7 @@ fn item_actions(ui: Ui, value: Cage<Item>) -> impl Widget {
                             // The Nginx app manages the service once it has
                             // been detected; until then, Monitor does.
                             sapid::button()
-                                .class("button")
+                                .class("button app-center-open")
                                 .label(i18n::bind(state.map(|s| {
                                     if nginx_window(s) {
                                         "Open Nginx"
@@ -586,6 +616,7 @@ fn item_actions(ui: Ui, value: Cage<Item>) -> impl Widget {
                             btn("Open Docker", move || {
                                 docker.open_desktop_app(WorkspacePage::Docker)
                             })
+                            .class("button app-center-open")
                         }
                     },
                 ),
@@ -608,23 +639,29 @@ fn item_actions(ui: Ui, value: Cage<Item>) -> impl Widget {
             ))
         }),
         when(value.map(|i| matches!(i, Item::Project(..))), move || {
-            btn("Manage project", {
-                let manage = manage.clone();
-                move || {
-                    if let Item::Project(project) = value.get() {
-                        manage.open_compose_project(project.definition.name);
+            row().class("app-center-installed-actions").fill(
+                btn("Manage project", {
+                    let manage = manage.clone();
+                    move || {
+                        if let Item::Project(project) = value.get() {
+                            manage.open_compose_project(project.definition.name);
+                        }
                     }
-                }
-            })
+                })
+                .class("button app-center-open"),
+            )
         }),
         when(value.map(|i| matches!(i, Item::Container(..))), move || {
             let container_ui = container_ui.clone();
-            btn("Open container", move || {
-                if let Item::Container(container) = value.get() {
-                    container_ui.open_docker_container(container.id);
-                }
-            })
-            .enabled(state.map(docker_ui::ready))
+            row().class("app-center-installed-actions").fill(
+                btn("Open container", move || {
+                    if let Item::Container(container) = value.get() {
+                        container_ui.open_docker_container(container.id);
+                    }
+                })
+                .class("button app-center-open")
+                .enabled(state.map(docker_ui::ready)),
+            )
         }),
     ))
 }
@@ -971,9 +1008,18 @@ fn installed_page(ui: Ui) -> impl Widget {
     let local = ui.clone();
     col().class("app-center-installed").fill((
         row().class("app-center-inventory-toolbar").fill((
-            text()
-                .class("section-title")
-                .content(i18n::bind("Installed applications")),
+            row().class("app-center-section-heading").fill((
+                text()
+                    .class("section-title")
+                    .content(i18n::bind("Installed applications")),
+                text().class("app-center-count").content(state.map(|s| {
+                    if s.software.app_center.inventory.is_none() {
+                        String::new()
+                    } else {
+                        (items(s).len() + installed_local_apps(s).count()).to_string()
+                    }
+                })),
+            )),
             sapid::checkbox()
                 .class("preference-check")
                 .label(i18n::bind("Show all system packages"))
@@ -1038,7 +1084,7 @@ fn installed_page(ui: Ui) -> impl Widget {
                             .content(arcnix_core::pgadmin::VERSION),
                         row()
                             .class("app-center-installed-actions")
-                            .fill(primary_button(local.clone(), app, "button")),
+                            .fill(primary_button(local.clone(), app, "button app-center-open")),
                     ))
                 }),
         )),
@@ -1184,6 +1230,27 @@ mod tests {
         assert!(installations(&s, pgadmin).is_empty());
         // Without a connection there is no window to open, so the card leads to its page.
         assert!(primary(&s, pgadmin) == Primary::Manage);
+    }
+
+    #[test]
+    fn category_counts_follow_the_search() {
+        let mut s = state();
+        let all = in_category(&s, None).len();
+        let counted: usize = Category::ALL
+            .into_iter()
+            .map(|c| in_category(&s, Some(c)).len())
+            .sum();
+        assert_eq!(counted, all);
+        assert!(in_category(&s, Some(Category::Backup)).is_empty());
+        s.software.app_center.query = "redis".into();
+        assert_eq!(
+            in_category(&s, None)
+                .iter()
+                .map(|a| a.id)
+                .collect::<Vec<_>>(),
+            ["redis"]
+        );
+        assert!(in_category(&s, Some(Category::Web)).is_empty());
     }
 
     #[test]

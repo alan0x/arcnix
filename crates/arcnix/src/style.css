@@ -1665,54 +1665,170 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .network-interface-name { font-weight: 600; overflow-wrap: anywhere; }
 .network-settings-values { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--font-code)/1.55 Consolas, monospace; }
 .network-warning { white-space: normal; line-height: 1.6; }
+/* Docker: a section rail, then tables, details and logs on the window surface. */
 .desktop-window-content:has(>.docker-page){padding:0}
-.docker-page{display:flex;flex:1;flex-direction:row!important;min-height:0;min-width:0;overflow:hidden;container:docker / inline-size;font-size:14px}
-.docker-tabs{display:flex;flex-direction:column;flex:0 0 134px;gap:3px;padding:14px 7px;background:var(--bg);border-right:1px solid var(--line)}
-.docker-tabs .docker-nav-item{display:flex;justify-content:flex-start;gap:8px;width:100%;border:0!important;background:transparent!important;padding:8px!important;text-align:left}
-.docker-tabs .docker-nav-item[aria-pressed=true]{color:var(--accent)!important;background:var(--accent-bg)!important;box-shadow:inset 3px 0 var(--accent)}
-.docker-main{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;gap:10px;overflow:auto;padding:16px;background:var(--surface)}
-.docker-section-title{font-size:21px;font-weight:650}
-.docker-toolbar,.docker-container-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
-.docker-toolbar{flex:none}
-.docker-search-field{align-items:center;gap:4px;order:-1}
-.docker-search-field .action-glyph{width:15px;height:15px}
-.docker-filter{min-width:70px;max-width:130px;font-size:13px}
-.docker-inventory{min-height:0;min-width:0;overflow:auto}
-.docker-image-row{display:grid!important;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr);gap:8px;padding:9px 8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-.docker-container-stats{white-space:pre-wrap;font-variant-numeric:tabular-nums;line-height:1.65}
-.docker-container-stats>div{display:flex;gap:12px;justify-content:space-between;max-width:320px;border-bottom:1px solid var(--line);padding:5px 0}
-.docker-columns{font-size:12px;font-weight:600;color:var(--muted);background:var(--bg);border-block:1px solid var(--line)}
-.docker-container-head,.docker-page .docker-container-row{display:grid!important;grid-template-columns:minmax(70px,1fr) minmax(64px,.8fr) minmax(85px,1.2fr) minmax(70px,1fr);align-items:center;gap:8px;padding:9px 8px!important}
-.docker-page .docker-container-row,.docker-page .docker-volume-row,.docker-page .docker-port-row{color:var(--text)!important;background:transparent!important;border:0!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;text-align:left;white-space:normal!important;flex:none}
-.docker-page .docker-container-row:hover,.docker-page .docker-volume-row:hover,.docker-page .docker-port-row:hover{background:var(--accent-bg)!important}
-.docker-volume-head,.docker-page .docker-volume-row{display:grid!important;grid-template-columns:1.1fr .8fr 1fr;align-items:center;gap:8px;padding:9px 8px!important}
-.docker-page .docker-port-row{display:grid!important;grid-template-columns:1fr 2fr 1fr;align-items:center;gap:8px;padding:9px 8px!important}
-.docker-container-list,.docker-volume-list{display:flex;flex-direction:column;gap:0}
-.docker-back{align-self:flex-start}
-.docker-no-matches{display:none;padding:14px 8px}
-.docker-inventory:not(:has(.docker-container-row,.docker-project-group)) .docker-no-matches{display:block}
-.docker-project-group{width:100%;justify-content:flex-start;min-height:34px;text-align:left;border-radius:0!important;border:0!important;border-bottom:1px solid var(--line)!important;background:var(--bg)!important}
-.docker-project-group::before{content:"▸";margin-inline-end:8px;color:var(--muted)}
-.docker-project-group[aria-pressed=true]::before{content:"▾"}
-.docker-resource-name.compose-member{padding-inline-start:16px}
-.docker-container-row .docker-resource-state::before{content:"";display:inline-block;width:7px;height:7px;margin-right:5px;border-radius:50%;background:var(--muted)}
-.docker-resource-state.running::before{background:#209360}
-.docker-summary,.docker-status{font-size:12px}
+/* Status colours shared by Docker and App Center, tuned for each desktop theme. */
+.docker-page,.app-center-content{--status-chip:#ffffff0d;--status-ok:#4cc38a;--status-ok-bg:#4cc38a1c;--status-warn:#e3b341;--status-warn-bg:#e3b3411c;--status-fail:#f47067;--status-fail-bg:#f470671c;--status-info:#6cb6ff;--status-info-bg:#6cb6ff1c}
+.desktop-light :is(.docker-page,.app-center-content){--status-chip:#0f2a4a09;--status-ok:#16794a;--status-ok-bg:#16794a14;--status-warn:#8a5a00;--status-warn-bg:#b8800018;--status-fail:#c03036;--status-fail-bg:#c0303612;--status-info:#1f63c4;--status-info-bg:#1f63c412}
+.docker-page{--docker-mono:'Cascadia Code',Consolas,ui-monospace,'SF Mono',Menlo,monospace;display:flex;flex:1;flex-direction:row!important;min-height:0;min-width:0;overflow:hidden;container:docker / inline-size;font-size:14px}
+.docker-tabs{display:flex;flex-direction:column;justify-content:space-between;gap:12px;flex:0 0 200px;min-height:0;padding:12px 8px;background:var(--bg);border-right:1px solid var(--line);overflow:auto}
+.docker-nav{display:flex;flex-direction:column;gap:2px}
+.docker-tabs .docker-nav-item{display:flex;justify-content:flex-start;gap:9px;width:100%;min-height:34px!important;padding:6px 10px!important;border:0!important;background:transparent!important;color:var(--muted)!important;text-align:left}
+.docker-tabs .docker-nav-item:hover:not(:disabled){background:var(--raised)!important;color:var(--text)!important}
+.docker-tabs .docker-nav-item[aria-pressed=true]{background:var(--accent-bg)!important;color:var(--text)!important}
+.docker-tabs .docker-nav-item[aria-pressed=true]>.action-glyph{color:var(--accent)}
+.docker-nav-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docker-nav-count{font-size:12px;font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
+.docker-nav-count:empty{display:none}
+.docker-summary{padding:0 10px;font-size:12px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere;text-wrap:balance}
+.docker-main{display:flex;flex-direction:column;flex:1;gap:12px;min-width:0;min-height:0;overflow:auto;padding:16px 20px 20px;background:var(--surface)}
+.docker-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;min-height:34px}
+.docker-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;min-width:0}
+.docker-section-title{font-size:20px;font-weight:650;line-height:1.25}
+.docker-section-meta{font-size:13px;color:var(--muted)}
+.docker-toolbar{display:flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+.docker-filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px 18px;flex:none}
+.docker-search-field,.docker-log-search{position:relative;display:flex;align-items:center;flex:1 1 220px;min-width:0;max-width:380px}
+.docker-search-field>.action-glyph,.docker-log-search>.action-glyph{position:absolute;left:10px;width:14px;height:14px;min-width:14px;min-height:14px;color:var(--muted)}
+.docker-search-field>.docker-filter,.docker-log-search>.logs-filter{height:32px;padding-left:31px;font-size:13px}
+.docker-page .preference-check{color:var(--text)!important;font-size:13px}
+.docker-status,.docker-summary{font-size:12px}
 .docker-status:empty,.docker-error:empty{display:none}
-.docker-error{overflow:auto;max-height:100px;flex:none;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
-.docker-resource-name{font-size:14px;font-weight:600;overflow-wrap:anywhere}
-.docker-resource-state,.docker-resource-image{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
-.docker-resource-ports{font-size:13px;overflow-wrap:anywhere;white-space:pre-wrap}
-.docker-detail{display:flex;flex-direction:column;gap:12px;flex:1;min-width:0;min-height:0;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--surface);padding:14px}
-.docker-detail-name{font-size:17px;font-weight:600;overflow-wrap:anywhere}
-.docker-container-id{font-size:12px;overflow-wrap:anywhere}
-.docker-detail-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
-.docker-detail-tabs .button{border:0!important;border-radius:0!important;background:transparent!important}
-.docker-detail-tabs .button[aria-pressed=true]{color:var(--accent)!important;box-shadow:inset 0 -2px var(--accent)}
-.docker-inspection,.docker-log-panel{display:flex;flex-direction:column;gap:12px;min-height:0}
-.docker-configuration-summary{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
-.docker-port-details,.docker-mount-details,.docker-volume-details{font-family:var(--mono,monospace);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}
-.docker-log-output{font-family:var(--mono,monospace);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;max-height:420px;overflow:auto;background:var(--bg);padding:10px;border-radius:6px}
+.docker-error,.docker-error-hint{flex:none;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.docker-error{max-height:110px;overflow:auto;background:var(--status-fail-bg);color:var(--status-fail)!important}
+.docker-error-hint{background:var(--status-info-bg);color:var(--text)}
+.docker-empty{padding:28px 12px;text-align:center;color:var(--muted)}
+/* Tables share one bordered surface; each row is a full-width button. */
+.docker-table{display:flex;flex-direction:column;flex:none;min-width:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.docker-inventory{min-width:0}
+.docker-columns{min-height:0!important;padding-block:7px!important;font-size:12px;font-weight:600;color:var(--muted);background:var(--bg);border-bottom:1px solid var(--line)}
+.docker-container-head,.docker-page .docker-container-row{display:grid!important;grid-template-columns:minmax(150px,1.5fr) minmax(130px,1fr) minmax(130px,1.2fr);align-items:center;gap:12px;padding:9px 14px!important}
+.docker-volume-head,.docker-page .docker-volume-row{display:grid!important;grid-template-columns:minmax(150px,1.6fr) minmax(70px,.6fr) minmax(120px,1fr);align-items:center;gap:12px;padding:9px 14px!important}
+.docker-port-head,.docker-page .docker-port-row{display:grid!important;grid-template-columns:minmax(130px,1fr) minmax(150px,1.8fr) minmax(130px,1fr);align-items:center;gap:12px;padding:9px 14px!important}
+.docker-image-row{display:grid!important;grid-template-columns:minmax(150px,2fr) minmax(70px,.8fr) minmax(100px,.8fr) minmax(64px,.5fr);align-items:center;gap:12px;min-height:44px;padding:9px 14px;border-bottom:1px solid var(--line)}
+.docker-page :is(.docker-container-row,.docker-volume-row,.docker-port-row){position:relative;flex:none;min-height:48px;border-bottom:1px solid var(--line)!important}
+.docker-page :is(.docker-container-row,.docker-volume-row,.docker-port-row,.docker-image-row):last-child{border-bottom:0!important}
+.docker-page :is(.docker-container-row,.docker-volume-row,.docker-port-row):hover,.docker-image-row:not(.docker-columns):hover{background:var(--raised)}
+.docker-page :is(.docker-container-row,.docker-volume-row).selected{background:var(--accent-bg)}
+/* The row's button stretches over it, so the whole row opens the item. */
+.docker-page .docker-row-open{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;align-self:center;gap:1px;min-width:0;min-height:0!important;padding:0!important;border:0!important;background:transparent!important;color:var(--text)!important;text-align:left;white-space:normal!important;font-weight:400!important}
+.docker-row-open::after{content:"";position:absolute;inset:0;z-index:1}
+.docker-row-open:focus-visible{outline:none}
+.docker-row-open:focus-visible::after{outline:2px solid var(--accent);outline-offset:-2px}
+.docker-row-open>span{max-width:100%}
+.docker-container-list,.docker-volume-list{display:flex;flex-direction:column}
+.docker-container-row.compose-member>.docker-row-open{padding-left:22px!important}
+.docker-resource-name{font-size:14px;font-weight:600;line-height:1.35;overflow-wrap:anywhere}
+.docker-resource-image{font:12px/1.45 var(--docker-mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docker-page .docker-project-group{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;min-height:38px!important;padding:7px 14px!important;border:0!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;background:var(--bg)!important;text-align:left;font-size:13px!important}
+.docker-project-group>.action-glyph{width:14px;height:14px;min-width:14px;min-height:14px;color:var(--muted);transition:transform .12s}
+.docker-project-group[aria-pressed=false]>.action-glyph{transform:rotate(-90deg)}
+.docker-project-name{font-weight:600}
+.docker-project-kind{padding:0 6px;border-radius:4px;font-size:11px;font-weight:600;line-height:1.6;color:var(--status-info);background:var(--status-info-bg)}
+.docker-project-count{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
+.docker-no-matches{display:none;padding:20px 14px;text-align:center}
+.docker-inventory:not(:has(.docker-container-row,.docker-project-group)) .docker-no-matches{display:block}
+/* State pills, port chips and badges */
+.docker-state{display:inline-flex;align-items:center;justify-self:start;gap:6px;max-width:100%;padding:1px 9px 1px 8px;border-radius:999px;font-size:12px;font-weight:500;line-height:1.6;color:var(--muted);background:var(--status-chip);overflow-wrap:anywhere}
+.docker-state::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:currentColor}
+.docker-state:empty{display:none}
+.docker-state.running{color:var(--status-ok);background:var(--status-ok-bg)}
+.docker-state:is(.paused,.warning){color:var(--status-warn);background:var(--status-warn-bg)}
+.docker-state.failed{color:var(--status-fail);background:var(--status-fail-bg)}
+.docker-state.busy{color:var(--status-info);background:var(--status-info-bg)}
+.docker-port-chips{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-width:0}
+.docker-chip{padding:0 7px;border:1px solid var(--line);border-radius:5px;font:12px/1.65 var(--docker-mono);color:var(--text);background:var(--status-chip);white-space:nowrap}
+.docker-chip.exposed{border-style:dashed;color:var(--muted);background:transparent}
+.docker-unused{font-size:12px;color:var(--muted)}
+.docker-badge{flex:none;padding:1px 7px;border-radius:5px;font-size:11px;font-weight:600;line-height:1.6;color:var(--muted);background:var(--status-chip);white-space:nowrap}
+.docker-badge.published{color:var(--status-ok);background:var(--status-ok-bg)}
+.docker-badge.read-only{color:var(--status-warn);background:var(--status-warn-bg)}
+/* Container details */
+.docker-page .docker-back{align-self:flex-start;gap:4px;min-height:30px!important;padding:4px 10px 4px 6px!important;border-color:transparent!important;background:transparent!important;color:var(--muted)!important}
+.docker-page .docker-back:hover{background:var(--raised)!important;color:var(--text)!important}
+.docker-back>.glyph-chevron-right{transform:rotate(180deg)}
+.docker-detail{display:flex;flex-direction:column;flex:1;gap:14px;min-width:0;min-height:0}
+.docker-detail-title{display:flex;flex-direction:column;gap:3px;flex:none;min-width:0}
+.docker-detail-heading{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;min-width:0}
+.docker-detail-name{font-size:20px;font-weight:650;line-height:1.25;overflow-wrap:anywhere}
+.docker-detail-image{font:13px/1.45 var(--docker-mono);color:var(--muted);overflow-wrap:anywhere}
+.docker-container-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;flex:none}
+.docker-detail-tabs{display:flex;flex-wrap:wrap;gap:2px;flex:none;border-bottom:1px solid var(--line)}
+.docker-detail-tabs .button{padding:7px 12px!important;border:0!important;border-radius:0!important;background:transparent!important;color:var(--muted)!important}
+.docker-detail-tabs .button:hover:not(:disabled){color:var(--text)!important}
+.docker-detail-tabs .button[aria-pressed=true]{color:var(--text)!important;box-shadow:inset 0 -2px var(--accent)!important}
+.docker-inspection{display:flex;flex-direction:column;gap:12px;flex:none;min-height:0}
+.docker-inspection>.section-heading{margin-top:4px;font-size:14px;font-weight:600}
+.docker-inspection>.section-heading>.icon-button{margin-left:auto}
+.docker-facts{display:grid!important;grid-template-columns:150px minmax(0,1fr);flex:none;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.docker-fact{display:contents!important}
+.docker-fact>*{min-width:0;padding:8px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.docker-fact:last-child>*{border-bottom:0}
+.docker-fact-label{color:var(--muted);background:var(--bg)}
+.docker-fact-value{overflow-wrap:anywhere}
+.docker-container-id{font:12px/1.6 var(--docker-mono)}
+.docker-binding,.docker-mount{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line)}
+.docker-binding:last-child,.docker-mount:last-child{border-bottom:0}
+.docker-binding-address{flex:1;min-width:0;font:13px/1.5 var(--docker-mono);overflow-wrap:anywhere}
+.docker-port-details:not(:has(.docker-binding)),.docker-mount-details:not(:has(.docker-mount)){display:none}
+.docker-mount-paths{display:flex;flex-direction:column;flex:1;gap:2px;min-width:0}
+.docker-mount-destination{font:13px/1.5 var(--docker-mono);overflow-wrap:anywhere}
+.docker-mount-source{font:12px/1.5 var(--docker-mono);color:var(--muted);overflow-wrap:anywhere}
+.docker-empty-note{padding:2px;font-size:13px;color:var(--muted)}
+.docker-container-stats{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.docker-stat{display:flex;flex-direction:column;gap:4px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.docker-stat-label{font-size:12px;color:var(--muted)}
+.docker-stat-value{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.docker-log-panel{display:flex;flex-direction:column;flex:1;gap:10px;min-height:260px}
+.docker-log-tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;flex:none}
+.docker-log-lines{display:flex;align-items:center;gap:8px}
+.docker-log-lines .logs-options{display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+.docker-log-lines .choice{min-height:26px!important;padding:2px 10px!important;border:0!important;font-size:12px!important}
+.docker-log-lines .choice.active{background:var(--accent-bg)!important;color:var(--text)!important}
+.docker-log-output{flex:1;min-height:200px;overflow:auto;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:12.5px/1.6 var(--docker-mono);white-space:pre-wrap;overflow-wrap:anywhere}
+/* Volumes, ports and images */
+.docker-volumes,.docker-ports{display:flex;flex-direction:column;gap:12px;flex:none;min-height:0}
+.docker-volume-driver{font-size:13px;color:var(--muted)}
+.docker-image-name{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-width:0}
+.docker-resource-name.untagged{font-weight:500;color:var(--muted)}
+.docker-image-tag{font:13px/1.45 var(--docker-mono);overflow-wrap:anywhere}
+.docker-image-id{font:12px/1.45 var(--docker-mono);color:var(--muted)}
+.docker-image-size,.docker-image-row.docker-columns>:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.docker-config-form,.docker-action-review{display:flex;flex-direction:column;gap:14px;min-width:0;overflow-wrap:anywhere}
+.docker-empty{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:13px}
+.docker-empty-title{font-size:15px;font-weight:600;color:var(--text)}
+/* Compose projects: a table of projects, then the selected project's panel. */
+.docker-page .compose-projects{display:flex;flex-direction:column;gap:14px;flex:none;min-height:0;overflow:visible}
+.docker-page .compose-project-list:not(:has(.compose-project-row)){display:none!important}
+.docker-page .compose-project-row{display:grid!important;grid-template-columns:minmax(120px,1fr) minmax(150px,1.5fr) auto;align-items:center;gap:12px;min-height:46px!important;padding:9px 14px!important;border:0!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;background:transparent!important;color:var(--text)!important;text-align:left;white-space:normal!important;font-weight:400!important}
+.docker-page .compose-project-row:last-child{border-bottom:0!important}
+.docker-page .compose-project-row:hover{background:var(--raised)!important}
+.docker-page .compose-project-row[aria-pressed=true]{background:var(--accent-bg)!important;border-color:var(--line)!important}
+.docker-page .compose-project-panel{display:flex;flex-direction:column;gap:10px;flex:none;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.docker-page .compose-project-path{font:12px/1.5 var(--docker-mono);color:var(--muted);overflow-wrap:anywhere}
+.docker-page .compose-actions{gap:6px;margin-top:4px}
+.docker-page .compose-actions [aria-pressed=true]{background:var(--accent-bg)!important}
+.docker-page .compose-preview{max-height:320px;margin:0;border-radius:8px;background:var(--surface);font:12.5px/1.6 var(--docker-mono)}
+.docker-page :is(.compose-actions,.docker-container-actions)>.docker-remove{color:var(--status-fail)!important}
+@container docker (max-width:760px){
+  .docker-tabs{flex-basis:140px}
+  .docker-main{padding:12px 14px 16px}
+  .docker-container-head,.docker-page .docker-container-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
+  .docker-container-head>:nth-child(3),.docker-container-row>.docker-port-chips{display:none!important}
+  .docker-image-row{grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,.7fr)}
+  .docker-image-row>.docker-image-id,.docker-image-row.docker-columns>:nth-child(3){display:none!important}
+}
+@container docker (max-width:560px){
+  .docker-tabs{flex-basis:50px;padding:10px 6px}
+  .docker-tabs .docker-nav-item{justify-content:center;padding:8px!important}
+  .docker-nav-label,.docker-nav-count,.docker-summary{display:none!important}
+  .docker-volume-head,.docker-page .docker-volume-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .docker-volume-head>:nth-child(2),.docker-volume-row>.docker-volume-driver{display:none!important}
+  .docker-port-head,.docker-page .docker-port-row{grid-template-columns:minmax(0,1fr) minmax(0,1.4fr)}
+  .docker-port-head>:nth-child(3),.docker-port-row>.docker-state{display:none!important}
+  .docker-facts{grid-template-columns:minmax(0,1fr)}
+  .docker-fact-label{padding-bottom:0!important;border-bottom:0!important}
+}
 /* Terminal colors in captured output, chosen for contrast on --bg in each theme. */
 :root,.theme-dark{--ansi-0:#6e7681;--ansi-1:#ff7b72;--ansi-2:#3fb950;--ansi-3:#d29922;--ansi-4:#58a6ff;--ansi-5:#bc8cff;--ansi-6:#39c5cf;--ansi-7:#b1bac4;--ansi-8:#8b949e;--ansi-9:#ffa198;--ansi-10:#56d364;--ansi-11:#e3b341;--ansi-12:#79c0ff;--ansi-13:#d2a8ff;--ansi-14:#56d4dd;--ansi-15:#f0f6fc}
 .theme-light{--ansi-0:#24292f;--ansi-1:#cf222e;--ansi-2:#116329;--ansi-3:#7d4e00;--ansi-4:#0969da;--ansi-5:#8250df;--ansi-6:#1b7c83;--ansi-7:#6e7781;--ansi-8:#57606a;--ansi-9:#a40e26;--ansi-10:#1a7f37;--ansi-11:#633c01;--ansi-12:#0550ae;--ansi-13:#6639ba;--ansi-14:#0e6b74;--ansi-15:#8c959f}
@@ -1720,22 +1836,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .ansi-bg-0{background:var(--ansi-0)}.ansi-bg-1{background:var(--ansi-1)}.ansi-bg-2{background:var(--ansi-2)}.ansi-bg-3{background:var(--ansi-3)}.ansi-bg-4{background:var(--ansi-4)}.ansi-bg-5{background:var(--ansi-5)}.ansi-bg-6{background:var(--ansi-6)}.ansi-bg-7{background:var(--ansi-7)}.ansi-bg-8{background:var(--ansi-8)}.ansi-bg-9{background:var(--ansi-9)}.ansi-bg-10{background:var(--ansi-10)}.ansi-bg-11{background:var(--ansi-11)}.ansi-bg-12{background:var(--ansi-12)}.ansi-bg-13{background:var(--ansi-13)}.ansi-bg-14{background:var(--ansi-14)}.ansi-bg-15{background:var(--ansi-15)}
 .ansi-fg-inverse{color:var(--bg)}.ansi-bg-inverse{background:var(--text)}.ansi-bold{font-weight:600}.ansi-dim{opacity:.7}.ansi-italic{font-style:italic}.ansi-underline{text-decoration:underline}.ansi-strike{text-decoration:line-through}.ansi-conceal{color:transparent}.ansi-underline.ansi-strike{text-decoration:underline line-through}
 .docker-log-time{color:var(--muted)}
-.docker-log-tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px}
-.docker-volumes,.docker-ports{display:flex;flex:1;min-height:0;flex-direction:column;overflow:auto;gap:10px}
-.docker-volume-details{padding:12px;background:var(--surface);border:1px solid var(--line);border-radius:7px;flex:none}
-.docker-volume-details:empty{display:none}
-.docker-config-form,.docker-action-review{display:flex;flex-direction:column;gap:14px;min-width:0;overflow-wrap:anywhere}
-@container docker (max-width:690px){
-  .docker-tabs{flex-basis:100px;padding:10px 3px}
-  .docker-tabs .docker-nav-item{gap:4px;padding:6px!important}
-  .docker-main{padding:10px}
-}
-@container docker (max-width:530px){
-  .docker-tabs{flex-basis:72px}
-  .docker-nav-item .action-glyph{display:none}
-  .docker-container-head,.docker-page .docker-container-row{grid-template-columns:1fr 1fr;gap:4px}
-  .docker-container-head>:nth-child(n+3),.docker-container-row>.docker-resource-ports,.docker-container-row>.docker-resource-image{display:none}
-}
 
 /* Desktop theme boundaries */
 .server-desktop.theme-dark,.server-desktop.theme-light{color:var(--text)}
@@ -1879,7 +1979,6 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .compose-preview{font:13px/1.55 monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);padding:12px;border:1px solid var(--line);border-radius:6px;max-height:280px;overflow:auto}
 .compose-projects{display:flex;flex-direction:column;flex:1;min-height:0;gap:12px;overflow:auto}.compose-project-list{display:flex;flex-direction:column;gap:6px}
 .compose-project-row{text-align:left;white-space:normal!important;overflow-wrap:anywhere}.compose-project-path,.compose-install-path{font-size:12px;overflow-wrap:anywhere}
-.docker-toolbar{gap:8px}.docker-toolbar .docker-filter{width:clamp(105px,23cqw,220px);max-width:100%}
 @media(max-width:1100px){.services-page .service-row{flex-wrap:wrap}.services-page .service-state{min-width:0}}
 
 /* Each theme scope owns inherited text as well as palette variables. */
@@ -1913,7 +2012,12 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   flex: none; justify-content: flex-start !important; text-align: left !important;
   white-space: normal !important; overflow-wrap: anywhere; font-size: 13px !important;
   padding: 7px 9px !important; background: transparent !important; border-color: transparent !important;
+  display: flex !important; align-items: center; gap: 8px;
 }
+.app-center-categories .button.hidden { display: none !important; }
+.app-center-category-label { flex: 1; min-width: 0; }
+.app-center-category-count { font-size: 12px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.app-center-categories .button[aria-pressed=true]>.app-center-category-count { color: var(--accent); }
 .app-center-categories .button:hover { background: var(--raised) !important; }
 .app-center-categories .button[aria-pressed=true] {
   color: var(--accent) !important; background: var(--accent-bg) !important;
@@ -1925,7 +2029,9 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   .app-center-categories .button { white-space: nowrap !important; }
   .app-center-detail-header, .app-center-context-filter { flex-wrap: wrap; }
 }
-.app-center-section-heading{display:flex!important;align-items:center;justify-content:space-between;flex-shrink:0}
+.app-center-section-heading{display:flex!important;align-items:center;gap:10px;flex-shrink:0;min-width:0}
+.app-center-count{padding:0 8px;border-radius:999px;font-size:12px;font-weight:600;line-height:1.7;color:var(--muted);background:var(--raised);font-variant-numeric:tabular-nums}
+.app-center-count:empty{display:none}
 .app-center-app-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(min(100%,245px),1fr));gap:14px;flex-shrink:0;min-width:0}
 .app-center-app-card{display:flex!important;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface);transition:border-color .12s,box-shadow .12s}
 .app-center-app-card:hover{border-color:var(--line-hover);box-shadow:0 6px 18px #00000013}
@@ -1933,12 +2039,12 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .app-center-card-open:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
 .app-center-card-identity{display:flex!important;align-items:center;gap:12px;min-width:0}
 .app-center-card-identity>div{gap:3px;min-width:0}
-.app-center-app-icon{display:flex!important;align-items:center;justify-content:center;flex:0 0 48px!important;width:48px;height:48px;border-radius:12px;font:600 23px/1 'Segoe UI',sans-serif!important;letter-spacing:-1px;color:#fff;box-shadow:inset 0 1px #ffffff25}
-.app-center-color-green{background:#218447}.app-center-color-mint{background:#1d7f69}.app-center-color-red{background:#b6414d}.app-center-color-blue{background:#376f9f}.app-center-color-teal{background:#317a83}.app-center-color-orange{background:#b75f2f}.app-center-color-cyan{background:#238298}.app-center-color-purple{background:#7556ac}
+.app-center-app-icon{display:flex!important;align-items:center;justify-content:center;flex:0 0 48px!important;width:48px;height:48px;border-radius:12px;font:600 23px/1 'Segoe UI',sans-serif!important;letter-spacing:-1px;color:#fff;text-shadow:0 1px 1px #0000002e;box-shadow:inset 0 1px #ffffff33,0 1px 2px #0000002e}
+.app-center-color-green{background:linear-gradient(145deg,#2ea35d,#176a3a)}.app-center-color-mint{background:linear-gradient(145deg,#26a084,#125f4f)}.app-center-color-red{background:linear-gradient(145deg,#d0535f,#8d2e39)}.app-center-color-blue{background:linear-gradient(145deg,#4b8cc5,#275985)}.app-center-color-teal{background:linear-gradient(145deg,#3b97a1,#215e66)}.app-center-color-orange{background:linear-gradient(145deg,#d5753d,#924520)}.app-center-color-cyan{background:linear-gradient(145deg,#2ea1ba,#196678)}.app-center-color-purple{background:linear-gradient(145deg,#8b6ccc,#5a3e93)}
 .app-center-app-icon.small{flex-basis:38px!important;width:38px;height:38px;border-radius:10px;font-size:18px!important}
 .app-center-card-name{font-size:16px!important;font-weight:600;line-height:1.35}
 .app-center-card-category{font-size:12px!important;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.app-center-card-summary{font-size:13px!important;font-weight:400;line-height:1.6;min-height:42px;color:var(--muted)}
+.app-center-card-summary{display:-webkit-box!important;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:13px!important;font-weight:400;line-height:1.6;min-height:42px;color:var(--muted)}
 .app-center-card-footer{display:flex!important;align-items:center;justify-content:space-between;gap:10px;padding:0 18px 16px;flex-shrink:0}
 .app-center-card-footer>.app-center-install-button{margin-left:auto}
 .app-center-install-button{color:var(--accent)!important;background:var(--accent-bg)!important;border-color:transparent!important;min-width:76px}
@@ -1955,14 +2061,20 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .app-center-detail-section>.section-heading{display:flex!important;align-items:center;gap:6px}
 .app-center-detail-section>.section-heading>.button{margin-left:auto}
 .app-center-inventory-toolbar{display:flex!important;align-items:center;gap:14px;flex-wrap:wrap;flex-shrink:0}
-.app-center-inventory-toolbar>.section-title{flex:1}
+.app-center-inventory-toolbar>.app-center-section-heading{flex:1}
 .app-center-inventory-toolbar>.icon-button{display:none!important}
-.app-center-inventory-list{display:flex!important;min-height:0;gap:8px}
-.app-center-installed-row{display:flex!important;align-items:center;gap:14px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;flex-shrink:0;min-width:0;flex-wrap:wrap;background:var(--surface)}
+/* Rows share the list's columns, so sources, versions and actions line up. */
+.app-center-inventory-list{display:grid!important;grid-template-columns:minmax(170px,1fr) max-content minmax(90px,max-content) max-content;flex-shrink:0;min-height:0;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.app-center-inventory-list:not(:has(.app-center-installed-row)){display:none!important}
+.app-center-installed-row{display:grid!important;grid-template-columns:subgrid;grid-column:1/-1;align-items:center;gap:16px;padding:11px 16px;border-bottom:1px solid var(--line);flex-shrink:0;min-width:0}
+.app-center-installed-row:last-child{border-bottom:0}
+.app-center-installed-row:hover{background:var(--raised)}
+.app-center-installed-row>.app-center-source-badge{justify-self:start}
 .app-center-source-badge{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:6px;white-space:nowrap}
 .app-center-installed-version{font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.app-center-installed-actions{display:flex!important;gap:6px;flex-shrink:0}
-.app-center-installed-actions .button{font-size:12px!important}
+.app-center-installed-actions{display:flex!important;justify-content:flex-end;gap:6px;flex-shrink:0}
+.app-center-installed-actions .button{min-height:28px!important;padding:4px 10px!important;font-size:12px!important;background:transparent!important}
+.app-center-installed-actions .button.app-center-open{color:var(--accent)!important;background:var(--accent-bg)!important;border-color:transparent!important}
 .install-app-heading{display:flex!important;align-items:center;gap:14px;padding-bottom:15px;border-bottom:1px solid var(--line)}
 .install-app-heading>div{gap:5px}
 .install-app-name{font-size:21px;font-weight:600}
@@ -1983,7 +2095,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 /* Status, installations and related applications on cards and app pages. */
 .app-center-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .app-center-status.installed {
-  color: #7fd3a1; background: color-mix(in srgb, #2fa463 16%, transparent);
+  color: var(--status-ok); background: var(--status-ok-bg);
   padding: 2px 9px; border-radius: 999px; font-weight: 500;
 }
 .app-center-status.installed::before { content: "✓ "; }
@@ -1996,6 +2108,14 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   display: flex !important; align-items: center; gap: 14px; min-width: 0; flex-wrap: wrap;
   padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
 }
+.app-center-installations:has(>.app-center-installation), .app-center-sources {
+  gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface);
+}
+:is(.app-center-installations, .app-center-sources)>:is(.app-center-installation, .app-center-source) {
+  border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent;
+}
+:is(.app-center-installations, .app-center-sources)>:last-child { border-bottom: 0; }
+.app-center-related { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
 .app-center-installation-name { flex: 1; gap: 3px; min-width: 140px; }
 .app-center-package-name { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .app-center-installation .app-center-installed-version { max-width: none; white-space: normal; overflow-wrap: anywhere; }
@@ -2004,7 +2124,9 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .app-center-source-name { font-size: 13px; font-weight: 600; }
 .app-center-source-note { font-size: 12px; overflow-wrap: anywhere; }
 .app-center-source-state { font-size: 12px; color: var(--muted); }
-.app-center-source.available>.app-center-source-state, .app-center-source.installed>.app-center-source-state { color: #7fd3a1; font-weight: 500; }
+.app-center-source:is(.available, .installed)>.app-center-source-state { padding: 1px 9px; border-radius: 999px; font-weight: 500; }
+.app-center-source.installed>.app-center-source-state { color: var(--status-ok); background: var(--status-ok-bg); }
+.app-center-source.available>.app-center-source-state { color: var(--accent); background: var(--accent-bg); }
 .app-center-source.installed>.app-center-source-state::before { content: "✓ "; }
 .app-center-source:not(.available, .installed) { background: transparent; }
 .app-center-source:not(.available, .installed)>.app-center-source-text { opacity: .7; }
@@ -2026,17 +2148,15 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .app-center-installed-open.plain { cursor: default; }
 .app-center-remove:hover:not(:disabled) { color: var(--danger) !important; }
 .app-center-inventory-toolbar>.preference-check { color: var(--text) !important; font-size: 13px; }
-.app-center-installed-row { flex-wrap: nowrap; }
-.app-center-installed-row>.app-center-installed-actions { margin-left: auto; }
-.app-center-installed-row>.app-center-installed-version { flex: 0 1 auto; min-width: 0; }
 @container app-center (max-width: 720px) {
-  .app-center-installed-row { flex-wrap: wrap; }
+  .app-center-inventory-list { display: flex !important; }
+  .app-center-installed-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
+  .app-center-installed-row>.app-center-installed-open { grid-column: 1 / -1; }
+  .app-center-installed-row>.app-center-installed-actions { grid-column: 1 / -1; }
   .app-center-detail-header>.app-center-app-icon { flex-basis: 60px !important; width: 60px; height: 60px; font-size: 28px !important; border-radius: 15px; }
   .app-center-detail-name { font-size: 22px; }
 }
-.theme-light .app-center-status.installed:not(:where(.desktop-dark *)),
-.theme-light .app-center-source.available>.app-center-source-state:not(:where(.desktop-dark *)),
-.theme-light .app-center-source.installed>.app-center-source-state:not(:where(.desktop-dark *)) { color: #1b6e40; }
+
 
 /* One shared workspace header and one address row for desktop Files. */
 .page-header.workspace-header {
