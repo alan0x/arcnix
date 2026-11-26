@@ -259,7 +259,7 @@ impl View {
         #[cfg(target_os = "macos")]
         {
             use wry::WebViewExtMacOS;
-            return self.surface.position(&self.web.webview(), bounds);
+            self.surface.position(&self.web.webview(), bounds)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
