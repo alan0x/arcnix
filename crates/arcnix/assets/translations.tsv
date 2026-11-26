@@ -3387,7 +3387,6 @@ Docker 返回了无效的响应	Invalid Docker response
 搜索和标签列表从这台电脑直接请求镜像仓库。	Searches and tag lists go from this computer to the registry.
 官方	Official
 次拉取	pulls
-标签：	Tags of
 筛选标签	Filter tags
 筛选	Filter
 正在列出标签…	Listing tags…
@@ -3397,6 +3396,18 @@ Docker 返回了无效的响应	Invalid Docker response
 请输入不超过 100 个字符的搜索内容	Enter up to 100 characters to search for
 请输入不超过 128 个字符的标签筛选	Enter up to 128 characters to filter tags
 镜像仓库的响应过大	The registry's answer is too large
-无法读取 Docker Hub 的搜索结果	Docker Hub's search answer isn't readable
-无法读取 Docker Hub 的标签列表	Docker Hub's tag list isn't readable
-无法读取镜像仓库的标签列表	The registry's tag list isn't readable
+{repository} 的标签	Tags of {repository}
+此镜像仓库的标签多于 Arcnix 读取的数量，可能缺少较新的标签或匹配项。选择一个标签以拉取。	This registry has more tags than Arcnix reads, so newer ones or matches may be missing. Choose a tag to pull it.
+无法从这台电脑访问 Docker Hub（{error}）。仍可按名称拉取镜像。	Docker Hub can't be reached from this computer ({error}). You can still pull an image by name.
+无法从这台电脑通过 HTTPS 访问镜像仓库 {host}（{error}）。仍可按名称拉取镜像。	The registry {host} can't be reached over HTTPS from this computer ({error}). You can still pull an image by name.
+30 秒内没有响应	no answer within 30 seconds
+Docker Hub 对搜索返回了 HTTP {status}	Docker Hub answered the search with HTTP {status}
+Docker Hub 没有仓库 {repository}	Docker Hub has no repository {repository}
+Docker Hub 返回了 HTTP {status}	Docker Hub answered with HTTP {status}
+镜像仓库 {host} 需要登录后才列出这些标签。如果服务器已登录，仍可按名称拉取。	The registry {host} only lists these tags after you log in. You can still pull by name if the server is logged in.
+镜像仓库 {host} 没有仓库 {name}	The registry {host} has no repository {name}
+镜像仓库 {host} 返回了 HTTP {status}	The registry {host} answered with HTTP {status}
+Docker Hub 的名称最多两段，例如 bitnami/redis	Docker Hub names have at most two parts, such as bitnami/redis
+无法读取 Docker Hub 的搜索结果：{e}	Docker Hub's search answer isn't readable: {e}
+无法读取 Docker Hub 的标签列表：{e}	Docker Hub's tag list isn't readable: {e}
+无法读取镜像仓库的标签列表：{e}	The registry's tag list isn't readable: {e}

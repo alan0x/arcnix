@@ -1,6 +1,8 @@
 //! Finding an image to pull: searching Docker Hub and listing a repository's
 //! tags. The requests go from this computer to the registry on a thread of
 //! their own, so a slow registry doesn't hold up the Docker app.
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use arcnix_core::docker_registry::{self, Repository, Tag};
 
 use super::*;
@@ -19,8 +21,18 @@ pub(crate) struct BrowseState {
     loading: bool,
     listed: bool,
     tags_error: String,
-    /// Replies to older searches and tag lists are dropped.
-    serial: u64,
+    /// The registry has more tags than were read.
+    partial: bool,
+    /// The latest search and tag list; replies to older ones are dropped.
+    search_request: u64,
+    tags_request: u64,
+}
+
+/// Request numbers for the whole app: resetting the dialog's state on
+/// disconnect must not let an older reply match a new request.
+fn next_request() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A count such as 21434 as 21k, or 13643022660 as 13.6B.
@@ -78,10 +90,10 @@ impl Ui {
             if query.is_empty() {
                 return None;
             }
-            b.serial += 1;
+            b.search_request = next_request();
             b.searching = true;
             b.search_error.clear();
-            Some((b.serial, query))
+            Some((b.search_request, query))
         });
         let Some((serial, query)) = request else {
             return;
@@ -90,7 +102,7 @@ impl Ui {
             move || docker_registry::search(&query),
             move |s, result| {
                 let b = &mut s.docker.pull.browse;
-                if b.serial != serial {
+                if b.search_request != serial {
                     return;
                 }
                 b.searching = false;
@@ -113,25 +125,29 @@ impl Ui {
             if b.repository != repository {
                 b.filter.clear();
             }
-            b.serial += 1;
+            b.tags_request = next_request();
             b.repository = repository.clone();
             b.loading = true;
             b.listed = false;
+            b.partial = false;
             b.tags.clear();
             b.tags_error.clear();
-            (b.serial, b.filter.clone())
+            (b.tags_request, b.filter.clone())
         });
         self.docker_registry_request(
             move || docker_registry::tags(&repository, &filter),
             move |s, result| {
                 let b = &mut s.docker.pull.browse;
-                if b.serial != serial {
+                if b.tags_request != serial {
                     return;
                 }
                 b.loading = false;
                 b.listed = true;
                 match result {
-                    Ok(tags) => b.tags = tags,
+                    Ok(list) => {
+                        b.tags = list.tags;
+                        b.partial = list.partial;
+                    }
                     Err(error) => b.tags_error = i18n::translate(&error),
                 }
             },
@@ -243,11 +259,8 @@ fn tag_list(ui: Ui) -> impl Widget {
     let rows = ui.clone();
     col().class("docker-browse-tags").fill((
         text().class("field-label").content(state.map(|s| {
-            format!(
-                "{} {}",
-                i18n::translate("Tags of"),
-                s.docker.pull.browse.repository
-            )
+            let repository = &s.docker.pull.browse.repository;
+            i18n::translate(&format!("Tags of {repository}"))
         })),
         row().class("docker-browse-search").fill((
             input()
@@ -271,8 +284,10 @@ fn tag_list(ui: Ui) -> impl Widget {
             let b = &s.docker.pull.browse;
             if b.loading {
                 "Listing tags…"
-            } else if b.listed && b.tags.is_empty() && b.tags_error.is_empty() {
+            } else if b.listed && b.tags.is_empty() && b.tags_error.is_empty() && !b.partial {
                 "No tags match"
+            } else if b.partial {
+                "This registry has more tags than Arcnix reads, so newer ones or matches may be missing. Choose a tag to pull it."
             } else {
                 "Choose a tag to pull it."
             }
