@@ -15,8 +15,8 @@ use anyhow::{Result, ensure};
 use serde::Deserialize;
 
 use crate::configurations;
+pub use crate::nginx_config::Serves;
 use crate::nginx_config::{self, Summary};
-pub use crate::nginx_config::{Serves, Settings};
 use crate::operations::Snippet;
 use crate::remote::RemoteSession;
 use crate::remote_tasks::quote;
@@ -69,6 +69,32 @@ pub struct Container {
     /// configuration (`-c`, `-p`, `-g`), for every nginx command run in it.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Server folders mounted into the container.
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Mount {
+    pub src: String,
+    pub dst: String,
+}
+
+impl Container {
+    /// The server path of a container path, when a mount brings it in.
+    pub fn server_path(&self, path: &str) -> Option<String> {
+        self.mounts
+            .iter()
+            .filter_map(|m| {
+                let dst = m.dst.trim_end_matches('/');
+                let rest = path.strip_prefix(dst)?;
+                (rest.is_empty() || rest.starts_with('/'))
+                    .then(|| (dst.len(), format!("{}{rest}", m.src.trim_end_matches('/'))))
+            })
+            .max_by_key(|(len, _)| *len)
+            .map(|(_, path)| path)
+    }
 }
 
 impl Container {
@@ -143,9 +169,19 @@ pub struct Site {
     pub summary: Summary,
     /// The file could be read but not understood.
     pub invalid: bool,
+    /// Which site of the file this is, when the file holds several (such
+    /// as nginx.conf): the key from [`crate::nginx_site::site_keys`].
+    pub scope: Option<String>,
 }
 
 impl Site {
+    /// Tells sites apart, also several in one file.
+    pub fn key(&self) -> String {
+        match &self.scope {
+            None => self.file.path.clone(),
+            Some(scope) => format!("{}#{scope}", self.file.path),
+        }
+    }
     /// The name people know the site by.
     pub fn title(&self) -> String {
         self.summary
@@ -162,6 +198,10 @@ impl Site {
             .unwrap_or(name)
     }
     pub fn switchable(&self) -> bool {
+        // Turning the file off would turn off the other sites in it too.
+        if self.scope.is_some() {
+            return false;
+        }
         match self.style {
             Style::Fixed => false,
             Style::Renamed => self.file.editable(),
@@ -242,14 +282,27 @@ impl Snapshot {
         ports.dedup();
         ports
     }
-    pub fn site(&self, path: &str) -> Option<&Site> {
-        self.sites.iter().find(|s| s.file.path == path)
+    /// A site by its [`Site::key`].
+    pub fn site(&self, key: &str) -> Option<&Site> {
+        self.sites.iter().find(|s| s.key() == key)
     }
-    /// The main configuration or a site, by the path Nginx knows.
+    /// The main configuration or a site's file, by the path Nginx knows.
     pub fn file(&self, path: &str) -> Option<&File> {
-        self.site(path)
+        if self.main.path == path {
+            return Some(&self.main);
+        }
+        self.sites
+            .iter()
+            .find(|s| s.file.path == path)
             .map(|s| &s.file)
-            .or((self.main.path == path).then_some(&self.main))
+    }
+    /// A container that only runs Nginx inside an application, such as a web
+    /// front end built on the nginx image: it publishes no port and nothing
+    /// in it comes from the server, so there is nothing to manage.
+    pub fn internal(&self) -> bool {
+        self.docker.as_ref().is_some_and(|c| c.ports.is_empty())
+            && !self.main.editable()
+            && !self.sites.iter().any(|s| s.file.editable())
     }
 }
 
@@ -355,6 +408,11 @@ fn checked_container(container: &Container) -> Result<()> {
             }),
         "Invalid Nginx options in the container"
     );
+    ensure!(container.mounts.len() <= 32, "Too many container mounts");
+    for mount in &container.mounts {
+        checked_path(&mount.src)?;
+        checked_path(&mount.dst)?;
+    }
     Ok(())
 }
 
@@ -367,6 +425,45 @@ fn file(raw: RawFile) -> Result<File> {
         text: raw.text,
         error: raw.error,
     })
+}
+
+/// The sites in one file: one, or one per site when the file holds several.
+/// Sites in the main configuration are always told apart, so its own
+/// settings stay separate from theirs.
+fn file_sites(
+    file: File,
+    enabled: bool,
+    style: Style,
+    link: String,
+    link_target: String,
+    main: bool,
+) -> Vec<Site> {
+    let parsed = file.text.as_deref().map(nginx_config::parse);
+    let invalid = matches!(parsed, Some(Err(_)));
+    let directives = match parsed {
+        Some(Ok(directives)) => directives,
+        _ => Vec::new(),
+    };
+    let keys = crate::nginx_site::site_keys(&directives);
+    let site = |summary, scope| Site {
+        file: file.clone(),
+        enabled,
+        style,
+        link: link.clone(),
+        link_target: link_target.clone(),
+        summary,
+        invalid,
+        scope,
+    };
+    if !main && keys.len() <= 1 {
+        return vec![site(nginx_config::summary(&directives), None)];
+    }
+    keys.into_iter()
+        .map(|key| {
+            let servers = crate::nginx_site::site_servers(&directives, &key);
+            site(nginx_config::summary(&servers), Some(key))
+        })
+        .collect()
 }
 
 fn instance(raw: RawInstance) -> Result<Snapshot> {
@@ -385,27 +482,30 @@ fn instance(raw: RawInstance) -> Result<Snapshot> {
             checked_path(&site.link)?;
         }
         checked_target(&site.link_target)?;
-        let parsed = site.text.as_deref().map(nginx_config::parse);
-        let invalid = matches!(parsed, Some(Err(_)));
-        let summary = match parsed {
-            Some(Ok(directives)) => nginx_config::summary(&directives),
-            _ => Summary::default(),
-        };
-        sites.push(Site {
-            file: file(RawFile {
-                path: site.path,
-                target: site.target,
-                text: site.text,
-                error: site.error,
-            })?,
-            enabled: site.enabled,
-            style: site.style,
-            link: site.link,
-            link_target: site.link_target,
-            summary,
-            invalid,
-        });
+        let file = file(RawFile {
+            path: site.path,
+            target: site.target,
+            text: site.text,
+            error: site.error,
+        })?;
+        sites.extend(file_sites(
+            file,
+            site.enabled,
+            site.style,
+            site.link,
+            site.link_target,
+            false,
+        ));
     }
+    let main = file(raw.main)?;
+    sites.extend(file_sites(
+        main.clone(),
+        true,
+        Style::Fixed,
+        String::new(),
+        String::new(),
+        true,
+    ));
     sites.sort_by_cached_key(|s| (s.title().to_lowercase(), s.file.path.clone()));
     Ok(Snapshot {
         root: raw.root,
@@ -414,7 +514,7 @@ fn instance(raw: RawInstance) -> Result<Snapshot> {
         service: raw.service,
         docker: raw.docker,
         layout: raw.layout,
-        main: file(raw.main)?,
+        main,
         sites,
         dirs: raw.dirs,
         truncated: raw.truncated,
@@ -468,6 +568,486 @@ pub fn read(session: &RemoteSession) -> Result<Reading> {
         output.stderr.trim()
     );
     parse(&output.stdout)
+}
+
+/// Which log the viewer shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LogKind {
+    #[default]
+    Access,
+    Error,
+}
+
+/// A log the viewer can show: for every site, or for one site that writes
+/// its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogSource {
+    /// The site's name; empty for the log of every site.
+    pub site: String,
+    /// The log file as Nginx knows it; empty for a container's own output.
+    pub path: String,
+}
+
+const DEFAULT_LOGS: [&str; 2] = ["/var/log/nginx/access.log", "/var/log/nginx/error.log"];
+
+/// The log file a directive writes to, when it writes to a file.
+fn log_file(args: &str) -> Option<String> {
+    let first = args.split_whitespace().next()?;
+    (first.starts_with('/') && checked_path(first).is_ok()).then(|| first.to_owned())
+}
+
+/// The logs of an instance: the one for every site first, then sites with
+/// their own.
+pub fn log_sources(snapshot: &Snapshot, kind: LogKind) -> Vec<LogSource> {
+    let name = match kind {
+        LogKind::Access => "access_log",
+        LogKind::Error => "error_log",
+    };
+    let global = if snapshot.docker.is_some() {
+        // The official images send both logs to the container's output.
+        String::new()
+    } else {
+        snapshot
+            .main
+            .text
+            .as_deref()
+            .and_then(|text| nginx_config::parse(text).ok())
+            .and_then(|d| {
+                let http = d.into_iter().find(|d| d.name == "http")?;
+                http.children()
+                    .iter()
+                    .find(|c| c.name == name)
+                    .map(|c| c.args.join(" "))
+            })
+            .and_then(|args| log_file(&args))
+            .unwrap_or_else(|| DEFAULT_LOGS[kind as usize].to_owned())
+    };
+    let mut out = vec![LogSource {
+        site: String::new(),
+        path: global,
+    }];
+    for site in &snapshot.sites {
+        let Some(text) = site.file.text.as_deref() else {
+            continue;
+        };
+        let Ok(form) = crate::nginx_site::read_in(text, site.scope.as_deref()) else {
+            continue;
+        };
+        let args = match kind {
+            LogKind::Access => form.access_log,
+            LogKind::Error => form.error_log,
+        };
+        if let Some(path) = log_file(&args)
+            && !out.iter().any(|s| s.path == path)
+        {
+            out.push(LogSource {
+                site: site.title(),
+                path,
+            });
+        }
+    }
+    out
+}
+
+/// The command that prints the last `lines` lines of a log, as the SSH
+/// account.
+pub fn logs_command(
+    snapshot: &Snapshot,
+    kind: LogKind,
+    source: &LogSource,
+    lines: u16,
+) -> Result<String> {
+    let lines = lines.clamp(10, 5000);
+    if !source.path.is_empty() {
+        checked_path(&source.path)?;
+    }
+    Ok(match (&snapshot.docker, source.path.is_empty()) {
+        (None, true) => anyhow::bail!("Choose a log"),
+        (None, false) => format!(
+            "# arcnix:nginx:logs\nexec tail -n {lines} -- {}",
+            quote(&source.path)
+        ),
+        (Some(container), empty) => {
+            checked_container(container)?;
+            let id = quote(&container.id);
+            let prelude = "PATH=\"$PATH:/snap/bin\"; unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH";
+            if empty {
+                // Access lines go to the container's standard output, errors
+                // to its standard error.
+                match kind {
+                    LogKind::Access => format!(
+                        "# arcnix:nginx:logs\n{prelude}\nexec docker logs --tail {lines} {id} 2>/dev/null"
+                    ),
+                    LogKind::Error => format!(
+                        "# arcnix:nginx:logs\n{prelude}\nexec docker logs --tail {lines} {id} 2>&1 >/dev/null"
+                    ),
+                }
+            } else {
+                format!(
+                    "# arcnix:nginx:logs\n{prelude}\nexec docker exec {id} tail -n {lines} -- {}",
+                    quote(&source.path)
+                )
+            }
+        }
+    })
+}
+
+/// Reads a log with a command from [`logs_command`].
+pub fn read_logs(session: &RemoteSession, command: &str) -> Result<String> {
+    ensure!(
+        command.starts_with("# arcnix:nginx:logs\n"),
+        "Invalid log request"
+    );
+    let output = crate::server_apps::execute_lossy(session, command, 4 * 1024 * 1024)?;
+    if output.exit_code != 0 {
+        let reason = output.stderr.trim();
+        ensure!(
+            !reason.to_lowercase().contains("permission denied"),
+            "The SSH account cannot read this log. On Debian and Ubuntu, add it to the adm group, or to the docker group for containers."
+        );
+        ensure!(
+            !reason.contains("No such file"),
+            "This log file does not exist yet"
+        );
+        anyhow::bail!(
+            "Could not read the log (exit {}): {reason}",
+            output.exit_code
+        );
+    }
+    Ok(output.stdout)
+}
+
+/// Where Let's Encrypt keeps certificates on the server.
+pub const LETSENCRYPT: &str = "/etc/letsencrypt";
+
+/// The certificate and key files Certbot keeps for a certificate name.
+pub fn certificate_files(name: &str) -> (String, String) {
+    (
+        format!("{LETSENCRYPT}/live/{name}/fullchain.pem"),
+        format!("{LETSENCRYPT}/live/{name}/privkey.pem"),
+    )
+}
+
+/// What a container still needs for Let's Encrypt: the challenge folder and
+/// the certificates mounted from the server. Empty when it has both.
+pub fn letsencrypt_mounts(container: &Container) -> Vec<String> {
+    let mut missing = Vec::new();
+    if container
+        .server_path(crate::nginx_site::ACME_ROOT)
+        .is_none()
+    {
+        missing.push(format!("{0}:{0}:ro", crate::nginx_site::ACME_ROOT));
+    }
+    // Certbot's live certificate paths link to their versions in archive.
+    if ["live", "archive"].into_iter().any(|directory| {
+        let path = format!("{LETSENCRYPT}/{directory}");
+        container.server_path(&path).as_deref() != Some(path.as_str())
+    }) {
+        missing.push(format!("{LETSENCRYPT}:{LETSENCRYPT}:ro"));
+    }
+    missing
+}
+
+fn check_email(email: &str) -> Result<()> {
+    ensure!(
+        email.is_empty()
+            || (email.len() <= 254
+                && email.matches('@').count() == 1
+                && !email.starts_with('@')
+                && !email.ends_with('@')
+                && email
+                    .bytes()
+                    .all(|b| b.is_ascii_graphic() && !b"'\"\\;,<>()".contains(&b))),
+        "Enter an email address such as admin@example.com, or leave it empty"
+    );
+    Ok(())
+}
+
+/// A task that gets a certificate from Let's Encrypt with Certbot's webroot
+/// method, for names whose challenge files the site already serves. Certbot
+/// saves a hook that reloads Nginx after each renewal.
+pub fn certificate(
+    snapshot: &Snapshot,
+    names: &[String],
+    email: &str,
+    staging: bool,
+) -> Result<Template> {
+    ensure!(
+        !names.is_empty(),
+        "The site needs a domain such as example.com"
+    );
+    ensure!(names.len() <= 100, "A certificate covers at most 100 names");
+    for name in names {
+        nginx_config::check_names(name)?;
+        ensure!(
+            name.contains('.')
+                && !name.contains(['*', '~', '_'])
+                && !name.starts_with('.')
+                && !name.ends_with('.'),
+            "Let's Encrypt needs full domain names such as example.com: {name}"
+        );
+    }
+    let email = email.trim();
+    check_email(email)?;
+    let c = commands(snapshot)?;
+    let (webroot, place) = match &snapshot.docker {
+        None => (crate::nginx_site::ACME_ROOT.to_owned(), String::new()),
+        Some(container) => {
+            let missing = letsencrypt_mounts(container);
+            ensure!(
+                missing.is_empty(),
+                "Mount these server folders into the container first: {}",
+                missing.join(", ")
+            );
+            (
+                container
+                    .server_path(crate::nginx_site::ACME_ROOT)
+                    .expect("a mounted challenge folder"),
+                format!(" in {}", container.name),
+            )
+        }
+    };
+    checked_path(&webroot)?;
+    // Container IDs change when Compose recreates a container; names stay.
+    let hook = match &snapshot.docker {
+        None => format!("systemctl reload {SERVICE}"),
+        Some(container) => {
+            let options: String = container
+                .args
+                .iter()
+                .map(|a| format!(" {}", quote(a)))
+                .collect();
+            // Certbot requires the hook to start with a command on its PATH.
+            let script = format!(
+                "{DOCKER_PATH}\nexec docker exec {} nginx{options} -s reload",
+                quote(&container.name)
+            );
+            format!("sh -c {}", quote(&script))
+        }
+    };
+    let domains: String = names.iter().map(|n| format!(" -d {}", quote(n))).collect();
+    let account = if email.is_empty() {
+        "--register-unsafely-without-email".to_owned()
+    } else {
+        format!("-m {}", quote(email))
+    };
+    let (live, _) = certificate_files(&names[0]);
+    let command = format!(
+        "# arcnix:nginx:certificate\nset -eu\n{prelude}if ! command -v certbot >/dev/null 2>&1; then\n  echo 'Certbot is not installed on this server. Install it from App Center, then try again.' >&2\n  exit 1\nfi\nmkdir -p -- {webroot}\ncertbot certonly --webroot -w {webroot} --cert-name {name}{domains} --non-interactive --agree-tos {account} --keep-until-expiring --deploy-hook {hook}{staging}\necho {saved}\n",
+        prelude = c.prelude,
+        webroot = quote(&webroot),
+        name = quote(&names[0]),
+        hook = quote(&hook),
+        staging = if staging { " --staging" } else { "" },
+        saved = quote(&format!(
+            "The certificate is in {}.",
+            live.trim_end_matches("/fullchain.pem")
+        )),
+    );
+    Ok(task(
+        "certificate",
+        "Get a certificate from Let's Encrypt",
+        &format!(
+            "{}{place} · Certbot checks each name over plain HTTP, saves the certificate in {LETSENCRYPT}, and renews it automatically.{}",
+            names.join(", "),
+            if staging {
+                " Test servers: the certificate is not trusted by browsers."
+            } else {
+                ""
+            }
+        ),
+        command,
+    ))
+}
+
+/// A site to check the certificate of: the name to ask for, and the port on
+/// this server that reaches its HTTPS.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Probe {
+    pub name: String,
+    pub port: u16,
+}
+
+/// The HTTPS sites of an instance whose certificate can be checked from the
+/// server: on port 443, or a container's published 443.
+pub fn certificate_probes(snapshot: &Snapshot) -> Vec<Probe> {
+    let port = match &snapshot.docker {
+        None => Some(443),
+        Some(container) => container.ports.iter().find_map(|p| {
+            let (host, inside) = p.rsplit_once(':')?;
+            (inside.split('/').next() == Some("443"))
+                .then(|| host.rsplit(':').next()?.parse().ok())
+                .flatten()
+        }),
+    };
+    let Some(port) = port else { return vec![] };
+    snapshot
+        .sites
+        .iter()
+        .filter(|s| {
+            s.enabled
+                && s.summary.https
+                && (snapshot.docker.is_some() || s.summary.ports.contains(&443))
+        })
+        .filter_map(|s| {
+            s.summary
+                .names
+                .iter()
+                .find(|n| n.contains('.') && !n.contains(['*', '~', '$']))
+                .cloned()
+        })
+        .take(50)
+        .map(|name| Probe { name, port })
+        .collect()
+}
+
+/// A served certificate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Served {
+    pub name: String,
+    pub port: u16,
+    /// Seconds since 1970; 0 when it could not be read.
+    pub expires: i64,
+    pub issuer: String,
+    pub error: String,
+}
+
+/// Certbot on the server, and the certificates the sites serve.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Certificates {
+    pub certbot: bool,
+    /// How certificates are renewed: "timer", "cron", or empty for not set up.
+    pub renewal: String,
+    /// Other automatic renewal found on the server, such as "acme.sh (cron)"
+    /// or a Certbot container; Arcnix shows it but does not manage it.
+    #[serde(default)]
+    pub others: Vec<String>,
+    pub served: Vec<Served>,
+}
+
+const CERTIFICATES_PY: &str = r#"
+import json, os, shutil, socket, ssl, subprocess, sys, tempfile
+probes = json.loads(sys.argv[1])
+def renewal():
+    systemctl = shutil.which('systemctl')
+    for timer in ('certbot.timer', 'snap.certbot.renew.timer'):
+        if systemctl and subprocess.run([systemctl, 'is-enabled', '--quiet', timer], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            return 'timer'
+    for path in ('/etc/cron.d/certbot', '/etc/cron.daily/certbot'):
+        if os.path.exists(path):
+            return 'cron'
+    return ''
+CLIENTS = (('acme.sh', 'acme.sh'), ('certbot', 'Certbot'), ('lego', 'lego'), ('dehydrated', 'dehydrated'), ('getssl', 'getssl'), ('acme-companion', 'acme-companion'), ('letsencrypt-nginx-proxy-companion', 'acme-companion'), ('swag', 'SWAG'))
+def client(text):
+    text = text.lower()
+    for needle, name in CLIENTS:
+        if needle in text:
+            return name
+    return ''
+def others():
+    found = []
+    def add(item):
+        if item not in found:
+            found.append(item)
+    tables = []
+    crontab = shutil.which('crontab')
+    if crontab:
+        result = subprocess.run([crontab, '-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        tables.append(result.stdout.decode('utf-8', 'replace'))
+    paths = ['/etc/crontab'] + [os.path.join('/etc/cron.d', n) for n in sorted(os.listdir('/etc/cron.d'))] if os.path.isdir('/etc/cron.d') else ['/etc/crontab']
+    for path in paths:
+        if path in ('/etc/cron.d/certbot',):
+            continue
+        try:
+            with open(path, errors='replace') as f:
+                tables.append(f.read(65536))
+        except OSError:
+            pass
+    for table in tables:
+        for line in table.splitlines():
+            line = line.strip()
+            if line and not line.startswith('#') and client(line):
+                add(client(line) + ' (cron)')
+    systemctl = shutil.which('systemctl')
+    if systemctl:
+        result = subprocess.run([systemctl, 'list-timers', '--all', '--no-legend', '--no-pager'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        for line in result.stdout.decode('utf-8', 'replace').splitlines():
+            unit = next((w for w in line.split() if w.endswith('.timer')), '')
+            if unit and unit not in ('certbot.timer', 'snap.certbot.renew.timer') and client(unit):
+                add(client(unit) + ' (systemd timer)')
+    docker = shutil.which('docker') or ('/snap/bin/docker' if os.path.exists('/snap/bin/docker') else '')
+    if docker:
+        env = {k: v for k, v in os.environ.items() if k not in ('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH')}
+        try:
+            result = subprocess.run([docker, 'ps', '--format', '{{.Names}}\t{{.Image}}'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, env=env)
+            for line in result.stdout.decode('utf-8', 'replace').splitlines()[:200]:
+                name, _, image = line.partition('\t')
+                tool = client(image.rsplit('/', 1)[-1].split(':')[0]) or client(name)
+                if tool:
+                    add(tool + ' (container ' + name[:64] + ')')
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return found[:8]
+def safe_others():
+    try:
+        return others()
+    except Exception:
+        return []
+def served(name, port):
+    out = {'name': name, 'port': port, 'expires': 0, 'issuer': '', 'error': ''}
+    try:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        with socket.create_connection(('127.0.0.1', port), timeout=4) as raw:
+            with context.wrap_socket(raw, server_hostname=name) as tls:
+                der = tls.getpeercert(binary_form=True)
+        with tempfile.NamedTemporaryFile('w', suffix='.pem', delete=False) as f:
+            f.write(ssl.DER_cert_to_PEM_cert(der))
+            path = f.name
+        try:
+            info = ssl._ssl._test_decode_cert(path)
+        finally:
+            os.unlink(path)
+        out['expires'] = int(ssl.cert_time_to_seconds(info['notAfter']))
+        issuer = dict(x[0] for x in info.get('issuer', ()))
+        out['issuer'] = (issuer.get('organizationName') or issuer.get('commonName') or '')[:120]
+        if issuer.get('commonName', '').startswith('(STAGING)'):
+            out['issuer'] = issuer['commonName'][:120]
+    except Exception as error:
+        out['error'] = type(error).__name__
+    return out
+print(json.dumps({'certbot': bool(shutil.which('certbot') or os.path.exists('/snap/bin/certbot')), 'renewal': renewal(), 'others': safe_others(), 'served': [served(p['name'], int(p['port'])) for p in probes[:50]]}))
+"#;
+
+/// The command that checks Certbot and the certificates the sites serve, as
+/// the SSH account.
+pub fn certificates_command(probes: &[Probe]) -> Result<String> {
+    for probe in probes {
+        nginx_config::check_names(&probe.name)?;
+    }
+    Ok(format!(
+        "# arcnix:nginx:certificates\nexec timeout --kill-after=2 60 python3 -I -c {} {}",
+        quote(CERTIFICATES_PY),
+        quote(&serde_json::to_string(probes)?)
+    ))
+}
+
+pub fn read_certificates(session: &RemoteSession, command: &str) -> Result<Certificates> {
+    ensure!(
+        command.starts_with("# arcnix:nginx:certificates\n"),
+        "Invalid certificate request"
+    );
+    let output = crate::server_apps::execute(session, command, 1024 * 1024)?;
+    ensure!(
+        output.exit_code == 0,
+        "Could not check certificates (exit {}): {}",
+        output.exit_code,
+        output.stderr.trim()
+    );
+    Ok(serde_json::from_str(&output.stdout)?)
 }
 
 /// Finds the docker command for administrator tasks, which may not have the
@@ -722,6 +1302,9 @@ pub fn publish(
         container,
         check_as: check_place(snapshot, target, create),
         local_probe: true,
+        // Keep a file's Windows line endings, so the diff shows only what
+        // changed and the rest of the file stays as written.
+        crlf: !create && content.contains("\r\n"),
         ..Default::default()
     };
     let job = if create {
@@ -958,6 +1541,72 @@ mod tests {
     }
 
     #[test]
+    fn sites_in_the_main_configuration_are_listed_one_by_one() {
+        let mut edge = compose();
+        edge["main"] = serde_json::json!({"path": "/etc/nginx/nginx.conf", "target": "/srv/web/nginx.conf",
+            "text": "events {}\nhttp {\n server { listen 80; server_name a.example.com; location / { proxy_pass http://a:80; } }\n server { listen 80; server_name b.example.com; return 301 https://$host$request_uri; }\n server { listen 443 ssl; server_name b.example.com; ssl_certificate /c; ssl_certificate_key /k; root /srv; }\n}\n", "error": ""});
+        edge["sites"] = serde_json::json!([]);
+        edge["layout"] = "none".into();
+        let n = reading(serde_json::json!([edge]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let keys: Vec<_> = n.sites.iter().map(Site::key).collect();
+        assert_eq!(
+            keys,
+            [
+                "/etc/nginx/nginx.conf#a.example.com",
+                "/etc/nginx/nginx.conf#b.example.com"
+            ]
+        );
+        let b = n.site("/etc/nginx/nginx.conf#b.example.com").unwrap();
+        assert!(b.summary.https && b.enabled && !b.switchable());
+        assert_eq!(b.summary.ports, [80, 443]);
+        assert_eq!(
+            n.file("/etc/nginx/nginx.conf").unwrap().target,
+            "/srv/web/nginx.conf"
+        );
+        assert!(!n.internal());
+
+        // A site file with several sites is split too, and keeps one switch
+        // for the file only through File.
+        let mut shared = compose();
+        shared["sites"][0]["text"] =
+            "server { listen 80; server_name a.local; } server { listen 80; server_name b.local; }"
+                .into();
+        let n = reading(serde_json::json!([shared]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let split: Vec<_> = n
+            .sites
+            .iter()
+            .filter(|s| s.scope.is_some())
+            .map(Site::title)
+            .collect();
+        assert_eq!(split, ["a.local", "b.local"]);
+        assert!(
+            n.sites
+                .iter()
+                .filter(|s| s.scope.is_some())
+                .all(|s| !s.switchable())
+        );
+
+        // A front end built on the nginx image: nothing published or mounted.
+        let mut front = compose();
+        front["docker"]["name"] = "app-front-1".into();
+        front["docker"]["ports"] = serde_json::json!([]);
+        front["sites"] = serde_json::json!([{"path": "/etc/nginx/conf.d/default.conf", "target": "", "enabled": true, "style": "renamed",
+            "link": "", "link_target": "", "text": "server { listen 80; root /usr/share/nginx/html; }", "error": ""}]);
+        let n = reading(serde_json::json!([front]))
+            .unwrap()
+            .instances
+            .remove(0);
+        assert!(n.internal());
+        assert!(!container().internal());
+    }
+
+    #[test]
     fn containers_change_only_files_mounted_from_the_server() {
         let c = container();
         assert_eq!(c.title(), "web · web");
@@ -1094,13 +1743,20 @@ mod tests {
             "/etc/nginx/conf.d/new.example.com.conf"
         );
         let proxy = new_site(Kind::Proxy, "a.example.com", "http://127.0.0.1:3000").unwrap();
-        let settings = nginx_config::settings(&proxy).unwrap();
-        assert_eq!(settings.proxy.as_deref(), Some("http://127.0.0.1:3000"));
-        assert_eq!(settings.forwarded, Some(true));
+        let site = crate::nginx_site::read(&proxy).unwrap();
+        assert!(matches!(
+            &site.locations[0].kind,
+            crate::nginx_site::Kind::Proxy { target, forwarded: true, .. } if target == "http://127.0.0.1:3000"
+        ));
         let folder = new_site(Kind::Folder, "a.example.com", "/srv/www").unwrap();
-        assert_eq!(
-            nginx_config::settings(&folder).unwrap().folder.as_deref(),
-            Some("/srv/www")
+        let site = crate::nginx_site::read(&folder).unwrap();
+        assert!(
+            matches!(&site.locations[..], [l] if matches!(&l.kind, crate::nginx_site::Kind::Static { folder, .. } if folder == "/srv/www"))
+                || site
+                    .rows
+                    .iter()
+                    .any(|r| r.name == "root" && r.args == "/srv/www"),
+            "{site:?}"
         );
         let redirect = new_site(Kind::Redirect, "old.example.com", "https://example.com/").unwrap();
         assert!(redirect.contains("return 301 https://example.com$request_uri;"));
@@ -1249,5 +1905,202 @@ mod tests {
             odd["docker"]["args"] = args;
             assert!(reading(serde_json::json!([odd])).is_err());
         }
+    }
+
+    #[test]
+    fn reads_logs_for_every_site_and_sites_with_their_own() {
+        let mut fixture = host();
+        fixture["main"]["text"] = "events {}\nhttp { access_log /var/log/nginx/all.log main; include /etc/nginx/sites-enabled/*; }\n".into();
+        fixture["sites"][0]["text"] = "server { listen 80; server_name shop.example.com; access_log /var/log/nginx/shop.log; location / { proxy_pass http://127.0.0.1:8080; } }".into();
+        let s = reading(serde_json::json!([fixture]))
+            .unwrap()
+            .instances
+            .remove(0);
+        let access = log_sources(&s, LogKind::Access);
+        assert_eq!(
+            access
+                .iter()
+                .map(|l| (l.site.as_str(), l.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("", "/var/log/nginx/all.log"),
+                ("shop.example.com", "/var/log/nginx/shop.log")
+            ]
+        );
+        assert_eq!(
+            log_sources(&s, LogKind::Error)[0].path,
+            "/var/log/nginx/error.log"
+        );
+        let command = logs_command(&s, LogKind::Access, &access[1], 200).unwrap();
+        assert!(
+            command.ends_with("exec tail -n 200 -- '/var/log/nginx/shop.log'"),
+            "{command}"
+        );
+        assert!(
+            logs_command(
+                &s,
+                LogKind::Access,
+                &LogSource {
+                    site: String::new(),
+                    path: "/var/log/../shadow".into()
+                },
+                200
+            )
+            .is_err()
+        );
+
+        let c = container();
+        let sources = log_sources(&c, LogKind::Error);
+        assert_eq!(sources[0].path, "");
+        let id = "a".repeat(64);
+        let error = logs_command(&c, LogKind::Error, &sources[0], 100).unwrap();
+        assert!(
+            error.ends_with(&format!(
+                "exec docker logs --tail 100 '{id}' 2>&1 >/dev/null"
+            )),
+            "{error}"
+        );
+        let access = logs_command(&c, LogKind::Access, &sources[0], 100).unwrap();
+        assert!(access.ends_with("2>/dev/null"));
+    }
+
+    #[test]
+    fn gets_certificates_from_lets_encrypt() {
+        let s = snapshot();
+        let names = vec![
+            "shop.example.com".to_owned(),
+            "www.shop.example.com".to_owned(),
+        ];
+        let task = certificate(&s, &names, "admin@example.com", false).unwrap();
+        assert_eq!(task.snippet.id, "builtin:nginx:certificate");
+        assert!(task.snippet.administrator);
+        let command = &task.snippet.command;
+        assert!(
+            command.contains("mkdir -p -- '/var/www/letsencrypt'"),
+            "{command}"
+        );
+        assert!(command.contains(
+            "certbot certonly --webroot -w '/var/www/letsencrypt' --cert-name 'shop.example.com' -d 'shop.example.com' -d 'www.shop.example.com' --non-interactive --agree-tos -m 'admin@example.com' --keep-until-expiring --deploy-hook 'systemctl reload nginx.service'\n"
+        ), "{command}");
+        assert!(task.parameters().unwrap().is_empty());
+        let staging = certificate(&s, &names[..1], "", true)
+            .unwrap()
+            .snippet
+            .command;
+        assert!(
+            staging.contains("--register-unsafely-without-email --keep-until-expiring")
+                && staging.contains(" --staging\n"),
+            "{staging}"
+        );
+        for bad in [
+            vec!["*.example.com".to_owned()],
+            vec!["localhost".to_owned()],
+            vec!["a.com; rm".to_owned()],
+            vec![],
+        ] {
+            assert!(certificate(&s, &bad, "", false).is_err(), "{bad:?}");
+        }
+        assert!(certificate(&s, &names, "not an email", false).is_err());
+        assert!(certificate(&s, &names, "a@b.com'; rm", false).is_err());
+        assert_eq!(
+            certificate_files("shop.example.com"),
+            (
+                "/etc/letsencrypt/live/shop.example.com/fullchain.pem".into(),
+                "/etc/letsencrypt/live/shop.example.com/privkey.pem".into()
+            )
+        );
+
+        // A container needs the challenge folder and the certificates mounted.
+        let c = container();
+        assert_eq!(
+            letsencrypt_mounts(c.docker.as_ref().unwrap()),
+            [
+                "/var/www/letsencrypt:/var/www/letsencrypt:ro",
+                "/etc/letsencrypt:/etc/letsencrypt:ro"
+            ]
+        );
+        assert!(certificate(&c, &names, "", false).is_err());
+        let mut mounted = compose();
+        mounted["docker"]["mounts"] = serde_json::json!([
+            {"src": "/srv/web/letsencrypt", "dst": "/var/www/letsencrypt"},
+            {"src": "/etc/letsencrypt", "dst": "/etc/letsencrypt"}
+        ]);
+        let c = reading(serde_json::json!([mounted]))
+            .unwrap()
+            .instances
+            .remove(0);
+        assert!(letsencrypt_mounts(c.docker.as_ref().unwrap()).is_empty());
+        let command = certificate(&c, &names, "", false).unwrap().snippet.command;
+        assert!(command.contains("-w '/srv/web/letsencrypt'"), "{command}");
+        assert!(
+            command.contains("--deploy-hook 'sh -c ")
+                && command.contains("web-web-1")
+                && command.contains("nginx -s reload"),
+            "{command}"
+        );
+        let mut elsewhere = mounted.clone();
+        elsewhere["docker"]["mounts"][1]["src"] = "/srv/certs".into();
+        let c = reading(serde_json::json!([elsewhere]))
+            .unwrap()
+            .instances
+            .remove(0);
+        assert_eq!(
+            letsencrypt_mounts(c.docker.as_ref().unwrap()),
+            ["/etc/letsencrypt:/etc/letsencrypt:ro"]
+        );
+
+        let mut live_only = container().docker.unwrap();
+        live_only.mounts = vec![
+            Mount {
+                src: "/var/www/letsencrypt".into(),
+                dst: "/var/www/letsencrypt".into(),
+            },
+            Mount {
+                src: "/etc/letsencrypt/live".into(),
+                dst: "/etc/letsencrypt/live".into(),
+            },
+        ];
+        assert_eq!(
+            letsencrypt_mounts(&live_only),
+            ["/etc/letsencrypt:/etc/letsencrypt:ro"]
+        );
+        live_only.mounts.push(Mount {
+            src: "/etc/letsencrypt/archive".into(),
+            dst: "/etc/letsencrypt/archive".into(),
+        });
+        assert!(letsencrypt_mounts(&live_only).is_empty());
+
+        // Certificates are checked where HTTPS is reachable from the server.
+        assert_eq!(
+            certificate_probes(&s),
+            [Probe {
+                name: "shop.example.com".into(),
+                port: 443
+            }]
+        );
+        assert!(
+            certificate_probes(&container()).is_empty(),
+            "443 is not published"
+        );
+        let mut published = compose();
+        published["docker"]["ports"] = serde_json::json!(["8080:80/tcp", "8443:443/tcp"]);
+        published["sites"][0]["text"] = "server { listen 443 ssl; server_name shop.local; ssl_certificate /c; ssl_certificate_key /k; }".into();
+        let c = reading(serde_json::json!([published]))
+            .unwrap()
+            .instances
+            .remove(0);
+        assert_eq!(
+            certificate_probes(&c),
+            [Probe {
+                name: "shop.local".into(),
+                port: 8443
+            }]
+        );
+        let command = certificates_command(&certificate_probes(&s)).unwrap();
+        assert!(
+            command.starts_with("# arcnix:nginx:certificates\n")
+                && command.ends_with(r#"'[{"name":"shop.example.com","port":443}]'"#),
+            "{command}"
+        );
     }
 }

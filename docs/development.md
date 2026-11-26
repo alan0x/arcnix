@@ -456,7 +456,20 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 
 读取以 SSH 账户运行 `crates/arcnix-core/src/software/nginx_read.py`（Python 3，60 秒限时），返回服务器上的每个 Nginx 实例：服务器本身安装的一个，以及最多 20 个运行 Nginx 的 Docker 容器（`docker run` 或 Compose 创建均可，最多 10 个同时读取，避免个别响应慢的容器用完整个时限）。服务器本身的实例只读取：`systemctl show nginx.service` 的状态和运行时长、`nginx -v`、`/etc/nginx/nginx.conf`，以及 `sites-available`（是否由 `sites-enabled` 中的链接启用）、`sites-enabled` 中直接放置的文件和 `conf.d/*.conf`／`*.conf.disabled`。单个文件最多 128 KiB，总量 6 MiB，最多 200 个站点；读不到的文件标明原因。解析在 Rust 中完成（`nginx_config.rs`）：保留每条指令的字节位置，从 `server` 块得到域名、端口、HTTPS、证书路径，以及 `location /` 的反向代理目标、静态目录或重定向。
 
-站点编辑器的表单只修改有变化的字段，其余内容按原文保留：域名、转发地址、超时、WebSocket、X-Forwarded-For、静态目录和最大上传大小。一个字段在文件中出现在多处且取值不一致时不显示，需要在文件视图编辑。值不允许空格、引号、分号、大括号和 `#`。
+站点编辑器的“设置”视图由 `nginx_site.rs` 读出：文件中唯一提供内容的 `server` 块（另有只做跳转的 `server` 块时，以提供内容的那个为准）分为以下几部分，其余内容按原文保留：
+- 域名（除 www 跳转块外所有 `server` 块一致时）、监听端口；`_` 说明为兜底站点。站点有真实域名时可选择“两者都响应”“使用 example.com”或“使用 www.example.com”：使用其中一个时，另加一个只含另一名称、复制主块监听端口（HTTPS 时也复制证书）并返回 `301 $scheme://<名称>$request_uri` 的 `server` 块，并从主块的 `server_name` 中去掉该名称；改为“两者都响应”时删除该块并把名称加回。www 跳转块不计入“提供内容的块”，也不会被当作 HTTPS 跳转（后者返回 `https://$host`）。站点摘要优先取提供内容的块的域名，标题和默认健康检查地址因此不受跳转块影响。
+- HTTPS：证书和私钥路径、HTTP/2、HSTS，以及“普通 HTTP 跳转到 HTTPS”（另加一个只返回 301 的 `server` 块，并去掉原块的 80 端口监听；关闭时删除该块并恢复 80 端口）。站点未启用 HTTPS 时，填入服务器上已有的证书和私钥即可开启。HTTP/2 在 Nginx 1.25.1 及以上写为 `http2 on;`，更早的版本写为 `listen` 参数。
+- location 列表：每个 location 按用途显示字段：转发（地址、超时、WebSocket、X-Forwarded-For）、提供文件（`root`/`alias`、单页应用回退到 `/index.html`）、重定向（状态码和目标）、固定响应（状态码和文本）；其他用途只列出指令。可以修改匹配规则、新增或删除 location；新增的转发 location 带常用的代理头，非 `/` 路径的目录用 `alias`。
+- 访问控制：按顺序排列的 `allow`／`deny` 规则（新规则放在末尾的 `deny all` 之前），以及“拒绝其他所有地址”（末尾的 `deny all`，至少有一条允许规则时才能开启）；整站的 Basic 认证（提示文本和密码文件；密码文件需事先在服务器上创建）。
+- location 可以直接改为其他用途：删除只适用于原用途的指令（转发的所有 `proxy_*`，提供文件的 `root`／`alias`／`try_files`／`expires`，重定向和固定响应的 `return`），其余指令保留，已设置的同名代理头不会重复添加。提供文件的 location 可设置浏览器缓存时长（`expires`）。
+- 请求频率：站点可选择主配置中定义的频率限制（`limit_req zone=… [burst=N nodelay]`，并加上 `limit_req_status 429;`），可设置突发时额外允许的请求数。限制本身在主配置的“请求频率限制”中按“名称 + 频率”添加（`limit_req_zone $binary_remote_addr zone=名称:10m rate=…;`）。两个文件分别发布：站点引用不存在的限制时 `nginx -t` 不会通过，因此要先发布主配置中的限制；删除时先去掉站点中的引用。其他写法的 `limit_req`／`limit_req_zone` 保留为指令行。
+- 响应头和日志：`X-Frame-Options: SAMEORIGIN`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin` 三个开关（`add_header … always`）。Nginx 中 location 自带 `add_header` 时不继承 `server` 块的响应头，界面列出这些 location。站点自己的 `access_log`／`error_log`（只有一行时以字段显示，参数按原文编辑，留空则删除、使用全局日志）。
+- 最大上传大小。
+- 其他指令：`server` 块和每个 location 中表单没有字段的指令按“名称 + 参数”逐行列出，可以修改、删除或新增；`if` 等嵌套块只显示，需在文件视图编辑。
+
+主配置文件（含 `http` 块）在“设置”中显示全局设置：`worker_processes`、`events` 中的 `worker_connections`、`http` 中的 `keepalive_timeout` 和 `client_max_body_size`、gzip（开启时没有 `gzip_types` 则加上常见的文本类型）和是否在响应中显示 Nginx 版本（`server_tokens`）；`http` 块中的其他指令按行列出。主配置中也有提供内容的 `server` 块时（例如容器自带的配置），同时显示站点部分。删除指令时，同一行末尾的注释一并删除。
+
+每次操作是对文本的一次定点修改，修改后重新解析，无法解析的结果会被拒绝。输入中的值即使暂时无效也会保留在字段中，有效后才写入文本；新增或删除 location／指令会改变各部分的位置，此时清除尚未写入的输入。文件中有多个提供内容的 `server` 块时，只显示域名和上传大小，其余在文件视图编辑。路径类的值不允许空格、引号、分号、大括号和 `#`；指令参数按 Nginx 语法检查，最终由发布前的 `nginx -t` 校验。
 
 所有更改都通过服务器任务对话框运行，需要 root 或 sudo，并保留在任务历史中：
 - 测试、重新加载、重启、启动、停止为短 shell 脚本；重新加载和重启前先执行 `nginx -t`。
@@ -465,6 +478,20 @@ PostgreSQL 快照可选择恢复到新的数据库：重新核对快照标签和
 - Nginx 当前不加载的文件（停用的站点、Debian 布局下新建的站点）按启用后的位置检查：请求带 `check_as`（`sites-enabled` 中的链接位置，或去掉 `.disabled` 的文件名），候选放在该位置再测试完整配置，否则 `nginx -t` 根本不会读到它。
 - 健康检查地址默认取站点的第一个域名。Nginx 应用的发布请求带 `local_probe`：向本服务器的 Nginx 请求该地址（连接本机地址、`Host` 为该域名；URL 中写的是 IP 时连接该 IP），任何非 5xx 响应都算通过，因此需要登录（401）或 `/` 没有页面（404）的站点不会被误回滚，域名尚未解析到本服务器也不影响。站点监听特定地址或处于停用状态时默认不填地址。
 - 服务器不允许私有挂载命名空间时（部分 OpenVZ、LXC 主机），站点文件无法在不改动生效目录的情况下检查，发布在检查前停止并说明原因。
+
+### 证书和 Let's Encrypt
+
+概览的“证书”部分列出各 HTTPS 站点实际提供的证书：以 SSH 账户在服务器上连接本机 443 端口（容器为其发布的 443 端口），按站点域名发送 SNI，读取证书的到期时间和签发者；14 天内到期时标明。证书文件本身只有 root 可读，因此不读取文件。同时检查 Certbot 是否安装、自动续期是否设置（`certbot.timer`、`snap.certbot.renew.timer` 或 cron）。
+
+站点编辑器的 HTTPS 部分可以从 Let's Encrypt 获取证书，分两步：
+1. “提供验证文件”：在每个响应普通 HTTP 的 `server` 块中加入 `location ^~ /.well-known/acme-challenge/ { root /var/www/letsencrypt; default_type text/plain; }`，然后发布。在 `server` 层直接 `return` 的跳转块会先于 location 执行，因此改为把跳转放进 `location /`、旁边是验证 location；这种形式仍视为只做跳转的块（`redirect_return`）。之后开启“普通 HTTP 跳转到 HTTPS”或 www 跳转时，新加的跳转块也保留验证 location，续期不受影响。验证 location 不在 location 列表中显示。站点不响应 80 端口的普通 HTTP 时说明原因。
+2. “获取证书…”：只在已发布的文件中有验证 location、且编辑器没有未发布的修改时可用。服务器任务运行 `certbot certonly --webroot -w /var/www/letsencrypt --cert-name <第一个域名> -d …`，域名为站点的域名加上跳转到这里的 www 名称，可选邮箱（否则 `--register-unsafely-without-email`）和测试服务器（`--staging`），并保存 `--deploy-hook`，续期后重新加载 Nginx（服务器上为 `systemctl reload nginx`；容器为 `sh -c '… docker exec <容器名> nginx -s reload'`，用容器名是因为 Compose 重建容器后 ID 会变；Certbot 要求钩子以 PATH 中的命令开头）。任务成功后，编辑器把站点的证书和私钥改为 `/etc/letsencrypt/live/<名称>/fullchain.pem`、`privkey.pem`（未开启 HTTPS 时一并开启），由用户检查并发布。
+
+容器中的 Nginx 由服务器上的 Certbot 获取证书：需要把服务器的 `/var/www/letsencrypt` 挂载到容器的同一路径，并把 `/etc/letsencrypt` 挂载到容器的 `/etc/letsencrypt`。读取器报告容器的挂载，缺少时界面列出需要添加的挂载，不会修改 Compose 文件。
+
+### 日志
+
+“日志”页以 SSH 账户读取所选日志的最后 200／1000／5000 行，最新的在前，可按文字筛选。服务器上的 Nginx 读取 `http` 块中 `access_log`／`error_log` 指定的文件（默认 `/var/log/nginx/access.log` 和 `error.log`），以及自己写日志的站点的文件（`tail`）；Debian 和 Ubuntu 上需要账户属于 adm 组，读不到时说明原因。容器中的 Nginx 读取容器输出：官方镜像把访问日志写到标准输出、错误日志写到标准错误，分别用 `docker logs --tail` 取得；站点自己的日志文件用 `docker exec … tail` 读取。命令由 `nginx::logs_command` 生成，路径经过校验并加引号，`read_logs` 只执行这种命令。
 
 ### Docker 中的 Nginx
 

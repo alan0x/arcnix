@@ -3060,6 +3060,106 @@ Docker 没有响应，因此不显示容器中的 Nginx。	Docker did not answer
 在本机安装一次 pgAdmin，即可在所有服务器桌面中使用。	Install pgAdmin once on this computer to use it from all your server desktops.
 安装已取消	Installation cancelled
 安装已中断	Installation stopped
+301 和 308 是永久重定向，浏览器会记住；302 和 307 是临时重定向。307 和 308 保留请求方法。	301 and 308 are permanent and remembered by browsers; 302 and 307 are temporary. 307 and 308 keep the request method.
+指令名只能包含小写字母、数字和下划线	A directive name has lowercase letters, digits and underscores
+访问控制	Access
+添加	Add
+添加 location	Add a location
+添加 location	Add location
+表单未显示的内容按原文保留；切换到“文件”可查看整个文件。	Anything the form does not show is kept as written; switch to File to see the whole file.
+参数	Arguments
+参数必须在一行内	Arguments must fit on one line
+要求访问者输入用户名和密码。请先在服务器上创建密码文件，例如使用 htpasswd。	Ask visitors for a user name and password. Create the password file on the server first, for example with htpasswd.
+证书	Certificate
+请选择重定向状态码：301、302、303、307 或 308	Choose a redirect status: 301, 302, 303, 307 or 308
+整个站点中表单没有对应字段的指令。发布前每条都会由 Nginx 检查。	Directives for the whole site that the form has no fields for. Each is checked by Nginx before it is published.
+每个 location 处理路径与之匹配的请求。Nginx 选择匹配最长的路径；= 只精确匹配一个路径，~ 和 ~* 按正则表达式匹配。	Each location handles the requests whose path it matches. Nginx picks the longest matching path; = matches one path exactly, ~ and ~* match a regular expression.
+块请在“文件”中编辑	Edit blocks in File
+请在“文件”中编辑此块	Edit this block in File
+请输入路径，例如 /api/，或修饰符加路径，例如 = /health	Enter a path such as /api/, or a modifier and a path such as = /health
+请输入 100 到 599 之间的 HTTP 状态码	Enter an HTTP status between 100 and 599
+请输入以 / 开头的完整路径	Enter the full path, starting with /
+请输入此 location 匹配的路径，例如 /api/	Enter the path this location matches, such as /api/
+转发请求	Forwards requests
+HTTP/2	HTTP/2
+HTTPS	HTTPS
+登录提示	Login prompt
+新指令	New directive
+其他	Other
+其他指令	Other directives
+密码文件	Password file
+普通 HTTP 已经跳转到 HTTPS	Plain HTTP already goes to HTTPS
+普通 HTTP 没有跳转到 HTTPS	Plain HTTP does not go to HTTPS
+重定向	Redirects
+删除指令	Remove directive
+删除 location	Remove location
+要求密码	Require a password
+响应文本	Response text
+返回固定响应	Returns a fixed response
+将普通 HTTP 访问者跳转到 HTTPS	Send plain HTTP visitors to HTTPS
+未知路径返回 /index.html（单页应用）	Send unknown paths to /index.html (single-page apps)
+提供文件	Serves files
+告诉浏览器一年内只使用 HTTPS（HSTS）	Tell browsers to use only HTTPS for a year (HSTS)
+此更改会使文件无法读取	The change would make the file unreadable
+表单没有对应此 location 用途的字段；它的指令列在下方。	The form has no fields for what this location does; its directives are listed below.
+匹配规则必须在一行内	The match must fit on one line
+响应文本必须在一行内	The response text must fit on one line
+无法读取这些参数；请检查引号、分号和大括号	These arguments cannot be read; check quotes, semicolons and braces
+此文件有多个提供内容的 server 块，因此 location、HTTPS 和访问控制需在“文件”中编辑。	This file has several server blocks that serve content, so locations, HTTPS and access are edited in File.
+此文件有多个 server 块；请在“文件”中编辑	This file has several server blocks; edit it in File
+此目录为整个站点设置，修改它也会影响使用它的其他 location。	This folder is set for the whole site, so changing it also changes other locations that use it.
+此 location 不转发请求	This location does not forward requests
+此 location 不做重定向	This location does not redirect
+此 location 不返回固定响应	This location does not return a response
+此 location 不提供目录	This location does not serve a folder
+文件的这一部分已变化；请重新打开	This part of the file changed; reopen it
+此站点通过普通 HTTP 提供。要开启 HTTPS，请输入服务器上已有的证书和私钥，例如 Certbot 生成的文件。	This site is served over plain HTTP. To turn on HTTPS, enter a certificate and key that are already on the server, for example from Certbot.
+关闭密码	Turn off the password
+开启 HTTPS	Turn on HTTPS
+_ 响应其他站点都未声明的任意域名（兜底站点）。	_ answers any domain that no other site claims (a catch-all).
+监听 {ports}。_ 响应其他站点都未声明的任意域名（兜底站点）。	Listens on {ports}. _ answers any domain that no other site claims (a catch-all).
+参数	arguments
+指令	directive
+请先开启 HTTPS	Turn on HTTPS first
+HTTPS 已经开启	HTTPS is already on
+请输入登录提示中显示的名称	Enter the name shown in the login prompt
+密码文件	The password file
+证书	The certificate
+私钥	The key
+文件	The file
+请重定向到 /new/ 这样的路径，或以 http:// 或 https:// 开头的地址	Redirect to a path such as /new/ or an address starting with http:// or https://
+此站点已有 {matching} 的 location	This site already has a location for {matching}
+添加指令…	Add directive…
+更改…	Change…
+将此 location 改为	Make this location
+更改	Change
+只适用于原用途的指令会被删除，其他指令保留。	Directives that only make sense for the old purpose are removed; the others stay.
+浏览器缓存时长	Browsers keep files for
+地址	Addresses
+Nginx 从上到下检查规则，使用第一条与访问者地址匹配的规则。	Nginx checks the rules from top to bottom and uses the first that matches the visitor's address.
+允许	Allow
+拒绝	Deny
+删除规则	Remove rule
+地址或网段	Address or network
+203.0.113.5 或 10.0.0.0/8	203.0.113.5 or 10.0.0.0/8
+拒绝其他所有地址	Refuse every other address
+全局设置	Global settings
+工作进程数	Worker processes
+每个进程的连接数	Connections per worker
+auto 表示每个 CPU 核心启动一个工作进程。每个工作进程最多同时处理给定数量的连接。	auto starts one worker per CPU core. Each worker handles up to the given number of connections at once.
+空闲连接保持时长	Keep idle connections open for
+所有站点的最大上传大小	Largest upload for every site
+压缩文本、CSS、JavaScript 和 JSON 响应（gzip）	Compress text, CSS, JavaScript and JSON responses (gzip)
+在响应头和错误页中显示 Nginx 版本	Show the Nginx version in headers and error pages
+适用于所有站点的其他指令	Other directives for every site
+http 块中的指令，除非站点自行设置，否则对所有站点生效。	Directives in the http block, which apply to every site unless a site sets its own.
+请输入地址（如 203.0.113.5）、网段（如 10.0.0.0/8）或 all	Enter an address such as 203.0.113.5, a network such as 10.0.0.0/8, or all
+请输入时长，例如 7d 或 12h，或 max	Enter a time such as 7d or 12h, or max
+请先允许一个地址，否则没有人能访问此站点	Allow an address first, or nobody can open the site
+请输入 auto 或 1 到 1024 之间的进程数	Enter auto or a number of processes from 1 to 1024
+请输入连接数，例如 1024	Enter a number of connections, such as 1024
+文件中没有 events 块；请在“文件”中编辑	The file has no events block; edit it in File
+这不是主配置文件	This is not the main configuration
 应用窗口总览	App window overview
 单击当前活跃应用	Click the active app
 退出窗口总览	Exit window overview
@@ -3094,6 +3194,92 @@ GPU 使用率	GPU utilization
 从程序坞取消固定	Unpin from Dock
 在桌面显示	Show on desktop
 从桌面隐藏	Hide from desktop
+带不带 www	With or without www
+两者都响应	Answer both
+使用 {b}	Use {b}
+使用 www.{b}	Use www.{b}
+使用其中一个名称时，访问另一个名称的访客会被永久重定向过来，搜索引擎只会看到一个站点。	Using one name sends visitors of the other to it with a permanent redirect, so search engines see one site.
+响应头和日志	Headers and logs
+只允许本站在框架中显示自己的页面（X-Frame-Options）	Only let this site show its pages in frames (X-Frame-Options)
+禁止浏览器猜测文件类型（X-Content-Type-Options）	Stop browsers from guessing file types (X-Content-Type-Options)
+链接到其他站点时只发送页面的来源（Referrer-Policy）	Send other sites only the origin of a page they are linked from (Referrer-Policy)
+自行设置响应头的 location 不会得到这些响应头：{own}。Nginx 不会合并响应头列表。	Locations that set their own headers do not get these: {own}. Nginx does not combine header lists.
+访问日志	Access log
+错误日志	Error log
+完整路径，例如 /var/log/nginx/example.log，后面可以跟日志格式或级别。off 关闭访问日志；留空则使用 nginx.conf 中的日志。	A full path such as /var/log/nginx/example.log, optionally followed by a log format or level. off turns the access log off; leave empty to use the logs in nginx.conf.
+请输入完整路径，例如 /var/log/nginx/site.log，或 off	Enter a full path such as /var/log/nginx/site.log, or off
+此站点有多行 {name}；请在“文件”中编辑	This site writes several {name} lines; edit them in File
+请先添加域名	Add a domain first
+站点需要一个域名，例如 example.com	The site needs a domain such as example.com
+请求频率	Request rate
+不限制	No limit
+请先在主配置（nginx.conf）中添加请求频率限制，然后在这里选择。	Add a request rate limit to the main configuration (nginx.conf) first; then choose it here.
+突发时额外允许的请求数	Extra requests allowed in a burst
+每个访客地址可按限制的频率发送请求；突发值允许短时间的峰值立即通过。超出的请求返回 429 Too Many Requests。	Each visitor address may send requests at the limit's rate; a burst lets short peaks through at once. Requests over it get 429 Too Many Requests.
+请求频率限制	Request rate limits
+限制按访客地址统计请求数。站点在“访问控制”中选择要使用的限制。	A limit counts requests per visitor address. Sites choose a limit in their Access settings.
+删除限制	Remove limit
+限制名称	Limit name
+频率	Rate
+名称	name
+限制名称只能包含字母、数字、- 和 _	A limit name has letters, digits, - and _
+请输入频率，例如 10r/s 或 60r/m	Enter a rate such as 10r/s or 60r/m
+已有名为 {name} 的限制	There is already a limit called {name}
+此站点的频率限制写法表单无法修改；请在“文件”中编辑	This site's rate limit is written in a way the form does not change; edit it in File
+请输入额外允许的请求数，例如 20，或留空	Enter how many extra requests to allow, such as 20, or leave it empty
+重新读取日志	Read the log again
+错误	Errors
+200 行	200 lines
+1000 行	1000 lines
+5000 行	5000 lines
+筛选日志行	Filter log lines
+筛选，例如 404 或某个地址	Filter, for example 404 or an address
+所有站点	Every site
+来自容器的输出，最新的在前。	From the container's output, newest first.
+来自 {}，最新的在前。	From {}, newest first.
+日志为空。	The log is empty.
+没有匹配筛选条件的行。	No lines match the filter.
+SSH 账户无法读取此日志。在 Debian 和 Ubuntu 上，请将其加入 adm 组；容器请加入 docker 组。	The SSH account cannot read this log. On Debian and Ubuntu, add it to the adm group, or to the docker group for containers.
+此日志文件尚不存在	This log file does not exist yet
+请选择日志	Choose a log
+无效的日志请求	Invalid log request
+于 {date} 过期	Expired on {date}
+{date} 到期，还有 {days} 天	Expires on {date}, in {days} days
+Let's Encrypt 已签发证书，站点已改用该证书。发布后开始使用。	Let's Encrypt issued the certificate, and the site now uses it. Publish to start serving it.
+Certbot 会自动续期证书（systemd 定时器），并在每次续期后重新加载 Nginx。	Certbot renews certificates automatically (systemd timer) and reloads Nginx after each renewal.
+Certbot 会自动续期证书（cron），并在每次续期后重新加载 Nginx。	Certbot renews certificates automatically (cron) and reloads Nginx after each renewal.
+已安装 Certbot，但没有设置自动续期。证书 90 天后过期。	Certbot is installed, but automatic renewal is not set up. Certificates expire after 90 days.
+证书	Certificates
+无法读取证书	Could not read the certificate
+即将到期	Renew soon
+Let's Encrypt	Let's Encrypt
+Let's Encrypt 要求站点有完整的域名，例如 example.com。	Let's Encrypt needs the site to have a full domain name such as example.com.
+Let's Encrypt 通过 80 端口的普通 HTTP 检查每个域名，而此站点不响应普通 HTTP。请添加 listen 80，或添加一个把普通 HTTP 跳转到 HTTPS 的 server 块。	Let's Encrypt checks each domain over plain HTTP on port 80, which this site does not answer. Add listen 80, or a server block that sends plain HTTP to HTTPS.
+第 1 步：提供 Let's Encrypt 的验证文件，然后发布站点。	Step 1: serve Let's Encrypt's challenge files, then publish the site.
+第 1 步：发布站点，让 Nginx 在 Let's Encrypt 检查之前提供验证文件。	Step 1: publish the site, so Nginx serves the challenge files before Let's Encrypt checks them.
+请把以下服务器目录挂载进容器，然后重新创建容器（docker compose up -d，或重新 docker run）：	Mount these server folders into the container, then recreate it (docker compose up -d, or docker run again):
+请先从应用中心安装 Certbot。	Install Certbot from App Center first.
+第 2 步：获取证书。Certbot 会检查下面的每个名称，把证书保存在服务器上，并在到期前续期。	Step 2: get the certificate. Certbot checks each name below, saves the certificate on the server and renews it before it expires.
+提供验证文件	Serve challenge files
+到期通知邮箱（可选）	Email for expiry notices (optional)
+使用 Let's Encrypt 的测试服务器（证书不被浏览器信任）	Use Let's Encrypt's test servers (the certificate is not trusted by browsers)
+获取证书…	Get a certificate…
+请先打开一个站点	Open a site first
+从 Let's Encrypt 获取证书	Get a certificate from Let's Encrypt
+请先把以下服务器目录挂载进容器：{}	Mount these server folders into the container first: {}
+请输入邮箱，例如 admin@example.com，或留空	Enter an email address such as admin@example.com, or leave it empty
+Let's Encrypt 需要完整的域名，例如 example.com：{name}	Let's Encrypt needs full domain names such as example.com: {name}
+一张证书最多包含 100 个名称	A certificate covers at most 100 names
+Let's Encrypt 通过普通 HTTP 检查域名，而此站点不响应普通 HTTP	Let's Encrypt checks domains over plain HTTP, which this site does not answer
+无效的证书请求	Invalid certificate request
+位于主配置中，因此始终启用	In the main configuration, so it stays on
+与其他站点共用一个文件，因此需在“文件”中启用或停用	Shares its file with other sites, so it is turned on and off in File
+未列出：{names}。这些容器只是在应用内部运行 Nginx，既不发布端口，也没有从服务器挂载的内容，因此无需管理。	Not listed: {names}. These containers run Nginx inside an application; they publish no port and nothing in them comes from the server, so there is nothing to manage.
+发现由 {tools} 自动续期。Arcnix 会显示每张证书的到期时间，但不管理这种续期方式。	Found automatic renewal by {tools}. Arcnix shows when each certificate expires, but does not manage that renewal.
+Arcnix 未发现可识别的自动续期方式（Certbot、acme.sh、lego 或续期容器）。如果证书通过其他方式续期，上方的到期日期可以说明续期是否正常。如需在此从 Let's Encrypt 获取证书，请从应用中心安装 Certbot。	Arcnix found no automatic renewal it recognizes (Certbot, acme.sh, lego or a renewal container). If the certificates are renewed another way, the expiry dates above show whether it works. To get certificates from Let's Encrypt here, install Certbot from App Center.
+此站点从 {root} 提供 Let's Encrypt 验证文件，因此其证书可能由其他工具获取和续期。Arcnix 不会改动它；上方日期显示证书的到期时间。	This site serves Let's Encrypt's challenge files from {root}, so another tool probably gets and renews its certificate. Arcnix leaves that alone; the date above shows when the certificate expires.
+此文件中已有其他站点使用 {first}	Another site in this file already answers to {first}
+这些站点从 {folder} 提供 Let's Encrypt 验证文件，因此这些证书可能由 acme.sh 等 ACME 客户端续期。Arcnix 无法看到它：Arcnix 以 SSH 账户读取服务器，而该账户无法读取 root 的 crontab。请确认每个到期日期都在一个月以后；14 天内到期的证书会被标出。	The sites serve Let's Encrypt challenge files from {folder}, so an ACME client such as acme.sh probably renews these certificates. Arcnix cannot see it: it reads the server as the SSH account, which cannot read root's crontab. Check that each date stays more than a month away; a certificate due within 14 days is marked.
 磁盘容量	Disk capacity
 未报告分区	No partitions reported
 未报告磁盘	No disks reported by this system

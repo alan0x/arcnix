@@ -3083,6 +3083,34 @@ button,
 .nginx-form-grid { display: grid !important; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .nginx-form-section .preference-check { color: var(--text) !important; font-size: 13px; }
 .nginx-form-summary { font-size: 12px; overflow-wrap: anywhere; }
+.nginx-location { display: flex !important; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.nginx-location-new { border-style: dashed; background: transparent; }
+.nginx-location-head { display: flex !important; align-items: flex-end; gap: 10px; min-width: 0; }
+.nginx-location-head > .field { flex: 1; }
+.nginx-location-kind { white-space: nowrap; padding-bottom: 9px; }
+.nginx-location-head .icon-button { margin-bottom: 4px; }
+.nginx-rows { display: flex !important; flex-direction: column; gap: 6px; min-width: 0; }
+.nginx-row { display: flex !important; align-items: center; gap: 8px; min-width: 0; }
+.nginx-row-name, .nginx-row-name-input { flex: 0 0 180px; min-width: 0; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace !important; overflow-wrap: anywhere; }
+.nginx-row-args, .nginx-row-block { flex: 1; min-width: 0; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace !important; overflow-wrap: anywhere; }
+.nginx-row-new { padding-top: 6px; border-top: 1px dashed var(--line); }
+.nginx-form-actions { display: flex !important; justify-content: flex-end; gap: 8px; }
+.nginx-codes { align-self: flex-start; }
+.nginx-mounts { white-space: pre-wrap; }
+.nginx-info { font-size: 13px; padding: 8px 12px; border-radius: 8px; color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); overflow-wrap: anywhere; }
+.nginx-badge.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.nginx-logs-view { display: flex !important; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; flex: 1; }
+.nginx-logs-controls { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nginx-log-filter { flex: 1 1 220px; min-width: 0; max-width: 360px; }
+.nginx-log-sources { align-self: flex-start; flex-wrap: wrap; }
+.nginx-log { flex: 1; min-height: 240px; overflow: auto; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; color: var(--text); }
+.nginx-subsection { padding-top: 10px; border-top: 1px solid var(--line); }
+.nginx-convert { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+@media (max-width: 700px) {
+  .nginx-row { flex-wrap: wrap; }
+  .nginx-row-name, .nginx-row-name-input { flex-basis: 100%; }
+  .nginx-location-head { flex-wrap: wrap; }
+}
 .nginx-file { min-height: 360px; font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace !important; white-space: pre; tab-size: 4; }
 .nginx-form input:disabled, .nginx-file:disabled { color: var(--muted); background: var(--raised); cursor: default; }
 .nginx-publish { gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
@@ -3090,6 +3118,8 @@ button,
 .nginx-publish-row { display: flex !important; align-items: center; gap: 10px; flex-wrap: wrap; }
 .nginx-change { flex: 1; font-size: 12px; min-width: 180px; }
 .nginx-error { font-size: 13px; color: var(--danger); padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 10%, transparent); overflow-wrap: anywhere; white-space: pre-wrap; }
+.nginx-field-error { font-size: 12px; color: var(--danger); padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, var(--danger) 10%, transparent); overflow-wrap: anywhere; white-space: pre-wrap; align-self: stretch; }
+.nginx-check, .nginx-row-item { display: flex !important; flex-direction: column; gap: 6px; min-width: 0; }
 .nginx-new-site { display: flex !important; flex-direction: column; gap: 10px; min-width: min(480px, 80vw); }
 .nginx-new-site>.nginx-segments { align-self: flex-start; }
 @container nginx (max-width: 560px) {

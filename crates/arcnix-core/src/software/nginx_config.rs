@@ -22,13 +22,16 @@ impl Directive {
     pub fn children(&self) -> &[Directive] {
         self.block.as_deref().unwrap_or_default()
     }
-    fn find<'a, 'n>(&'a self, name: &'n str) -> impl Iterator<Item = &'a Directive> + use<'a, 'n> {
+    pub(crate) fn find<'a, 'n>(
+        &'a self,
+        name: &'n str,
+    ) -> impl Iterator<Item = &'a Directive> + use<'a, 'n> {
         self.children().iter().filter(move |d| d.name == name)
     }
-    fn first(&self, name: &str) -> Option<&Directive> {
+    pub(crate) fn first(&self, name: &str) -> Option<&Directive> {
         self.children().iter().find(|d| d.name == name)
     }
-    fn header(&self, name: &str) -> Option<&Directive> {
+    pub(crate) fn header(&self, name: &str) -> Option<&Directive> {
         self.find("proxy_set_header").find(|d| {
             d.args
                 .first()
@@ -257,7 +260,7 @@ fn servers(directives: &[Directive]) -> Vec<&Directive> {
     out
 }
 
-fn port(listen: &Directive) -> Option<(u16, bool)> {
+pub(crate) fn port(listen: &Directive) -> Option<(u16, bool)> {
     let address = listen.args.first()?;
     let ssl = listen
         .args
@@ -333,11 +336,54 @@ fn health_endpoint(server: &Directive) -> Option<(String, u16, bool)> {
     Some((name.clone(), port, tls))
 }
 
-fn redirect_only(server: &Directive) -> bool {
-    server.first("return").is_some() && server.first("location").is_none()
+/// The path Let's Encrypt (ACME HTTP-01) fetches challenge files from.
+pub const ACME_PATH: &str = "/.well-known/acme-challenge/";
+
+/// A location that serves ACME challenge files.
+pub(crate) fn acme_location(server: &Directive) -> Option<&Directive> {
+    server.find("location").find(|l| {
+        l.block.is_some()
+            && (matches!(l.args.as_slice(), [m, p] if m == "^~" && p == ACME_PATH)
+                || l.args.as_slice() == [ACME_PATH])
+    })
 }
 
-fn root_location(server: &Directive) -> Option<&Directive> {
+fn is_redirect_return(directive: &Directive) -> bool {
+    match directive.args.as_slice() {
+        [code, target] => {
+            !target.is_empty() && matches!(code.as_str(), "301" | "302" | "303" | "307" | "308")
+        }
+        [target] => ["http://", "https://", "$scheme"]
+            .iter()
+            .any(|prefix| target.starts_with(prefix)),
+        _ => false,
+    }
+}
+
+/// The `return` of a server block that only redirects: at the server level,
+/// or in `location /` next to nothing but an ACME challenge location (the
+/// shape a redirect needs for Let's Encrypt to reach the challenge).
+pub(crate) fn redirect_return(server: &Directive) -> Option<&Directive> {
+    let locations: Vec<&Directive> = server.find("location").collect();
+    if locations.is_empty() {
+        return server.first("return").filter(|d| is_redirect_return(d));
+    }
+    let root = locations.iter().find(|l| l.args.as_slice() == ["/"])?;
+    let only_acme = locations.iter().all(|l| {
+        l.args.as_slice() == ["/"] || acme_location(server).is_some_and(|a| a.span == l.span)
+    });
+    let only_return = root.children().len() == 1 && root.children()[0].name == "return";
+    (only_acme && only_return && server.first("return").is_none() && server.first("root").is_none())
+        .then(|| root.first("return"))
+        .flatten()
+        .filter(|d| is_redirect_return(d))
+}
+
+pub(crate) fn redirect_only(server: &Directive) -> bool {
+    redirect_return(server).is_some()
+}
+
+pub(crate) fn root_location(server: &Directive) -> Option<&Directive> {
     server.find("location").find(|l| l.args.as_slice() == ["/"])
 }
 
@@ -373,12 +419,18 @@ pub fn summary(directives: &[Directive]) -> Summary {
         servers: servers.len(),
         ..Default::default()
     };
-    for server in &servers {
+    // Names of the servers that serve the site come first: a server that
+    // only redirects (to HTTPS, or from www) may come earlier in the file.
+    let mut ordered: Vec<&&Directive> = servers.iter().filter(|s| !redirect_only(s)).collect();
+    ordered.extend(servers.iter().filter(|s| redirect_only(s)));
+    for server in ordered {
         for name in server.find("server_name").flat_map(|d| &d.args) {
             if !name.is_empty() && name != "_" && !out.names.contains(name) {
                 out.names.push(name.clone());
             }
         }
+    }
+    for server in &servers {
         out.addressed |= server.find("listen").any(addressed);
         for (port, ssl) in server.find("listen").filter_map(port) {
             if !out.ports.contains(&port) {
@@ -403,90 +455,7 @@ pub fn summary(directives: &[Directive]) -> Summary {
     out
 }
 
-/// The settings shown in a site's form. A field is `None` when the file does
-/// not have it in one consistent place, so it must be edited as text.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Settings {
-    pub names: Option<String>,
-    pub proxy: Option<String>,
-    pub folder: Option<String>,
-    pub timeout: Option<String>,
-    pub upload: Option<String>,
-    pub websocket: Option<bool>,
-    pub forwarded: Option<bool>,
-}
-
-fn content_servers(directives: &[Directive]) -> Vec<&Directive> {
-    let all = servers(directives);
-    let content: Vec<_> = all.iter().copied().filter(|s| !redirect_only(s)).collect();
-    if content.is_empty() { all } else { content }
-}
-
-/// One value when every place agrees, otherwise `None`.
-fn agreed<T: PartialEq>(values: impl IntoIterator<Item = Option<T>>) -> Option<Option<T>> {
-    let mut values = values.into_iter();
-    let first = values.next()?;
-    values.all(|v| v == first).then_some(first)
-}
-
-fn joined(directive: Option<&Directive>) -> Option<String> {
-    directive.map(|d| d.args.join(" "))
-}
-
-pub fn settings(text: &str) -> Result<Settings> {
-    let directives = parse(text)?;
-    let all = servers(&directives);
-    let content = content_servers(&directives);
-    let mut out = Settings::default();
-    if all.is_empty() {
-        return Ok(out);
-    }
-    out.names = agreed(all.iter().map(|s| joined(s.first("server_name")))).flatten();
-    let proxies: Vec<_> = content
-        .iter()
-        .map(|s| root_location(s).and_then(|l| l.first("proxy_pass").map(|p| (s, l, p))))
-        .collect();
-    if proxies.iter().all(Option::is_some) {
-        let proxies: Vec<_> = proxies.into_iter().flatten().collect();
-        out.proxy = agreed(proxies.iter().map(|(_, _, p)| joined(Some(p)))).flatten();
-        if out.proxy.is_some() {
-            out.timeout = agreed(
-                proxies
-                    .iter()
-                    .map(|(_, l, _)| joined(l.first("proxy_read_timeout"))),
-            )
-            .map(Option::unwrap_or_default);
-            out.websocket = agreed(proxies.iter().map(|(_, l, _)| {
-                Some(l.header("Upgrade").is_some() && l.header("Connection").is_some())
-            }))
-            .flatten();
-            out.forwarded = agreed(
-                proxies
-                    .iter()
-                    .map(|(_, l, _)| Some(l.header("X-Forwarded-For").is_some())),
-            )
-            .flatten();
-        }
-    } else {
-        out.folder = agreed(content.iter().map(|s| {
-            joined(
-                root_location(s)
-                    .and_then(|l| l.first("root"))
-                    .or_else(|| s.first("root")),
-            )
-        }))
-        .flatten();
-    }
-    out.upload = agreed(
-        content
-            .iter()
-            .map(|s| joined(s.first("client_max_body_size"))),
-    )
-    .map(Option::unwrap_or_default);
-    Ok(out)
-}
-
-fn plain_value(value: &str, what: &str) -> Result<()> {
+pub(crate) fn plain_value(value: &str, what: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
             && value.len() <= 1024
@@ -558,16 +527,22 @@ pub fn check_size(value: &str) -> Result<()> {
     Ok(())
 }
 
-struct Edits<'a> {
+pub(crate) struct Edits<'a> {
     text: &'a str,
     changes: Vec<(Range<usize>, String)>,
 }
 
 impl<'a> Edits<'a> {
+    pub(crate) fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            changes: Vec::new(),
+        }
+    }
     fn line_start(&self, at: usize) -> usize {
         self.text[..at].rfind('\n').map_or(0, |i| i + 1)
     }
-    fn indent(&self, d: &Directive) -> &'a str {
+    pub(crate) fn indent(&self, d: &Directive) -> &'a str {
         let start = self.line_start(d.span.start);
         let prefix = &self.text[start..d.span.start];
         if prefix.chars().all(|c| c == ' ' || c == '\t') {
@@ -577,13 +552,13 @@ impl<'a> Edits<'a> {
         }
     }
     /// The indentation for a new directive at the top of a block.
-    fn inner_indent(&self, block: &Directive) -> String {
+    pub(crate) fn inner_indent(&self, block: &Directive) -> String {
         if let Some(child) = block.children().first() {
             return self.indent(child).to_owned();
         }
         format!("{}    ", self.indent(block))
     }
-    fn replace_args(&mut self, d: &Directive, value: &str) {
+    pub(crate) fn replace_args(&mut self, d: &Directive, value: &str) {
         let range = if d.args_span.is_empty() {
             d.args_span.start..d.args_span.start
         } else {
@@ -597,27 +572,41 @@ impl<'a> Edits<'a> {
         self.changes.push((range, value));
     }
     /// Removes the directive, with its line when nothing else is on it.
-    fn remove(&mut self, d: &Directive) {
+    pub(crate) fn remove(&mut self, d: &Directive) {
         let start = self.line_start(d.span.start);
         let end = self.text[d.span.end..]
             .find('\n')
             .map_or(self.text.len(), |i| d.span.end + i + 1);
         let before_blank = self.text[start..d.span.start].trim().is_empty();
-        let after_blank = self.text[d.span.end..end].trim().is_empty();
+        // A comment at the end of the line belongs to the directive.
+        let rest = self.text[d.span.end..end].trim();
+        let after_blank = rest.is_empty() || rest.starts_with('#');
         if before_blank && after_blank {
+            // A block usually has an empty line around it; take one with it
+            // so no double empty line is left behind.
+            let (mut start, mut end) = (start, end);
+            if d.block.is_some() {
+                if self.text[end..].starts_with('\n') {
+                    end += 1;
+                } else if start >= 2 && &self.text[start - 2..start] == "\n\n" {
+                    start -= 1;
+                }
+            }
             self.changes.push((start..end, String::new()));
         } else {
             self.changes.push((d.span.clone(), String::new()));
         }
     }
     /// Adds lines after `anchor`, at its indentation.
-    fn insert_after(&mut self, anchor: &Directive, lines: &[String]) {
+    pub(crate) fn insert_after(&mut self, anchor: &Directive, lines: &[String]) {
         let indent = self.indent(anchor);
         let mut text = String::new();
         for line in lines {
             text.push('\n');
-            text.push_str(indent);
-            text.push_str(line);
+            if !line.is_empty() {
+                text.push_str(indent);
+                text.push_str(line);
+            }
         }
         // Keep a comment at the end of the anchor's line with it.
         let rest = &self.text[anchor.span.end..];
@@ -631,18 +620,71 @@ impl<'a> Edits<'a> {
         self.changes.push((at..at, text));
     }
     /// Adds lines at the top of a block.
-    fn insert_first(&mut self, block: &Directive, lines: &[String]) {
+    pub(crate) fn insert_first(&mut self, block: &Directive, lines: &[String]) {
         let indent = self.inner_indent(block);
         let mut text = String::new();
         for line in lines {
             text.push('\n');
-            text.push_str(&indent);
-            text.push_str(line);
+            if !line.is_empty() {
+                text.push_str(&indent);
+                text.push_str(line);
+            }
         }
         self.changes
             .push((block.body.start..block.body.start, text));
     }
-    fn finish(mut self) -> Result<String> {
+    /// Adds lines at the end of a block, before its closing brace.
+    pub(crate) fn insert_last(&mut self, block: &Directive, lines: &[String]) {
+        let Some(last) = block.children().last() else {
+            return self.insert_first(block, lines);
+        };
+        self.insert_after(last, lines);
+    }
+    /// Adds lines before `anchor`, at its indentation, followed by an empty
+    /// line; for a new block in front of an existing one.
+    pub(crate) fn insert_before(&mut self, anchor: &Directive, lines: &[String]) {
+        self.insert_lines_before(anchor, lines, true);
+    }
+    /// Adds lines before `anchor`, at its indentation; `spaced` adds an empty
+    /// line after them.
+    pub(crate) fn insert_lines_before(
+        &mut self,
+        anchor: &Directive,
+        lines: &[String],
+        spaced: bool,
+    ) {
+        let start = self.line_start(anchor.span.start);
+        let indent = self.indent(anchor);
+        let mut text = String::new();
+        for line in lines {
+            if !line.is_empty() {
+                text.push_str(indent);
+                text.push_str(line);
+            }
+            text.push('\n');
+        }
+        if spaced {
+            text.push('\n');
+        }
+        self.changes.push((start..start, text));
+    }
+    /// Replaces a directive with lines, the first at its position and the
+    /// rest at its indentation.
+    pub(crate) fn replace_with(&mut self, d: &Directive, lines: &[String]) {
+        let indent = self.indent(d);
+        let mut text = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+                if !line.is_empty() {
+                    text.push_str(indent);
+                }
+            }
+            text.push_str(line);
+        }
+        self.changes.push((d.span.clone(), text));
+    }
+    pub(crate) fn finish(mut self) -> Result<String> {
         self.changes
             .sort_by_key(|(range, _)| (range.start, range.end));
         for pair in self.changes.windows(2) {
@@ -659,145 +701,6 @@ impl<'a> Edits<'a> {
     }
 }
 
-/// Applies the fields that differ between `before` and `after`, leaving the
-/// rest of the file as written.
-pub fn apply(text: &str, before: &Settings, after: &Settings) -> Result<String> {
-    let directives = parse(text)?;
-    let all = servers(&directives);
-    let content = content_servers(&directives);
-    let mut edits = Edits {
-        text,
-        changes: Vec::new(),
-    };
-    if after.names != before.names
-        && let (Some(_), Some(names)) = (&before.names, &after.names)
-    {
-        check_names(names)?;
-        let names = names.split_whitespace().collect::<Vec<_>>().join(" ");
-        for server in &all {
-            if let Some(d) = server.first("server_name") {
-                edits.replace_args(d, &names);
-            }
-        }
-    }
-    let locations: Vec<_> = content
-        .iter()
-        .filter_map(|s| root_location(s).filter(|l| l.first("proxy_pass").is_some()))
-        .collect();
-    if before.proxy.is_some() {
-        if after.proxy != before.proxy
-            && let Some(target) = &after.proxy
-        {
-            check_proxy(target)?;
-            for l in &locations {
-                edits.replace_args(l.first("proxy_pass").unwrap(), target);
-            }
-        }
-        if after.timeout != before.timeout
-            && let (Some(_), Some(value)) = (&before.timeout, &after.timeout)
-        {
-            let value = value.trim();
-            check_timeout(value)?;
-            for l in &locations {
-                match (l.first("proxy_read_timeout"), value.is_empty()) {
-                    (Some(d), true) => edits.remove(d),
-                    (Some(d), false) => edits.replace_args(d, value),
-                    (None, false) => edits.insert_after(
-                        l.first("proxy_pass").unwrap(),
-                        &[format!("proxy_read_timeout {value};")],
-                    ),
-                    (None, true) => {}
-                }
-            }
-        }
-        if after.websocket != before.websocket
-            && let (Some(_), Some(on)) = (before.websocket, after.websocket)
-        {
-            for l in &locations {
-                if on {
-                    let mut lines = Vec::new();
-                    if l.first("proxy_http_version").is_none() {
-                        lines.push("proxy_http_version 1.1;".to_owned());
-                    }
-                    if l.header("Upgrade").is_none() {
-                        lines.push("proxy_set_header Upgrade $http_upgrade;".to_owned());
-                    }
-                    if l.header("Connection").is_none() {
-                        lines.push("proxy_set_header Connection \"upgrade\";".to_owned());
-                    }
-                    edits.insert_after(l.first("proxy_pass").unwrap(), &lines);
-                } else {
-                    for name in ["Upgrade", "Connection"] {
-                        if let Some(d) = l.header(name) {
-                            edits.remove(d);
-                        }
-                    }
-                }
-            }
-        }
-        if after.forwarded != before.forwarded
-            && let (Some(_), Some(on)) = (before.forwarded, after.forwarded)
-        {
-            for l in &locations {
-                match (l.header("X-Forwarded-For"), on) {
-                    (None, true) => {
-                        let anchor = l
-                            .find("proxy_set_header")
-                            .last()
-                            .or(l.first("proxy_pass"))
-                            .unwrap();
-                        edits.insert_after(
-                            anchor,
-                            &[
-                                "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
-                                    .to_owned(),
-                            ],
-                        );
-                    }
-                    (Some(d), false) => edits.remove(d),
-                    _ => {}
-                }
-            }
-        }
-    }
-    if after.folder != before.folder
-        && let (Some(_), Some(folder)) = (&before.folder, &after.folder)
-    {
-        check_folder(folder)?;
-        for server in &content {
-            if let Some(d) = root_location(server)
-                .and_then(|l| l.first("root"))
-                .or_else(|| server.first("root"))
-            {
-                edits.replace_args(d, folder);
-            }
-        }
-    }
-    if after.upload != before.upload
-        && let (Some(_), Some(value)) = (&before.upload, &after.upload)
-    {
-        let value = value.trim();
-        check_size(value)?;
-        for server in &content {
-            match (server.first("client_max_body_size"), value.is_empty()) {
-                (Some(d), true) => edits.remove(d),
-                (Some(d), false) => edits.replace_args(d, value),
-                (None, false) => {
-                    let line = format!("client_max_body_size {value};");
-                    match server.first("server_name") {
-                        Some(anchor) => edits.insert_after(anchor, &[line]),
-                        None => edits.insert_first(server, &[line]),
-                    }
-                }
-                (None, true) => {}
-            }
-        }
-    }
-    let out = edits.finish()?;
-    parse(&out)?;
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +715,24 @@ mod tests {
                 .to_string()
                 .contains("nested too deeply")
         );
+    }
+
+    #[test]
+    fn fixed_http_responses_are_not_redirect_only() {
+        for (body, redirects) in [
+            ("return 200 'ready';", false),
+            ("return 304;", false),
+            ("return 301 /next;", true),
+            ("return https://example.test/;", true),
+            ("location / { return 204; }", false),
+            (
+                "location / { return 308 /next; } location ^~ /.well-known/acme-challenge/ {}",
+                true,
+            ),
+        ] {
+            let directives = parse(&format!("server {{ {body} }}")).unwrap();
+            assert_eq!(redirect_only(&directives[0]), redirects, "{body}");
+        }
     }
 
     const PROXY: &str = "# Shop
@@ -885,121 +806,5 @@ server {
             &parse("events {} http { include mime.types; server { listen 80; } }").unwrap(),
         );
         assert_eq!(main.servers, 1);
-    }
-
-    #[test]
-    fn reads_and_changes_settings_in_place() {
-        let before = settings(PROXY).unwrap();
-        assert_eq!(before.names.as_deref(), Some("shop.example.com"));
-        assert_eq!(before.proxy.as_deref(), Some("http://127.0.0.1:8080"));
-        assert_eq!(before.timeout.as_deref(), Some("30s"));
-        assert_eq!(before.upload.as_deref(), Some(""));
-        assert_eq!(before.websocket, Some(false));
-        assert_eq!(before.forwarded, Some(false));
-        assert_eq!(before.folder, None);
-        let after = Settings {
-            names: Some("shop.example.com  www.shop.example.com".into()),
-            timeout: Some("60s".into()),
-            upload: Some("50m".into()),
-            websocket: Some(true),
-            forwarded: Some(true),
-            ..before.clone()
-        };
-        let text = apply(PROXY, &before, &after).unwrap();
-        assert_eq!(
-            text,
-            PROXY
-                .replace(
-                    "server_name shop.example.com;",
-                    "server_name shop.example.com www.shop.example.com;"
-                )
-                .replacen(
-                    "server_name shop.example.com www.shop.example.com;\n\n",
-                    "server_name shop.example.com www.shop.example.com;\n    client_max_body_size 50m;\n\n",
-                    1
-                )
-                .replace(
-                    "proxy_pass http://127.0.0.1:8080;  # the app",
-                    "proxy_pass http://127.0.0.1:8080;  # the app\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection \"upgrade\";"
-                )
-                .replace(
-                    "proxy_set_header Host $host;",
-                    "proxy_set_header Host $host;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
-                )
-                .replace("proxy_read_timeout 30s;", "proxy_read_timeout 60s;")
-        );
-        let reread = settings(&text).unwrap();
-        assert_eq!(reread.websocket, Some(true));
-        assert_eq!(reread.upload.as_deref(), Some("50m"));
-        // Turning the options off again removes exactly what was added,
-        // apart from proxy_http_version, which is harmless on its own.
-        let back = apply(
-            &text,
-            &reread,
-            &Settings {
-                websocket: Some(false),
-                forwarded: Some(false),
-                upload: Some(String::new()),
-                timeout: Some(String::new()),
-                ..reread.clone()
-            },
-        )
-        .unwrap();
-        assert!(!back.contains("Upgrade") && !back.contains("X-Forwarded-For"));
-        assert!(!back.contains("client_max_body_size") && !back.contains("proxy_read_timeout"));
-        assert!(
-            back.contains("proxy_http_version 1.1;\n        proxy_set_header Host $host;\n    }"),
-            "{back}"
-        );
-    }
-
-    #[test]
-    fn refuses_unsafe_values_and_inconsistent_files() {
-        let before = settings(PROXY).unwrap();
-        for after in [
-            Settings {
-                names: Some("a.com; b".into()),
-                ..before.clone()
-            },
-            Settings {
-                proxy: Some("127.0.0.1:8080".into()),
-                ..before.clone()
-            },
-            Settings {
-                proxy: Some("http://a b".into()),
-                ..before.clone()
-            },
-            Settings {
-                timeout: Some("soon".into()),
-                ..before.clone()
-            },
-            Settings {
-                upload: Some("50 MB".into()),
-                ..before.clone()
-            },
-        ] {
-            assert!(apply(PROXY, &before, &after).is_err());
-        }
-        let mixed = "server { server_name a.com; location / { proxy_pass http://a; } }\nserver { server_name b.com; location / { proxy_pass http://b; } }";
-        let s = settings(mixed).unwrap();
-        assert_eq!(s.names, None);
-        assert_eq!(s.proxy, None);
-        assert_eq!(s.timeout, None);
-        let folder = settings("server {\n\tserver_name a.com;\n\troot /srv/a;\n}\n").unwrap();
-        assert_eq!(folder.folder.as_deref(), Some("/srv/a"));
-        let changed = apply(
-            "server {\n\tserver_name a.com;\n\troot /srv/a;\n}\n",
-            &folder,
-            &Settings {
-                folder: Some("/srv/b".into()),
-                upload: Some("1g".into()),
-                ..folder.clone()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            changed,
-            "server {\n\tserver_name a.com;\n\tclient_max_body_size 1g;\n\troot /srv/b;\n}\n"
-        );
     }
 }

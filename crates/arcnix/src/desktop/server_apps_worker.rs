@@ -48,6 +48,10 @@ pub enum Action {
     DockerLogs(String, u16),
     DockerOperate(String, docker::Operation),
     NginxRead,
+    /// A command from `nginx::logs_command`.
+    NginxLogs(String),
+    /// A command from `nginx::certificates_command`.
+    NginxCertificates(String),
 }
 pub enum Reply {
     Applications(server_apps::Applications),
@@ -83,6 +87,8 @@ pub enum Reply {
     Logs(String),
     Operated,
     Nginx(arcnix_core::nginx::Reading),
+    NginxLogs(String),
+    NginxCertificates(arcnix_core::nginx::Certificates),
 }
 pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> {
     Ok(match action {
@@ -153,6 +159,12 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::DockerVolume(name) => Reply::Volume(session.inspect_container_volume(&name)?),
         Action::DockerLogs(id, lines) => Reply::Logs(session.read_container_logs(&id, lines)?),
         Action::NginxRead => Reply::Nginx(arcnix_core::nginx::read(session)?),
+        Action::NginxLogs(command) => {
+            Reply::NginxLogs(arcnix_core::nginx::read_logs(session, &command)?)
+        }
+        Action::NginxCertificates(command) => {
+            Reply::NginxCertificates(arcnix_core::nginx::read_certificates(session, &command)?)
+        }
         Action::DockerOperate(id, operation) => {
             session.apply_container_operation(&id, &operation)?;
             Reply::Operated

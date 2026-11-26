@@ -3,19 +3,24 @@
 //! review, and that runs with administrator rights.
 use std::rc::Rc;
 
-use arcnix_core::nginx::{self, Control, Kind, Layout, Serves, Settings, Snapshot, Style};
-use arcnix_core::nginx_config;
+use arcnix_core::nginx::{self, Control, Kind, Layout, Serves, Snapshot, Style};
+use arcnix_core::nginx_site::{self, Main, Site};
 
 use crate::i18n::desktop as i18n;
 use crate::i18n::desktop::{btn, icon_action, text_action};
 use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
 
+mod certificates;
+mod form;
+mod logs;
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum View {
     #[default]
     Overview,
     Sites,
+    Logs,
 }
 
 #[derive(Clone, Default)]
@@ -24,19 +29,69 @@ pub(crate) struct Editor {
     instance: String,
     /// The path Nginx knows.
     path: String,
+    /// Which site of the file this is, when the file holds several.
+    scope: Option<String>,
+    /// The main configuration's own settings, without its sites.
+    main_only: bool,
     /// The file on the server that publishing writes; empty when the file is
     /// inside a container image and can only be read.
     target: String,
     /// The live text when the editor opened; empty for a new file.
     original: String,
     text: String,
-    form: Settings,
+    /// The text as the Settings view shows it.
+    site: Site,
+    /// The main configuration's settings, for nginx.conf.
+    main: Option<Main>,
+    /// Values typed into Settings fields, by field, so typing is not lost
+    /// while a value is not valid yet.
+    drafts: std::collections::HashMap<String, String>,
+    adding: form::Adding,
     file_view: bool,
     health: String,
     create: bool,
     error: String,
+    /// The Settings control the error came from, where it is shown instead
+    /// of above the form.
+    error_at: Option<String>,
     /// Why the last publication of this file failed, from the server.
     failure: String,
+    /// What happened that the operator should know, such as a certificate
+    /// that is ready to publish.
+    info: String,
+    /// The certificate name being issued for this site.
+    issuing: Option<String>,
+}
+
+/// The text as the Settings view shows it: one site, the main
+/// configuration's settings, or both for a file that holds one site.
+fn settings_of(
+    main_only: bool,
+    scope: Option<&str>,
+    text: &str,
+) -> anyhow::Result<(Site, Option<Main>)> {
+    if main_only {
+        return Ok((Site::default(), nginx_site::read_main(text)?));
+    }
+    let site = nginx_site::read_in(text, scope)?;
+    let main = match scope {
+        Some(_) => None,
+        None => nginx_site::read_main(text)?,
+    };
+    Ok((site, main))
+}
+
+impl Editor {
+    fn read(&self, text: &str) -> anyhow::Result<(Site, Option<Main>)> {
+        settings_of(self.main_only, self.scope.as_deref(), text)
+    }
+    /// The [`nginx::Site::key`] of the site being edited.
+    fn key(&self) -> String {
+        match &self.scope {
+            Some(scope) => format!("{}#{scope}", self.path),
+            None => self.path.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -54,6 +109,9 @@ pub(crate) struct NginxState {
     snapshot: Option<Rc<Snapshot>>,
     /// Why Docker containers could not be listed.
     docker_error: String,
+    /// Containers that run Nginx only inside an application, which are not
+    /// listed as instances.
+    hidden: Vec<String>,
     pending: Option<u64>,
     error: String,
     /// Why the last site or service task failed.
@@ -62,6 +120,8 @@ pub(crate) struct NginxState {
     filter: String,
     editor: Option<Editor>,
     new_site: NewSite,
+    logs: logs::Logs,
+    certificates: certificates::CertificateState,
 }
 
 /// What a row in the sites list needs, without the file's text.
@@ -91,7 +151,7 @@ fn rows(s: &State, enabled_only: bool) -> Vec<Row> {
         .iter()
         .filter(|site| !enabled_only || site.enabled)
         .map(|site| Row {
-            path: site.file.path.clone(),
+            path: site.key(),
             title: site.title(),
             file: site.file.path.clone(),
             names: site.summary.names.join(" "),
@@ -114,6 +174,10 @@ fn rows(s: &State, enabled_only: bool) -> Vec<Row> {
                 "Not valid Nginx configuration"
             } else if !site.file.editable() {
                 "Inside the container image; mount it from the server to change it"
+            } else if site.scope.is_some() && site.file.path == snapshot.main.path {
+                "In the main configuration, so it stays on"
+            } else if site.scope.is_some() {
+                "Shares its file with other sites, so it is turned on and off in File"
             } else if site.style == Style::Fixed && site.file.path.contains("/sites-enabled/") {
                 "Copied into sites-enabled, so it stays on"
             } else if site.style == Style::Fixed {
@@ -276,8 +340,8 @@ fn tail(output: &str) -> String {
 }
 
 /// The form needs at least one field it can show.
-fn has_form(form: &Settings) -> bool {
-    form.names.is_some() || form.proxy.is_some() || form.folder.is_some() || form.upload.is_some()
+fn has_form(site: &Site, main: Option<&Main>) -> bool {
+    site.names.is_some() || site.server.is_some() || site.upload.is_some() || main.is_some()
 }
 
 impl Ui {
@@ -323,9 +387,14 @@ impl Ui {
                 failed,
                 private,
                 target.output.clone(),
+                record.script_id == "builtin:nginx:certificate",
+                target.status == arcnix_core::tasks::Status::Succeeded,
             ))
         });
-        if let Some((path, name, failed, private, output)) = finished {
+        if let Some((_, _, _, _, _, true, succeeded)) = &finished {
+            self.nginx_issued(*succeeded);
+        }
+        if let Some((path, name, failed, private, output, ..)) = finished {
             self.state.revise(|s| match path {
                 Some(path) => {
                     let message = match (failed, private) {
@@ -387,33 +456,50 @@ impl Ui {
             self.nginx_task(template);
         }
     }
-    fn nginx_open(&self, path: &str) {
+    /// Opens a site by its key, or the main configuration by its path.
+    fn nginx_open(&self, key: &str) {
         let editor = self.state.with(|s| {
             let snapshot = s.nginx.snapshot.as_ref()?;
             // A site that is off cannot answer, so it gets no health address.
-            let (file, summary) = match snapshot.site(path) {
-                Some(site) => (&site.file, site.enabled.then_some(&site.summary)),
-                None if snapshot.main.path == path => (&snapshot.main, None),
+            let (file, summary, scope) = match snapshot.site(key) {
+                Some(site) => (
+                    &site.file,
+                    site.enabled.then_some(&site.summary),
+                    Some(site.scope.clone()),
+                ),
+                None if snapshot.main.path == key => (&snapshot.main, None, None),
                 None => return None,
             };
             let text = file.text.clone()?;
-            let form = nginx_config::settings(&text).unwrap_or_default();
             // A site's domain does not reach a container from the server, so
             // a containerized Nginx checks only that it keeps running.
             let summary = summary.filter(|_| snapshot.docker.is_none());
-            Some(Editor {
+            let mut editor = Editor {
                 instance: snapshot.key(),
                 path: file.path.clone(),
+                main_only: scope.is_none(),
+                scope: scope.flatten(),
                 target: file.target.clone(),
                 original: text.clone(),
-                file_view: !has_form(&form),
-                form,
+                file_view: false,
+                site: Site::default(),
+                main: None,
+                drafts: Default::default(),
+                adding: Default::default(),
                 text,
                 health: summary.map(nginx::health_address).unwrap_or_default(),
                 create: false,
                 error: String::new(),
+                error_at: None,
                 failure: String::new(),
-            })
+                info: String::new(),
+                issuing: None,
+            };
+            let (site, main) = editor.read(&editor.text).unwrap_or_default();
+            editor.file_view = !has_form(&site, main.as_ref());
+            editor.site = site;
+            editor.main = main;
+            Some(editor)
         });
         if editor.is_some() {
             self.state.revise(|s| s.nginx.editor = editor);
@@ -436,21 +522,30 @@ impl Ui {
             let new = &s.nginx.new_site;
             let text = nginx::new_site(new.kind, &new.names, new.target.trim())?;
             let (path, target) = nginx::new_site_path(snapshot, &new.names)?;
-            let form = nginx_config::settings(&text).unwrap_or_default();
+            let site = nginx_site::read(&text).unwrap_or_default();
+            let main = nginx_site::read_main(&text).ok().flatten();
             Ok(Editor {
                 instance: snapshot.key(),
                 path,
+                scope: None,
+                main_only: false,
                 target,
                 original: String::new(),
                 text,
                 file_view: false,
-                form,
+                site,
+                main,
+                drafts: Default::default(),
+                adding: Default::default(),
                 // A new site that is not on yet cannot answer, so only check
                 // that Nginx keeps running.
                 health: String::new(),
                 create: true,
                 error: String::new(),
+                error_at: None,
                 failure: String::new(),
+                info: String::new(),
+                issuing: None,
             })
         });
         match result {
@@ -465,23 +560,6 @@ impl Ui {
             Err(error) => self.state.revise(|s| s.dialog_error = format!("{error:#}")),
         }
     }
-    fn nginx_form(&self, change: impl FnOnce(&mut Settings)) {
-        self.state.revise(|s| {
-            let Some(editor) = &mut s.nginx.editor else {
-                return;
-            };
-            change(&mut editor.form);
-            let result = nginx_config::settings(&editor.text)
-                .and_then(|before| nginx_config::apply(&editor.text, &before, &editor.form));
-            match result {
-                Ok(text) => {
-                    editor.text = text;
-                    editor.error.clear();
-                }
-                Err(error) => editor.error = i18n::translate(&format!("{error:#}")),
-            }
-        });
-    }
     fn nginx_file_view(&self, file: bool) {
         self.state.revise(|s| {
             let Some(editor) = &mut s.nginx.editor else {
@@ -491,12 +569,15 @@ impl Ui {
                 return;
             }
             if !file {
-                match nginx_config::settings(&editor.text) {
-                    Ok(form) => {
-                        editor.form = form;
+                match editor.read(&editor.text) {
+                    Ok((site, main)) => {
+                        editor.site = site;
+                        editor.main = main;
+                        editor.drafts.clear();
                         editor.error.clear();
                     }
                     Err(error) => {
+                        editor.error_at = None;
                         editor.error = i18n::translate(&format!(
                             "The file cannot be read as Nginx configuration: {error:#}"
                         ));
@@ -540,6 +621,7 @@ impl Ui {
             Err(error) => self.state.revise(|s| {
                 if let Some(editor) = &mut s.nginx.editor {
                     editor.error = format!("{error:#}");
+                    editor.error_at = None;
                 }
             }),
         }
@@ -551,15 +633,28 @@ pub(crate) fn event(
     serial: u64,
     result: std::result::Result<Reply, String>,
 ) -> Option<std::result::Result<Reply, String>> {
+    let result = logs::event(ui, serial, result)?;
+    let result = certificates::event(ui, serial, result)?;
     if !ui.state.with(|s| s.nginx.pending == Some(serial)) {
         return Some(result);
     }
+    let read = matches!(result, Ok(Reply::Nginx(_)));
     ui.state.revise(|s| {
         s.nginx.pending = None;
         match result {
             Ok(Reply::Nginx(reading)) => {
-                let instances: Vec<Rc<Snapshot>> =
-                    reading.instances.into_iter().map(Rc::new).collect();
+                // An application's own Nginx is listed only when there is no
+                // other to manage.
+                let managed = reading.instances.iter().any(|n| !n.internal());
+                let (instances, hidden): (Vec<Snapshot>, Vec<Snapshot>) = reading
+                    .instances
+                    .into_iter()
+                    .partition(|n| !managed || !n.internal());
+                s.nginx.hidden = hidden
+                    .iter()
+                    .filter_map(|n| n.docker.as_ref().map(|c| c.name.clone()))
+                    .collect();
+                let instances: Vec<Rc<Snapshot>> = instances.into_iter().map(Rc::new).collect();
                 let selected = instances
                     .iter()
                     .find(|n| n.key() == s.nginx.instance)
@@ -570,9 +665,12 @@ pub(crate) fn event(
                     match selected.as_ref().filter(|n| n.key() == editor.instance) {
                         // A published file now matches what is being edited.
                         Some(snapshot) => {
-                            let live = snapshot.file(&editor.path).and_then(|f| f.text.as_ref());
-                            if live == Some(&editor.text) {
-                                editor.original = editor.text.clone();
+                            let live = snapshot.file(&editor.path).and_then(|f| f.text.clone());
+                            // Publishing gives every line the file's own ending.
+                            let lines = |t: &str| t.replace("\r\n", "\n");
+                            if let Some(live) = live.filter(|l| lines(l) == lines(&editor.text)) {
+                                editor.text = live.clone();
+                                editor.original = live;
                                 editor.create = false;
                             }
                         }
@@ -587,6 +685,9 @@ pub(crate) fn event(
             _ => s.nginx.error = "Invalid Nginx response".into(),
         }
     });
+    if read {
+        ui.nginx_certificates();
+    }
     None
 }
 
@@ -595,23 +696,32 @@ fn navigation(ui: Ui) -> impl Widget {
     let items = [
         ("Overview", Icon::Grid, View::Overview),
         ("Sites", Icon::WebServer, View::Sites),
+        ("Logs", Icon::Logs, View::Logs),
     ]
     .into_iter()
-    .map(move |(label, icon, view)| {
-        text_action(label, icon)
-            .class("button with-icon nginx-nav-item")
-            .pressed(state.map(move |s| s.nginx.view == view && !editing(s)))
-            .on_press(move || {
-                state.revise(|s| {
-                    s.nginx.view = view;
-                    s.nginx.editor = None;
+    .map({
+        let ui = ui.clone();
+        move |(label, icon, view)| {
+            let ui = ui.clone();
+            text_action(label, icon)
+                .class("button with-icon nginx-nav-item")
+                .pressed(state.map(move |s| s.nginx.view == view && !editing(s)))
+                .on_press(move || {
+                    state.revise(|s| {
+                        s.nginx.view = view;
+                        s.nginx.editor = None;
+                    });
+                    if view == View::Logs {
+                        ui.nginx_logs();
+                    }
                 })
-            })
+        }
     })
     .collect::<Vec<_>>();
     col().class("nginx-nav").fill((
         col().class("nginx-views").fill(items),
         when(state.map(|s| s.nginx.instances.len() > 1), move || {
+            let ui = ui.clone();
             col().class("nginx-instances").fill((
                 text()
                     .class("nginx-nav-label")
@@ -627,6 +737,7 @@ fn navigation(ui: Ui) -> impl Widget {
                 .children(move |item| {
                     let (key, title, docker, running) = item.value.get();
                     let chosen = key.clone();
+                    let logs_ui = ui.clone();
                     text_action(
                         title,
                         if docker {
@@ -655,7 +766,12 @@ fn navigation(ui: Ui) -> impl Widget {
                             s.nginx.instance = chosen.clone();
                             s.nginx.editor = None;
                             s.nginx.notice.clear();
-                        })
+                            s.nginx.logs.source.clear();
+                        });
+                        logs_ui.nginx_certificates();
+                        if logs_ui.state.with(|s| s.nginx.view == View::Logs) {
+                            logs_ui.nginx_logs();
+                        }
                     })
                 }),
             ))
@@ -823,9 +939,19 @@ fn overview(ui: Ui) -> impl Widget {
                 },
             ),
         )),
+        certificates::overview(&ui),
         text().class("hint").content(i18n::bind(
             "Changes run as server tasks with administrator rights. You review each one before it runs, and it is kept in task history.",
         )),
+        text().class("hint").content(state.map(|s| {
+            if s.nginx.hidden.is_empty() {
+                return String::new();
+            }
+            let names = s.nginx.hidden.join(", ");
+            i18n::translate(&format!(
+                "Not listed: {names}. These containers run Nginx inside an application; they publish no port and nothing in them comes from the server, so there is nothing to manage."
+            ))
+        })),
         text().class("hint").content(i18n::bind(state.map(|s| {
             match s.nginx.docker_error.as_str() {
                 "permission" => "Arcnix cannot list Docker containers as the SSH account, so Nginx in containers is not shown. Add the account to the docker group to manage it.",
@@ -1014,158 +1140,6 @@ fn field(label: &'static str, control: impl Widget) -> impl Widget {
     ))
 }
 
-fn text_field(
-    ui: &Ui,
-    label: &'static str,
-    read: fn(&Settings) -> Option<String>,
-    write: fn(&mut Settings, String),
-) -> impl Widget + use<> {
-    let state = ui.state;
-    let ui = ui.clone();
-    when(
-        state.map(move |s| {
-            s.nginx
-                .editor
-                .as_ref()
-                .is_some_and(|e| read(&e.form).is_some())
-        }),
-        move || {
-            let ui = ui.clone();
-            field(
-                label,
-                input()
-                    .name(i18n::bind(label))
-                    .enabled(state.map(writable))
-                    .value(state.map(move |s| {
-                        s.nginx
-                            .editor
-                            .as_ref()
-                            .and_then(|e| read(&e.form))
-                            .unwrap_or_default()
-                    }))
-                    .on(value_changed, move |event| {
-                        if let Event::ValueChanged { value, .. } = event {
-                            ui.nginx_form(|form| write(form, value));
-                        }
-                    }),
-            )
-        },
-    )
-}
-
-fn check_field(
-    ui: &Ui,
-    label: &'static str,
-    read: fn(&Settings) -> Option<bool>,
-    write: fn(&mut Settings, bool),
-) -> impl Widget + use<> {
-    let state = ui.state;
-    let ui = ui.clone();
-    when(
-        state.map(move |s| {
-            s.nginx
-                .editor
-                .as_ref()
-                .is_some_and(|e| read(&e.form).is_some())
-        }),
-        move || {
-            let ui = ui.clone();
-            sapid::checkbox()
-                .class("preference-check")
-                .label(i18n::bind(label))
-                .enabled(state.map(writable))
-                .checked(state.map(move |s| {
-                    s.nginx
-                        .editor
-                        .as_ref()
-                        .and_then(|e| read(&e.form))
-                        .unwrap_or_default()
-                }))
-                .on_checked_change(move |value| ui.nginx_form(|form| write(form, value)))
-        },
-    )
-}
-
-fn settings_form(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    col().class("nginx-form").fill((
-        col().class("nginx-form-section").fill((
-            text().class("section-title").content(i18n::bind("Domain")),
-            text_field(&ui, "Domains", |f| f.names.clone(), |f, v| f.names = Some(v)),
-            text()
-                .class("nginx-form-summary subtle")
-                .content(i18n::bind(state.map(|s| {
-                    let Some(editor) = &s.nginx.editor else {
-                        return String::new();
-                    };
-                    let summary = nginx_config::parse(&editor.text)
-                        .map(|d| nginx_config::summary(&d))
-                        .unwrap_or_default();
-                    let ports = summary
-                        .ports
-                        .iter()
-                        .map(u16::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    match (&summary.certificate, ports.is_empty()) {
-                        (_, true) => String::new(),
-                        (Some(certificate), false) => {
-                            format!("Listens on {ports} · certificate {certificate}")
-                        }
-                        (None, false) => format!("Listens on {ports}"),
-                    }
-                }))),
-        )),
-        when(
-            state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| e.form.proxy.is_some())),
-            {
-                let ui = ui.clone();
-                move || {
-                    col().class("nginx-form-section").fill((
-                        text().class("section-title").content(i18n::bind("Reverse proxy")),
-                        row().class("nginx-form-grid").fill((
-                            text_field(&ui, "Forward to", |f| f.proxy.clone(), |f, v| f.proxy = Some(v)),
-                            text_field(&ui, "Timeout", |f| f.timeout.clone(), |f, v| f.timeout = Some(v)),
-                        )),
-                        check_field(&ui, "WebSocket connections", |f| f.websocket, |f, v| f.websocket = Some(v)),
-                        check_field(&ui, "Pass the visitor’s address (X-Forwarded-For)", |f| f.forwarded, |f, v| f.forwarded = Some(v)),
-                    ))
-                }
-            },
-        ),
-        when(
-            state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| e.form.folder.is_some())),
-            {
-                let ui = ui.clone();
-                move || {
-                    col().class("nginx-form-section").fill((
-                        text().class("section-title").content(i18n::bind("Static files")),
-                        text_field(&ui, "Folder", |f| f.folder.clone(), |f, v| f.folder = Some(v)),
-                    ))
-                }
-            },
-        ),
-        when(
-            state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| e.form.upload.is_some())),
-            {
-                let ui = ui.clone();
-                move || {
-                    col().class("nginx-form-section").fill((
-                        text().class("section-title").content(i18n::bind("Requests")),
-                        text_field(&ui, "Largest upload", |f| f.upload.clone(), |f, v| f.upload = Some(v)),
-                        text().class("hint").content(i18n::bind(
-                            "Use Nginx units: 60s or 5m for times, 50m or 1g for sizes. Leave empty to use the Nginx default.",
-                        )),
-                    ))
-                }
-            },
-        ),
-        text().class("hint").content(i18n::bind(
-            "Settings covers common directives. Anything else in the file is kept as written; switch to File to see or change it.",
-        )),
-    ))
-}
-
 fn editor(ui: Ui) -> impl Widget {
     let state = ui.state;
     let back = ui.clone();
@@ -1189,7 +1163,7 @@ fn editor(ui: Ui) -> impl Widget {
                             s.nginx
                                 .snapshot
                                 .as_ref()
-                                .and_then(|n| n.site(&e.path))
+                                .and_then(|n| n.site(&e.key()))
                                 .map(|site| site.title())
                                 .unwrap_or_else(|| {
                                     e.path.rsplit('/').next().unwrap_or_default().to_owned()
@@ -1219,7 +1193,7 @@ fn editor(ui: Ui) -> impl Widget {
                     .class("nginx-segment")
                     .label(i18n::bind("Settings"))
                     .pressed(state.map(move |s| !file(s)))
-                    .enabled(state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| has_form(&e.form) || !e.file_view)))
+                    .enabled(state.map(|s| s.nginx.editor.as_ref().is_some_and(|e| has_form(&e.site, e.main.as_ref()) || !e.file_view)))
                     .on_press(move || form_view.nginx_file_view(false)),
                 sapid::button()
                     .class("nginx-segment")
@@ -1230,7 +1204,7 @@ fn editor(ui: Ui) -> impl Widget {
         )),
         text()
             .class(state.map(|s| {
-                if s.nginx.editor.as_ref().is_some_and(|e| !e.error.is_empty() || !e.failure.is_empty()) {
+                if s.nginx.editor.as_ref().is_some_and(|e| (!e.error.is_empty() && e.error_at.is_none()) || !e.failure.is_empty()) {
                     "nginx-error"
                 } else {
                     "hidden"
@@ -1242,9 +1216,14 @@ fn editor(ui: Ui) -> impl Widget {
                 s.nginx
                     .editor
                     .as_ref()
-                    .map(|e| if e.error.is_empty() { e.failure.clone() } else { e.error.clone() })
+                    .map(|e| if e.error.is_empty() || e.error_at.is_some() { e.failure.clone() } else { e.error.clone() })
                     .unwrap_or_default()
             })),
+        text()
+            .class(state.map(|s| {
+                if s.nginx.editor.as_ref().is_some_and(|e| !e.info.is_empty()) { "nginx-info" } else { "hidden" }.to_owned()
+            }))
+            .content(state.map(|s| s.nginx.editor.as_ref().map(|e| e.info.clone()).unwrap_or_default())),
         text()
             .class(state.map(|s| {
                 if s.nginx.editor.as_ref().is_some_and(|e| e.target.is_empty()) {
@@ -1259,7 +1238,7 @@ fn editor(ui: Ui) -> impl Widget {
             )),
         when(state.map(move |s| !file(s)), {
             let ui = ui.clone();
-            move || settings_form(ui.clone())
+            move || form::settings_form(ui.clone())
         }),
         when(state.map(file), move || {
             input()
@@ -1313,6 +1292,11 @@ fn editor(ui: Ui) -> impl Widget {
             text().class("hint").content(i18n::bind(
                 "Arcnix checks the complete configuration before replacing the file. After the reload, it asks this server's Nginx for the address. If there is no answer, or only server errors (5xx), for 30 seconds, the previous file is put back. Leave it empty to check only that Nginx keeps running.",
             )),
+            text()
+                .class(state.map(|s| {
+                    if s.nginx.editor.as_ref().is_some_and(|e| !e.error.is_empty()) { "error" } else { "hidden" }.to_owned()
+                }))
+                .content(state.map(|s| s.nginx.editor.as_ref().map(|e| e.error.clone()).unwrap_or_default())),
             row().class("nginx-publish-row").fill((
                 text().class("nginx-change subtle").content(i18n::bind(state.map(|s| {
                     match &s.nginx.editor {
@@ -1333,7 +1317,8 @@ fn editor(ui: Ui) -> impl Widget {
                                 s.nginx.editor = None;
                             } else if let Some(editor) = &mut s.nginx.editor {
                                 editor.text = editor.original.clone();
-                                editor.form = nginx_config::settings(&editor.text).unwrap_or_default();
+                                (editor.site, editor.main) = editor.read(&editor.text).unwrap_or_default();
+                                editor.drafts.clear();
                                 editor.error.clear();
                                 editor.failure.clear();
                             }
@@ -1384,6 +1369,10 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 move || overview(ui.clone())
             },
         ),
+        when(state.map(|s| !editing(s) && s.nginx.view == View::Logs), {
+            let ui = ui.clone();
+            move || logs::view(ui.clone())
+        }),
         when(state.map(|s| !editing(s) && s.nginx.view == View::Sites), {
             let ui = ui.clone();
             move || sites(ui.clone())
@@ -1511,10 +1500,12 @@ mod tests {
 
     #[test]
     fn forms_appear_only_for_files_with_common_settings() {
-        assert!(!has_form(&Settings::default()));
-        let site = nginx_config::settings("server { server_name a.com; root /srv; }").unwrap();
-        assert!(has_form(&site));
-        let main = nginx_config::settings("events {}\nhttp { include mime.types; }\n").unwrap();
-        assert!(!has_form(&main));
+        assert!(!has_form(&Site::default(), None));
+        let site = nginx_site::read("server { server_name a.com; root /srv; }").unwrap();
+        assert!(has_form(&site, None));
+        let text = "events {}\nhttp { include mime.types; }\n";
+        let main = nginx_site::read_main(text).unwrap();
+        assert!(has_form(&nginx_site::read(text).unwrap(), main.as_ref()));
+        assert!(!has_form(&nginx_site::read("events {}\n").unwrap(), None));
     }
 }
