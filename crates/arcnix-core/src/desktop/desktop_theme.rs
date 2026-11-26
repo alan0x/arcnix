@@ -37,6 +37,22 @@ pub const BUNDLED_WALLPAPERS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/wallpapers/tide-dark.webp"),
     ),
     (
+        "clay-light",
+        include_bytes!("../../assets/wallpapers/clay-light.webp"),
+    ),
+    (
+        "clay-dark",
+        include_bytes!("../../assets/wallpapers/clay-dark.webp"),
+    ),
+    (
+        "meadow-light",
+        include_bytes!("../../assets/wallpapers/meadow-light.webp"),
+    ),
+    (
+        "meadow-dark",
+        include_bytes!("../../assets/wallpapers/meadow-dark.webp"),
+    ),
+    (
         "fjord",
         include_bytes!("../../assets/wallpapers/fjord.webp"),
     ),
@@ -155,6 +171,8 @@ pub enum Preset {
     Prism,
     Valley,
     Tide,
+    Clay,
+    Meadow,
     Fjord,
     Aurora,
     #[serde(alias = "terracotta", alias = "afterglow")]
@@ -162,10 +180,12 @@ pub enum Preset {
 }
 
 impl Preset {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Prism,
         Self::Valley,
         Self::Tide,
+        Self::Clay,
+        Self::Meadow,
         Self::Fjord,
         Self::Aurora,
         Self::Seaside,
@@ -176,6 +196,8 @@ impl Preset {
             Self::Prism => "Prism",
             Self::Valley => "Valley",
             Self::Tide => "Tide",
+            Self::Clay => "Clay",
+            Self::Meadow => "Meadow",
             Self::Fjord => "Fjord",
             Self::Aurora => "Aurora",
             Self::Seaside => "Seaside",
@@ -186,38 +208,50 @@ impl Preset {
         let (wallpaper, light_accent, dark_accent, icons) = match self {
             Self::Prism => (
                 Wallpaper::Prism,
-                [102, 126, 159],
-                [104, 168, 247],
+                [0, 120, 212],
+                [119, 167, 222],
                 IconStyle::Outline,
             ),
             Self::Valley => (
                 Wallpaper::Valley,
-                [146, 107, 218],
-                [180, 132, 241],
+                [137, 99, 201],
+                [190, 145, 238],
                 IconStyle::Outline,
             ),
             Self::Tide => (
                 Wallpaper::Tide,
-                [200, 153, 78],
-                [222, 165, 79],
+                [173, 116, 46],
+                [226, 161, 81],
+                IconStyle::Outline,
+            ),
+            Self::Clay => (
+                Wallpaper::Clay,
+                [160, 95, 99],
+                [198, 143, 155],
+                IconStyle::Outline,
+            ),
+            Self::Meadow => (
+                Wallpaper::Meadow,
+                [100, 118, 70],
+                [143, 168, 122],
                 IconStyle::Outline,
             ),
             Self::Fjord => (
                 Wallpaper::Fjord,
-                [135, 206, 235],
-                [121, 185, 213],
+                [84, 140, 163],
+                [131, 175, 197],
                 IconStyle::Outline,
             ),
             Self::Aurora => (
                 Wallpaper::Aurora,
-                [170, 163, 239],
-                [137, 188, 153],
+                [134, 127, 174],
+                [136, 195, 166],
                 IconStyle::Outline,
             ),
             Self::Seaside => (
                 Wallpaper::Seaside,
-                [232, 162, 124],
-                [215, 152, 144],
+                [180, 121, 104],
+                [207, 155, 132],
                 IconStyle::Filled,
             ),
         };
@@ -664,6 +698,28 @@ impl Themes {
 mod tests {
     use super::*;
     use crate::server_apps::{DesktopPreferences, parse_preferences};
+
+    #[test]
+    fn preset_accents_are_readable_in_both_schemes() {
+        use ColorRole::*;
+        for preset in Preset::ALL {
+            let theme = preset.theme();
+            for dark in [false, true] {
+                let palette = theme.palette(dark);
+                let fill = theme.accent_fill(dark);
+                let surface = palette[&Surface];
+                let label = fill.contrasting_label(surface, palette[&Text]);
+                let selected = palette[&Background].mix(fill, 20);
+                let readable = palette[&Accent];
+                assert!(
+                    contrast(surface.luminance(), fill.luminance()) >= 3.0,
+                    "{preset:?}, dark={dark}"
+                );
+                assert!(contrast(fill.luminance(), label.luminance()) >= 4.5);
+                assert!(contrast(selected.luminance(), readable.luminance()) >= 4.5);
+            }
+        }
+    }
 
     #[test]
     fn generated_colors_keep_text_and_accent_legible_in_both_schemes() {

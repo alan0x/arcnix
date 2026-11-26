@@ -23,7 +23,7 @@ pub fn checked_reference(reference: &str) -> Result<String> {
     let reference = reference.trim();
     ensure!(!reference.is_empty(), "Enter an image, such as nginx:1.27");
     ensure!(
-        reference.len() <= 512 && reference.is_ascii() && !reference.contains(char::is_whitespace),
+        reference.is_ascii() && !reference.contains(char::is_whitespace),
         "Enter an image, such as nginx:1.27 or ghcr.io/owner/app:1.0"
     );
     let (name, digest) = match reference.split_once('@') {
@@ -65,38 +65,45 @@ pub fn checked_reference(reference: &str) -> Result<String> {
             "A tag uses letters, digits, _ . and -, such as 1.27 or latest"
         );
     }
-    // Docker limits the name, not the tag or digest, to 255 characters.
-    ensure!(
-        name.len() <= 255,
-        "An image name can be at most 255 characters"
-    );
-    let mut parts: Vec<&str> = name.split('/').collect();
-    if parts.len() > 1
-        && (parts[0].contains(['.', ':'])
-            || parts[0] == "localhost"
-            || parts[0].bytes().any(|b| b.is_ascii_uppercase()))
+    let path = if let Some((registry, path)) = name.split_once('/')
+        && (registry.contains(['.', ':'])
+            || registry == "localhost"
+            || registry.bytes().any(|b| b.is_ascii_uppercase()))
     {
-        let registry = parts.remove(0);
         ensure!(
             valid_registry(registry),
             "Enter a registry such as ghcr.io or registry.example.com:5000"
         );
-    }
+        path
+    } else {
+        name
+    };
     ensure!(
-        !parts.is_empty() && parts.iter().all(|part| valid_component(part)),
+        path.len() <= 255,
+        "An image name can be at most 255 characters"
+    );
+    ensure!(
+        path.split('/').all(valid_component),
         "An image name uses lower-case letters, digits and . _ - between them, such as library/nginx"
     );
     Ok(reference.to_owned())
 }
 
-/// A registry host name or IPv4 address, with an optional port.
+/// A registry hostname or IP address, with brackets around IPv6.
 fn valid_registry(registry: &str) -> bool {
-    let (host, port) = match registry.rsplit_once(':') {
-        Some((host, port)) => (host, Some(port)),
-        None => (registry, None),
+    let host = match registry.rsplit_once(':') {
+        Some((host, port)) if !registry.ends_with(']') => {
+            if !port.bytes().all(|b| b.is_ascii_digit()) || port.parse::<u16>().is_err() {
+                return false;
+            }
+            host
+        }
+        _ => registry,
     };
-    port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()))
-        && !host.is_empty()
+    if let Some(address) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return !address.contains('.') && address.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    host.len() <= 253
         && host.split('.').all(|label| {
             !label.is_empty()
                 && !label.starts_with('-')
@@ -155,16 +162,10 @@ pub fn pull(reference: &str, platform: &str) -> Result<Template> {
         format!("--platform {} ", quote(&platform))
     };
     let image = quote(&reference);
+    let setup = super::docker::PREFIX;
     let command = format!(
         r#"# arcnix:docker:pull
-set -eu
-if ! command -v docker >/dev/null 2>&1 && [ -x /snap/bin/docker ]; then PATH="$PATH:/snap/bin"; fi
-command -v docker >/dev/null 2>&1 || {{ echo 'Docker is not installed on this server' >&2; exit 1; }}
-unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH
-arcnix_runtime="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
-if [ -S "$arcnix_runtime/docker.sock" ]; then arcnix_socket="unix://$arcnix_runtime/docker.sock"; else arcnix_socket='unix:///var/run/docker.sock'; fi
-arcnix_limit=
-if command -v timeout >/dev/null 2>&1; then arcnix_limit='timeout -k 10s {PULL_SECONDS}s'; fi
+{setup}
 (
   arcnix_sleep=
   trap 'kill "$arcnix_sleep" 2>/dev/null; exit 0' TERM
@@ -180,16 +181,17 @@ if command -v timeout >/dev/null 2>&1; then arcnix_limit='timeout -k 10s {PULL_S
 arcnix_beat=$!
 trap 'kill "$arcnix_beat" 2>/dev/null || true' EXIT
 arcnix_status=0
-$arcnix_limit docker --host "$arcnix_socket" pull {platform_option}{image} || arcnix_status=$?
+timeout -k 10s {PULL_SECONDS}s docker --host "$arcnix_socket" pull {platform_option}{image} || arcnix_status=$?
 kill "$arcnix_beat" 2>/dev/null || true
+wait "$arcnix_beat" || true
+trap - EXIT
 case "$arcnix_status" in 124|137) echo 'The pull took longer than 55 minutes and was stopped' >&2;; esac
 [ "$arcnix_status" -eq 0 ] || exit "$arcnix_status"
 # Task scripts can't contain double braces, which mark parameters.
-docker --host "$arcnix_socket" image inspect --format "$(printf 'Image ID: \173\173.Id\175\175')" {image} || true
+arcnix_docker image inspect --format "$(printf 'Image ID: \173\173.Id\175\175')" {image} || true
 printf 'ARCNIX_DOCKER_PULLED\n'
 "#
     );
-    crate::operations::validate_command(&command)?;
     let snippet = Snippet {
         parameters: vec![],
         id: SCRIPT_ID.into(),
@@ -227,6 +229,8 @@ mod tests {
             "ghcr.io/owner/app:v1.0.0",
             "registry.example.com:5000/team/app",
             "localhost:5000/app:dev",
+            "[2001:db8::2]/team/app",
+            "[::1]:5000/app:dev",
             "localhost/app",
             "quay.io/prometheus/node-exporter:latest",
             "my_org/my__app",
@@ -256,6 +260,9 @@ mod tests {
             "ghcr.io//app",
             "bad-.example.com/app",
             "registry.example.com:port/app",
+            "[2001::db8::2]/app",
+            "[::1]:65536/app",
+            "[fe80::1%eth0]/app",
             "nginx'",
             "nginx$(id)",
             "ngïnx",
@@ -264,7 +271,12 @@ mod tests {
         }
         assert!(checked_reference(&format!("a/{}", "b".repeat(260))).is_err());
         // The 255 limit is the name's; a long name with a tag and digest fits.
-        let long = format!("{}:1.0@sha512:{}", "a".repeat(250), "c".repeat(128));
+        let long = format!(
+            "registry.example.org/{}:{}@sha512:{}",
+            "a".repeat(255),
+            "b".repeat(128),
+            "c".repeat(128)
+        );
         assert_eq!(checked_reference(&long).unwrap(), long);
     }
 
@@ -299,7 +311,7 @@ mod tests {
         let command = &template.snippet.command;
         assert!(
             command.contains(
-                "$arcnix_limit docker --host \"$arcnix_socket\" pull --platform 'linux/arm64' 'ghcr.io/owner/app:1.0' || arcnix_status=$?"
+                "timeout -k 10s 3300s docker --host \"$arcnix_socket\" pull --platform 'linux/arm64' 'ghcr.io/owner/app:1.0' || arcnix_status=$?"
             ),
             "{command}"
         );
@@ -310,7 +322,7 @@ mod tests {
         // The task system reads double braces as parameters.
         assert!(template.parameters().unwrap().is_empty());
         assert!(!command.contains("{{"));
-        assert!(command.contains("timeout -k 10s 3300s"));
+        assert!(command.contains("arcnix_docker image inspect --format"));
         assert!(!command.contains("Darwin"));
         let plain = pull("nginx", "").unwrap().snippet.command;
         assert!(plain.contains("pull 'nginx' ||"), "{plain}");

@@ -60,6 +60,8 @@ pub enum Wallpaper {
     Prism,
     Valley,
     Tide,
+    Clay,
+    Meadow,
     #[serde(alias = "terracotta", alias = "arcnix", alias = "afterglow")]
     Seaside,
     Aurora,
