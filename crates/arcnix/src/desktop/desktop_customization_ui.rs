@@ -1919,8 +1919,9 @@ pub(crate) fn dock_settings(ui: Ui) -> impl Widget {
                     "Launcher",
                     true,
                     settings::desktop_reset(&ui, |prefs| {
-                        prefs.appearance.dock.launcher_locations = false;
-                        prefs.appearance.dock.launcher_power = false;
+                        let defaults = Dock::default();
+                        prefs.appearance.dock.launcher_locations = defaults.launcher_locations;
+                        prefs.appearance.dock.launcher_power = defaults.launcher_power;
                     }),
                 ),
                 settings_row(
