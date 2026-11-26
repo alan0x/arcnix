@@ -1,4 +1,4 @@
-# Arcnix
+# 阿牛桌面（Arcnix）
 
 Rust + Glory + Sapid 桌面服务器管理工作台。通过 SSH 管理多台服务器，提供文件管理、系统软件、运维操作、资源概览、系统日志和 Terminal 六个模块。Windows 桌面为当前验收平台；资源页提供连接期间的实时数值和会话趋势。
 
@@ -154,7 +154,7 @@ Ctrl+C 在有选中文字时复制，否则向远程程序发送中断；Ctrl+Sh
 
 ## Office 菜单与工具栏
 
-Arcnix 使用同一 Syntra Git 提交中的文档引擎、导出器和共享界面组件。Syntra 网页端与桌面端复用菜单定义和 Writer 编辑表面。打开文档后，菜单和工具栏在文档自己的 WebView 中渲染，文件选择、本地保存和 SFTP 同步由 Arcnix 处理。本地读写模式下，Ctrl+S 会显示当前 DOCX 的保存路径，可确认写回或另存；Ctrl+Shift+S 直接另存。写回前校验原文件内容，遇到外部修改会保留编辑草稿。
+阿牛桌面使用同一 Syntra Git 提交中的文档引擎、导出器和共享界面组件。Syntra 网页端与桌面端复用菜单定义和 Writer 编辑表面。打开文档后，菜单和工具栏在文档自己的 WebView 中渲染，文件选择、本地保存和 SFTP 同步由阿牛桌面处理。本地读写模式下，Ctrl+S 会显示当前 DOCX 的保存路径，可确认写回或另存；Ctrl+Shift+S 直接另存。写回前校验原文件内容，遇到外部修改会保留编辑草稿。
 
 阅读时支持查找、打印、缩放和适应宽度。表格可切换工作表，演示文稿可翻页。Word 编辑支持撤销、重做、正文和标题样式，以及加粗和斜体。退出编辑时可选择继续编辑或放弃未保存的修改。
 
@@ -164,13 +164,13 @@ Arcnix 使用同一 Syntra Git 提交中的文档引擎、导出器和共享界�
 
 保存 DOCX 时，客户端先持有该文件的本机锁，核对打开时的缓存记录，落盘新 DOCX 并原子更新待上传记录。上传前检查内容 SHA-256、大小、修改时间、权限及可用的属主和组信息。通过检查后写入远端同目录的私有临时文件，在发布前再次检查版本，沿用 SFTP 文件替换流程并核对发布后的内容。常规 SFTP 没有按版本比较并替换的指令，其他工具在最终检查和重命名之间仍有极短的竞争窗口。
 
-同步成功后记录新的基线，并保留上次被替换的本地版本。遇到冲突、删除或网络错误，待上传记录与本地副本保留。重新连接同一 SSH 配置并验证主机密钥后，Arcnix 会自动检查缓存、重试待上传文件。上传中的远端文件会显示上传角标，校验完成后恢复打开操作。左侧铃铛的数字是仍需处理的文件数，点击可按服务器和路径查看上传进度、校验结果与错误原因。即使远端文件已经删除，也可以从 Office 的「待上传文件」找回本地副本。选择「打开服务器版本」会保留冲突副本并显示其本地路径。回归测试 `tools/remote_office_smoke.py` 使用相互隔离的 SSH 配置验证三格式打开、DOCX 保存、主动断开与 SSH 中断后的重连、应用重启后的多文件恢复、冲突保护和跨配置的同步状态。
+同步成功后记录新的基线，并保留上次被替换的本地版本。遇到冲突、删除或网络错误，待上传记录与本地副本保留。重新连接同一 SSH 配置并验证主机密钥后，阿牛桌面会自动检查缓存、重试待上传文件。上传中的远端文件会显示上传角标，校验完成后恢复打开操作。左侧铃铛的数字是仍需处理的文件数，点击可按服务器和路径查看上传进度、校验结果与错误原因。即使远端文件已经删除，也可以从 Office 的「待上传文件」找回本地副本。选择「打开服务器版本」会保留冲突副本并显示其本地路径。回归测试 `tools/remote_office_smoke.py` 使用相互隔离的 SSH 配置验证三格式打开、DOCX 保存、主动断开与 SSH 中断后的重连、应用重启后的多文件恢复、冲突保护和跨配置的同步状态。
 
 ## pgAdmin
 
-Windows 将 pgAdmin 安装在 `%LOCALAPPDATA%\Arcnix\apps\pgadmin\<版本>`。指定便携配置文件时，安装目录为配置文件旁的 `apps/pgadmin/<版本>`。升级后首次检查 pgAdmin 时，Arcnix 会将旧的 `components/pgadmin` 目录连同已保存的连接和数据库设置一起迁移。
+Windows 将 pgAdmin 安装在 `%LOCALAPPDATA%\Arcnix\apps\pgadmin\<版本>`。指定便携配置文件时，安装目录为配置文件旁的 `apps/pgadmin/<版本>`。升级后首次检查 pgAdmin 时，阿牛桌面会将旧的 `components/pgadmin` 目录连同已保存的连接和数据库设置一起迁移。
 
-macOS 和 Windows 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随 Arcnix 管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层。下载先写入该窗口的临时目录，完成后由系统保存对话框（macOS 为附在窗口上的面板）选择位置，再在后台线程移动过去；窗口关闭时尚未询问的下载移到「下载」。保存的数据库密码由 pgAdmin 加密，密钥由 Arcnix 生成并存放在系统钥匙串（`org.arcnix.pgadmin`），启动时交给后端；pgAdmin 自己的钥匙串存储保持关闭，因为它的桌面模式探测超时会在运行中改用另一把密钥。密钥变化（例如钥匙串条目被删除）时启动器清除已保存的密码，pgAdmin 会重新询问；本次读不到钥匙串时不改动已保存的密码。更换数据库用户时清除为原用户保存的密码。
+macOS 和 Windows 的 pgAdmin 窗口运行 pgAdmin 的桌面模式后端。后端随阿牛桌面管理的组件下载：便携 Python 加上官方 pgAdmin 发布包，由 [arcnix-org/pgadmin4](https://github.com/arcnix-org/pgadmin4) 的 `arcnix-build` 分支构建并发布。`crates/arcnix-core/src/software/pgadmin.rs` 固定当前版本组件的 URL、大小和 SHA-256，升级成功后删除旧版本。每台服务器的每个数据库使用独立的数据目录。后端只监听本机回环地址，要求每次启动生成的密钥，经固定目标的 SSH 转发连接 PostgreSQL。窗口内的 WebView 只能加载该后端，复用 Code 窗口的裁切层。下载先写入该窗口的临时目录，完成后由系统保存对话框（macOS 为附在窗口上的面板）选择位置，再在后台线程移动过去；窗口关闭时尚未询问的下载移到「下载」。保存的数据库密码由 pgAdmin 加密，密钥由阿牛桌面生成并存放在系统钥匙串（`org.arcnix.pgadmin`），启动时交给后端；pgAdmin 自己的钥匙串存储保持关闭，因为它的桌面模式探测超时会在运行中改用另一把密钥。密钥变化（例如钥匙串条目被删除）时启动器清除已保存的密码，pgAdmin 会重新询问；本次读不到钥匙串时不改动已保存的密码。更换数据库用户时清除为原用户保存的密码。
 
 `cargo test -p arcnix-core --test pgadmin_integration -- --ignored --nocapture` 使用真实组件、回环 SSH 和 PostgreSQL，需设置 `ARCNIX_TEST_PGADMIN_PACKAGE`、`ARCNIX_TEST_SSH_PORT`、`ARCNIX_TEST_SSH_USER`、`ARCNIX_TEST_SSH_KEY` 和 `ARCNIX_TEST_POSTGRES_PORT`。调试构建可用 `ARCNIX_PGADMIN_PACKAGE` 指定本地组件包。
 
@@ -203,7 +203,7 @@ python tools/system_theme_smoke.py
 
 该验证需要 `artifacts/python` 中的 Playwright、Paramiko，以及 CairoSVG、Pillow。它会自行启动和关闭回环测试服务，并在 `artifacts/navigation-redesign` 保存截图与结果。可用 `--exe <path>` 指定其他已构建程序。
 
-Windows 功能测试预览使用以下入口。它会打开 Arcnix、连接本机测试服务器，并在桌面浏览器中打开本地测试页。公网 HTTP/HTTPS 转发默认关闭。
+Windows 功能测试预览使用以下入口。它会打开阿牛桌面、连接本机测试服务器，并在桌面浏览器中打开本地测试页。公网 HTTP/HTTPS 转发默认关闭。
 
 ```powershell
 cargo build -p arcnix --locked
@@ -211,7 +211,7 @@ python -m pip install --target artifacts/python playwright paramiko
 python tools/desktop_preview.py
 ```
 
-用 `--public-web` 启用公网转发。可用 `--url <网址>` 在第二个标签页打开指定网页。关闭 Arcnix 时会一并退出预览测试服务。每次预览使用独立的客户端配置和临时服务器数据。
+用 `--public-web` 启用公网转发。可用 `--url <网址>` 在第二个标签页打开指定网页。关闭阿牛桌面时会一并退出预览测试服务。每次预览使用独立的客户端配置和临时服务器数据。
 
 真实回环 SSH/SFTP 集成测试需要可选 Python 测试依赖，仅安装在项目忽略的 `artifacts/python` 目录：
 
@@ -252,7 +252,7 @@ tools/sftp_fixture.py   仅用于回环测试的 SSH/SFTP 服务
 
 Docker 适配在连接后按需检测 CLI，在桌面／Dock 动态添加入口；桌面齿轮内可重新检测。通过远程 Docker CLI 的显式本机 Unix socket 查询，优先当前用户的 rootless socket，忽略远端 Docker context／host 环境覆盖，不自动 sudo；系统套接字权限不足时提示将 SSH 账号加入 docker 组（等同 root 权限）并重新连接。容器、卷各限制 1000 项，总响应最多 2 MiB，每次 CLI 以 `timeout` 限时 25 秒，SSH 总请求限时 90 秒；日志为最后 200、500 或 1000 行（默认 200）的快照，不跟随或轮询，更改行数会重新读取；可按显示出的文字（含时间戳）在本地筛选行，被隐藏的行设置的颜色仍作用于后续行；按终端 SGR 序列显示颜色和粗体等样式（16 色随主题，256 色和真彩色按原值），其他控制序列移除，回车重绘只保留最终内容，时间戳淡化显示，最多渲染 4000 个样式片段。详情只投影必要属性，不查询容器环境或完整配置。启动、停止、重启和配置绑定完整容器 ID，失败后需刷新确认状态，不自动重试。端口优先显示已发布的映射，容器停止时显示配置的绑定，未发布的暴露端口单独标注；host 网络可跳转现有资源页检查服务器监听。
 
-Docker 窗口左侧为分区栏（容器、卷、端口、项目、容器镜像），每项显示数量，底部显示 Docker 版本和总数；窄窗口只保留图标。容器表把名称和镜像放在同一列，状态按结果着色：运行中为绿色，已暂停或健康检查失败为黄色，非零退出码和 dead 为红色。端口显示为简短标签：省略 `0.0.0.0`、`[::]` 等通配地址并合并重复项，仅暴露的端口用虚线框标出。点击整行进入详情，标题区显示名称、状态和镜像；操作按钮只列出适用于当前状态的操作（运行中为停止、重启、暂停，已停止为启动和移除，已暂停为恢复），Docker 忙碌或出错时保持可见但不可用。检查页以表格列出容器 ID、网络、重启策略、CPU 与内存限制（0 显示为不限）和端口绑定，挂载页列出类型、容器内路径、来源和读写方式，统计页以卡片显示资源用量。卷页标出使用每个卷的容器和未使用的卷，镜像页显示镜像 ID 并标出正在使用的镜像。项目页列出 Arcnix 管理的 Compose 项目及其镜像和监听地址，选中项目后显示路径、操作和 Compose 文件。
+Docker 窗口左侧为分区栏（容器、卷、端口、项目、容器镜像），每项显示数量，底部显示 Docker 版本和总数；窄窗口只保留图标。容器表把名称和镜像放在同一列，状态按结果着色：运行中为绿色，已暂停或健康检查失败为黄色，非零退出码和 dead 为红色。端口显示为简短标签：省略 `0.0.0.0`、`[::]` 等通配地址并合并重复项，仅暴露的端口用虚线框标出。点击整行进入详情，标题区显示名称、状态和镜像；操作按钮只列出适用于当前状态的操作（运行中为停止、重启、暂停，已停止为启动和移除，已暂停为恢复），Docker 忙碌或出错时保持可见但不可用。检查页以表格列出容器 ID、网络、重启策略、CPU 与内存限制（0 显示为不限）和端口绑定，挂载页列出类型、容器内路径、来源和读写方式，统计页以卡片显示资源用量。卷页标出使用每个卷的容器和未使用的卷，镜像页显示镜像 ID 并标出正在使用的镜像。项目页列出阿牛桌面管理的 Compose 项目及其镜像和监听地址，选中项目后显示路径、操作和 Compose 文件。
 
 重启策略和 CPU／内存限制使用 [Docker container update](https://docs.docker.com/reference/cli/docker/container/update/)，只修改当前容器，不改写 Compose 定义；端口和挂载变更需要重建容器。卷详情使用 [volume inspect](https://docs.docker.com/reference/cli/docker/volume/inspect/)，日志使用 [container logs](https://docs.docker.com/reference/cli/docker/container/logs/) 的有限尾部读取。标准输出与错误输出在服务器端合并到同一管道，按 Docker 写出的顺序显示；日志正文中的无效 UTF-8 显示为替换字符，不会使读取失败。
 
@@ -278,13 +278,13 @@ App Center 目录包括 Docker、Nginx、Caddy、Redis、PostgreSQL、pgAdmin、
 
 卡片和应用页使用同一套状态：检查中、已安装、未安装、暂无可用安装来源；本机应用显示「本机可用」或「首次打开时下载」。卡片按钮随状态变化：未安装为「安装…」，已安装且有对应窗口（Docker、Nginx、pgAdmin）为「打开」，其余已安装应用为「管理」，进入应用页。应用页依次显示标题区的状态和主要操作、「在此服务器上」的每份安装及其升级、卸载等操作（本机应用为「在本机上」）、各安装方式的可用性（已安装时为「其他安装方式」，可另选来源安装）、介绍、常见用途和网站，以及「相关应用」。相关应用在目录中双向声明，例如 PostgreSQL 与 pgAdmin。分类栏显示每个分类的应用数并随搜索更新，没有匹配应用的分类不显示。
 
-已安装页合并系统包、Snap、Arcnix Compose 项目和通过已知镜像引用识别的外部 Nginx 容器，在同一列表中按列对齐来源、版本或容器状态及操作。已安装的 Nginx 系统包链接到服务管理，各外部容器按完整 ID 打开详情。Compose 项目和独立容器分别提供移除操作，保留数据卷。安装和移除任务完成后重新检测服务器能力并刷新清单。查询失败时仍展示其他来源的结果和对应错误。
+已安装页合并系统包、Snap、阿牛桌面 Compose 项目和通过已知镜像引用识别的外部 Nginx 容器，在同一列表中按列对齐来源、版本或容器状态及操作。已安装的 Nginx 系统包链接到服务管理，各外部容器按完整 ID 打开详情。Compose 项目和独立容器分别提供移除操作，保留数据卷。安装和移除任务完成后重新检测服务器能力并刷新清单。查询失败时仍展示其他来源的结果和对应错误。
 
 系统来源识别 APT、DNF、YUM、Zypper、APK、Pacman；APT 安装继续使用原有事务审核，其他来源在每个目标执行前重新检查管理器。Pacman 升级明确展示为完整系统升级，拒绝单独刷新索引，避免部分升级。软件包名称按管理器验证；不同发行版的同类软件未必同名。Snap 仅在检测到时可用，默认 stable、默认不启用 classic，Certbot 需用户明确允许 classic 才能提交。Snap 身份来自 [Caddy](https://snapcraft.io/caddy)、[htop](https://snapcraft.io/htop)、[Certbot](https://snapcraft.io/certbot) 的发布信息。后台任务可用时，应用中心通过服务器任务安装、升级和卸载软件。普通账号可在提交时提供 sudo 密码。后台任务不可用时，系统包和 Snap 操作可以在新终端中打开命令，由用户按回车执行并按需认证，随后手动刷新清单。Compose 部署仍使用后台任务。
 
 应用中心验证入口：`python tools/app_center_smoke.py`，覆盖浏览时隐藏安装渠道、分类和中文搜索、详情、各来源配置、不可用来源、classic 显式选择、安装来源保持、Docker 共用目录、发行版包名及主题／窄窗口布局。完整安装任务仍由 `tools/desktop_extensions_smoke.py` 覆盖。
 
-Compose 内置 Nginx、Redis、Caddy。定义与清单存放于 `~/.arcnix/apps/<name>/compose.yaml` 和 `arcnix.json`，归原 SSH 用户所有、目录 0700、定义 0600。选择用户目录是为了避免写入其他用户或系统配置、便于按用户备份；Nginx 静态文件位于同一项目 html 目录，命名卷仍在 Docker 的实际存储位置。项目名冲突拒绝覆盖，应用修改前核对审核时的 YAML 摘要；仅列出 Arcnix 管理的项目。使用 Compose v2 的 config 和 up --detach --no-build --wait，配置 restart: unless-stopped；Docker daemon 自身需启用开机启动，可在 Services 中检查。停止／重启／应用通过服务器任务执行，保留数据卷。说明依据 [Compose 生产部署](https://docs.docker.com/compose/how-tos/production/) 和 [Compose volumes](https://docs.docker.com/reference/compose-file/volumes/)。
+Compose 内置 Nginx、Redis、Caddy。定义与清单存放于 `~/.arcnix/apps/<name>/compose.yaml` 和 `arcnix.json`，归原 SSH 用户所有、目录 0700、定义 0600。选择用户目录是为了避免写入其他用户或系统配置、便于按用户备份；Nginx 静态文件位于同一项目 html 目录，命名卷仍在 Docker 的实际存储位置。项目名冲突拒绝覆盖，应用修改前核对审核时的 YAML 摘要；仅列出阿牛桌面管理的项目。使用 Compose v2 的 config 和 up --detach --no-build --wait，配置 restart: unless-stopped；Docker daemon 自身需启用开机启动，可在 Services 中检查。停止／重启／应用通过服务器任务执行，保留数据卷。说明依据 [Compose 生产部署](https://docs.docker.com/compose/how-tos/production/) 和 [Compose volumes](https://docs.docker.com/reference/compose-file/volumes/)。
 
 Disks 通过有限 lsblk/findmnt 查询设备、分区及挂载使用量，不提供分区或格式化操作；未知容量保留为未知，挂载点可打开 Files。Services 合并 list-units 和 list-unit-files，区分运行状态与开机启用状态；enable/disable 不隐式启动／停止。新启动任务以审核后的系统服务执行，用户脚本存放于目标用户 ~/.arcnix/services/<name>/run.sh，单元在 /etc/systemd/system/arcnix-startup-<name>.service，启用后需独立启动。持续程序由 systemd 管理，客户端无需常驻。
 
@@ -707,7 +707,7 @@ recovery_drills.rs 构造类型化 Job 和最大 4 KiB 的 Description，版本�
 
 `Stopping` 是活动状态。重启后与运行中／提交中一样转为未知，清除未确认的退出码；配置恢复入口使用活动状态判定，覆盖停止中。安装／演练仍需原有完整报告，服务退出确认不会替代应用或数据检查。
 
-`task_query.sh` 与独立账户记录读取复用 `task_exit.sh`。退出文件需要可读、普通、单链接且最多 4 字节，前后核对文件身份，再将原始字节编码传回；Rust 验证 0–255 的十进制及可选单个换行，避免 Shell 替换删除 NUL 或多余换行后误认成 0。独立记录行协议更新为 2，保存的 `record.json` 仍为原格式；旧元数据缺省的任务照常读取，不依赖服务端 Arcnix 升级。
+`task_query.sh` 与独立账户记录读取复用 `task_exit.sh`。退出文件需要可读、普通、单链接且最多 4 字节，前后核对文件身份，再将原始字节编码传回；Rust 验证 0–255 的十进制及可选单个换行，避免 Shell 替换删除 NUL 或多余换行后误认成 0。独立记录行协议更新为 2，保存的 `record.json` 仍为原格式；旧元数据缺省的任务照常读取，不依赖服务端阿牛桌面升级。
 
 最近查询限制为 10 秒、48 KiB 日志尾部和 64 KiB 整体响应，核对返回的任务编号；独立记录沿用分页和时限。读取不需要 Python、SFTP 或 sudo。服务属性含义依据 [systemd D-Bus API](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html)，收尾检查使用 [ExecStopPost](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#ExecStopPost=)。这些结果仍是查询时的快照，不补写旧任务证明或承诺服务器重启续跑。
 
