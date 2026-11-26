@@ -2355,6 +2355,14 @@ const APP_CSS: &str = concat!(
 const APP_CSS: &str = include_str!("style.css");
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none() {
+        // Shared-memory transport avoids blank views on virtual GPUs. Unlike
+        // WEBKIT_DISABLE_DMABUF_RENDERER, it also supports view transitions:
+        // https://bugs.webkit.org/show_bug.cgi?id=324730
+        // SAFETY: This runs before this process starts any other threads.
+        unsafe { std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1") };
+    }
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.first().is_some_and(|arg| arg == "--apply-update") {
         if arguments.len() != 2 {

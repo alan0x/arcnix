@@ -1,7 +1,10 @@
-use std::{fs, io::ErrorKind, path::Path};
+use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
 
 use anyhow::{Context, Result};
-use gtk::{gdk_pixbuf::Pixbuf, glib};
+use gtk::gdk_pixbuf::Pixbuf;
+use gtk::glib;
 
 const ICON: &[u8] = include_bytes!("../../assets/arcnix.png");
 const LAUNCHER: &str = "applications/arcnix.desktop";
