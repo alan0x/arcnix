@@ -18,7 +18,7 @@ pub(crate) struct BrowseState {
     repository: String,
     filter: String,
     tags: Vec<Tag>,
-    loading: bool,
+    pub(super) loading: bool,
     listed: bool,
     tags_error: String,
     /// The registry has more tags than were read.
@@ -87,7 +87,7 @@ impl Ui {
         let request = self.state.revise(|s| {
             let b = &mut s.docker.pull.browse;
             let query = b.query.trim().to_owned();
-            if query.is_empty() {
+            if b.searching || query.is_empty() {
                 return None;
             }
             b.search_request = next_request();
@@ -120,8 +120,11 @@ impl Ui {
 
     /// Lists the tags of `repository` that contain the filter.
     fn docker_tags(&self, repository: String) {
-        let (serial, filter) = self.state.revise(|s| {
+        let request = self.state.revise(|s| {
             let b = &mut s.docker.pull.browse;
+            if b.loading {
+                return None;
+            }
             if b.repository != repository {
                 b.filter.clear();
             }
@@ -132,8 +135,11 @@ impl Ui {
             b.partial = false;
             b.tags.clear();
             b.tags_error.clear();
-            (b.tags_request, b.filter.clone())
+            Some((b.tags_request, b.filter.clone()))
         });
+        let Some((serial, filter)) = request else {
+            return;
+        };
         self.docker_registry_request(
             move || docker_registry::tags(&repository, &filter),
             move |s, result| {
@@ -224,6 +230,7 @@ pub(super) fn section(ui: Ui) -> impl Widget {
                             }
                             .to_owned()
                         }))
+                        .enabled(state.map(|s| !s.docker.pull.browse.loading))
                         .name(name.clone())
                         .label("")
                         .fill((
@@ -312,16 +319,13 @@ fn tag_list(ui: Ui) -> impl Widget {
                     .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
                     .join(" · ");
-                    let reference = state.map({
-                        let name = name.clone();
-                        move |s| format!("{}:{name}", s.docker.pull.browse.repository)
-                    });
+                    let repository = state.with(|s| s.docker.pull.browse.repository.clone());
+                    let reference = format!("{repository}:{name}");
                     sapid::button()
                         .class(state.map({
-                            let name = name.clone();
+                            let reference = reference.clone();
                             move |s| {
-                                let chosen = format!("{}:{name}", s.docker.pull.browse.repository);
-                                if s.docker.pull.reference == chosen {
+                                if s.docker.pull.reference == reference {
                                     "button docker-browse-item active"
                                 } else {
                                     "button docker-browse-item"
@@ -329,7 +333,7 @@ fn tag_list(ui: Ui) -> impl Widget {
                                 .to_owned()
                             }
                         }))
-                        .name(reference)
+                        .name(reference.clone())
                         .label("")
                         .fill((
                             text().class("docker-browse-name").content(name.clone()),
@@ -337,9 +341,10 @@ fn tag_list(ui: Ui) -> impl Widget {
                         ))
                         .on_press(move || {
                             ui.state.revise(|s| {
-                                s.docker.pull.reference =
-                                    format!("{}:{name}", s.docker.pull.browse.repository);
-                                s.docker.pull.error.clear();
+                                if s.docker.pull.browse.repository == repository {
+                                    s.docker.pull.reference = reference.clone();
+                                    s.docker.pull.error.clear();
+                                }
                             })
                         })
                 }),

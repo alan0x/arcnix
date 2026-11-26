@@ -125,7 +125,9 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
                         move || ui.docker_typed_tags()
                     })
                     .class("button compact")
-                    .enabled(state.map(|s| !s.docker.pull.reference.trim().is_empty())),
+                    .enabled(state.map(|s| {
+                        !s.docker.pull.browse.loading && !s.docker.pull.reference.trim().is_empty()
+                    })),
                 ),
                 field(
                     "Platform (optional, such as linux/arm64)",

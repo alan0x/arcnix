@@ -53,15 +53,7 @@ pub fn checked_reference(reference: &str) -> Result<String> {
     };
     if let Some(tag) = tag {
         ensure!(
-            !tag.is_empty()
-                && tag.len() <= 128
-                && tag
-                    .bytes()
-                    .next()
-                    .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && tag
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
+            valid_tag(tag),
             "A tag uses letters, digits, _ . and -, such as 1.27 or latest"
         );
     }
@@ -87,6 +79,17 @@ pub fn checked_reference(reference: &str) -> Result<String> {
         "An image name uses lower-case letters, digits and . _ - between them, such as library/nginx"
     );
     Ok(reference.to_owned())
+}
+
+pub(super) fn valid_tag(tag: &str) -> bool {
+    tag.len() <= 128
+        && tag
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && tag
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
 /// A registry hostname or IP address, with brackets around IPv6.

@@ -7,13 +7,17 @@
 //! registries are asked with the registry API (`/v2/<name>/tags/list`),
 //! which lists tag names only, after the anonymous token exchange most
 //! public registries need.
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::blocking::{Client, RequestBuilder, Response};
+use reqwest::header::{HeaderMap, LINK, WWW_AUTHENTICATE};
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
+
+use super::docker_pull::valid_tag;
 
 const HUB: &str = "https://hub.docker.com";
 /// The longest one request may wait for an answer or the next bytes.
@@ -25,6 +29,7 @@ const SEARCH_RESULTS: usize = 25;
 const TAG_RESULTS: usize = 100;
 /// Registry tag lists are read up to this many pages of 1000.
 const TAG_PAGES: usize = 5;
+const TAGS_PER_PAGE: usize = 1000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repository {
@@ -121,6 +126,20 @@ fn client() -> Result<&'static Client> {
         .user_agent(concat!("Arcnix/", env!("CARGO_PKG_VERSION")))
         .timeout(STEP)
         .https_only(true)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                return attempt.error("too many redirects");
+            }
+            if attempt
+                .previous()
+                .first()
+                .is_some_and(|origin| same_origin(origin, attempt.url()))
+            {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         .build()?;
     Ok(CLIENT.get_or_init(|| client))
 }
@@ -157,7 +176,7 @@ fn send(request: RequestBuilder, deadline: Instant, place: Place) -> Result<Resp
     request
         .timeout(left.min(STEP))
         .send()
-        .map_err(|e| place.unreachable(e))
+        .map_err(|e| place.unreachable(e.without_url()))
 }
 
 /// Reads an answer up to the size limit, stopping at `deadline` even when a
@@ -225,14 +244,19 @@ pub fn parse_search(bytes: &[u8]) -> Result<Vec<Repository>> {
     }
     let page: Page =
         serde_json::from_slice(bytes).context("Docker Hub's search answer isn't readable")?;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     Ok(page
         .results
         .unwrap_or_default()
         .into_iter()
         // Only names Arcnix would accept for a pull, each once: the dialog
         // lists them by name.
-        .filter(|r| crate::docker_pull::checked_reference(&r.repo_name).is_ok())
+        .filter(|r| {
+            let name = r.repo_name.as_str();
+            name.trim() == name
+                && !name.contains([':', '@'])
+                && matches!(source(name), Ok(Source::Hub { .. }))
+        })
         .filter(|r| seen.insert(r.repo_name.clone()))
         .take(SEARCH_RESULTS)
         .map(|r| Repository {
@@ -258,7 +282,7 @@ pub fn parse_search(bytes: &[u8]) -> Result<Vec<Repository>> {
 pub fn tags(reference: &str, filter: &str) -> Result<Tags> {
     let filter = filter.trim();
     ensure!(
-        filter.len() <= 128 && !filter.chars().any(char::is_control),
+        filter.chars().count() <= 128 && !filter.chars().any(char::is_control),
         "Enter up to 128 characters to filter tags"
     );
     match source(reference)? {
@@ -324,7 +348,7 @@ pub fn parse_hub_tags(bytes: &[u8]) -> Result<Vec<Tag>> {
     }
     let page: Page =
         serde_json::from_slice(bytes).context("Docker Hub's tag list isn't readable")?;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     Ok(page
         .results
         .unwrap_or_default()
@@ -365,10 +389,6 @@ pub fn parse_hub_tags(bytes: &[u8]) -> Result<Vec<Tag>> {
         .collect())
 }
 
-fn valid_tag(tag: &str) -> bool {
-    crate::docker_pull::checked_reference(&format!("a:{tag}")).is_ok()
-}
-
 fn registry_tags(host: &str, name: &str, filter: &str) -> Result<Tags> {
     let place = Place::Registry(host);
     let deadline = Instant::now() + DEADLINE;
@@ -379,30 +399,31 @@ fn registry_tags(host: &str, name: &str, filter: &str) -> Result<Tags> {
         .push("v2")
         .extend(name.split('/'))
         .extend(["tags", "list"]);
-    url.query_pairs_mut().append_pair("n", "1000");
+    url.query_pairs_mut()
+        .append_pair("n", &TAGS_PER_PAGE.to_string());
     let mut token: Option<String> = None;
     let mut all = Vec::new();
     let mut next = Some(url);
-    let mut pages = 0;
+    let mut pages = HashSet::new();
+    let mut partial = false;
     while let Some(url) = next.take() {
-        if pages == TAG_PAGES {
-            next = Some(url);
+        if pages.len() == TAG_PAGES || !pages.insert(url.clone()) {
+            partial = true;
             break;
         }
-        pages += 1;
         let request = |token: &Option<String>| match token {
             Some(token) => client.get(url.clone()).bearer_auth(token),
             None => client.get(url.clone()),
         };
         let mut response = send(request(&token), deadline, place)?;
         if response.status() == StatusCode::UNAUTHORIZED && token.is_none() {
-            let challenge = response
-                .headers()
-                .get(reqwest::header::WWW_AUTHENTICATE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default()
-                .to_owned();
-            token = Some(anonymous_token(client, &challenge, host, name, deadline)?);
+            token = Some(anonymous_token(
+                client,
+                response.headers(),
+                host,
+                name,
+                deadline,
+            )?);
             response = send(request(&token), deadline, place)?;
         }
         match response.status() {
@@ -416,23 +437,33 @@ fn registry_tags(host: &str, name: &str, filter: &str) -> Result<Tags> {
             }
             _ => {}
         }
-        next = next_page(&response, &url);
-        all.extend(parse_tag_names(&body(response, deadline, place)?)?);
+        next = next_page(&response);
+        let names = parse_tag_names(&body(response, deadline, place)?)?;
+        partial |= names.len() > TAGS_PER_PAGE;
+        all.extend(names.into_iter().take(TAGS_PER_PAGE));
     }
     Ok(Tags {
         tags: sorted_tags(all, filter),
-        partial: next.is_some(),
+        partial,
     })
 }
 
-/// The next page from a `Link: <…>; rel="next"` header, on the same host.
-fn next_page(response: &Response, current: &Url) -> Option<Url> {
-    let link = response
+/// The next page on the same repository endpoint.
+fn next_page(response: &Response) -> Option<Url> {
+    response
         .headers()
-        .get(reqwest::header::LINK)?
-        .to_str()
-        .ok()?;
-    next_link(link, current)
+        .get_all(LINK)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|link| next_link(link, response.url()))
+}
+
+fn same_origin(current: &Url, next: &Url) -> bool {
+    usable_https_url(next) && next.origin() == current.origin()
+}
+
+fn usable_https_url(url: &Url) -> bool {
+    url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
 }
 
 pub fn next_link(link: &str, current: &Url) -> Option<Url> {
@@ -448,10 +479,8 @@ pub fn next_link(link: &str, current: &Url) -> Option<Url> {
         let next = current
             .join(target.trim().strip_prefix('<')?.strip_suffix('>')?)
             .ok()?;
-        (next.scheme() == "https"
-            && next.host() == current.host()
-            && next.port_or_known_default() == current.port_or_known_default())
-        .then_some(next)
+        (same_origin(current, &next) && next.path() == current.path() && next.fragment().is_none())
+            .then_some(next)
     })
 }
 
@@ -459,7 +488,7 @@ pub fn next_link(link: &str, current: &Url) -> Option<Url> {
 /// `WWW-Authenticate: Bearer realm="…",service="…",scope="…"` challenge.
 fn anonymous_token(
     client: &Client,
-    challenge: &str,
+    headers: &HeaderMap,
     host: &str,
     name: &str,
     deadline: Instant,
@@ -470,14 +499,14 @@ fn anonymous_token(
             "The registry {host} only lists these tags after you log in. You can still pull by name if the server is logged in."
         )
     };
-    let params = challenge_params(challenge).ok_or_else(login)?;
+    let params = bearer_params(headers).ok_or_else(login)?;
     let realm = params
         .iter()
         .find(|(k, _)| k == "realm")
         .map(|(_, v)| v.as_str())
         .ok_or_else(login)?;
     let mut url = Url::parse(realm).map_err(|_| login())?;
-    if url.scheme() != "https" {
+    if !usable_https_url(&url) || url.fragment().is_some() {
         return Err(login());
     }
     for (key, value) in &params {
@@ -503,11 +532,19 @@ fn anonymous_token(
     }
     let token: Token =
         serde_json::from_slice(&body(response, deadline, place)?).map_err(|_| login())?;
-    token
-        .token
-        .or(token.access_token)
-        .filter(|t| !t.is_empty() && t.len() <= 16 * 1024)
+    [token.token, token.access_token]
+        .into_iter()
+        .flatten()
+        .find(|t| !t.is_empty() && t.len() <= 16 * 1024 && t.bytes().all(|b| b.is_ascii_graphic()))
         .ok_or_else(login)
+}
+
+fn bearer_params(headers: &HeaderMap) -> Option<Vec<(String, String)>> {
+    headers
+        .get_all(WWW_AUTHENTICATE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(challenge_params)
 }
 
 /// The parameters of a Bearer challenge, or None for another scheme.
@@ -574,7 +611,7 @@ fn sorted_tags(names: Vec<String>, filter: &str) -> Vec<Tag> {
         .into_iter()
         .filter(|t| valid_tag(t) && t.contains(filter))
         .collect();
-    tags.sort_by_key(|tag| std::cmp::Reverse((natural(tag), tag.clone())));
+    tags.sort_by_cached_key(|tag| std::cmp::Reverse((natural(tag), tag.clone())));
     tags.dedup();
     tags.into_iter()
         .take(TAG_RESULTS)
@@ -674,6 +711,8 @@ mod tests {
             {"repo_name": "nginx", "short_description": "Official build\n of  Nginx.", "star_count": 21434, "pull_count": 13643022660, "is_official": true},
             {"repo_name": "nginx/nginx-ingress", "short_description": null, "star_count": 124, "pull_count": 1, "is_official": false},
             {"repo_name": "nginx", "short_description": "a repeat"},
+            {"repo_name": "nginx:latest"},
+            {"repo_name": "registry.example.com/team/image"},
             {"repo_name": "Bad Name", "star_count": 1}
         ]}"#;
         let results = parse_search(page).unwrap();
@@ -758,6 +797,29 @@ mod tests {
     }
 
     #[test]
+    fn tag_rows_reject_repository_references() {
+        let names = [
+            "latest".to_owned(),
+            "a/b".to_owned(),
+            "5000/repo".to_owned(),
+            format!("latest@sha256:{}", "a".repeat(64)),
+        ];
+        let hub = serde_json::json!({
+            "results": names.iter().map(|name| serde_json::json!({"name": name})).collect::<Vec<_>>()
+        });
+        let registry = serde_json::json!({"tags": names});
+        for tags in [
+            parse_hub_tags(&serde_json::to_vec(&hub).unwrap()).unwrap(),
+            parse_registry_tags(&serde_json::to_vec(&registry).unwrap(), "").unwrap(),
+        ] {
+            assert_eq!(
+                tags.into_iter().map(|tag| tag.name).collect::<Vec<_>>(),
+                ["latest"]
+            );
+        }
+    }
+
+    #[test]
     fn later_pages_are_followed_on_the_same_registry_only() {
         let current = Url::parse("https://ghcr.io/v2/o/app/tags/list?n=1000").unwrap();
         assert_eq!(
@@ -773,6 +835,7 @@ mod tests {
             r#"<https://other.example.com/v2/x>; rel="next""#,
             r#"<http://ghcr.io/v2/x>; rel="next""#,
             r#"<https://ghcr.io:8443/v2/x>; rel="next""#,
+            r#"</v2/other/app/tags/list?n=1000>; rel="next""#,
             r#"</v2/x>; rel="prev""#,
         ] {
             assert!(next_link(elsewhere, &current).is_none(), "{elsewhere}");
@@ -807,5 +870,20 @@ mod tests {
         );
         assert!(challenge_params(r#"Basic realm="registry""#).is_none());
         assert!(challenge_params(r#"Bearer realm="unterminated"#).is_none());
+        let mut headers = HeaderMap::new();
+        headers.append(
+            WWW_AUTHENTICATE,
+            r#"Basic realm="registry""#.parse().unwrap(),
+        );
+        headers.append(
+            WWW_AUTHENTICATE,
+            "Bearer realm=https://auth.example.com/token"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            bearer_params(&headers),
+            challenge_params("Bearer realm=https://auth.example.com/token")
+        );
     }
 }
