@@ -339,6 +339,9 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
     let Some(result) = mirrors::event(ui, serial, result) else {
         return;
     };
+    let Some(result) = pull::event(ui, serial, result) else {
+        return;
+    };
     if !ui.state.with(|s| s.docker.pending == Some(serial)) {
         return;
     }

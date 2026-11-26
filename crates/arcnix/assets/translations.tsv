@@ -3370,7 +3370,6 @@ Docker 返回了无效的响应	Invalid Docker response
 镜像	Image
 平台（可选，例如 linux/arm64）	Platform (optional, such as linux/arm64)
 按 docker pull 的写法输入镜像：nginx:1.27，其他镜像仓库则写成 ghcr.io/owner/app:1.0。不写标签时，Docker 拉取 latest。Docker Hub 的镜像会经过镜像加速地址。	Enter an image the way docker pull takes it: nginx:1.27, or ghcr.io/owner/app:1.0 for another registry. Without a tag, Docker pulls latest. Images from Docker Hub go through the registry mirrors.
-平台留空时拉取适合服务器本身的版本。拉取作为任务在服务器上运行，关闭 Arcnix 不会中断。	Leave the platform empty to pull the server's own. The pull runs on the server as a task, so closing Arcnix doesn't stop it.
 以当前 SSH 用户在服务器上用 Docker CLI 下载镜像。Docker Hub 的镜像会经过镜像加速地址。关闭 Arcnix 不会中断拉取。	Downloads the image on the server with the Docker CLI as this SSH user. Images from Docker Hub go through the registry mirrors. Closing Arcnix doesn't stop the pull.
 请输入镜像，例如 nginx:1.27	Enter an image, such as nginx:1.27
 请输入镜像，例如 nginx:1.27 或 ghcr.io/owner/app:1.0	Enter an image, such as nginx:1.27 or ghcr.io/owner/app:1.0
@@ -3379,3 +3378,6 @@ Docker 返回了无效的响应	Invalid Docker response
 请输入镜像仓库，例如 ghcr.io 或 registry.example.com:5000	Enter a registry such as ghcr.io or registry.example.com:5000
 镜像名由小写字母、数字以及其间的 . _ - 组成，例如 library/nginx	An image name uses lower-case letters, digits and . _ - between them, such as library/nginx
 请输入平台，例如 linux/amd64 或 linux/arm64，或留空	Enter a platform such as linux/amd64 or linux/arm64, or leave it empty
+平台留空时拉取适合服务器本身的版本。拉取作为任务在服务器上运行：和其他任务一样用 sudo 启动，以当前 SSH 用户运行，关闭 Arcnix 不会中断。拉取完成前，此服务器上的其他 Arcnix 任务无法启动。	Leave the platform empty to pull the server's own. The pull runs on the server as a task: it starts with sudo like other tasks, runs as this SSH user, and keeps going when Arcnix closes. Other Arcnix tasks on this server can't start until it finishes.
+另一个服务器任务正在运行。请在它完成后再拉取。	Another server task is running. Pull when it finishes.
+镜像名最多 255 个字符	An image name can be at most 255 characters

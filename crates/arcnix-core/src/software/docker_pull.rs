@@ -1,6 +1,8 @@
 //! Pulling an image on the server: a task that runs `docker pull` as the SSH
 //! user against the socket the Docker app uses. A pull can take minutes, so
 //! it runs as a server task instead of a request with a short time limit.
+//! Server tasks run on Linux with systemd and start through sudo or root,
+//! and they hold Arcnix's server task lock while they run.
 use anyhow::{Result, ensure};
 
 use crate::operations::Snippet;
@@ -8,8 +10,11 @@ use crate::remote_tasks::quote;
 use crate::scripts::Template;
 
 pub const SCRIPT_ID: &str = "builtin:docker:pull";
-/// The longest a pull may run before the task stops it.
-const PULL_SECONDS: u32 = 3600;
+/// The longest a pull may run before the task stops it: below the hour the
+/// client watches a task, so a stopped pull still reports why.
+const PULL_SECONDS: u32 = 3300;
+/// The task name limit in [`Snippet::validate`].
+const NAME_LIMIT: usize = 128;
 
 /// Checks an image reference the way Docker reads one:
 /// `[registry[:port]/]path[:tag][@sha256:digest]`, with a lower-case path.
@@ -18,7 +23,7 @@ pub fn checked_reference(reference: &str) -> Result<String> {
     let reference = reference.trim();
     ensure!(!reference.is_empty(), "Enter an image, such as nginx:1.27");
     ensure!(
-        reference.len() <= 255 && reference.is_ascii() && !reference.contains(char::is_whitespace),
+        reference.len() <= 512 && reference.is_ascii() && !reference.contains(char::is_whitespace),
         "Enter an image, such as nginx:1.27 or ghcr.io/owner/app:1.0"
     );
     let (name, digest) = match reference.split_once('@') {
@@ -26,13 +31,18 @@ pub fn checked_reference(reference: &str) -> Result<String> {
         None => (reference, None),
     };
     if let Some(digest) = digest {
+        let valid = [("sha256:", 64), ("sha384:", 96), ("sha512:", 128)]
+            .iter()
+            .any(|(algorithm, length)| {
+                digest.strip_prefix(algorithm).is_some_and(|hex| {
+                    hex.len() == *length
+                        && hex
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+            });
         ensure!(
-            digest
-                .strip_prefix("sha256:")
-                .is_some_and(|hex| hex.len() == 64
-                    && hex
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))),
+            valid,
             "An image digest looks like @sha256: followed by 64 hexadecimal characters"
         );
     }
@@ -55,6 +65,11 @@ pub fn checked_reference(reference: &str) -> Result<String> {
             "A tag uses letters, digits, _ . and -, such as 1.27 or latest"
         );
     }
+    // Docker limits the name, not the tag or digest, to 255 characters.
+    ensure!(
+        name.len() <= 255,
+        "An image name can be at most 255 characters"
+    );
     let mut parts: Vec<&str> = name.split('/').collect();
     if parts.len() > 1
         && (parts[0].contains(['.', ':'])
@@ -143,23 +158,13 @@ pub fn pull(reference: &str, platform: &str) -> Result<Template> {
     let command = format!(
         r#"# arcnix:docker:pull
 set -eu
-if ! command -v docker >/dev/null 2>&1; then
-  for dir in /snap/bin /usr/local/bin /opt/homebrew/bin; do
-    if [ -x "$dir/docker" ]; then PATH="$PATH:$dir"; break; fi
-  done
-fi
+if ! command -v docker >/dev/null 2>&1 && [ -x /snap/bin/docker ]; then PATH="$PATH:/snap/bin"; fi
 command -v docker >/dev/null 2>&1 || {{ echo 'Docker is not installed on this server' >&2; exit 1; }}
 unset DOCKER_CONTEXT DOCKER_HOST DOCKER_TLS_VERIFY DOCKER_CERT_PATH
-if [ "$(uname -s)" = Darwin ] && [ -S "$HOME/.docker/run/docker.sock" ]; then
-  arcnix_socket="unix://$HOME/.docker/run/docker.sock"
-else
-  arcnix_runtime="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
-  if [ -S "$arcnix_runtime/docker.sock" ]; then arcnix_socket="unix://$arcnix_runtime/docker.sock"; else arcnix_socket='unix:///var/run/docker.sock'; fi
-fi
+arcnix_runtime="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+if [ -S "$arcnix_runtime/docker.sock" ]; then arcnix_socket="unix://$arcnix_runtime/docker.sock"; else arcnix_socket='unix:///var/run/docker.sock'; fi
 arcnix_limit=
-if command -v timeout >/dev/null 2>&1; then arcnix_limit='timeout -k 10s {PULL_SECONDS}s'
-elif command -v gtimeout >/dev/null 2>&1; then arcnix_limit='gtimeout -k 10s {PULL_SECONDS}s'
-fi
+if command -v timeout >/dev/null 2>&1; then arcnix_limit='timeout -k 10s {PULL_SECONDS}s'; fi
 (
   arcnix_sleep=
   trap 'kill "$arcnix_sleep" 2>/dev/null; exit 0' TERM
@@ -177,22 +182,36 @@ trap 'kill "$arcnix_beat" 2>/dev/null || true' EXIT
 arcnix_status=0
 $arcnix_limit docker --host "$arcnix_socket" pull {platform_option}{image} || arcnix_status=$?
 kill "$arcnix_beat" 2>/dev/null || true
-if [ "$arcnix_status" -eq 124 ]; then echo 'The pull took longer than an hour and was stopped' >&2; fi
+case "$arcnix_status" in 124|137) echo 'The pull took longer than 55 minutes and was stopped' >&2;; esac
 [ "$arcnix_status" -eq 0 ] || exit "$arcnix_status"
 # Task scripts can't contain double braces, which mark parameters.
-docker --host "$arcnix_socket" image inspect --format "$(printf 'Image ID: \173\173.Id\175\175')" {image}
+docker --host "$arcnix_socket" image inspect --format "$(printf 'Image ID: \173\173.Id\175\175')" {image} || true
 printf 'ARCNIX_DOCKER_PULLED\n'
 "#
     );
     crate::operations::validate_command(&command)?;
-    Ok(Template::custom(Snippet {
+    let snippet = Snippet {
         parameters: vec![],
         id: SCRIPT_ID.into(),
-        name: format!("Pull {reference}"),
+        name: task_name(&reference),
         description: "Downloads the image on the server with the Docker CLI as this SSH user. Images from Docker Hub go through the registry mirrors. Closing Arcnix doesn't stop the pull.".into(),
         command,
         administrator: false,
-    }))
+    };
+    snippet.validate()?;
+    Ok(Template::custom(snippet))
+}
+
+/// "Pull " and the reference without its digest, shortened to the task name
+/// limit. The full reference is in the command.
+fn task_name(reference: &str) -> String {
+    let shown = reference.split('@').next().unwrap_or(reference);
+    let name = format!("Pull {shown}");
+    if name.len() <= NAME_LIMIT {
+        return name;
+    }
+    // References are ASCII, so any byte index is a character boundary.
+    format!("{}…", &name[..NAME_LIMIT - '…'.len_utf8()])
 }
 
 #[cfg(test)]
@@ -244,6 +263,9 @@ mod tests {
             assert!(checked_reference(bad).is_err(), "{bad}");
         }
         assert!(checked_reference(&format!("a/{}", "b".repeat(260))).is_err());
+        // The 255 limit is the name's; a long name with a tag and digest fits.
+        let long = format!("{}:1.0@sha512:{}", "a".repeat(250), "c".repeat(128));
+        assert_eq!(checked_reference(&long).unwrap(), long);
     }
 
     #[test]
@@ -282,16 +304,31 @@ mod tests {
             "{command}"
         );
         assert!(
-            command.contains("'ghcr.io/owner/app:1.0'\nprintf 'ARCNIX_DOCKER_PULLED"),
+            command.contains("'ghcr.io/owner/app:1.0' || true\nprintf 'ARCNIX_DOCKER_PULLED"),
             "{command}"
         );
         // The task system reads double braces as parameters.
         assert!(template.parameters().unwrap().is_empty());
         assert!(!command.contains("{{"));
-        assert!(command.contains("timeout -k 10s 3600s"));
+        assert!(command.contains("timeout -k 10s 3300s"));
+        assert!(!command.contains("Darwin"));
         let plain = pull("nginx", "").unwrap().snippet.command;
         assert!(plain.contains("pull 'nginx' ||"), "{plain}");
         assert!(pull("nginx;id", "").is_err());
+        // A long reference pinned by digest still makes a valid task name.
+        let ecr = format!(
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/some-long-application-name:1.0.0@sha256:{}",
+            "a".repeat(64)
+        );
+        let template = pull(&ecr, "").unwrap();
+        assert_eq!(
+            template.snippet.name,
+            "Pull 123456789012.dkr.ecr.us-east-1.amazonaws.com/team/some-long-application-name:1.0.0"
+        );
+        assert!(template.snippet.command.contains(&quote(&ecr)));
+        let longest = format!("{}/app:1", "a".repeat(240));
+        let name = pull(&longest, "").unwrap().snippet.name;
+        assert!(name.len() <= NAME_LIMIT && name.ends_with('…'), "{name}");
         assert!(pull("nginx", "linux").is_err());
     }
 }

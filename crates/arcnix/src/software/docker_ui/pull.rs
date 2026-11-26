@@ -10,11 +10,17 @@ pub(crate) struct PullState {
     reference: String,
     platform: String,
     error: String,
+    /// The image list request sent after a pull, apart from the Docker
+    /// app's own requests so neither replaces the other.
+    refresh: Option<u64>,
 }
 
-/// The pull runs a POSIX shell script, which Windows servers don't have.
+/// Server tasks run on Linux with systemd. Until the server's system is
+/// known, the button shows and the task's own check explains a refusal.
 pub(super) fn offered(s: &State) -> bool {
-    s.metrics.remote_platform != Some(arcnix_core::host::HostOs::Windows)
+    s.metrics
+        .remote_platform
+        .is_none_or(|p| p == arcnix_core::host::HostOs::Linux)
 }
 
 fn can_pull(s: &State) -> bool {
@@ -56,10 +62,34 @@ impl Ui {
                         .any(|target| s.selected.as_ref() == Some(&target.id))
             })
         });
-        if pulled && self.state.with(ready) {
-            self.docker_send(AppAction::DockerImages);
+        if pulled
+            && self
+                .state
+                .with(|s| s.connected && s.server_apps.applications.docker)
+        {
+            let serial = self.send(Action::ServerApps(AppAction::DockerImages));
+            self.state.revise(|s| s.docker.pull.refresh = Some(serial));
         }
     }
+}
+
+/// Takes the image list sent after a pull and passes on other replies.
+pub(super) fn event(
+    ui: &Ui,
+    serial: u64,
+    result: std::result::Result<Reply, String>,
+) -> Option<std::result::Result<Reply, String>> {
+    if !ui.state.with(|s| s.docker.pull.refresh == Some(serial)) {
+        return Some(result);
+    }
+    ui.state.revise(|s| {
+        s.docker.pull.refresh = None;
+        // A failed refresh leaves the list as it was; Refresh shows the error.
+        if let Ok(Reply::Images(images)) = result {
+            s.docker.images = images;
+        }
+    });
+    None
 }
 
 pub(super) fn dialog(ui: Ui) -> impl Widget {
@@ -94,8 +124,15 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
                     },
                 ),
                 text().class("subtle").content(i18n::bind(
-                    "Leave the platform empty to pull the server's own. The pull runs on the server as a task, so closing Arcnix doesn't stop it.",
+                    "Leave the platform empty to pull the server's own. The pull runs on the server as a task: it starts with sudo like other tasks, runs as this SSH user, and keeps going when Arcnix closes. Other Arcnix tasks on this server can't start until it finishes.",
                 )),
+                text().class("hint").content(state.map(|s| {
+                    if scripts_ui::busy(s) {
+                        i18n::translate("Another server task is running. Pull when it finishes.")
+                    } else {
+                        String::new()
+                    }
+                })),
                 text()
                     .class("error")
                     .content(state.map(|s| s.docker.pull.error.clone())),
