@@ -1087,47 +1087,55 @@ fn rows_editor(ui: Ui, block: Path) -> impl Widget {
                     let anchor = field.clone();
                     let error = error_below(state, move |_| anchor.clone());
                     if r.block {
-                        return col().class("nginx-row-item").fill((row().class("nginx-row").fill((
-                            text().class("nginx-row-name").content(r.name.clone()),
-                            text()
-                                .class("nginx-row-block subtle")
-                                .content(format!("{} {{ … }}", r.args)),
-                            text()
-                                .class("hint")
-                                .content(i18n::bind("Edit this block in File")),
-                        )), error));
+                        return col().class("nginx-row-item").fill((
+                            row().class("nginx-row").fill((
+                                text().class("nginx-row-name").content(r.name.clone()),
+                                text()
+                                    .class("nginx-row-block subtle")
+                                    .content(format!("{} {{ … }}", r.args)),
+                                text()
+                                    .class("hint")
+                                    .content(i18n::bind("Edit this block in File")),
+                            )),
+                            error,
+                        ));
                     }
                     let typed = ui.clone();
                     let (value_field, change_field) = (field.clone(), field);
                     let (value_path, change_path) = (path.clone(), path.clone());
                     let block = block.clone();
-                    col().class("nginx-row-item").fill((row().class("nginx-row").fill((
-                        text().class("nginx-row-name").content(r.name.clone()),
-                        input()
-                            .class("nginx-row-args")
-                            .name(i18n::bind(r.name.clone()))
-                            .enabled(state.map(writable))
-                            .value(state.map(move |s| {
-                                s.nginx
-                                    .editor
-                                    .as_ref()
-                                    .and_then(|e| e.drafts.get(&value_field).cloned())
-                                    .unwrap_or_else(|| row_args(s, &block, &value_path))
-                            }))
-                            .on(value_changed, move |event| {
-                                if let Event::ValueChanged { value, .. } = event {
-                                    typed.nginx_typed(
-                                        change_field.clone(),
-                                        value.clone(),
-                                        Change::RowArgs(change_path.clone(), value),
-                                    );
-                                }
-                            }),
-                        icon_action("Remove directive", Icon::Close)
-                            .class("icon-button")
-                            .enabled(state.map(writable))
-                            .on_press(move || remove.nginx_change(Change::RemoveRow(path.clone()))),
-                    )), error))
+                    col().class("nginx-row-item").fill((
+                        row().class("nginx-row").fill((
+                            text().class("nginx-row-name").content(r.name.clone()),
+                            input()
+                                .class("nginx-row-args")
+                                .name(i18n::bind(r.name.clone()))
+                                .enabled(state.map(writable))
+                                .value(state.map(move |s| {
+                                    s.nginx
+                                        .editor
+                                        .as_ref()
+                                        .and_then(|e| e.drafts.get(&value_field).cloned())
+                                        .unwrap_or_else(|| row_args(s, &block, &value_path))
+                                }))
+                                .on(value_changed, move |event| {
+                                    if let Event::ValueChanged { value, .. } = event {
+                                        typed.nginx_typed(
+                                            change_field.clone(),
+                                            value.clone(),
+                                            Change::RowArgs(change_path.clone(), value),
+                                        );
+                                    }
+                                }),
+                            icon_action("Remove directive", Icon::Close)
+                                .class("icon-button")
+                                .enabled(state.map(writable))
+                                .on_press(move || {
+                                    remove.nginx_change(Change::RemoveRow(path.clone()))
+                                }),
+                        )),
+                        error,
+                    ))
                 }
             }),
         when(state.map(adding.clone()), {
