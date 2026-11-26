@@ -49,6 +49,9 @@ SSH 认证成功	SSH authentication succeeded.
 服务器未启用 SFTP；SSH 系统软件管理仍可使用。	SFTP is unavailable; SSH software management remains available.
 连接已断开	Disconnected.
 读取目录失败：{message}	Could not read directory: {message}
+已跳过 {count} 个名称不是 UTF-8 的项目，目录：{path}	Skipped {count} entries with non-UTF-8 names in {path}
+目录中有非 UTF-8 文件名，无法完整读取目录：{path}	Cannot read the entire directory because it contains non-UTF-8 names: {path}
+远程目录的实际路径不是 UTF-8，请打开 / 或其他 UTF-8 路径	The resolved directory path is not UTF-8. Open / or another UTF-8 path.
 SSH 连接已断开：{message}	SSH connection lost: {message}
 传输结果：写入 {} 个文件，跳过 {} 个文件	Transfer result: wrote {} files; skipped {} files.
 传输未完成：{error}	Transfer did not finish: {error}

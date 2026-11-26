@@ -294,7 +294,7 @@ pub enum Update {
     Connected(bool, String),
     Disconnected,
     Local(PathBuf, Vec<FileEntry>),
-    Remote(String, Vec<FileEntry>),
+    Remote(String, Vec<FileEntry>, usize),
     Created {
         remote: bool,
         directory: bool,
@@ -1795,8 +1795,12 @@ pub(crate) fn start_with_limiter(
                                 send(Update::Alive);
                             }
                             Action::Remote(path) => {
-                                let (path, entries) = remote.list_entries(&path)?;
-                                send(Update::Remote(path, entries));
+                                let listing = remote.browse_dir(&path)?;
+                                send(Update::Remote(
+                                    listing.path,
+                                    listing.entries,
+                                    listing.skipped_non_utf8,
+                                ));
                             }
                             Action::Children { remote: true, path } => {
                                 let result = remote.list_entries(&path).map(|(_, entries)| entries);
@@ -2328,7 +2332,7 @@ mod tests {
         assert!(matches!(receive(&rx)?.update, Update::Connected(true, _)));
         send(77, Action::Remote("/".into()))?;
         match receive(&rx)?.update {
-            Update::Remote(path, entries) => {
+            Update::Remote(path, entries, 0) => {
                 assert_eq!(path, "/");
                 assert!(entries.iter().any(|entry| entry.name == "中文 空格.txt"));
             }

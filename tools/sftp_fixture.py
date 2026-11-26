@@ -1373,6 +1373,8 @@ class Files(paramiko.SFTPServerInterface):
         raise OSError(errno.ELOOP, "Too many links")
 
     def canonicalize(self, path):
+        if path == "/__fixture_non_utf8_canonical__":
+            return b"/invalid-\xff"
         if path == "/__fixture_disconnect__":
             self.transport.close()
             return "/"
@@ -1398,6 +1400,11 @@ class Files(paramiko.SFTPServerInterface):
                 item = self.attributes(self.path(path))
                 item.filename = name
                 rows.append(item)
+            if path.startswith("/__fixture_non_utf8_names__-"):
+                for name in (b"bad-\xff", b"bad-\xfe"):
+                    item = self.attributes(self.path(path))
+                    item.filename = name
+                    rows.append(item)
             for child in self.path(path).iterdir():
                 try:
                     item = self.attributes(child)

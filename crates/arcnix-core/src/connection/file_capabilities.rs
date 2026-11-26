@@ -12,7 +12,7 @@ pub use mutations::*;
 pub use streams::*;
 
 pub trait DirectoryReader {
-    /// Return the resolved directory and its entries.
+    /// Return the resolved directory and the entries the browser can display.
     fn list_entries(&self, directory: &str) -> Result<(String, Vec<FileEntry>)>;
 }
 
@@ -77,7 +77,8 @@ impl DirectoryReader for Target {
 
 impl DirectoryReader for RemoteSession {
     fn list_entries(&self, directory: &str) -> Result<(String, Vec<FileEntry>)> {
-        self.list_dir(directory)
+        let listing = self.browse_dir(directory)?;
+        Ok((listing.path, listing.entries))
     }
 }
 

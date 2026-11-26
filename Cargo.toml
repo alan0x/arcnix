@@ -17,5 +17,7 @@ serde_json = "1"
 arcnix-core = { version = "0.3.7", path = "crates/arcnix-core" }
 
 [patch.crates-io]
+# Read SFTP entry names as wire bytes before deciding which can be displayed.
+ssh2 = { path = "vendor/ssh2" }
 # Keep the parent resize handler when a child closes.
 wry = { git = "https://github.com/tauri-apps/wry", rev = "5006b49b3a643b5544263ff9863b797a810d549b" }

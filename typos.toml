@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["/target/**", "/artifacts/**", "Cargo.lock", "crates/arcnix/assets/vendor/**"]
+extend-exclude = ["/target/**", "/artifacts/**", "Cargo.lock", "crates/arcnix/assets/vendor/**", "/vendor/ssh2/**"]
 
 [default.extend-words]
 arcnix = "arcnix"

@@ -126,7 +126,7 @@ impl Session {
             Action::MetricsSample(gpu) => Update::Metrics(message(target.sample_monitor(gpu))),
             Action::Keepalive => Update::Alive,
             Action::Remote(path) => match target.list_entries(&path) {
-                Ok((path, entries)) => Update::Remote(path, entries),
+                Ok((path, entries)) => Update::Remote(path, entries, 0),
                 Err(error) => Update::BrowseError {
                     remote: true,
                     message: format!("{error:#}"),

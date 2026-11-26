@@ -39,6 +39,13 @@ const TREE_DEPTH_LIMIT: usize = 64;
 const TREE_ENTRY_LIMIT: usize = 100_000;
 const STREAM_TAIL_LIMIT: usize = 256 * 1024;
 
+#[derive(Debug)]
+pub struct DirectoryListing {
+    pub path: String,
+    pub entries: Vec<FileEntry>,
+    pub skipped_non_utf8: usize,
+}
+
 struct DeleteFiles<'a>(&'a Sftp);
 fn deletion_stamp(stat: ssh2::FileStat) -> crate::deletion::Stamp {
     use crate::deletion::Kind;
@@ -1619,32 +1626,52 @@ impl RemoteSession {
     }
 
     pub fn list_dir(&self, path: &str) -> Result<(String, Vec<FileEntry>)> {
+        let listing = self.browse_dir(path)?;
+        ensure!(
+            listing.skipped_non_utf8 == 0,
+            "目录中有非 UTF-8 文件名，无法完整读取目录：{}",
+            listing.path
+        );
+        Ok((listing.path, listing.entries))
+    }
+
+    /// A partial listing is suitable for display, but never for a tree operation.
+    pub fn browse_dir(&self, path: &str) -> Result<DirectoryListing> {
         validate_path(path)?;
         let canonical = self
             .sftp()?
-            .realpath(Path::new(path))
+            .realpath_bytes(Path::new(path))
             .context("Cannot resolve remote directory")?;
-        let canonical = path_string(&canonical)?;
+        let canonical = String::from_utf8(canonical)
+            .context("远程目录的实际路径不是 UTF-8，请打开 / 或其他 UTF-8 路径")?;
         validate_path(&canonical)?;
         let mut entries = Vec::new();
+        let mut skipped_non_utf8 = 0;
         let mut directory = self
             .sftp()?
             .opendir(Path::new(&canonical))
             .context("Cannot open remote directory")?;
         loop {
-            let (filename, stat) = match directory.readdir() {
+            let (filename, stat) = match directory.readdir_bytes() {
                 Ok(entry) => entry,
                 Err(error) if error.code() == ErrorCode::Session(-16) => break,
                 Err(error) => return Err(error).context("Cannot list remote directory"),
             };
-            let name = path_string(&filename)?;
-            if name == "." || name == ".." {
+            if filename == b"." || filename == b".." {
                 continue;
             }
             ensure!(
-                !name.is_empty() && !name.contains('/'),
+                !filename.is_empty() && !filename.contains(&b'/') && !filename.contains(&0),
                 "Invalid remote filename"
             );
+            ensure!(
+                entries.len() + skipped_non_utf8 < TREE_ENTRY_LIMIT,
+                "目录超过 {TREE_ENTRY_LIMIT} 个项目"
+            );
+            let Ok(name) = String::from_utf8(filename) else {
+                skipped_non_utf8 += 1;
+                continue;
+            };
             let path = format!("{}/{name}", canonical.trim_end_matches('/'));
             validate_path(&path)?;
             let is_symlink = stat.file_type().is_symlink();
@@ -1654,10 +1681,6 @@ impl RemoteSession {
                         .sftp()?
                         .stat(Path::new(&path))
                         .is_ok_and(|s| s.is_dir()));
-            ensure!(
-                entries.len() < TREE_ENTRY_LIMIT,
-                "目录超过 {TREE_ENTRY_LIMIT} 个项目"
-            );
             entries.push(FileEntry {
                 hidden_attribute: false,
                 name,
@@ -1670,7 +1693,11 @@ impl RemoteSession {
             });
         }
         crate::local::sort_entries(&mut entries);
-        Ok((canonical, entries))
+        Ok(DirectoryListing {
+            path: canonical,
+            entries,
+            skipped_non_utf8,
+        })
     }
     pub fn create_file(&self, path: &str) -> Result<()> {
         validate_path(path)?;

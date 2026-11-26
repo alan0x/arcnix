@@ -266,7 +266,7 @@ fn pending_conflict_releases_worker_on_cancel_and_connection_switch() -> Result<
     );
     bridge.send(Action::Remote("/".into()))?;
     ensure!(
-        matches!(bridge.receive()?.update, Update::Remote(_, _)),
+        matches!(bridge.receive()?.update, Update::Remote(..)),
         "cancelled prompt must release SSH worker"
     );
 

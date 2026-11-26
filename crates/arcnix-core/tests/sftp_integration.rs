@@ -434,6 +434,35 @@ impl Drop for Temp {
 
 #[test]
 #[ignore = "requires loopback SSH fixture"]
+fn non_utf8_names_allow_partial_browsing_but_require_complete_tree_listings() -> Result<()> {
+    let session = connect()?;
+    let path = format!("/__fixture_non_utf8_names__-{}", new_id());
+    session.mkdir(&path)?;
+    // A lossy decoder would give both fixture entries this same real file's name.
+    let valid = format!("{path}/bad-�");
+    session.create_file(&valid)?;
+    let listing = session.browse_dir(&path)?;
+    assert_eq!(listing.path, path);
+    assert_eq!(listing.skipped_non_utf8, 2);
+    assert_eq!(listing.entries.len(), 1);
+    assert_eq!(listing.entries[0].path, valid);
+    let temp = Temp::new()?;
+    let download = temp.join("download");
+    let error = session
+        .prepare_download(&path, &download, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(error.to_string().contains("非 UTF-8 文件名"));
+    assert!(!download.exists());
+    let error = session
+        .browse_dir("/__fixture_non_utf8_canonical__")
+        .unwrap_err();
+    assert!(error.to_string().contains("实际路径不是 UTF-8"));
+    assert_eq!(session.browse_dir("/")?.skipped_non_utf8, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires loopback SSH fixture"]
 fn roundtrip_unicode_listing_rename_and_no_overwrite() -> Result<()> {
     let session = connect()?;
     let (path, entries) = session.list_dir(".")?;

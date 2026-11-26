@@ -1010,7 +1010,26 @@ impl Ui {
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.send(Action::ResumeOffice(events.store.as_ref().clone()));events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.pgadmin_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
             Update::Local(path,entries)=>{if !accepts_listing(state.with(|s|s.local_request),response.serial){return;}state.revise(|s|{s.local_path=local_display(&path);s.local_ready=true;s.local=entries;file_browser::listed(s,false);if !s.background{s.config.local_directory=Some(path.clone());};if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_local=Some(path);}});events.save();}
-            Update::Remote(path,entries)=>{if !accepts_listing(state.with(|s|s.remote_request),response.serial){return;}state.revise(|s|{file_browser::remote_listed(s,&path);s.remote_path=path.clone();if let Some(profile)=s.config.servers.iter_mut().find(|p|Some(&p.id)==s.selected.as_ref())&& profile.locations.remember_paths{profile.locations.last_remote=Some(path);}s.remote_ready=true;s.remote=entries;file_browser::listed(s,true);});events.save();},
+            Update::Remote(path, entries, skipped) => {
+                if !accepts_listing(state.with(|s| s.remote_request), response.serial) {
+                    return;
+                }
+                if skipped > 0 {
+                    events.error(format!("已跳过 {skipped} 个名称不是 UTF-8 的项目，目录：{path}"));
+                }
+                state.revise(|s| {
+                    file_browser::remote_listed(s, &path);
+                    s.remote_path = path.clone();
+                    if let Some(profile) = s.config.servers.iter_mut().find(|p| Some(&p.id) == s.selected.as_ref())
+                        && profile.locations.remember_paths {
+                        profile.locations.last_remote = Some(path);
+                    }
+                    s.remote_ready = true;
+                    s.remote = entries;
+                    file_browser::listed(s, true);
+                });
+                events.save();
+            },
             Update::Children{remote:true,result,..} if state.with(|s|s.images.directory_request == Some(response.serial)) =>
                 state.revise(|s|image_viewer::listed(s,result.unwrap_or_default())),
             Update::Children{remote:true,result,..} if desktop_file_picker::awaiting_directory(events, response.serial) =>
