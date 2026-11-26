@@ -272,6 +272,7 @@ enum Input {
 }
 #[derive(Serialize)]
 struct Metadata<'a> {
+    dark: bool,
     font_family: &'static str,
     font_size: u8,
     cursor_style: arcnix_core::server_apps::CursorStyle,
@@ -1072,6 +1073,7 @@ fn page(ui: Ui, window: u32) -> impl Widget {
             text().class("terminal-state").content(state.map(|s| {
                 let prefs = &server_apps_ui::current(s).app_settings;
                 serde_json::to_string(&Metadata {
+                    dark: prefs.terminal.theme.is_dark(s.system_dark),
                     font_family: prefs.terminal.font_family.css(),
                     font_size: prefs.terminal.font_size,
                     cursor_style: prefs.terminal.cursor_style,

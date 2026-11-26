@@ -5,6 +5,31 @@
     const engines = new Map();
     const handledKeys = new WeakSet();
     let terminalMenu = null;
+    const palettes = {
+        light: {
+            background:'#edf1f5', foreground:'#253341', cursor:'#245e94', cursorAccent:'#edf1f5', selectionBackground:'#457bb74d',
+            black:'#283340', red:'#a23435', green:'#286438', yellow:'#805711', blue:'#275f9e', magenta:'#823e88', cyan:'#216771', white:'#a8b1ba',
+            brightBlack:'#526170', brightRed:'#b4323a', brightGreen:'#237545', brightYellow:'#916415', brightBlue:'#256db3', brightMagenta:'#954b9b', brightCyan:'#147484', brightWhite:'#dce2e8'
+        },
+        dark: {
+            background:'#19212b', foreground:'#dce4ec', cursor:'#8cc4ff', cursorAccent:'#19212b', selectionBackground:'#78a9db55',
+            black:'#323e4c', red:'#ee8080', green:'#87c997', yellow:'#dfbc76', blue:'#81ade3', magenta:'#c799d4', cyan:'#79c4ca', white:'#c1ccd6',
+            brightBlack:'#8796a6', brightRed:'#ffa2a0', brightGreen:'#a7deb1', brightYellow:'#f3d49a', brightBlue:'#a4caff', brightMagenta:'#dfb6e9', brightCyan:'#9adee2', brightWhite:'#edf3fa'
+        }
+    };
+    function applyPalette(current, surface, dark) {
+        const scheme = dark ? 'dark' : 'light';
+        const palette = palettes[scheme];
+        if (surface.dataset.terminalScheme !== scheme) {
+            surface.dataset.terminalScheme = scheme;
+            surface.style.setProperty('--terminal-background', palette.background);
+            surface.style.setProperty('--terminal-foreground', palette.foreground);
+        }
+        if (current.theme !== scheme) {
+            current.term.options.theme = palette;
+            current.theme = scheme;
+        }
+    }
     function metadata() {
         try { return JSON.parse(document.querySelector(".terminal-state")?.textContent || "null"); }
         catch (_) { return null; }
@@ -94,6 +119,24 @@
         current.resize.observe(surface);
         engines.set(key,current);
         term.onData(text=>{if(engine?.key===key && engine.status==="running") data(text,id);});
+        // In screen-reader mode xterm handles keyboard and composition events,
+        // but skips text committed by the input service without a key event.
+        let keyProducedInput = false;
+        term.onKey(() => { keyProducedInput = true; });
+        for (const type of ['keydown', 'keyup', 'blur']) {
+            wrapper.addEventListener(type, () => { keyProducedInput = false; }, true);
+        }
+        term.textarea.addEventListener('beforeinput', event => {
+            if (event.inputType !== 'insertText' || event.isComposing || !event.data ||
+                !event.cancelable || engine !== current || current.status !== 'running') return;
+            if (keyProducedInput) {
+                keyProducedInput = false;
+                return;
+            }
+            // Prevent a second delivery from xterm's deferred keyCode 229 textarea check.
+            event.preventDefault();
+            term.input(event.data);
+        });
         term.onBinary(text=>{if(engine?.key===key && engine.status==="running") emit({kind:"binary",id,data:btoa(text)});});
         term.onResize(size=>{if(engine?.key===key)emit({kind:"resize",id,columns:size.cols,rows:size.rows});});
         term.onSelectionChange(()=>{
@@ -103,7 +146,7 @@
         });
         term.attachCustomKeyEventHandler(event=>{
             if(engine?.key!==key)return false;
-            if(event.type!=="keydown") return true;
+            if(event.type!=="keydown" || event.isComposing || event.keyCode===229) return true;
             if(applicationKey(event))return false;
             if (arcnixKeys.matches(event, 'terminal_copy', 'Ctrl+Shift+C')) {
                 event.preventDefault(); copy(); return false;
@@ -226,7 +269,7 @@
     }
     function applicationKey(event) {
         if(handledKeys.has(event))return true;
-        if(event.type!=='keydown' || event.isComposing || !(event.target instanceof Element))return false;
+        if(event.type!=='keydown' || event.isComposing || event.keyCode===229 || !(event.target instanceof Element))return false;
         if(terminalMenu && event.key==='Escape' && document.querySelector('.terminal-context-menu')){
             dismissContext(true);
             handledKeys.add(event);event.preventDefault();event.stopImmediatePropagation();return true;
@@ -370,6 +413,7 @@
             const surface = parked.querySelector('.terminal-parked-surface');
             if (!cached || cached === engine || !parked.getClientRects().length) continue;
             if (cached.wrapper.parentElement !== surface) surface.replaceChildren(cached.wrapper);
+            applyPalette(cached, surface, metadata.dark);
             const input = parked.querySelector('.terminal-output-ack');
             renderPackets(cached, parked, current => {
                 if (!input.isConnected || current.ackPacket <= current.sentAckPacket) return;
@@ -379,12 +423,7 @@
             });
         }
         const term=engine.term;
-        const app=document.querySelector(".server-desktop:not(.hidden)") || document.querySelector(".app");
-        if(app){
-            const style=getComputedStyle(app),background=style.getPropertyValue("--surface").trim(),foreground=style.getPropertyValue("--text").trim(),cursor=style.getPropertyValue("--accent").trim();
-            const themeKey=`${background}:${foreground}:${cursor}`;
-            if(engine.theme!==themeKey){engine.theme=themeKey;term.options.theme={background,foreground,cursor,selectionBackground:"#649cff66"};}
-        }
+        applyPalette(engine, surface, metadata.dark);
         if(engine.status!==metadata.status){
             engine.status=metadata.status;
             term.options.disableStdin=metadata.status!=="running";

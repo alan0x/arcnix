@@ -80,10 +80,16 @@ pub struct DesktopAppSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TerminalAppearance {
+    #[serde(skip_serializing_if = "system_theme")]
+    pub theme: Theme,
     pub font_size: u8,
     pub font_family: TerminalFont,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
+}
+
+fn system_theme(theme: &Theme) -> bool {
+    *theme == Theme::System
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +123,7 @@ impl TerminalFont {
 impl Default for TerminalAppearance {
     fn default() -> Self {
         Self {
+            theme: Theme::System,
             font_size: 13,
             font_family: TerminalFont::Automatic,
             cursor_style: CursorStyle::Block,
@@ -721,6 +728,10 @@ mod tests {
     fn app_preferences_round_trip_through_desktop_storage() -> Result<()> {
         let mut prefs = parse_preferences(r#"{"version":1}"#)?;
         assert_eq!(prefs.app_settings, DesktopAppSettings::default());
+        let legacy: TerminalAppearance = serde_json::from_str(r#"{"font_size":15}"#)?;
+        assert_eq!(legacy.theme, Theme::System);
+        assert!(serde_json::to_value(legacy)?.get("theme").is_none());
+        prefs.app_settings.terminal.theme = Theme::Dark;
         prefs.app_settings.terminal.font_family = TerminalFont::Consolas;
         prefs.app_settings.terminal.cursor_blink = false;
         prefs.app_settings.editor.font_size = 18;
