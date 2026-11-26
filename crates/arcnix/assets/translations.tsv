@@ -3518,13 +3518,14 @@ Shell	Shell
 搜索网络	Search networks
 这些设置太长，无法运行。请缩短环境变量的值或路径。	These settings are too long to run. Shorten the environment values or paths.
 名为 {name} 的项目已存在	A project named {name} already exists
-变量值为单行，最多 2048 个字符	A variable's value is one line of up to 2048 characters
 所有能检查的镜像都是最新的。	Every image that could be checked is up to date.
 没有从镜像仓库拉取的镜像可检查。	No image pulled from a registry to check.
 所有镜像都无法检查。	None of the images could be checked.
 正在运行旧镜像	Running an older image
-Docker Hub 没有发布 {repository}；它可能是在服务器上构建的	Docker Hub doesn't publish {repository}; it may have been built on the server
+Docker Hub 不向未登录的用户显示 {repository}；它可能是私有镜像，或是在服务器上构建的	Docker Hub doesn't show {repository} to anyone not logged in; it may be private or built on the server
 无法读取 Docker 的登录信息：{error}	Docker's logins can't be read: {error}
 密码或访问令牌超过 4000 个字符	The password or access token is longer than 4000 characters
 镜像仓库在 25 秒内没有响应	The registry didn't answer within 25 seconds
 Docker 没有报告任何网络。	Docker reported no networks.
+共回收空间：{size}	Total reclaimed space: {size}
+共计：{size}	Total: {size}

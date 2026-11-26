@@ -538,19 +538,28 @@ fn current_digest_until(reference: &str, deadline: Instant) -> Result<Option<Str
     let mut response = send(request(&None), deadline, place)?;
     let login = || anyhow::anyhow!("The registry {host} only answers after you log in");
     if response.status() == StatusCode::UNAUTHORIZED {
+        // A registry that can't be reached keeps its own message; any
+        // other refusal of an anonymous token means a login is needed.
         let token = Some(
-            anonymous_token(client, response.headers(), &host, &name, deadline)
-                .map_err(|_| login())?,
+            anonymous_token(client, response.headers(), &host, &name, deadline).map_err(
+                |error| {
+                    if format!("{error:#}").contains("can't be reached") {
+                        error
+                    } else {
+                        login()
+                    }
+                },
+            )?,
         );
         response = send(request(&token), deadline, place)?;
     }
     match response.status() {
         StatusCode::NOT_FOUND => bail!("The tag {tag} is no longer published"),
-        // Docker Hub answers 401 for a repository it doesn't have, which is
-        // what an image built on the server and never pushed looks like.
-        StatusCode::UNAUTHORIZED if hub => {
-            bail!("Docker Hub doesn't publish {repository}; it may have been built on the server")
-        }
+        // Docker Hub answers 401 both for a private repository and for one
+        // it doesn't have, as with an image built on the server.
+        StatusCode::UNAUTHORIZED if hub => bail!(
+            "Docker Hub doesn't show {repository} to anyone not logged in; it may be private or built on the server"
+        ),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(login()),
         status if !status.is_success() => {
             let status = status.as_u16();

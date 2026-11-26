@@ -275,6 +275,13 @@ fn translate_inner(value: &str, language: Language, depth: u8) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn docker_cleanup_totals_are_translated() {
+        assert_eq!(
+            translate_for("Total reclaimed space: 1.91MB", Language::SimplifiedChinese),
+            "共回收空间：1.91MB"
+        );
+    }
+    #[test]
     fn translates_templates_preserving_values_and_reordering() {
         assert_eq!(
             translate_for("SFTP · 12 个项目", Language::English),

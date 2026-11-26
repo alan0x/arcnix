@@ -135,7 +135,7 @@ pub fn suggested_name(image: &str) -> String {
 
 fn valid_path(path: &str) -> bool {
     path.starts_with('/')
-        && path.len() <= 512
+        && path.len() <= 1024
         && !path.chars().any(|c| c.is_control() || c == '$')
         && path != "/"
         && path[1..]
@@ -229,8 +229,8 @@ impl ContainerApp {
             );
             ensure!(keys.insert(key.as_str()), "The variable {key} is set twice");
             ensure!(
-                value.len() <= 2048 && !value.chars().any(|c| c.is_control() && c != '\t'),
-                "A variable's value is one line of up to 2048 characters"
+                value.len() <= 4096 && !value.chars().any(|c| c.is_control() && c != '\t'),
+                "A variable's value is one line of up to 4096 characters"
             );
         }
         Ok(())

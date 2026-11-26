@@ -700,8 +700,9 @@ fn container_list(ui: Ui) -> impl Widget {
                                         }))
                                         .content(i18n::bind("Update available")),
                                     text()
-                                        .class(state.map(move |_| {
+                                        .class(state.map(move |s| {
                                             if updates::superseded(
+                                                s,
                                                 &container.get().container().image,
                                             ) {
                                                 "docker-badge update"

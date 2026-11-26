@@ -341,6 +341,17 @@ pub fn parse(text: &str) -> Result<Projects> {
                         _ => continue,
                     }
                 };
+                // A container project listed earlier under an App Center
+                // project's name is left out, whichever folder came first.
+                if matches!(definition, Manifest::Template(_))
+                    && let Some(index) = result.entries.iter().position(|p| {
+                        matches!(p.definition, Manifest::Container(_))
+                            && p.definition.name() == definition.name()
+                    })
+                {
+                    result.entries.remove(index);
+                    seen.remove(definition.name());
+                }
                 ensure!(
                     seen.insert(definition.name().to_owned()),
                     "Duplicate Compose project name"
@@ -502,6 +513,18 @@ mod tests {
         assert_eq!(projects.entries[1].definition.kind(), None);
         assert_eq!(projects.entries[1].definition.image(), "redis:7");
         assert!(list_command().contains("arcnix-container.json"));
+        // An App Center project listed after a container project of the same
+        // name replaces it instead of failing the list.
+        let text = format!(
+            "ARCNIX_COMPOSE_V1\n{}\n{}ARCNIX_PROJECT\n{}\n{}\nARCNIX_COMPOSE_END\n",
+            b64("/home/u/.arcnix/apps"),
+            container("nginx", &app("nginx")),
+            b64(&template),
+            b64("services: {}\n"),
+        );
+        let projects = parse(&text).unwrap();
+        assert_eq!(projects.entries.len(), 1);
+        assert_eq!(projects.entries[0].definition.kind(), Some(Kind::Nginx));
     }
 
     #[test]

@@ -55,11 +55,6 @@ fn untagged(image: &Image) -> bool {
     image.repository == "<none>" || image.tag == "<none>"
 }
 
-/// What `image prune` removes: no tag and no digest from a registry.
-fn dangling(image: &Image) -> bool {
-    untagged(image) && image.digests.is_empty()
-}
-
 /// Whether any tag of this image (the same ID) is used by a container, as
 /// Docker decides what is in use.
 fn in_use(s: &State, image: &Image) -> bool {
@@ -344,7 +339,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                         Prune::Untagged,
                         "Untagged images",
                         |s| {
-                            let count = s.docker.images.iter().filter(|i| dangling(i) && !in_use(s, i)).count();
+                            let count = s.docker.images.iter().filter(|i| untagged(i) && !in_use(s, i)).count();
                             i18n::translate(&format!("{count} untagged images, usually left behind when a newer one was pulled."))
                         },
                         "Remove untagged…",

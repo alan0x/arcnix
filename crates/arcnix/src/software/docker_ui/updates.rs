@@ -45,8 +45,17 @@ pub(super) fn normalized(image: &str) -> String {
 /// Whether a container runs an image its tag no longer points to: Docker
 /// then shows the image's ID instead of a name, as after an update was
 /// pulled. The container keeps the old image until it is recreated.
-pub(super) fn superseded(image: &str) -> bool {
+pub(super) fn superseded(s: &State, image: &str) -> bool {
     let id = image.strip_prefix("sha256:").unwrap_or(image);
+    looks_like_id(id)
+        // The old image is still on the server, without a tag.
+        && s.docker.images.iter().any(|i| {
+            i.repository == "<none>"
+                && i.id.strip_prefix("sha256:").unwrap_or(&i.id).starts_with(id)
+        })
+}
+
+fn looks_like_id(id: &str) -> bool {
     id.len() >= 12
         && id
             .bytes()
@@ -189,8 +198,8 @@ mod tests {
         assert_eq!(normalized("docker.io/library/postgres:16"), "postgres:16");
         assert_eq!(normalized("docker.io/nginx"), "nginx:latest");
         assert_eq!(normalized("library/nginx:1.27"), "nginx:1.27");
-        assert!(superseded("65645c7bb6a0"));
-        assert!(!superseded("nginx:1.27") && !superseded("abc"));
+        assert!(looks_like_id("65645c7bb6a0"));
+        assert!(!looks_like_id("nginx:1.27") && !looks_like_id("abc"));
         let pinned = format!("nginx@sha256:{}", "a".repeat(64));
         assert_eq!(normalized(&pinned), pinned);
     }
