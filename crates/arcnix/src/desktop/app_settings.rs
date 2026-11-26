@@ -42,6 +42,17 @@ pub(crate) fn dialog(ui: Ui) -> impl Widget {
                 Some(Dialog::AppSettings(WorkspacePage::Terminal)) => fragment((
                     choice(
                         &ui,
+                        "Color scheme",
+                        vec![
+                            (Theme::System, "Follow system"),
+                            (Theme::Light, "Light"),
+                            (Theme::Dark, "Dark"),
+                        ],
+                        |p| p.terminal.theme,
+                        |p, v| p.terminal.theme = v,
+                    ),
+                    choice(
+                        &ui,
                         "Font size",
                         fonts,
                         |p| p.terminal.font_size,

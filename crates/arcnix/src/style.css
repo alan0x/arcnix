@@ -96,7 +96,9 @@
 @media(max-width:950px){.navigation-rail{width:56px;min-width:56px;padding-inline:6px}.rail-item{width:42px;min-width:42px}.navigation-shell>.sidebar,.context-sidebar{width:208px}.context-title{padding-inline:18px}.navigation-shell>.sidebar{padding-inline:12px}.home-title{font-size:27px}.home-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.server-facts{grid-template-columns:repeat(2,minmax(0,1fr))}.main-panel>.module-nav{gap:16px;padding-inline:16px;overflow-x:auto}.workspace-content,.workspace-content:has(>.server-modules),.workspace-content:has(>.terminal-module:not(.hidden)),.workspace-content:has(>.settings-page){padding:16px}.page-header{padding-inline:16px}.page-header-title{font-size:var(--font-body)}.server-overview{padding:24px}.home-section-heading>.subtle{font-size:var(--font-small)}}
 .home-server-card{display:grid!important;grid-template-columns:26px minmax(0,1fr) auto;grid-template-rows:auto auto;gap:7px 14px;align-content:center}.home-server-card>.action-glyph{grid-column:1;grid-row:1/3}.home-server-name{grid-column:2;grid-row:1}.home-server-address{grid-column:2;grid-row:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.home-server-card>.server-card-status{grid-column:3;grid-row:1/3}
 .terminal-copy.copied{color:var(--accent)!important}
-.terminal-surface .xterm-viewport{background:var(--surface)!important;overflow-x:hidden}
+.terminal-surface, .terminal-parked-surface { background:var(--terminal-background, var(--surface)); }
+.terminal-owned-surface .xterm .xterm-viewport { background:var(--terminal-background, var(--surface)); overflow-x:hidden; }
+.terminal-owned-surface .xterm .composition-view { background:var(--terminal-background); color:var(--terminal-foreground); }
 .terminal-owned-surface.has-scrollback .xterm-scrollable-element > .scrollbar.vertical {
   opacity: 1;
   pointer-events: auto;
@@ -2480,12 +2482,26 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .files-tab-select > .folder-color-dot { margin-inline-end: 5px; }
 .tag-all { --folder-tag: conic-gradient(#ee646b, #ed9251, #dba928, #46af72, #4299eb, #b276dd, #ee646b); }
 .files-tags-view { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.files-tags-list { overflow: auto; min-height: 0; padding-inline: 10px; }
-.files-tags-list:has(.files-tag-result) { padding-block: 5px; }
-.files-tag-result { display: flex; align-items: center; gap: 4px; min-width: 0; border-bottom: 1px solid var(--file-row-line); }
-.files-tag-item { display: grid !important; grid-template-columns: 8px minmax(0, 1fr); column-gap: 10px; row-gap: 1px; flex: 1; min-width: 0; padding-block: 6px !important; }
-.files-tag-item > .folder-color-dot { grid-row: span 2; }
-.files-tag-item-path { grid-column: 2; font-size: var(--font-small); }
+.files-tags-list { display: block; overflow: auto; min-height: 0; }
+.files-tag-columns, .files-tag-result {
+  display: grid !important; grid-template-columns: 8px minmax(0, 1fr) minmax(0, 1.6fr) 30px;
+  align-items: center; column-gap: 12px; min-height: 32px; padding-inline: 12px;
+}
+.files-tag-columns {
+  position: sticky; top: 0; z-index: 1; background: var(--surface); color: var(--muted);
+  border-bottom: 1px solid var(--line); font-size: var(--font-small); user-select: none;
+}
+.files-tag-result { border-bottom: 1px solid var(--file-row-line); }
+.files-tag-columns > :first-child { grid-column: span 2; }
+.files-tag-result:hover { background: var(--raised); }
+.files-tag-item {
+  display: grid !important; grid-column: span 3; grid-template-columns: subgrid;
+  align-self: stretch; align-items: center; min-width: 0; padding: 4px 0 !important;
+  border: 0 !important; background: transparent !important; color: var(--text) !important;
+  text-align: start !important; font-size: var(--font-label);
+}
+.files-tag-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-tag-item-path { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-small); }
 .tag-red { --folder-tag: #ee646b; }
 .tag-orange { --folder-tag: #ed9251; }
 .tag-yellow { --folder-tag: #dba928; }

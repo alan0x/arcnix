@@ -208,7 +208,7 @@ impl Preset {
         let (wallpaper, light_accent, dark_accent, icons) = match self {
             Self::Prism => (
                 Wallpaper::Prism,
-                [0, 120, 212],
+                [79, 108, 132],
                 [119, 167, 222],
                 IconStyle::Outline,
             ),
@@ -260,6 +260,7 @@ impl Preset {
             ..StyleOverrides::default()
         };
         Theme {
+            preset: self,
             wallpaper,
             mode: Mode::System,
             accent: None,
@@ -388,6 +389,7 @@ impl fmt::Display for Rgb {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
+    preset: Preset,
     pub wallpaper: Wallpaper,
     pub mode: Mode,
     pub icons: IconStyle,
@@ -451,6 +453,16 @@ impl Theme {
                 [226, 234, 244],
                 [146, 163, 185],
                 [240, 148, 148],
+            )
+        } else if self.preset == Preset::Prism {
+            (
+                [222, 225, 227],
+                [234, 236, 237],
+                [240, 242, 243],
+                [191, 198, 203],
+                [45, 55, 63],
+                [83, 97, 108],
+                [163, 62, 70],
             )
         } else {
             (

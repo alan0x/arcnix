@@ -1,4 +1,5 @@
 """Owned WebView/SSH checks for the terminal menu and direct multi-tab controls."""
+import hashlib
 import json
 import re
 import time
@@ -109,6 +110,28 @@ def main():
                 expect(menu).not_to_be_visible()
 
             running()
+            keyboard.focus()
+            page.keyboard.type('checksum key-')
+            cdp = page.context.new_cdp_session(page)
+            cdp.send('Input.insertText', {'text': 'abc'})
+            process_key = {'key': 'Process', 'windowsVirtualKeyCode': 229}
+            cdp.send('Input.dispatchKeyEvent', {'type': 'rawKeyDown', **process_key})
+            cdp.send('Input.insertText', {'text': 'xyz'})
+            cdp.send('Input.dispatchKeyEvent', {'type': 'keyUp', **process_key})
+            for commit in ('pin', '拼', None):
+                cdp.send('Input.imeSetComposition', {'text': 'pin', 'selectionStart': 3, 'selectionEnd': 3})
+                expect(surface.locator('.composition-view')).to_have_text('pin')
+                if commit is None:
+                    cdp.send('Input.imeSetComposition', {'text': '', 'selectionStart': 0, 'selectionEnd': 0})
+                else:
+                    cdp.send('Input.insertText', {'text': commit})
+                expect(surface.locator('.composition-view')).to_be_hidden()
+            cdp.detach()
+            page.keyboard.type('-end')
+            page.keyboard.press('Enter')
+            digest = hashlib.sha256('key-abcxyzpin拼-end'.encode()).hexdigest()
+            expect(reader).to_contain_text(digest)
+            checks.append('The remote PTY receives ordinary keys, direct text and committed IME text exactly once, and receives no cancelled preedit')
             expect(page.locator('.terminal-controls .help-trigger')).to_have_count(0)
             command('burst')
             expect(reader).to_contain_text('BURST COMPLETE', timeout=30000)

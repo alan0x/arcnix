@@ -7,6 +7,14 @@ pub(crate) const WINDOWS: &str = include_str!("gpu_windows.ps1");
 pub(crate) const LINUX: &str = include_str!("gpu_linux.sh");
 pub(crate) const MACOS: &str = include_str!("gpu_macos.sh");
 
+pub(super) fn linux_remote_command() -> String {
+    // Optional sysfs globs must reach the readability checks even when they match nothing.
+    format!(
+        "# arcnix:gpu:linux\nexec /bin/sh -c {}",
+        crate::remote_tasks::quote(LINUX)
+    )
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Gpu {
     pub id: String,
@@ -213,6 +221,39 @@ mod tests {
         assert_eq!(card.renderer, Some(0.));
         assert_eq!(card.tiler, None);
         assert_eq!(card.shared, Some(8192));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_probe_keeps_gpu_without_a_temperature_sensor() {
+        // Bash failglob gives the outer shell zsh's unmatched-pattern behavior.
+        let fixture = r#"
+set -eu
+root=$(mktemp -d)
+trap 'rm -rf -- "$root"' EXIT
+cd "$root"
+mkdir -p drm/card0/device bin
+printf '0x8086' > drm/card0/device/vendor
+printf 'Fixture GPU' > drm/card0/device/product_name
+printf '37' > drm/card0/device/gpu_busy_percent
+for tool in basename readlink cat; do ln -s "$(command -v "$tool")" "bin/$tool"; done
+PATH="$PWD/bin" /bin/bash -O failglob -c "$1"
+"#;
+        let command = linux_remote_command().replace("/sys/class/drm/", "./drm/");
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", fixture, "fixture", &command])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cards = parse(HostOs::Linux, std::str::from_utf8(&output.stdout).unwrap()).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].name.as_deref(), Some("Fixture GPU"));
+        assert_eq!(cards[0].utilization, Some(37.));
+        assert_eq!(cards[0].temperature, None);
     }
 
     #[test]

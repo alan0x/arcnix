@@ -547,6 +547,12 @@ class Authentication(paramiko.ServerInterface):
 
     def check_channel_direct_tcpip_request(self, channel_id, origin, destination):
         host, port = destination
+        # Model an HTTP-only server on its standard port without binding port 80 on the test host.
+        if self.browser_port and host in {"http-only.browser-fixture.test", "192.0.2.87"}:
+            if port != 80:
+                return paramiko.OPEN_FAILED_CONNECT_FAILED
+            destination = ("127.0.0.1", self.browser_port)
+            host, port = destination
         asset = host in {"assets.browser-fixture.test", "scripts.browser-fixture.test"}
         local = bool(self.browser_port and port == self.browser_port
                      and (asset or host in {"browser-fixture.test", "127.0.0.1", "localhost", "::1"}))

@@ -1,7 +1,9 @@
 //! The browser chrome belongs to the desktop. Web content is hosted separately.
 use std::collections::{BTreeMap, VecDeque};
 
-use arcnix_core::browser::{BOOKMARK_LIMIT, Bookmark, URL_LIMIT, normalize_address, parse_address};
+use arcnix_core::browser::{
+    BOOKMARK_LIMIT, Bookmark, URL_LIMIT, address_candidates, parse_address,
+};
 use arcnix_core::browser_proxy::Diagnosis;
 use arcnix_core::server_apps::DesktopApp;
 use zeroize::Zeroizing;
@@ -22,6 +24,7 @@ pub(crate) struct Browser {
     pub commands: VecDeque<(u64, Command)>,
     pub reconnecting: bool,
     next_id: u64,
+    next_attempt: u64,
     draft: String,
     draft_dirty: bool,
     input_error: bool,
@@ -43,6 +46,7 @@ pub(crate) struct Tab {
     pub forward: bool,
     pub error: Option<String>,
     pub resources_blocked: bool,
+    pub http_fallback: Option<(u64, String)>,
     diagnostic: Option<Diagnostic>,
     forwarding_error: String,
     html: Option<HtmlPreview>,
@@ -106,7 +110,7 @@ impl Proxy {
 
 #[derive(Clone)]
 pub(crate) enum Command {
-    Load(String),
+    Load(String, Option<u64>),
     Back,
     Forward,
     Reload,
@@ -155,13 +159,14 @@ impl Browser {
             forward: false,
             error: None,
             resources_blocked: false,
+            http_fallback: None,
             diagnostic: None,
             forwarding_error: String::new(),
             html: None,
         });
         self.select(id);
         if let Some(url) = url {
-            self.load(url);
+            self.load_tab(id, url, None);
         }
         Some(id)
     }
@@ -203,13 +208,11 @@ impl Browser {
         }
     }
 
-    fn load(&mut self, url: String) {
-        let Some(id) = self.active else { return };
-        self.load_tab(id, url);
-    }
-
-    fn load_tab(&mut self, id: u64, url: String) {
+    pub(super) fn load_tab(&mut self, id: u64, url: String, fallback: Option<String>) {
+        self.next_attempt += 1;
+        let attempt = fallback.as_ref().map(|_| self.next_attempt);
         let Some(tab) = self.tab_mut(id) else { return };
+        tab.http_fallback = attempt.zip(fallback);
         tab.html = None;
         tab.url = url.clone();
         tab.title.clear();
@@ -225,7 +228,7 @@ impl Browser {
             self.input_error = false;
         }
         self.commands.retain(|(tab, _)| *tab != id);
-        self.commands.push_back((id, Command::Load(url)));
+        self.commands.push_back((id, Command::Load(url, attempt)));
     }
 
     fn reconnect(&mut self) {
@@ -364,11 +367,15 @@ impl Ui {
     }
 
     fn navigate_web(&self, address: String) {
-        let Ok(url) = normalize_address(&address) else {
+        let Ok((url, fallback)) = address_candidates(&address) else {
             self.state.revise(|s| s.web_browser.input_error = true);
             return;
         };
-        self.state.revise(|s| s.web_browser.load(url));
+        self.state.revise(|s| {
+            if let Some(id) = s.web_browser.active {
+                s.web_browser.load_tab(id, url, fallback);
+            }
+        });
         self.start_web_proxy();
     }
 
@@ -403,14 +410,14 @@ impl Ui {
                 return None;
             }
             let tab = s.web_browser.selected()?;
-            Some((tab.url.clone(), can_reconnect(s)))
+            Some((tab.id, tab.url.clone(), can_reconnect(s)))
         });
-        if let Some((url, reconnect)) = target {
+        if let Some((id, url, reconnect)) = target {
             self.state.revise(|s| {
                 if reconnect {
                     s.web_browser.reconnect();
                 }
-                s.web_browser.load(url);
+                s.web_browser.load_tab(id, url, None);
             });
             self.start_web_proxy();
         }
@@ -478,6 +485,9 @@ impl Ui {
         self.state.revise(|s| {
             let browser = &mut s.web_browser;
             let Some(id) = browser.active else { return };
+            if let Some(tab) = browser.tab_mut(id) {
+                tab.http_fallback = None;
+            }
             if matches!(command, Command::Stop) {
                 browser.commands.retain(|(tab, _)| *tab != id);
                 if let Some(tab) = browser.tab_mut(id) {
@@ -937,7 +947,7 @@ pub(crate) fn forwarding_repaired(ui: &Ui, serial: u64, result: std::result::Res
                 browser.forwarding_applied = true;
                 browser.reconnect();
                 if same_page {
-                    browser.load_tab(id, url);
+                    browser.load_tab(id, url, None);
                 }
                 true
             }

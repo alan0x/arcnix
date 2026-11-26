@@ -351,6 +351,14 @@ def main():
 
             visit(f'localhost:{port}/second', 'Routed second page')
             expect(address).to_have_value(f'http://localhost:{port}/second')
+            for host in ('http-only.browser-fixture.test', '192.0.2.87'):
+                visit(host + '/second', 'Routed second page')
+                expect(address).to_have_value(f'http://{host}/second')
+            explicit = 'https://http-only.browser-fixture.test/second'
+            address.fill(explicit)
+            address.press('Enter')
+            expect(browser.locator('.browser-error')).to_be_visible(timeout=20000)
+            expect(address).to_have_value(explicit)
             visit(f'[::1]:{port}/loopback', 'Remote loopback')
             expect(address).to_have_value(f'http://[::1]:{port}/loopback')
             targets = {json.loads(line)['host'] for line in path.read_text().splitlines()}

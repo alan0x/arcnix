@@ -53,7 +53,63 @@ fn chrome_user_agent() -> String {
 struct PageView {
     view: WebView,
     identity_pending: bool,
-    pending_url: Option<String>,
+    pending_url: Option<(String, Option<u64>)>,
+    events: Events,
+}
+
+impl PageView {
+    fn navigate(&self, url: &str, attempt: Option<u64>) -> Result<()> {
+        let Some(attempt) = attempt else {
+            return Ok(self.view.load_url(url)?);
+        };
+        let events = self.events.clone();
+        let parameters = HSTRING::from(serde_json::json!({"url": url}).to_string());
+        let original = url.to_owned();
+        unsafe {
+            let started = self.view.webview().CallDevToolsProtocolMethod(
+                w!("Page.navigate"),
+                &parameters,
+                &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                    move |status, result| {
+                        let reply = serde_json::from_str::<serde_json::Value>(&result).ok();
+                        let error = reply
+                            .as_ref()
+                            .and_then(|r| r.get("errorText"))
+                            .and_then(|s| s.as_str());
+                        // A certificate failure or a response from an HTTPS site is final.
+                        let retry = matches!(
+                            error,
+                            Some(
+                                "net::ERR_CONNECTION_REFUSED"
+                                    | "net::ERR_CONNECTION_TIMED_OUT"
+                                    | "net::ERR_TIMED_OUT"
+                                    | "net::ERR_CONNECTION_CLOSED"
+                                    | "net::ERR_CONNECTION_RESET"
+                                    | "net::ERR_SSL_PROTOCOL_ERROR"
+                                    | "net::ERR_SOCKS_CONNECTION_FAILED"
+                            )
+                        );
+                        let outcome = if status.is_err() || reply.is_none() {
+                            AddressOutcome::NativeHttps(original.clone())
+                        } else if retry {
+                            AddressOutcome::RetryHttp
+                        } else {
+                            AddressOutcome::Finished
+                        };
+                        events.send(BrowserEvent::AddressResult(attempt, outcome));
+                        Ok(())
+                    },
+                )),
+            );
+            if started.is_err() {
+                self.events.send(BrowserEvent::AddressResult(
+                    attempt,
+                    AddressOutcome::NativeHttps(url.to_owned()),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 struct HtmlView {
@@ -121,6 +177,12 @@ pub(crate) struct Host {
     html_preview: BTreeMap<u64, HtmlView>,
 }
 
+enum AddressOutcome {
+    Finished,
+    RetryHttp,
+    NativeHttps(String),
+}
+
 enum BrowserEvent {
     CookieCapture(u64, Result<bool, ()>),
     IdentityReady,
@@ -130,7 +192,8 @@ enum BrowserEvent {
         forward: bool,
     },
     Title(String),
-    Started(u64),
+    Started(u64, bool),
+    AddressResult(u64, AddressOutcome),
     Finished(u64, Option<&'static str>),
     ResourceFailed(String),
     Popup(String),
@@ -356,8 +419,8 @@ impl Host {
             if matches!(event, BrowserEvent::IdentityReady) {
                 let page = self.views.get_mut(&id).expect("Browser tab exists");
                 page.identity_pending = false;
-                if let Some(url) = page.pending_url.take()
-                    && let Err(error) = page.view.load_url(&url)
+                if let Some((url, attempt)) = page.pending_url.take()
+                    && let Err(error) = page.navigate(&url, attempt)
                 {
                     self.tab_error(id, error.to_string());
                 }
@@ -391,8 +454,28 @@ impl Host {
                                 .collect();
                         }
                     }
-                    BrowserEvent::Started(navigation) => {
+                    BrowserEvent::AddressResult(attempt, outcome) => {
+                        if let Some(tab) = browser.tab_mut(id)
+                            && tab
+                                .http_fallback
+                                .as_ref()
+                                .is_some_and(|(pending, _)| *pending == attempt)
+                            && let Some((_, url)) = tab.http_fallback.take()
+                        {
+                            match outcome {
+                                AddressOutcome::Finished => {}
+                                AddressOutcome::RetryHttp => browser.load_tab(id, url, None),
+                                AddressOutcome::NativeHttps(https) => {
+                                    browser.load_tab(id, https, None)
+                                }
+                            }
+                        }
+                    }
+                    BrowserEvent::Started(navigation, redirected) => {
                         if let Some(tab) = browser.tab_mut(id) {
+                            if redirected && tab.navigation == Some(navigation) {
+                                tab.http_fallback = None;
+                            }
                             tab.navigation = Some(navigation);
                             tab.loading = true;
                             tab.error = None;
@@ -642,7 +725,7 @@ impl Host {
         port: u16,
         command: Command,
     ) -> Result<()> {
-        if let Command::Load(url) = command {
+        if let Command::Load(url, attempt) = command {
             parse_address(&url)?;
             if !self.views.contains_key(&id) {
                 let events = Events {
@@ -669,22 +752,23 @@ impl Host {
                     }
                     self.cookies_restored = true;
                 }
-                let identity_pending = configure_chrome_identity(&view, events).is_ok();
+                let identity_pending = configure_chrome_identity(&view, events.clone()).is_ok();
                 self.views.insert(
                     id,
                     PageView {
                         view,
                         identity_pending,
                         pending_url: None,
+                        events,
                     },
                 );
                 self.sync_theme();
             }
             let page = self.views.get_mut(&id).expect("Browser tab created");
             if page.identity_pending {
-                page.pending_url = Some(url);
+                page.pending_url = Some((url, attempt));
             } else {
-                page.view.load_url(&url)?;
+                page.navigate(&url, attempt)?;
             }
         } else if let Some(page) = self.views.get_mut(&id) {
             if page.identity_pending {
@@ -700,7 +784,7 @@ impl Host {
                     Command::Forward => core.GoForward()?,
                     Command::Reload => core.Reload()?,
                     Command::Stop => core.Stop()?,
-                    Command::Load(_) => unreachable!(),
+                    Command::Load(..) => unreachable!(),
                 }
             }
         }
@@ -1048,7 +1132,9 @@ fn initialize(view: &WebView, events: Events) -> windows::core::Result<()> {
                     args.Uri(&mut source)?;
                     if parse_address(&CoTaskMemPWSTR::from(source).to_string()).is_ok() {
                         requests.borrow_mut().clear();
-                        started.send(BrowserEvent::Started(id));
+                        let mut redirected = BOOL::default();
+                        args.IsRedirected(&mut redirected)?;
+                        started.send(BrowserEvent::Started(id, redirected.as_bool()));
                     }
                 }
                 Ok(())

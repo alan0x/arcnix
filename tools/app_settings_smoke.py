@@ -1,6 +1,7 @@
 """Check per-app settings, persistence and folder-to-terminal window routing."""
 import subprocess
 import time
+import winreg
 
 from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 
@@ -44,7 +45,17 @@ def main():
 
             terminal('New Terminal tab')
             first = page.locator('.tab-window-app-terminal-0')
+            surface = first.locator('.terminal-surface')
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
+                native = 'light' if winreg.QueryValueEx(key, 'AppsUseLightTheme')[0] else 'dark'
+            expect(surface).to_have_attribute('data-terminal-scheme', native)
             settings('terminal')
+            expect(dialog.get_by_role('radio', name='Follow system')).to_be_checked()
+            for scheme, color in [('Light', 'rgb(237, 241, 245)'), ('Dark', 'rgb(25, 33, 43)')]:
+                dialog.get_by_role('radio', name=scheme, exact=True).check()
+                expect(surface).to_have_css('background-color', color)
+                expect(surface.locator('.xterm-viewport')).to_have_css('background-color', color)
             dialog.get_by_role('combobox', name='Font size').select_option(label='18 px')
             dialog.get_by_role('combobox', name='Font family').select_option(label='Consolas')
             dialog.get_by_role('radio', name='Underline', exact=True).check()
@@ -92,6 +103,9 @@ def main():
             dialog = page.get_by_role('dialog', name='Settings', exact=True)
             app.application('Terminal')
             settings('terminal')
+            expect(dialog.get_by_role('radio', name='Dark', exact=True)).to_be_checked()
+            dialog.get_by_role('radio', name='Follow system').check()
+            expect(page.locator('.terminal-surface')).to_have_attribute('data-terminal-scheme', native)
             expect(dialog.get_by_role('combobox', name='Font size').locator('option:checked')).to_have_text('18 px')
             expect(dialog.get_by_role('radio', name='Off', exact=True)).to_be_checked()
             close_settings()

@@ -134,7 +134,7 @@ impl ResourceReader for RemoteSession {
         let command = match os {
             HostOs::Windows => crate::host::powershell_command(gpu::WINDOWS),
             HostOs::MacOs => gpu::MACOS.into(),
-            HostOs::Linux => gpu::LINUX.into(),
+            HostOs::Linux => gpu::linux_remote_command(),
             HostOs::Unknown => return Ok(Vec::new()),
         };
         gpu::parse(os, &super::remote_metrics::execute(self, &command)?)
