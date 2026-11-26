@@ -5,8 +5,11 @@ use crate::i18n::desktop::{icon_action, text_action};
 use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
 
+mod mirrors;
+
 #[derive(Clone, Default)]
 pub(crate) struct DockerState {
+    pub(crate) mirrors: mirrors::MirrorState,
     snapshot: Option<Snapshot>,
     images: Vec<docker::Image>,
     stats: Option<docker::Stats>,
@@ -331,6 +334,9 @@ fn parse_cpu(text: &str) -> anyhow::Result<u32> {
 }
 
 pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, String>) {
+    let Some(result) = mirrors::event(ui, serial, result) else {
+        return;
+    };
     if !ui.state.with(|s| s.docker.pending == Some(serial)) {
         return;
     }
@@ -1372,6 +1378,16 @@ fn header(ui: Ui) -> impl Widget {
             ))
         }),
         row().class("docker-toolbar").fill((
+            when(state.map(|s| s.docker.view == 4), {
+                let ui = ui.clone();
+                move || {
+                    let ui = ui.clone();
+                    text_action("Registry mirrors", Icon::Settings)
+                        .class("button with-icon compact")
+                        .enabled(state.map(ready))
+                        .on_press(move || ui.docker_mirrors_open())
+                }
+            }),
             when(state.map(|s| s.docker.view == 2), move || {
                 let listeners = listeners.clone();
                 text_action("Server listeners", Icon::Server).class("button with-icon compact")
@@ -1620,6 +1636,7 @@ fn images(state: Cage<State>) -> impl Widget {
 pub(crate) fn dialogs(ui: Ui) -> impl Widget {
     let state = ui.state;
     fragment((
+        mirrors::dialog(ui.clone()),
         when(state.map(|s| s.dialog == Some(Dialog::DockerAction)), {
             let ui = ui.clone();
             move || {

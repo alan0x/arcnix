@@ -512,6 +512,7 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
     }
     if let Some(id) = refresh_nginx {
         ui.nginx_task_finished(&id);
+        ui.docker_task_finished(&id);
     }
     if refresh_software {
         ui.refresh_software_inventory();

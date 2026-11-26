@@ -63,6 +63,26 @@ pub struct Daemon {
 }
 
 impl Daemon {
+    /// The mirrors as daemon.json writes them, or as the daemon reports them
+    /// when the file doesn't list any.
+    pub fn configured(&self) -> Vec<String> {
+        if let Config::Text(text) = &self.config
+            && let Ok(value) = serde_json::from_str::<Value>(text)
+            && let Some(list) = value.get(KEY).and_then(Value::as_array)
+        {
+            return list
+                .iter()
+                .filter_map(|m| m.as_str().map(str::to_owned))
+                .collect();
+        }
+        self.mirrors.clone()
+    }
+
+    /// Whether publishing `list` would change the file or what the daemon uses.
+    pub fn changes(&self, list: &[String]) -> bool {
+        list != self.configured().as_slice() || reported(list) != self.mirrors
+    }
+
     /// Why Arcnix can't change the mirrors here, or None when it can.
     pub fn read_only(&self) -> Option<String> {
         match &self.setup {
@@ -759,6 +779,17 @@ mod tests {
         );
         assert_eq!(daemon.config, Config::Text("{}\n".into()));
         assert_eq!(daemon.read_only(), None);
+        // The file lists none, so the editor starts from what the daemon uses.
+        assert_eq!(daemon.configured(), ["https://a.example.com/"]);
+        assert!(daemon.changes(&[]));
+        assert!(daemon.changes(&m(&["https://a.example.com"])));
+        let written = Daemon {
+            config: Config::Text("{\"registry-mirrors\": [\"https://a.example.com\"]}".into()),
+            ..daemon.clone()
+        };
+        assert_eq!(written.configured(), ["https://a.example.com"]);
+        assert!(!written.changes(&m(&["https://a.example.com"])));
+        assert!(written.changes(&[]));
 
         let missing = parse(
             &output("loaded", "", START, DEFAULT_CONFIG, "missing\n"),
