@@ -1,5 +1,5 @@
 //! URL and bookmark validation shared by the desktop browser and settings.
-use std::net::IpAddr;
+use std::net::Ipv6Addr;
 
 use anyhow::{Result, ensure};
 use reqwest::Url;
@@ -35,22 +35,30 @@ pub fn parse_address(value: &str) -> Result<Url> {
     Ok(url)
 }
 
-pub fn normalize_address(address: &str) -> Result<String> {
+/// An explicit scheme is binding. For bare addresses the browser can try HTTP
+/// after a transport failure on the initial HTTPS navigation.
+pub fn address_candidates(address: &str) -> Result<(String, Option<String>)> {
     let address = address.trim();
-    if address.contains("://") {
-        return parse_address(address).map(Into::into);
-    }
-    // Self-hosted panels commonly expose plain HTTP on loopback or a custom port.
-    let host = address.split(['/', '?', '#']).next().unwrap_or_default();
-    let scheme = if host.contains(':')
-        || host.eq_ignore_ascii_case("localhost")
-        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    if address
+        .split_once("://")
+        .is_some_and(|(scheme, _)| !scheme.contains(['/', '?', '#']))
     {
-        "http"
+        return Ok((parse_address(address)?.into(), None));
+    }
+    let host = address.split(['/', '?', '#']).next().unwrap_or_default();
+    ensure!(
+        !host.is_empty() && !address.contains('\\'),
+        "Invalid web address"
+    );
+    let authority = if host.parse::<Ipv6Addr>().is_ok() {
+        format!("[{host}]{}", &address[host.len()..])
     } else {
-        "https"
+        address.to_owned()
     };
-    parse_address(&format!("{scheme}://{address}")).map(Into::into)
+    Ok((
+        parse_address(&format!("https://{authority}"))?.into(),
+        Some(parse_address(&format!("http://{authority}"))?.into()),
+    ))
 }
 
 pub(crate) fn validate_bookmarks(bookmarks: &[Bookmark]) -> Result<()> {
@@ -85,19 +93,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_loopback_addresses_open_with_http() -> Result<()> {
-        for host in ["127.0.0.1", "127.0.0.2", "localhost", "[::1]"] {
-            assert_eq!(normalize_address(host)?, format!("http://{host}/"));
+    fn addresses_preserve_explicit_schemes_ports_and_paths() -> Result<()> {
+        for host in ["192.168.5.87", "localhost", "[::1]", "example.com"] {
+            let (tls, plain) = address_candidates(&format!("{host}/status?q=1#top"))?;
+            assert_eq!(tls, format!("https://{host}/status?q=1#top"));
+            assert_eq!(plain.unwrap(), format!("http://{host}/status?q=1#top"));
         }
+        assert_eq!(address_candidates("::1")?.0, "https://[::1]/");
         assert_eq!(
-            normalize_address("127.0.0.1?status=1")?,
-            "http://127.0.0.1/?status=1"
+            address_candidates("host:443")?.1.unwrap(),
+            "http://host:443/"
         );
-        assert_eq!(
-            normalize_address("https://127.0.0.1")?,
-            "https://127.0.0.1/"
-        );
-        assert_eq!(normalize_address("example.com")?, "https://example.com/");
+        assert_eq!(address_candidates("host:80")?.0, "https://host:80/");
+        for url in ["http://host/", "https://host/"] {
+            assert_eq!(address_candidates(url)?, (url.to_owned(), None));
+        }
+        for invalid in [
+            "",
+            "//host",
+            "file:///path",
+            "user:pass@host",
+            "javascript:alert(1)",
+        ] {
+            assert!(address_candidates(invalid).is_err());
+        }
         Ok(())
     }
 }
