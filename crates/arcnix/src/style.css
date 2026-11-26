@@ -2589,6 +2589,11 @@ html.desktop-motion { view-transition-name: none; }
 .desktop-motion-overview::view-transition-old(*) { animation: desktop-window-fade-out 180ms ease-out both; }
 .desktop-motion-overview::view-transition-new(*) { animation: desktop-window-fade-in 200ms ease-out both; }
 .desktop-motion-overview::view-transition-old(*), .desktop-motion-overview::view-transition-new(*) { mix-blend-mode: plus-lighter; }
+/* A window present in both layouts travels as one opaque surface. The group animates its bounds. */
+.desktop-motion-overview::view-transition-old(.returning-window) { animation: none; opacity: 0; }
+.desktop-motion-overview::view-transition-new(.returning-window) {
+  animation: none; mix-blend-mode: normal; width: 100%; height: 100%; object-fit: fill;
+}
 .desktop-shortcut .desktop-app-icon { transition: transform 170ms cubic-bezier(.2,.75,.25,1); }
 @media (hover: hover) {
   .desktop-shortcut:hover .desktop-app-icon { transform: scale(1.04); }

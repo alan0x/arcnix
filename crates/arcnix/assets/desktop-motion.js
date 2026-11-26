@@ -3,6 +3,7 @@
 const desktopMotion = (() => {
     const reduced = matchMedia('(prefers-reduced-motion: reduce)');
     const forwarded = new WeakSet(), animations = new Set();
+    const overviewRects = new Map();
     let transition = null, stateNode = null, previous = null, pendingDeliver = null;
     const stateObserver = new MutationObserver(changed);
     function state() {
@@ -31,6 +32,7 @@ const desktopMotion = (() => {
         desktopGeometry.sync(current);
         if(!current || !old || signature(current)===signature(old))return;
         if(!current.shown || current.epoch!==old.epoch){
+            overviewRects.clear();
             transition?.skipTransition();
             for(const animation of animations)animation.cancel();
             return;
@@ -38,11 +40,18 @@ const desktopMotion = (() => {
         if(transition || reduced.matches)return;
         if(Boolean(current.overviewCount)!==Boolean(old.overviewCount)){
             if(current.overviewCount){
+                overviewRects.clear();
                 animate(document.querySelector('.window-overview'),[{opacity:.3},{opacity:1}],180);
                 for(const tile of document.querySelectorAll('.window-overview > .overview-tile'))
                     animate(tile,[{transform:'translateY(10px) scale(.975)'},{transform:'none'}],200);
             } else {
-                animate(windowFor(current.app),[{opacity:.7,transform:'scale(.985)'},{opacity:1,transform:'none'}],180);
+                for(const [app,from] of overviewRects){
+                    const element=windowFor(app),to=element?.getBoundingClientRect();
+                    if(!to?.width || !to.height)continue;
+                    const transform=`translate(${from.left-to.left}px, ${from.top-to.top}px) scale(${from.width/to.width}, ${from.height/to.height})`;
+                    animate(element,[{transformOrigin:'top left',transform},{transformOrigin:'top left',transform:'none'}],220);
+                }
+                overviewRects.clear();
             }
             return;
         }
@@ -126,6 +135,7 @@ const desktopMotion = (() => {
         let delivered=false,active;
         const root=document.documentElement;
         const named=new Set();
+        const overviewWindows=new Set();
         const name=(element,value)=>{
             element.style.viewTransitionName=value;
             named.add(element);
@@ -136,7 +146,12 @@ const desktopMotion = (() => {
                 if(layer)name(layer,'arcnix-desktop-overview');
                 for(const element of layer?.querySelectorAll(':scope > .desktop-window:not(.hidden)') || []){
                     const id=appClass(element);
-                    if(id)name(element,`arcnix-overview-${id}`);
+                    if(!id)continue;
+                    name(element,`arcnix-overview-${id}`);
+                    if(before.overviewCount){
+                        if(overviewWindows.has(id))element.style.viewTransitionClass='returning-window';
+                        else overviewWindows.add(id);
+                    }
                 }
                 return;
             }
@@ -152,7 +167,10 @@ const desktopMotion = (() => {
             windowOffset(app,dock?.getBoundingClientRect());
         }
         const clear=()=>{
-            for(const element of named)element.style.removeProperty('view-transition-name');
+            for(const element of named){
+                element.style.removeProperty('view-transition-name');
+                element.style.removeProperty('view-transition-class');
+            }
             root.classList.remove('desktop-motion',`desktop-motion-${motion}`);
             root.style.removeProperty('--desktop-motion-x');
             root.style.removeProperty('--desktop-motion-y');
@@ -213,7 +231,14 @@ const desktopMotion = (() => {
             animate(button.querySelector('.desktop-app-icon'),
                 [{transform:'scale(.88)'},{transform:'translateY(-6px) scale(1.08)',offset:.55},{transform:'none'}],245);
         }
-        if(!canTransition())return;
+        if(!canTransition()){
+            if(motion.motion==='overview' && before.overviewCount){
+                overviewRects.clear();
+                for(const tile of document.querySelectorAll('.window-overview > .overview-tile'))
+                    overviewRects.set(appClass(tile),tile.getBoundingClientRect());
+            }
+            return;
+        }
         event.preventDefault();event.stopImmediatePropagation();
         play(()=>forward(button),motion,before,button);
     },true);

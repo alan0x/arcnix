@@ -32,6 +32,19 @@ def main():
                         transition.ready.then(() => {
                             motion.snapshots = [...new Set(document.getAnimations().map(animation =>
                                 animation.effect?.pseudoElement || ''))];
+                            const root = document.documentElement;
+                            if (!document.querySelector('.window-overview')) {
+                                const active = document.querySelector('.desktop-window.active:not(.hidden)');
+                                const name = active.style.viewTransitionName;
+                                const style = part => getComputedStyle(root, `::view-transition-${part}(${name})`);
+                                motion.restored = {
+                                    group: motion.snapshots.includes(`::view-transition-group(${name})`),
+                                    oldOpacity: style('old').opacity,
+                                    newOpacity: style('new').opacity,
+                                    newAnimation: style('new').animationName,
+                                    blend: style('new').mixBlendMode,
+                                };
+                            }
                         }).catch(() => {});
                         transition.finished.catch(() => {}).then(() => motion.finished = true);
                     }
@@ -53,7 +66,14 @@ def main():
                 motion = p.evaluate('(i) => overviewMotions[i]', index)
                 snapshots = motion.get('snapshots', [])
                 assert any('arcnix-desktop-overview)' in part for part in snapshots), motion
-                assert sum('::view-transition-new(arcnix-overview-files-window-' in part for part in snapshots) >= windows, motion
+                if 'restored' in motion:
+                    assert_opaque(motion)
+                else:
+                    assert sum('::view-transition-new(arcnix-overview-files-window-' in part for part in snapshots) >= windows, motion
+
+            def assert_opaque(motion):
+                assert motion['restored'] == dict(group=True, oldOpacity='0', newOpacity='1',
+                                                  newAnimation='none', blend='normal'), motion
 
             files.click()
             location('/Start')
@@ -131,6 +151,23 @@ def main():
             overview.get_by_role('button', name='Exit window overview').click()
             expect(p.locator('.desktop-window.app-settings.active')).to_be_visible()
 
+            monitor = dock.get_by_role('button', name='Monitor', exact=True)
+            monitor.click()
+            monitor_window = p.locator('.desktop-window.app-monitor:not(.hidden)')
+            expect(monitor_window).to_be_visible()
+            eventually(lambda: not p.locator('html').evaluate("el => el.classList.contains('desktop-motion')"))
+            normal = monitor_window.bounding_box()
+            monitor.click()
+            expect(tiles).to_have_count(1)
+            eventually(lambda: not p.locator('html').evaluate("el => el.classList.contains('desktop-motion')"))
+            thumbnail = monitor_window.bounding_box()
+            index = p.evaluate('overviewMotions.length')
+            tiles.click()
+            eventually(lambda: p.evaluate('(i) => overviewMotions[i]?.finished', index))
+            assert_opaque(p.evaluate('(i) => overviewMotions[i]', index))
+            assert monitor_window.bounding_box() == normal and normal != thumbnail
+            settings.click()
+
             p.emulate_media(reduced_motion='reduce')
             before = p.evaluate('overviewMotions.length')
             settings.click()
@@ -145,6 +182,8 @@ def main():
                 window.overviewFallback = [];
                 const animate = Element.prototype.animate;
                 Element.prototype.animate = function(frames, options) {
+                    if (this.matches('.app-settings.desktop-window') && !this.closest('.window-overview'))
+                        window.restoreFrames = frames;
                     if (this.matches('.window-overview,.overview-tile,.app-settings.desktop-window'))
                         overviewFallback.push(this.classList.contains('overview-tile') ? 'tile' :
                             this.classList.contains('window-overview') ? 'layer' : 'window');
@@ -157,6 +196,10 @@ def main():
             settings.click()
             expect(overview).to_have_count(0)
             eventually(lambda: p.evaluate('overviewFallback.includes("window")'))
+            frames = p.evaluate('window.restoreFrames')
+            assert all('opacity' not in frame for frame in frames), frames
+            assert 'translate(' in frames[0]['transform'] and 'scale(' in frames[0]['transform'], frames
+            assert frames[-1]['transform'] == 'none', frames
         print(out)
 
 
