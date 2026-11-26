@@ -1896,6 +1896,7 @@ TCP 监听	TCP listeners
 正在结束进程…	Ending process…
 正在读取监听端口…	Reading listening ports…
 尚未读取监听端口	No listening port snapshot yet
+服务器缺少 Python 3，正在显示 ss 提供的只读端口列表。	Python 3 is unavailable. Showing read-only ports from ss.
 {} 个端口 · 显示 {} 个 · 采样于 {} · UID {}	{} ports · {} shown · Sampled {} · UID {}
 协议 / 地址	Protocol / address
 PID / 程序	PID / program

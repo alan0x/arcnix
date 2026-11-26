@@ -89,6 +89,38 @@ def main():
             app.screenshot('ports-light.png')
             passed('Resources automatically lists TCP/UDP IPv4/IPv6 bindings with PID, executable, service and explicit process visibility limits')
 
+            options(snapshot=dict(rows=[
+                dict(protocol='tcp', family=4, address='127.0.0.1', port=8080, uid=1000,
+                     inode=42, holders_limited=False,
+                     holders=[dict(pid=200, start_ticks=12345, uid=1000, fd=3,
+                                   command='bad\ncommand', executable=None, unit=None)]),
+            ], denied=0))
+            refresh()
+            expect(rows).to_have_count(1)
+            expect(web()).to_be_visible()
+            expect(panel.locator('.resource-port-kill')).to_have_count(0)
+            expect(panel.locator('.resource-ports-warning')).to_contain_text('unavailable')
+            passed('Invalid process metadata leaves the listening port visible without offering process termination')
+
+            options(raw='ARCNIX_RESOURCE_PORTS_SS_V1\n'
+                        'tcp LISTEN 0 128 127.0.0.1:8080 0.0.0.0:* users:(("fixture-web",pid=200,fd=3))\n'
+                        '\nARCNIX_RESOURCE_PORTS_SS_IPV6\n'
+                        'udp UNCONN 0 0 [::1]:5353 [::]:*\n')
+            refresh_button.click()
+            observed = panel.locator('.resource-port-holder')
+            expect(observed).to_have_count(2)
+            expect(observed.filter(has_text='127.0.0.1:8080')).to_contain_text('200 · fixture-web')
+            expect(observed.filter(has_text='[::1]:5353')).to_be_visible()
+            expect(panel).to_contain_text('Python 3 is unavailable. Showing read-only ports from ss.')
+            expect(panel.locator('.resource-ports-admin, .resource-port-kill')).to_have_count(0)
+            expect(panel.get_by_role('button', name='Refresh ports', exact=True)).to_be_enabled()
+            expect(page.get_by_role('button', name='Back to processes', exact=True)).to_be_visible()
+            passed('The missing-Python fallback displays IPv4 and IPv6 ports in the read-only panel')
+
+            options()
+            panel.get_by_role('button', name='Refresh ports', exact=True).click()
+            expect(rows).to_have_count(4)
+
             for value, count in [('fixture-web', 2), ('5353', 2), ('/usr/bin/fixture-web', 2), ('not-a-listener', 0)]:
                 search.fill(value)
                 expect(rows).to_have_count(count)
@@ -207,7 +239,9 @@ def main():
             app.settings('General')
             page.locator('.setting-language:visible').get_by_role('radio', name='简体中文', exact=True).check()
             app.servers()
-            page.locator('.desktop-dock').get_by_role('button', name='监控', exact=True).click()
+            monitor = page.locator('.desktop-dock').get_by_role('button', name='监控', exact=True)
+            if monitor.get_attribute('aria-pressed') != 'true':
+                monitor.click()
             page.locator('.monitor-sidebar').get_by_role('button', name='进程', exact=True).click()
             details = page.get_by_role('button', name='端口详情', exact=True)
             expect(details.or_(page.locator('.monitor-port-details'))).to_be_visible()
