@@ -120,14 +120,39 @@ impl Definition {
     pub fn install(&self) -> Result<Template> {
         let yaml = self.yaml()?;
         let manifest = serde_json::to_string(self)?;
-        let name = &self.name;
         let html = if self.kind == Kind::Nginx {
             "mkdir -m 755 \"$arcnix_dir/html\"\nprintf '<!doctype html><title>Arcnix</title><h1>Nginx is ready</h1>\\n' > \"$arcnix_dir/html/index.html\"\nchmod 644 \"$arcnix_dir/html/index.html\""
         } else {
             ""
         };
-        let script = format!(
-            r#"# arcnix:compose:install
+        install_task(
+            &self.name,
+            &yaml,
+            "arcnix.json",
+            &manifest,
+            html,
+            format!("Install {} with Compose", self.kind.label()),
+        )
+    }
+}
+/// The task that creates `~/.arcnix/apps/<name>` with its Compose file and
+/// manifest, checks the file and starts the project. It refuses a name that
+/// is already used.
+pub(crate) fn install_task(
+    name: &str,
+    yaml: &str,
+    manifest_file: &str,
+    manifest: &str,
+    extra: &str,
+    title: String,
+) -> Result<Template> {
+    crate::startup_services::validate_name(name)?;
+    ensure!(
+        matches!(manifest_file, "arcnix.json" | "arcnix-container.json"),
+        "Invalid Compose manifest"
+    );
+    let script = format!(
+        r#"# arcnix:compose:install
 {SHELL}
 umask 077
 timeout -k 2s 15s docker --host "$arcnix_socket" compose version --short
@@ -136,31 +161,68 @@ arcnix_dir="$arcnix_base/{name}"
 mkdir -m 700 "$arcnix_dir"
 printf '%s' {yaml} | base64 -d > "$arcnix_dir/.compose.yaml.tmp"
 mv -fT "$arcnix_dir/.compose.yaml.tmp" "$arcnix_dir/compose.yaml"
-printf '%s' {manifest} | base64 -d > "$arcnix_dir/.arcnix.json.tmp"
-{html}
-mv -fT "$arcnix_dir/.arcnix.json.tmp" "$arcnix_dir/arcnix.json"
+printf '%s' {manifest} | base64 -d > "$arcnix_dir/.{manifest_file}.tmp"
+{extra}
+mv -fT "$arcnix_dir/.{manifest_file}.tmp" "$arcnix_dir/{manifest_file}"
 cd "$arcnix_dir"
 timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml config --quiet
 timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml up --detach --no-build --wait --wait-timeout 120
 printf 'ARCNIX_COMPOSE_INSTALLED_V1\n'
 "#,
-            yaml = q(&STANDARD.encode(yaml)),
-            manifest = q(&STANDARD.encode(manifest))
-        );
-        template(
-            format!("Install {} with Compose", self.kind.label()),
-            script,
-        )
-    }
+        yaml = q(&STANDARD.encode(yaml)),
+        manifest = q(&STANDARD.encode(manifest))
+    );
+    template(title, script)
 }
 type IpAddress = std::net::IpAddr;
 fn template(name: String, command: String) -> Result<Template> {
     crate::operations::validate_command(&command)?;
     Ok(Template::custom(Snippet {parameters:vec![],id:"builtin:compose-application".into(),name,description:"Compose application in ~/.arcnix/apps; image pulls and deployment run on the server. Persistent volumes remain under Docker management.".into(),command,administrator:false}))
 }
+/// What a project was made from: an App Center template, or any image.
+#[derive(Clone, Debug)]
+pub enum Manifest {
+    Template(Definition),
+    Container(crate::container_app::ContainerApp),
+}
+impl Manifest {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Template(d) => &d.name,
+            Self::Container(c) => &c.name,
+        }
+    }
+    pub fn image(&self) -> &str {
+        match self {
+            Self::Template(d) => &d.image,
+            Self::Container(c) => &c.image,
+        }
+    }
+    /// The App Center template, for projects made from one.
+    pub fn kind(&self) -> Option<Kind> {
+        match self {
+            Self::Template(d) => Some(d.kind),
+            Self::Container(_) => None,
+        }
+    }
+    /// The first published address, such as `127.0.0.1:8080`.
+    pub fn address(&self) -> String {
+        match self {
+            Self::Template(d) if d.address.contains(':') => format!("[{}]:{}", d.address, d.port),
+            Self::Template(d) => format!("{}:{}", d.address, d.port),
+            Self::Container(c) => c.address(),
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Template(d) => d.validate(),
+            Self::Container(c) => c.validate(),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Project {
-    pub definition: Definition,
+    pub definition: Manifest,
     pub yaml: String,
     pub digest: String,
 }
@@ -179,10 +241,16 @@ printf '\n'
 if [ -d "$arcnix_base" ]; then
  for arcnix_dir in "$arcnix_base"/*; do
   [ -d "$arcnix_dir" ] && [ ! -L "$arcnix_dir" ] || continue
-  [ -f "$arcnix_dir/arcnix.json" ] && [ ! -L "$arcnix_dir/arcnix.json" ] || continue
   [ -f "$arcnix_dir/compose.yaml" ] && [ ! -L "$arcnix_dir/compose.yaml" ] || continue
-  printf 'ARCNIX_PROJECT\n'
-  head -c 4097 "$arcnix_dir/arcnix.json" | base64 -w 0; printf '\n'
+  if [ -f "$arcnix_dir/arcnix.json" ] && [ ! -L "$arcnix_dir/arcnix.json" ]; then
+   printf 'ARCNIX_PROJECT\n'
+   head -c 4097 "$arcnix_dir/arcnix.json" | base64 -w 0; printf '\n'
+  elif [ -f "$arcnix_dir/arcnix-container.json" ] && [ ! -L "$arcnix_dir/arcnix-container.json" ]; then
+   printf 'ARCNIX_CONTAINER\n'
+   head -c 65537 "$arcnix_dir/arcnix-container.json" | base64 -w 0; printf '\n'
+  else
+   continue
+  fi
   head -c 16385 "$arcnix_dir/compose.yaml" | base64 -w 0; printf '\n'
  done
 fi
@@ -219,7 +287,7 @@ pub fn parse(text: &str) -> Result<Projects> {
                 );
                 break;
             }
-            Some("ARCNIX_PROJECT") => {
+            Some(marker @ ("ARCNIX_PROJECT" | "ARCNIX_CONTAINER")) => {
                 ensure!(result.entries.len() < 200, "Too many Compose projects");
                 let manifest = STANDARD.decode(
                     lines
@@ -231,14 +299,29 @@ pub fn parse(text: &str) -> Result<Projects> {
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("Incomplete Compose project"))?,
                 )?;
+                let limit = if marker == "ARCNIX_PROJECT" {
+                    4096
+                } else {
+                    65536
+                };
                 ensure!(
-                    manifest.len() <= 4096 && yaml.len() <= 16384,
+                    manifest.len() <= limit && yaml.len() <= 16384,
                     "Compose project is too large"
                 );
-                let definition: Definition = serde_json::from_slice(&manifest)?;
-                definition.validate()?;
+                let definition = if marker == "ARCNIX_PROJECT" {
+                    let definition: Definition = serde_json::from_slice(&manifest)?;
+                    definition.validate()?;
+                    Manifest::Template(definition)
+                } else {
+                    // A project from a later Arcnix, or one edited by hand
+                    // into something invalid, is left out, not an error.
+                    match crate::container_app::parse_manifest(&manifest) {
+                        Ok(Some(app)) => Manifest::Container(app),
+                        _ => continue,
+                    }
+                };
                 ensure!(
-                    seen.insert(definition.name.clone()),
+                    seen.insert(definition.name().to_owned()),
                     "Duplicate Compose project name"
                 );
                 let digest = format!("{:x}", Sha256::digest(&yaml));
@@ -275,7 +358,7 @@ pub fn action(project: &Project, action: Action) -> Result<Template> {
         project.digest.len() == 64 && project.digest.bytes().all(|b| b.is_ascii_hexdigit()),
         "Invalid Compose file digest"
     );
-    let name = &project.definition.name;
+    let name = project.definition.name();
     let verb = match action {
         Action::Apply => "up --detach --no-build --wait --wait-timeout 120",
         Action::Stop => "stop --timeout 10",
@@ -343,5 +426,38 @@ mod tests {
             .install()
             .is_err()
         );
+    }
+
+    #[test]
+    fn container_projects_are_listed_and_later_versions_skipped() {
+        let b64 = |s: &str| STANDARD.encode(s);
+        let template = serde_json::to_string(&Definition::default()).unwrap();
+        let app = crate::container_app::ContainerApp {
+            name: "redis".into(),
+            image: "redis:7".into(),
+            ..Default::default()
+        };
+        let container = serde_json::to_string(&app).unwrap();
+        let text = format!(
+            "ARCNIX_COMPOSE_V1\n{}\nARCNIX_PROJECT\n{}\n{}\nARCNIX_CONTAINER\n{}\n{}\nARCNIX_CONTAINER\n{}\n{}\nARCNIX_COMPOSE_END\n",
+            b64("/home/u/.arcnix/apps"),
+            b64(&template),
+            b64("services: {}\n"),
+            b64(&container),
+            b64("services: {}\n"),
+            b64(r#"{"version": 2, "name": "future"}"#),
+            b64("services: {}\n"),
+        );
+        let projects = parse(&text).unwrap();
+        let names: Vec<_> = projects
+            .entries
+            .iter()
+            .map(|p| p.definition.name())
+            .collect();
+        assert_eq!(names, ["nginx", "redis"]);
+        assert_eq!(projects.entries[0].definition.kind(), Some(Kind::Nginx));
+        assert_eq!(projects.entries[1].definition.kind(), None);
+        assert_eq!(projects.entries[1].definition.image(), "redis:7");
+        assert!(list_command().contains("arcnix-container.json"));
     }
 }

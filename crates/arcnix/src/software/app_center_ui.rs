@@ -33,7 +33,7 @@ impl Item {
     fn name(&self) -> String {
         match self {
             Self::Package(_, p) => p.name.clone(),
-            Self::Project(p) => p.definition.name.clone(),
+            Self::Project(p) => p.definition.name().to_owned(),
             Self::Container(c) => c.name.clone(),
         }
     }
@@ -42,7 +42,7 @@ impl Item {
             Self::Package(source, p) => catalog::for_package(*source, &p.name),
             Self::Project(p) => catalog::APPS
                 .iter()
-                .find(|a| a.compose == Some(p.definition.kind))
+                .find(|a| a.compose.is_some() && a.compose == p.definition.kind())
                 .copied(),
             Self::Container(c) => catalog::for_container(c),
         }
@@ -59,7 +59,7 @@ impl Item {
     fn version(&self) -> String {
         match self {
             Self::Package(_, p) => p.version.clone(),
-            Self::Project(p) => p.definition.image.clone(),
+            Self::Project(p) => p.definition.image().to_owned(),
             Self::Container(c) => format!("{} · {}", c.image, c.status),
         }
     }
@@ -134,7 +134,7 @@ fn installed(s: &State, app: App) -> bool {
                 .any(|p| app.snap.is_some_and(|v| v.name == p.name))
             || i.projects
                 .iter()
-                .any(|p| app.compose == Some(p.definition.kind))
+                .any(|p| app.compose.is_some() && app.compose == p.definition.kind())
             || i.containers
                 .iter()
                 .any(|c| catalog::for_container(c).is_some_and(|a| a.id == app.id))
@@ -258,7 +258,7 @@ fn installations(s: &State, app: App) -> Vec<Item> {
         .chain(
             inv.projects
                 .iter()
-                .filter(|p| app.compose == Some(p.definition.kind))
+                .filter(|p| app.compose.is_some() && app.compose == p.definition.kind())
                 .cloned()
                 .map(Item::Project),
         )
@@ -644,7 +644,7 @@ fn item_actions(ui: Ui, value: Cage<Item>) -> impl Widget {
                     let manage = manage.clone();
                     move || {
                         if let Item::Project(project) = value.get() {
-                            manage.open_compose_project(project.definition.name);
+                            manage.open_compose_project(project.definition.name().to_owned());
                         }
                     }
                 })

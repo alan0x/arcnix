@@ -1,4 +1,5 @@
 pub mod compose_apps;
+pub mod container_app;
 pub mod docker;
 pub mod docker_daemon;
 pub mod docker_pull;
