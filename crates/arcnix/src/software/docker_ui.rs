@@ -402,37 +402,119 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
     }
 }
 
-fn container_button(ui: &Ui, label: &'static str, operation: Operation) -> impl Widget + use<> {
+/// The colour a container's state takes, as a class suffix.
+fn tone(container: &Container) -> &'static str {
+    match container.state.as_str() {
+        "running" if container.status.contains("(unhealthy)") => "warning",
+        "running" => "running",
+        "paused" => "paused",
+        "restarting" | "removing" => "busy",
+        "dead" => "failed",
+        "exited" if exit_code(&container.status).is_some_and(|code| code != 0) => "failed",
+        _ => "stopped",
+    }
+}
+/// The code in Docker's `Exited (1) 12 minutes ago` status.
+fn exit_code(status: &str) -> Option<i32> {
+    status
+        .strip_prefix("Exited (")?
+        .split_once(')')?
+        .0
+        .parse()
+        .ok()
+}
+/// A container's status in the colour of its state.
+fn pill<T: 'static>(value: Cage<T>, container: fn(&T) -> &Container) -> impl Widget + use<T> {
+    text()
+        .class(
+            value
+                .map(move |v| format!("docker-state docker-resource-state {}", tone(container(v)))),
+        )
+        .content(value.map(move |v| container(v).status.clone()))
+}
+/// `docker ps` ports as short entries. A wildcard host address is left out,
+/// so `0.0.0.0:80->80/tcp, [::]:80->80/tcp` reads once as `80 → 80/tcp`.
+/// Entries without a host binding are exposed only and marked as such.
+fn port_entries(ports: &str) -> Vec<(String, bool)> {
+    let mut entries: Vec<(String, bool)> = Vec::new();
+    for entry in ports.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let item = match entry.split_once("->") {
+            Some((host, target)) => {
+                let (address, port) = host.rsplit_once(':').unwrap_or(("", host));
+                if matches!(address, "" | "0.0.0.0" | "::" | "[::]") {
+                    (format!("{port} → {target}"), true)
+                } else {
+                    (format!("{address}:{port} → {target}"), true)
+                }
+            }
+            None => (entry.to_owned(), false),
+        };
+        if !entries.contains(&item) {
+            entries.push(item);
+        }
+    }
+    entries
+}
+fn port_chips(ports: Bond<Vec<(String, bool)>>) -> impl Widget {
+    row()
+        .class("docker-port-chips")
+        .fill(
+            each(ports)
+                .key(|(label, _)| label.clone())
+                .children(|item| {
+                    let (label, published) = item.value.get();
+                    text()
+                        .class(if published {
+                            "docker-chip"
+                        } else {
+                            "docker-chip exposed"
+                        })
+                        .content(label)
+                }),
+        )
+}
+fn container_button(
+    ui: &Ui,
+    label: &'static str,
+    icon: Icon,
+    operation: Operation,
+) -> impl Widget + use<> {
     let state = ui.state;
     let ui = ui.clone();
-    let predicate = operation.clone();
-    sapid::button()
-        .class("button compact")
-        .label(i18n::bind(label))
-        .enabled(state.map(move |s| {
-            actionable(s)
-                && selected(s).is_some_and(|c| match predicate {
-                    Operation::Start => matches!(c.state.as_str(), "exited" | "created"),
-                    Operation::Stop => matches!(c.state.as_str(), "running" | "restarting"),
-                    Operation::Restart => c.state != "paused",
-                    Operation::Remove => matches!(c.state.as_str(), "exited" | "created" | "dead"),
-                    Operation::Pause => c.state == "running",
-                    Operation::Resume => c.state == "paused",
-                    _ => true,
-                })
+    let shown = operation.clone();
+    let remove = operation == Operation::Remove;
+    // Only the operations that fit the container's state are offered. They
+    // stay visible but disabled while Docker is busy or unavailable.
+    text_action(label, icon)
+        .class(state.map(move |s| {
+            let fits = selected(s).is_some_and(|c| match shown {
+                Operation::Start => matches!(c.state.as_str(), "exited" | "created"),
+                Operation::Stop => matches!(c.state.as_str(), "running" | "restarting"),
+                Operation::Restart => c.state != "paused",
+                Operation::Remove => matches!(c.state.as_str(), "exited" | "created" | "dead"),
+                Operation::Pause => c.state == "running",
+                Operation::Resume => c.state == "paused",
+                _ => true,
+            });
+            format!(
+                "button with-icon compact{}{}",
+                if remove { " docker-remove" } else { "" },
+                if fits { "" } else { " hidden" }
+            )
         }))
+        .enabled(state.map(actionable))
         .on_press(move || ui.docker_prepare(operation.clone()))
 }
 #[derive(Clone)]
 enum ContainerRow {
-    Project(String),
+    Project(String, usize, usize),
     Container(Box<Container>),
 }
 impl ContainerRow {
     fn container(&self) -> &Container {
         match self {
             Self::Container(container) => container,
-            Self::Project(_) => unreachable!("Container row key changed"),
+            Self::Project(..) => unreachable!("Container row key changed"),
         }
     }
 }
@@ -467,7 +549,12 @@ fn container_rows(s: &State) -> Vec<ContainerRow> {
         }
     }
     for (name, containers) in projects {
-        rows.push(ContainerRow::Project(name.to_owned()));
+        let running = containers.iter().filter(|c| c.state == "running").count();
+        rows.push(ContainerRow::Project(
+            name.to_owned(),
+            running,
+            containers.len(),
+        ));
         if !s.docker.collapsed_projects.contains(name) {
             rows.extend(
                 containers
@@ -487,17 +574,30 @@ fn container_list(ui: Ui) -> impl Widget {
         each(state.map(container_rows))
             .key(|row| match row {
                 ContainerRow::Container(c) => (false, c.id.clone()),
-                ContainerRow::Project(name) => (true, name.clone()),
+                ContainerRow::Project(name, ..) => (true, name.clone()),
             })
             .children(move |item| {
                 let initial = item.value.get();
-                if let ContainerRow::Project(name) = initial {
+                if let ContainerRow::Project(name, ..) = initial {
                     let pressed_name = name.clone();
+                    let counts = item.value;
                     return fragment(
                         sapid::button()
                             .class("button docker-project-group")
                             .name(name.clone())
-                            .label(name.clone())
+                            .fill((
+                                icons::glyph(Icon::Collapse),
+                                text().class("docker-project-name").content(name.clone()),
+                                text().class("docker-project-kind").content("Compose"),
+                                text().class("docker-project-count").content(i18n::bind(
+                                    counts.map(|row| match row {
+                                        ContainerRow::Project(_, running, total) => {
+                                            format!("{running} of {total} running")
+                                        }
+                                        ContainerRow::Container(_) => String::new(),
+                                    }),
+                                )),
+                            ))
                             .pressed(
                                 state.map(move |s| {
                                     !s.docker.collapsed_projects.contains(&pressed_name)
@@ -515,54 +615,286 @@ fn container_list(ui: Ui) -> impl Widget {
                 let container = item.value;
                 let select = ui.clone();
                 fragment(
-                    sapid::button()
+                    row()
                         .class(state.map(move |s| {
-                            if s.docker.selected == container.get().container().id {
-                                "docker-container-row selected"
-                            } else {
-                                "docker-container-row"
-                            }
-                            .to_owned()
+                            let row = container.get();
+                            let c = row.container();
+                            format!(
+                                "docker-container-row{}{}",
+                                if c.compose_project.is_empty() {
+                                    ""
+                                } else {
+                                    " compose-member"
+                                },
+                                if s.docker.selected == c.id {
+                                    " selected"
+                                } else {
+                                    ""
+                                }
+                            )
                         }))
-                        .name(container.map(|row| row.container().name.clone()))
-                        .enabled(state.map(ready))
-                        .pressed(
-                            state.map(move |s| s.docker.selected == container.get().container().id),
-                        )
                         .fill((
-                            text()
-                                .class(container.map(|row| {
-                                    if row.container().compose_project.is_empty() {
-                                        "docker-resource-name"
-                                    } else {
-                                        "docker-resource-name compose-member"
-                                    }
-                                    .to_owned()
+                            // The button covers the row, so any part of it opens the container.
+                            sapid::button()
+                                .class("docker-row-open")
+                                .name(container.map(|row| row.container().name.clone()))
+                                .enabled(state.map(ready))
+                                .pressed(state.map(move |s| {
+                                    s.docker.selected == container.get().container().id
                                 }))
-                                .content(container.map(|row| row.container().name.clone())),
-                            text()
-                                .class(container.map(|row| {
-                                    if row.container().state == "running" {
-                                        "docker-resource-state running"
-                                    } else {
-                                        "docker-resource-state"
-                                    }
-                                    .to_owned()
-                                }))
-                                .content(container.map(|row| row.container().status.clone())),
-                            text()
-                                .class("docker-resource-image")
-                                .content(container.map(|row| row.container().image.clone())),
-                            text()
-                                .class("docker-resource-ports")
-                                .content(container.map(|row| row.container().ports.clone())),
-                        ))
-                        .on_press(move || {
-                            select.docker_select(container.get().container().id.clone())
-                        }),
+                                .fill((
+                                    text()
+                                        .class("docker-resource-name")
+                                        .content(container.map(|row| row.container().name.clone())),
+                                    text().class("docker-resource-image").content(
+                                        container.map(|row| row.container().image.clone()),
+                                    ),
+                                ))
+                                .on_press(move || {
+                                    select.docker_select(container.get().container().id.clone())
+                                }),
+                            pill(container, ContainerRow::container),
+                            port_chips(container.map(|row| port_entries(&row.container().ports))),
+                        )),
                 )
             }),
     )
+}
+/// A labelled value in a detail list.
+fn fact(label: &'static str, value: impl Widget) -> impl Widget {
+    row().class("docker-fact").fill((
+        text().class("docker-fact-label").content(i18n::bind(label)),
+        value,
+    ))
+}
+fn fact_text(
+    state: Cage<State>,
+    label: &'static str,
+    value: impl Fn(&State) -> String + 'static,
+) -> impl Widget {
+    fact(
+        label,
+        text()
+            .class("docker-fact-value")
+            .selectable(true)
+            .content(state.map(value)),
+    )
+}
+fn limit(value: u64, unit: &str) -> String {
+    if value == 0 {
+        i18n::translate("Unlimited")
+    } else {
+        format!("{value}{unit}")
+    }
+}
+fn restart_policy(details: &ContainerDetails) -> String {
+    if details.restart == "on-failure" && details.retries > 0 {
+        format!("on-failure:{}", details.retries)
+    } else {
+        details.restart.clone()
+    }
+}
+/// One row per port: the address in use when Docker published it, the
+/// configured binding while the container is stopped, or the exposed port.
+fn port_bindings(details: &ContainerDetails) -> Vec<(String, &'static str)> {
+    let mut keys: Vec<String> = Vec::new();
+    for value in [&details.ports, &details.bindings] {
+        for key in value.as_object().into_iter().flat_map(|ports| ports.keys()) {
+            if !keys.contains(key) {
+                keys.push(key.clone());
+            }
+        }
+    }
+    keys.sort();
+    let bindings = |value: &serde_json::Value, key: &str| {
+        value[key]
+            .as_array()
+            .map(|bindings| {
+                bindings
+                    .iter()
+                    .map(|binding| {
+                        let host = binding["HostIp"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("*");
+                        let host = if host.contains(':') {
+                            format!("[{host}]")
+                        } else {
+                            host.to_owned()
+                        };
+                        format!(
+                            "{host}:{} → {key}",
+                            binding["HostPort"].as_str().unwrap_or("?")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let mut rows = Vec::new();
+    for key in keys {
+        let published = bindings(&details.ports, &key);
+        if !published.is_empty() {
+            rows.extend(published.into_iter().map(|b| (b, "Published")));
+            continue;
+        }
+        let configured = bindings(&details.bindings, &key);
+        if !configured.is_empty() {
+            rows.extend(configured.into_iter().map(|b| (b, "Configured")));
+        } else if details.ports.get(&key).is_some() {
+            rows.push((key, "Exposed only"));
+        }
+    }
+    rows
+}
+fn mounts(details: &ContainerDetails) -> Vec<[String; 4]> {
+    details
+        .mounts
+        .as_array()
+        .map(|mounts| {
+            mounts
+                .iter()
+                .map(|m| {
+                    [
+                        m["Type"].as_str().unwrap_or("?").to_owned(),
+                        m["Source"].as_str().unwrap_or("?").to_owned(),
+                        m["Destination"].as_str().unwrap_or("?").to_owned(),
+                        if m["RW"].as_bool() == Some(true) {
+                            "Read-write".to_owned()
+                        } else {
+                            "Read-only".to_owned()
+                        },
+                    ]
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+fn inspection(state: Cage<State>) -> impl Widget {
+    let details = |s: &State| {
+        s.docker
+            .details
+            .as_ref()
+            .filter(|d| d.id == s.docker.selected)
+            .cloned()
+    };
+    col().class("docker-inspection").fill((
+        col().class("docker-facts").fill((
+            fact(
+                "Container ID",
+                text()
+                    .class("docker-fact-value docker-container-id")
+                    .selectable(true)
+                    .content(state.map(|s| s.docker.selected.clone())),
+            ),
+            fact_text(state, "Network", move |s| {
+                details(s).map(|d| d.network).unwrap_or_default()
+            }),
+        )),
+        row().class("section-heading").fill((
+            text().content(i18n::bind("Container configuration")),
+            help_ui::tip("Container configuration", "Restart policy: no, always, unless-stopped or on-failure[:retries]. CPU and memory limits use 0 for unlimited. Changes apply to this container; Compose may replace them when it recreates the container."),
+        )),
+        col().class("docker-facts docker-configuration-summary").fill((
+            fact_text(state, "Restart policy", move |s| {
+                details(s).map(|d| restart_policy(&d)).unwrap_or_default()
+            }),
+            fact_text(state, "CPU limit", move |s| {
+                details(s)
+                    .map(|d| {
+                        if d.nano_cpus == 0 {
+                            i18n::translate("Unlimited")
+                        } else {
+                            format!("{}", d.nano_cpus as f64 / 1_000_000_000.0)
+                        }
+                    })
+                    .unwrap_or_default()
+            }),
+            fact_text(state, "Memory limit", move |s| {
+                details(s)
+                    .map(|d| limit(d.memory / (1024 * 1024), " MiB"))
+                    .unwrap_or_default()
+            }),
+        )),
+        row().class("section-heading").fill((
+            text().content(i18n::bind("Port bindings")),
+            help_ui::tip("Port bindings", "Published mappings show host addresses and ports. Exposed ports without a host binding are not published. Host networking uses the server network directly. Changing mappings or mounts requires recreating the container."),
+        )),
+        col().class("docker-port-details docker-table").fill(
+            each(state.map(move |s| details(s).map(|d| port_bindings(&d)).unwrap_or_default()))
+                .key(Clone::clone)
+                .children(|item| {
+                    let (binding, kind) = item.value.get();
+                    row().class("docker-binding").fill((
+                        text().class("docker-binding-address").selectable(true).content(binding),
+                        text()
+                            .class(if kind == "Published" {
+                                "docker-badge published"
+                            } else {
+                                "docker-badge"
+                            })
+                            .content(i18n::bind(kind)),
+                    ))
+                }),
+        ),
+        when(
+            state.map(move |s| details(s).is_some_and(|d| port_bindings(&d).is_empty())),
+            || text().class("docker-empty-note").content(i18n::bind("No ports are exposed")),
+        ),
+    ))
+}
+fn mount_list(state: Cage<State>) -> impl Widget {
+    let mounts_of = |s: &State| {
+        s.docker
+            .details
+            .as_ref()
+            .filter(|d| d.id == s.docker.selected)
+            .map(mounts)
+            .unwrap_or_default()
+    };
+    col().class("docker-inspection").fill((
+        col().class("docker-mount-details docker-table").fill(
+            each(state.map(mounts_of))
+                .key(Clone::clone)
+                .children(|item| {
+                    let [kind, source, destination, mode] = item.value.get();
+                    row().class("docker-mount").fill((
+                        text().class("docker-badge").content(kind),
+                        col().class("docker-mount-paths").fill((
+                            text()
+                                .class("docker-mount-destination")
+                                .selectable(true)
+                                .content(destination),
+                            text()
+                                .class("docker-mount-source")
+                                .selectable(true)
+                                .content(source),
+                        )),
+                        text()
+                            .class(if mode == "Read-write" {
+                                "docker-badge"
+                            } else {
+                                "docker-badge read-only"
+                            })
+                            .content(i18n::bind(mode)),
+                    ))
+                }),
+        ),
+        when(
+            state.map(move |s| {
+                s.docker
+                    .details
+                    .as_ref()
+                    .is_some_and(|d| d.id == s.docker.selected)
+                    && mounts_of(s).is_empty()
+            }),
+            || {
+                text()
+                    .class("docker-empty-note")
+                    .content(i18n::bind("No mounts"))
+            },
+        ),
+    ))
 }
 fn detail(ui: Ui) -> impl Widget {
     let state = ui.state;
@@ -571,16 +903,23 @@ fn detail(ui: Ui) -> impl Widget {
     let stats = ui.clone();
     let refresh_stats = ui.clone();
     col().class("docker-detail").fill((
-        sapid::button().class("button compact docker-back").label(i18n::bind("Back to containers")).on_press(move || state.revise(|s| s.docker.detail_open = false)),
-        text().class("docker-detail-name").content(state.map(|s| selected(s).map(|c| c.name).unwrap_or_default())),
+        col().class("docker-detail-title").fill((
+            row().class("docker-detail-heading").fill((
+                text().class("docker-detail-name").content(state.map(|s| selected(s).map(|c| c.name).unwrap_or_default())),
+                text()
+                    .class(state.map(|s| format!("docker-state {}", selected(s).as_ref().map_or("stopped", tone))))
+                    .content(state.map(|s| selected(s).map(|c| c.status).unwrap_or_default())),
+            )),
+            text().class("docker-detail-image").selectable(true).content(state.map(|s| selected(s).map(|c| c.image).unwrap_or_default())),
+        )),
         row().class("docker-container-actions").fill((
-            container_button(&ui, "Start", Operation::Start),
-            container_button(&ui, "Stop", Operation::Stop),
-            container_button(&ui, "Restart", Operation::Restart),
-            container_button(&ui, "Pause", Operation::Pause),
-            container_button(&ui, "Resume", Operation::Resume),
-            container_button(&ui, "Remove…", Operation::Remove),
+            container_button(&ui, "Start", Icon::Play, Operation::Start),
+            container_button(&ui, "Stop", Icon::Stop, Operation::Stop),
+            container_button(&ui, "Restart", Icon::Refresh, Operation::Restart),
+            container_button(&ui, "Pause", Icon::Pause, Operation::Pause),
+            container_button(&ui, "Resume", Icon::Play, Operation::Resume),
             text_action("Configure", Icon::Settings).class("button with-icon compact").enabled(state.map(|s| actionable(s) && s.docker.details.as_ref().is_some_and(|d| d.id == s.docker.selected))).on_press(move || configure.docker_configure()),
+            container_button(&ui, "Remove…", Icon::Clear, Operation::Remove),
         )),
         row().class("docker-detail-tabs").fill((
             btn("Inspect", move || state.revise(|s| s.docker.detail_tab = DetailTab::Inspect))
@@ -593,38 +932,39 @@ fn detail(ui: Ui) -> impl Widget {
                 .enabled(state.map(|s| actionable(s) && selected(s).is_some_and(|c| c.state == "running")))
                 .pressed(state.map(|s| s.docker.detail_tab == DetailTab::Stats)),
         )),
-        text().class("docker-container-id subtle").selectable(true).content(state.map(|s| s.docker.selected.clone())),
         when(state.map(|s| s.docker.detail_tab == DetailTab::Logs), {
             let ui = ui.clone();
             move || {
                 col().class("docker-log-panel").fill((
-                    row().class("section-heading").fill((
-                        text().content(i18n::bind("Recent logs")),
-                        help_ui::tip("Recent logs", "The last 200, 500 or 1000 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process."),
-                    )),
                     row().class("docker-log-tools").fill((
-                        text().class("field-label").content(i18n::bind("Lines")),
-                        row().class("logs-options").fill(docker::LOG_LINES.iter().map(|&lines| {
-                            let ui = ui.clone();
-                            sapid::button()
-                                .class(state.map(move |s| if log_lines(s) == lines { "choice active" } else { "choice" }.to_owned()))
-                                .label(lines.to_string())
-                                .enabled(state.map(actionable))
-                                .on_press(move || {
-                                    ui.state.revise(|s| s.docker.log_lines = lines);
-                                    ui.docker_logs();
-                                })
-                        }).collect::<Vec<_>>()),
-                        input()
-                            .name(i18n::bind("筛选当前日志"))
-                            .semantics(Some(Box::new(Semantics { placeholder: Some(i18n::translate("筛选当前结果…")), ..Default::default() })))
-                            .class("logs-filter")
-                            .value(state.map(|s| s.docker.log_filter.clone()))
-                            .on(value_changed, move |e| {
-                                if let glory::ui::Event::ValueChanged { value, .. } = e {
-                                    state.revise(|s| s.docker.log_filter = value);
-                                }
-                            }),
+                        row().class("docker-log-lines").fill((
+                            text().class("field-label").content(i18n::bind("Lines")),
+                            row().class("logs-options").fill(docker::LOG_LINES.iter().map(|&lines| {
+                                let ui = ui.clone();
+                                sapid::button()
+                                    .class(state.map(move |s| if log_lines(s) == lines { "choice active" } else { "choice" }.to_owned()))
+                                    .label(lines.to_string())
+                                    .enabled(state.map(actionable))
+                                    .on_press(move || {
+                                        ui.state.revise(|s| s.docker.log_lines = lines);
+                                        ui.docker_logs();
+                                    })
+                            }).collect::<Vec<_>>()),
+                        )),
+                        row().class("docker-log-search").fill((
+                            icons::glyph(Icon::Filter),
+                            input()
+                                .name(i18n::bind("筛选当前日志"))
+                                .semantics(Some(Box::new(Semantics { placeholder: Some(i18n::translate("筛选当前结果…")), ..Default::default() })))
+                                .class("logs-filter")
+                                .value(state.map(|s| s.docker.log_filter.clone()))
+                                .on(value_changed, move |e| {
+                                    if let glory::ui::Event::ValueChanged { value, .. } = e {
+                                        state.revise(|s| s.docker.log_filter = value);
+                                    }
+                                }),
+                        )),
+                        help_ui::tip("Recent logs", "The last 200, 500 or 1000 lines, fetched on demand. Container stdout and stderr are included, with their terminal colors. No background log process."),
                     )),
                     // The scrolling block stays, so filtering keeps the scroll position. Its
                     // spans are rebuilt for a new reply, filter or language; other state
@@ -659,16 +999,8 @@ fn detail(ui: Ui) -> impl Widget {
                 ))
             }
         }),
-        when(state.map(|s| s.docker.detail_tab == DetailTab::Inspect), move || col().class("docker-inspection").fill((
-            text().class("subtle").content(state.map(|s| selected(s).map(|c| format!("{} · {}", c.image, c.status)).unwrap_or_default())),
-            text().class("docker-configuration-summary").content(i18n::bind(state.map(|s| s.docker.details.as_ref().map(|d| format!("Restart policy: {} · CPU: {} · Memory: {} MiB", if d.restart == "on-failure" && d.retries > 0 { format!("on-failure:{}", d.retries) } else { d.restart.clone() }, d.nano_cpus as f64 / 1_000_000_000.0, d.memory / (1024 * 1024))).unwrap_or_default()))),
-            row().class("section-heading").fill((text().content(i18n::bind("Port bindings")), help_ui::tip("Port bindings", "Published mappings show host addresses and ports. Exposed ports without a host binding are not published. Host networking uses the server network directly. Changing mappings or mounts requires recreating the container."))),
-            text().class("docker-port-details").selectable(true).content(state.map(|s| s.docker.details.as_ref().map(format_ports).unwrap_or_default())),
-        ))),
-        when(state.map(|s| s.docker.detail_tab == DetailTab::Mounts), move || col().class("docker-inspection").fill((
-            text().class("field-label").content(i18n::bind("Mounts")),
-            text().class("docker-mount-details").selectable(true).content(state.map(|s| s.docker.details.as_ref().map(format_mounts).unwrap_or_default())),
-        ))),
+        when(state.map(|s| s.docker.detail_tab == DetailTab::Inspect), move || inspection(state)),
+        when(state.map(|s| s.docker.detail_tab == DetailTab::Mounts), move || mount_list(state)),
         when(state.map(|s| s.docker.detail_tab == DetailTab::Stats), move || {
             let refresh = refresh_stats.clone();
             type Field = (&'static str, fn(&docker::Stats) -> &str);
@@ -680,13 +1012,16 @@ fn detail(ui: Ui) -> impl Widget {
                 ("Processes", |stats| &stats.processes),
             ];
             col().class("docker-inspection").fill((
-                icon_action("Refresh container stats", Icon::Refresh)
-                    .enabled(state.map(actionable)).on_press(move || refresh.docker_stats()),
-                col().class("docker-container-stats").fill(fields.into_iter().map(|(label, value)| {
-                    row().fill((
-                        text().class("subtle").content(i18n::bind(label)),
-                        text().selectable(true).content(state.map(move |s| {
-                            s.docker.stats.as_ref().map(value).unwrap_or_default().to_owned()
+                row().class("section-heading").fill((
+                    text().content(i18n::bind("Resource usage")),
+                    icon_action("Refresh container stats", Icon::Refresh)
+                        .enabled(state.map(actionable)).on_press(move || refresh.docker_stats()),
+                )),
+                row().class("docker-container-stats").fill(fields.into_iter().map(|(label, value)| {
+                    col().class("docker-stat").fill((
+                        text().class("docker-stat-label").content(i18n::bind(label)),
+                        text().class("docker-stat-value").selectable(true).content(state.map(move |s| {
+                            s.docker.stats.as_ref().map(value).unwrap_or("–").to_owned()
                         })),
                     ))
                 }).collect::<Vec<_>>()),
@@ -694,204 +1029,190 @@ fn detail(ui: Ui) -> impl Widget {
         }),
     ))
 }
-fn format_ports(details: &ContainerDetails) -> String {
-    let mut rows = vec![format!(
-        "{}: {}",
-        i18n::translate("Network"),
-        details.network
-    )];
-    for (source, value) in [
-        ("Published", &details.ports),
-        ("Configured", &details.bindings),
-    ] {
-        if let Some(ports) = value.as_object() {
-            let mut keys = ports.keys().collect::<Vec<_>>();
-            keys.sort();
-            for key in keys {
-                if let Some(bindings) = ports[key].as_array() {
-                    for binding in bindings {
-                        let host = binding["HostIp"]
-                            .as_str()
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or("*");
-                        let host = if host.contains(':') {
-                            format!("[{host}]")
-                        } else {
-                            host.to_owned()
-                        };
-                        rows.push(format!(
-                            "{}: {}:{} → {key}",
-                            i18n::translate(source),
-                            host,
-                            binding["HostPort"].as_str().unwrap_or("?")
-                        ));
-                    }
-                } else if source == "Published" {
-                    rows.push(format!("{key} · {}", i18n::translate("Exposed only")));
-                }
-            }
-        }
-    }
-    rows.join("\n")
-}
-fn format_mounts(details: &ContainerDetails) -> String {
-    details
-        .mounts
-        .as_array()
-        .map(|mounts| {
-            mounts
+/// The containers that mount each volume, by name.
+fn volume_users(s: &State, volume: &str) -> Vec<String> {
+    s.docker
+        .snapshot
+        .as_ref()
+        .map(|v| {
+            v.containers
                 .iter()
-                .map(|m| {
-                    format!(
-                        "{} · {} → {} · {}",
-                        m["Type"].as_str().unwrap_or("?"),
-                        m["Source"].as_str().unwrap_or("?"),
-                        m["Destination"].as_str().unwrap_or("?"),
-                        if m["RW"].as_bool() == Some(true) {
-                            "rw"
-                        } else {
-                            "ro"
-                        }
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+                .filter(|c| c.mounts.split(',').any(|m| m.trim() == volume))
+                .map(|c| c.name.clone())
+                .collect()
         })
         .unwrap_or_default()
 }
 fn volumes(ui: Ui) -> impl Widget {
     let state = ui.state;
     col().class("docker-volumes").fill((
-        column_titles(
-            &["Name", "Driver / scope", "Used by"],
-            "docker-volume-head docker-columns",
-        ),
-        col().class("docker-volume-list").fill(
+        col().class("docker-table").fill((
+            column_titles(
+                &["Name", "Driver", "Used by"],
+                "docker-volume-head docker-columns",
+            ),
+            col().class("docker-volume-list").fill(
+                each(state.map(|s| {
+                    let filter = s.docker.filter.to_lowercase();
+                    s.docker
+                        .snapshot
+                        .as_ref()
+                        .map(|v| {
+                            v.volumes
+                                .iter()
+                                .filter(|v| {
+                                    format!("{} {}", v.name, v.driver)
+                                        .to_lowercase()
+                                        .contains(&filter)
+                                })
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                }))
+                .key(|v| v.name.clone())
+                .children(move |item| {
+                    let volume = item.value;
+                    let select = ui.clone();
+                    row()
+                        .class(state.map(move |s| {
+                            if s.docker.selected_volume == volume.get().name {
+                                "docker-volume-row selected"
+                            } else {
+                                "docker-volume-row"
+                            }
+                            .to_owned()
+                        }))
+                        .fill((
+                            sapid::button()
+                                .class("docker-row-open")
+                                .name(volume.map(|v| v.name.clone()))
+                                .enabled(state.map(ready))
+                                .pressed(
+                                    state.map(move |s| {
+                                        s.docker.selected_volume == volume.get().name
+                                    }),
+                                )
+                                .fill(
+                                    text()
+                                        .class("docker-resource-name")
+                                        .content(volume.map(|v| v.name.clone())),
+                                )
+                                .on_press(move || {
+                                    let name = volume.get().name;
+                                    state.revise(|s| {
+                                        s.docker.selected_volume = name.clone();
+                                        s.docker.volume = None;
+                                    });
+                                    select.docker_send(AppAction::DockerVolume(name));
+                                }),
+                            text()
+                                .class("docker-volume-driver")
+                                .content(volume.map(|v| {
+                                    if v.scope == "local" || v.scope.is_empty() {
+                                        v.driver.clone()
+                                    } else {
+                                        format!("{} · {}", v.driver, v.scope)
+                                    }
+                                })),
+                            row().class("docker-port-chips").fill((
+                                each(state.map(move |s| volume_users(s, &volume.get().name)))
+                                    .key(Clone::clone)
+                                    .children(|item| {
+                                        text().class("docker-chip").content(item.value.get())
+                                    }),
+                                when(
+                                    state.map(move |s| {
+                                        volume_users(s, &volume.get().name).is_empty()
+                                    }),
+                                    || text().class("docker-unused").content(i18n::bind("Unused")),
+                                ),
+                            )),
+                        ))
+                }),
+            ),
+        )),
+        when(state.map(|s| s.docker.volume.is_some()), move || {
+            col().class("docker-volume-details docker-facts").fill((
+                fact_text(state, "Name", |s| {
+                    s.docker
+                        .volume
+                        .as_ref()
+                        .map(|v| v.name.clone())
+                        .unwrap_or_default()
+                }),
+                fact_text(state, "Driver", |s| {
+                    s.docker
+                        .volume
+                        .as_ref()
+                        .map(|v| format!("{} · {}", v.driver, v.scope))
+                        .unwrap_or_default()
+                }),
+                fact_text(state, "Mount point", |s| {
+                    s.docker
+                        .volume
+                        .as_ref()
+                        .map(|v| v.mountpoint.clone())
+                        .unwrap_or_default()
+                }),
+            ))
+        }),
+    ))
+}
+fn ports(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    col().class("docker-ports").fill(
+        col().class("docker-table").fill((
+            column_titles(
+                &["Container", "Ports", "Status"],
+                "docker-port-head docker-columns",
+            ),
             each(state.map(|s| {
-                let filter = s.docker.filter.to_lowercase();
                 s.docker
                     .snapshot
                     .as_ref()
                     .map(|v| {
-                        v.volumes
+                        v.containers
                             .iter()
-                            .filter(|v| {
-                                format!("{} {}", v.name, v.driver)
-                                    .to_lowercase()
-                                    .contains(&filter)
+                            .filter(|c| {
+                                (!c.ports.is_empty()
+                                    || c.networks.split(',').any(|n| n.trim() == "host"))
+                                    && format!("{} {}", c.name, c.ports)
+                                        .to_lowercase()
+                                        .contains(&s.docker.filter.to_lowercase())
                             })
                             .cloned()
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default()
             }))
-            .key(|v| v.name.clone())
+            .key(|c| c.id.clone())
             .children(move |item| {
-                let volume = item.value;
+                let container = item.value;
                 let select = ui.clone();
-                sapid::button()
-                    .class("docker-volume-row")
-                    .name(volume.map(|v| v.name.clone()))
-                    .enabled(state.map(ready))
-                    .fill((
-                        text()
-                            .class("docker-resource-name")
-                            .content(volume.map(|v| v.name.clone())),
-                        text().content(volume.map(|v| format!("{} · {}", v.driver, v.scope))),
-                        text().class("subtle").content(state.map(move |s| {
-                            s.docker
-                                .snapshot
-                                .as_ref()
-                                .map(|v| {
-                                    v.containers
-                                        .iter()
-                                        .filter(|c| {
-                                            c.mounts
-                                                .split(',')
-                                                .any(|m| m.trim() == volume.get().name)
-                                        })
-                                        .map(|c| c.name.clone())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                })
-                                .unwrap_or_default()
-                        })),
-                    ))
-                    .on_press(move || {
-                        let name = volume.get().name;
-                        state.revise(|s| {
-                            s.docker.selected_volume = name.clone();
-                            s.docker.volume = None;
-                        });
-                        select.docker_send(AppAction::DockerVolume(name));
-                    })
-            }),
-        ),
-        text()
-            .class("docker-volume-details")
-            .selectable(true)
-            .content(state.map(|s| {
-                s.docker
-                    .volume
-                    .as_ref()
-                    .map(|v| format!("{} · {} · {}\n{}", v.name, v.driver, v.scope, v.mountpoint))
-                    .unwrap_or_default()
-            })),
-    ))
-}
-fn ports(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let listeners = ui.clone();
-    col().class("docker-ports").fill((
-        row().class("section-heading").fill((
-            text_action("Server listeners", Icon::Server).class("button with-icon compact")
-                .on_press(move || {
-                    listeners.state.revise(|s| {
-                        monitor_ui::set_section(s, monitor_ui::Section::Processes);
-                        processes_ui::show_port_details(s, true);
-                    });
-                    listeners.open_desktop_app(WorkspacePage::Monitor);
-                }),
-            help_ui::tip("Docker ports", "Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details."),
-        )),
-        each(state.map(|s| {
-            s.docker
-                .snapshot
-                .as_ref()
-                .map(|v| {
-                    v.containers
-                        .iter()
-                        .filter(|c| {
-                            (!c.ports.is_empty() || c.networks.split(',').any(|n| n.trim() == "host"))
-                                && format!("{} {}", c.name, c.ports)
-                                    .to_lowercase()
-                                    .contains(&s.docker.filter.to_lowercase())
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        }))
-        .key(|c| c.id.clone())
-        .children(move |item| {
-            let container = item.value;
-            let select = ui.clone();
-            sapid::button()
-                .class("docker-port-row")
-                .name(container.map(|c| c.name.clone()))
-                .enabled(state.map(ready))
-                .fill((
-                    text()
-                        .class("docker-resource-name")
-                        .content(container.map(|c| c.name.clone())),
-                    text()
-                        .class("docker-resource-ports")
-                        .content(i18n::bind(container.map(|c| if c.ports.is_empty() { "Host network".into() } else { c.ports.clone() }))),
-                    text().class("docker-resource-state").content(container.map(|c| c.status.clone())),
+                row().class("docker-port-row").fill((
+                    sapid::button()
+                        .class("docker-row-open")
+                        .name(container.map(|c| c.name.clone()))
+                        .enabled(state.map(ready))
+                        .fill(
+                            text()
+                                .class("docker-resource-name")
+                                .content(container.map(|c| c.name.clone())),
+                        )
+                        .on_press(move || select.docker_select(container.get().id)),
+                    port_chips(container.map(|c| {
+                        if c.ports.is_empty() {
+                            vec![(i18n::translate("Host network"), true)]
+                        } else {
+                            port_entries(&c.ports)
+                        }
+                    })),
+                    pill(container, |c| c),
                 ))
-                .on_press(move || select.docker_select(container.get().id))
-        }),
-    ))
+            }),
+        )),
+    )
 }
 fn column_titles(labels: &[&'static str], class: &'static str) -> impl Widget + use<> {
     row().class(class).fill(
@@ -908,15 +1229,34 @@ const SECTIONS: [&str; 5] = [
     "Projects",
     "Container images",
 ];
+/// How many items a section lists, once Docker has reported them.
+fn section_count(s: &State, view: u8) -> String {
+    let snapshot = s.docker.snapshot.as_ref();
+    let count = match view {
+        0 => snapshot.map(|v| v.containers.len()),
+        1 => snapshot.map(|v| v.volumes.len()),
+        2 => snapshot.map(|v| {
+            v.containers
+                .iter()
+                .filter(|c| {
+                    !c.ports.is_empty() || c.networks.split(',').any(|n| n.trim() == "host")
+                })
+                .count()
+        }),
+        3 => compose_ui::project_count(s),
+        _ => (!s.docker.images.is_empty()).then_some(s.docker.images.len()),
+    };
+    count.map(|n| n.to_string()).unwrap_or_default()
+}
 
 fn navigation(ui: Ui) -> impl Widget {
     let state = ui.state;
     let icons = [
-        Icon::Grid,
+        Icon::Container,
         Icon::Disks,
-        Icon::Server,
+        Icon::Plug,
         Icon::Folder,
-        Icon::Grid,
+        Icon::Layers,
     ];
     let items = SECTIONS
         .into_iter()
@@ -925,8 +1265,16 @@ fn navigation(ui: Ui) -> impl Widget {
         .map(move |(index, (label, icon))| {
             let view = index as u8;
             let ui = ui.clone();
-            text_action(label, icon)
+            sapid::button()
+                .name(i18n::bind(label))
                 .class("button with-icon docker-nav-item")
+                .fill((
+                    icons::glyph(icon),
+                    text().class("docker-nav-label").content(i18n::bind(label)),
+                    text()
+                        .class("docker-nav-count")
+                        .content(state.map(move |s| section_count(s, view))),
+                ))
                 .pressed(state.map(move |s| s.docker.view == view))
                 .enabled(state.map(ready))
                 .on_press(move || {
@@ -943,62 +1291,10 @@ fn navigation(ui: Ui) -> impl Widget {
                 })
         })
         .collect::<Vec<_>>();
-    col().class("docker-tabs").fill(items)
-}
-
-fn toolbar(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let refresh = ui.clone();
-    row().class("docker-toolbar").fill((
-        when(state.map(|s| s.docker.view != 3 && !s.docker.detail_open), move || {
-            row().class("docker-search-field").fill((
-                icons::glyph(Icon::Search),
-                text().content(i18n::bind("Search")),
-                input()
-                    .class("docker-filter")
-                    .name(i18n::bind("Filter Docker resources"))
-                    .value(state.map(|s| s.docker.filter.clone()))
-                    .on(value_changed, move |event| {
-                        if let Event::ValueChanged { value, .. } = event {
-                            state.revise(|s| s.docker.filter = value);
-                        }
-                    }),
-            ))
-        }),
-        when(state.map(|s| s.docker.view == 0 && !s.docker.detail_open), move || {
-            sapid::checkbox().class("preference-check")
-                .label(i18n::bind("Only running containers"))
-                .checked(state.map(|s| s.docker.running_only))
-                .on_checked_change(move |value| state.revise(|s| s.docker.running_only = value))
-        }),
-        when(state.map(|s| s.docker.view != 3), move || {
-            let ui = ui.clone();
-            let refresh = refresh.clone();
-            fragment((
-                text_action("Install software", Icon::Plus)
-                    .class("button with-icon compact")
-                    .enabled(state.map(|s| s.connected && !scripts_ui::busy(s)))
-                    .on_press(move || ui.open_software_install(2, None)),
-                icon_action("Refresh Docker", Icon::Refresh)
-                    .class("icon-button")
-                    .enabled(state.map(ready))
-                    .on_press(move || refresh.docker_refresh()),
-            ))
-        }),
-        help_ui::tip("Docker connection", "Uses this SSH user's local Docker socket, including rootless Docker. No automatic sudo. Start Docker or check this user's socket access if a connection error appears."),
-    ))
-}
-
-pub(crate) fn page(ui: Ui) -> impl Widget {
-    let state = ui.state;
-    let sidebar = navigation(ui.clone());
-    let content = col().class("docker-main").fill((
-        text().class("docker-section-title").content(i18n::bind(
-            state.map(|s| SECTIONS[s.docker.view as usize].to_owned()),
-        )),
-        toolbar(ui.clone()),
+    col().class("docker-tabs").fill((
+        col().class("docker-nav").fill(items),
         text()
-            .class("docker-summary subtle")
+            .class("docker-summary")
             .content(i18n::bind(state.map(|s| {
                 s.docker
                     .snapshot
@@ -1013,6 +1309,148 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                     })
                     .unwrap_or_default()
             }))),
+    ))
+}
+
+/// A short count under the section title, such as how many containers run.
+fn section_meta(s: &State) -> String {
+    let Some(snapshot) = &s.docker.snapshot else {
+        return String::new();
+    };
+    match s.docker.view {
+        0 if !s.docker.detail_open => {
+            let running = snapshot
+                .containers
+                .iter()
+                .filter(|c| c.state == "running")
+                .count();
+            format!(
+                "{running} running · {} stopped",
+                snapshot.containers.len() - running
+            )
+        }
+        1 => {
+            let unused = snapshot
+                .volumes
+                .iter()
+                .filter(|v| volume_users(s, &v.name).is_empty())
+                .count();
+            if unused == 0 {
+                String::new()
+            } else {
+                format!("{unused} unused")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn header(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let refresh = ui.clone();
+    let install = ui.clone();
+    let listeners = ui.clone();
+    row().class("docker-header").fill((
+        when(state.map(|s| s.docker.view == 0 && s.docker.detail_open), move || {
+            sapid::button()
+                .name(i18n::bind("Back to containers"))
+                .class("button with-icon docker-back")
+                .fill((
+                    icons::glyph(Icon::ChevronRight),
+                    text().content(i18n::bind("Containers")),
+                ))
+                .on_press(move || state.revise(|s| s.docker.detail_open = false))
+        })
+        .otherwise(move || {
+            row().class("docker-heading").fill((
+                text().class("docker-section-title").content(i18n::bind(
+                    state.map(|s| SECTIONS[s.docker.view as usize].to_owned()),
+                )),
+                text()
+                    .class("docker-section-meta")
+                    .content(i18n::bind(state.map(section_meta))),
+            ))
+        }),
+        row().class("docker-toolbar").fill((
+            when(state.map(|s| s.docker.view == 2), move || {
+                let listeners = listeners.clone();
+                text_action("Server listeners", Icon::Server).class("button with-icon compact")
+                    .on_press(move || {
+                        listeners.state.revise(|s| {
+                            monitor_ui::set_section(s, monitor_ui::Section::Processes);
+                            processes_ui::show_port_details(s, true);
+                        });
+                        listeners.open_desktop_app(WorkspacePage::Monitor);
+                    })
+            }),
+            when(state.map(|s| !s.docker.detail_open), move || {
+                let install = install.clone();
+                text_action("Install software", Icon::Plus)
+                    .class("button with-icon compact")
+                    .enabled(state.map(|s| s.connected && !scripts_ui::busy(s)))
+                    .on_press(move || install.open_software_install(2, None))
+            }),
+            icon_action("Refresh Docker", Icon::Refresh)
+                .class("icon-button")
+                .enabled(state.map(ready))
+                .on_press(move || refresh.docker_refresh()),
+            when(state.map(|s| s.docker.view == 2), || {
+                help_ui::tip("Docker ports", "Docker reports published and exposed ports. Host-network containers use server listeners directly; inspect them in Monitor → Processes → Port details.")
+            }),
+            when(state.map(|s| s.docker.view == 3), || {
+                help_ui::tip("Compose projects", "Application definitions are in ~/.arcnix/apps/<name>/compose.yaml. Docker manages named-volume data. Applying changes is a server task; closing the client does not stop accepted work.")
+            }),
+            when(state.map(|s| s.docker.view < 2 || s.docker.view > 3), || {
+                help_ui::tip("Docker connection", "Uses this SSH user's local Docker socket, including rootless Docker. No automatic sudo. Start Docker or check this user's socket access if a connection error appears.")
+            }),
+        )),
+    ))
+}
+
+fn filters(state: Cage<State>) -> impl Widget {
+    row().class("docker-filters").fill((
+        row().class("docker-search-field").fill((
+            icons::glyph(Icon::Search),
+            input()
+                .class("docker-filter")
+                .name(i18n::bind("Filter Docker resources"))
+                .semantics(state.map(|s| {
+                    Some(Box::new(Semantics {
+                        placeholder: Some(i18n::translate(match s.docker.view {
+                            0 => "Search by name, image or port",
+                            1 => "Search volumes",
+                            2 => "Search by container or port",
+                            _ => "Search images",
+                        })),
+                        ..Default::default()
+                    }))
+                }))
+                .value(state.map(|s| s.docker.filter.clone()))
+                .on(value_changed, move |event| {
+                    if let Event::ValueChanged { value, .. } = event {
+                        state.revise(|s| s.docker.filter = value);
+                    }
+                }),
+        )),
+        when(state.map(|s| s.docker.view == 0), move || {
+            sapid::checkbox()
+                .class("preference-check")
+                .label(i18n::bind("Only running containers"))
+                .checked(state.map(|s| s.docker.running_only))
+                .on_checked_change(move |value| state.revise(|s| s.docker.running_only = value))
+        }),
+    ))
+}
+
+pub(crate) fn page(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let sidebar = navigation(ui.clone());
+    let content = col().class("docker-main").fill((
+        header(ui.clone()),
+        when(
+            state.map(|s| s.docker.view != 3 && !s.docker.detail_open),
+            move || filters(state),
+        ),
         text()
             .class("docker-status subtle")
             .content(i18n::bind(state.map(|s| {
@@ -1038,8 +1476,8 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
             .content(state.map(|s| hint(s).unwrap_or_default())),
         when(
             state.map(|s| {
-                s.docker.view > 0
-                    && s.docker.view < 3
+                s.docker.view < 3
+                    && !s.docker.detail_open
                     && s.docker.snapshot.as_ref().is_some_and(|v| {
                         if s.docker.view == 1 {
                             v.volumes.is_empty()
@@ -1050,18 +1488,25 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
             }),
             || {
                 text()
-                    .class("empty-copy")
+                    .class("empty-copy docker-empty")
                     .content(i18n::bind("No Docker resources"))
             },
         ),
         when(
-            state.map(|s| s.docker.view == 0 && !s.docker.detail_open),
+            state.map(|s| {
+                s.docker.view == 0
+                    && !s.docker.detail_open
+                    && s.docker
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|v| !v.containers.is_empty())
+            }),
             {
                 let ui = ui.clone();
                 move || {
-                    col().class("docker-inventory").fill((
+                    col().class("docker-inventory docker-table").fill((
                         column_titles(
-                            &["Name", "Status", "Container image", "Ports"],
+                            &["Name", "Status", "Ports"],
                             "docker-container-head docker-columns",
                         ),
                         container_list(ui.clone()),
@@ -1093,10 +1538,19 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     ));
     row().class("docker-page").fill((sidebar, content))
 }
+/// Whether a container runs this image, by `repository:tag` or by name for `latest`.
+fn image_in_use(s: &State, image: &docker::Image) -> bool {
+    let reference = format!("{}:{}", image.repository, image.tag);
+    s.docker.snapshot.as_ref().is_some_and(|v| {
+        v.containers
+            .iter()
+            .any(|c| c.image == reference || image.tag == "latest" && c.image == image.repository)
+    })
+}
 fn images(state: Cage<State>) -> impl Widget {
-    col().class("docker-inventory").fill((
+    col().class("docker-inventory docker-table").fill((
         column_titles(
-            &["Image repository", "Tag", "Size"],
+            &["Image repository", "Tag", "Image ID", "Size"],
             "docker-image-row docker-columns",
         ),
         each(state.map(|s| {
@@ -1109,10 +1563,10 @@ fn images(state: Cage<State>) -> impl Widget {
                         .into_iter()
                         .any(|value| value.to_lowercase().contains(&filter))
                 })
-                .cloned()
+                .map(|image| (image.clone(), image_in_use(s, image)))
                 .collect::<Vec<_>>()
         }))
-        .key(|image| {
+        .key(|(image, _)| {
             (
                 image.id.clone(),
                 image.repository.clone(),
@@ -1122,13 +1576,43 @@ fn images(state: Cage<State>) -> impl Widget {
         .children(|item| {
             let image = item.value;
             row().class("docker-image-row").fill((
+                row().class("docker-image-name").fill((
+                    text()
+                        .class(image.map(|(image, _)| {
+                            if image.repository == "<none>" {
+                                "docker-resource-name untagged"
+                            } else {
+                                "docker-resource-name"
+                            }
+                            .to_owned()
+                        }))
+                        .selectable(true)
+                        .content(image.map(|(image, _)| image.repository.clone())),
+                    text()
+                        .class(image.map(|(_, used)| {
+                            if *used {
+                                "docker-badge published"
+                            } else {
+                                "hidden"
+                            }
+                            .to_owned()
+                        }))
+                        .content(i18n::bind("In use")),
+                )),
                 text()
+                    .class("docker-image-tag")
                     .selectable(true)
-                    .content(image.map(|image| image.repository.clone())),
+                    .content(image.map(|(image, _)| image.tag.clone())),
                 text()
+                    .class("docker-image-id")
                     .selectable(true)
-                    .content(image.map(|image| image.tag.clone())),
-                text().content(image.map(|image| image.size.clone())),
+                    .content(image.map(|(image, _)| {
+                        let id = image.id.strip_prefix("sha256:").unwrap_or(&image.id);
+                        id.chars().take(12).collect::<String>()
+                    })),
+                text()
+                    .class("docker-image-size")
+                    .content(image.map(|(image, _)| image.size.clone())),
             ))
         }),
     ))
@@ -1307,6 +1791,97 @@ mod tests {
         assert!(parts("[31m").is_empty());
         assert!(parts("nothing").is_empty());
     }
+    #[test]
+    fn ports_read_once_without_the_wildcard_address() {
+        assert_eq!(
+            port_entries(
+                "0.0.0.0:80->80/tcp, [::]:80->80/tcp, :::443->443/tcp, 127.0.0.1:8080->8080/tcp, 5432/tcp"
+            ),
+            [
+                ("80 → 80/tcp".to_owned(), true),
+                ("443 → 443/tcp".to_owned(), true),
+                ("127.0.0.1:8080 → 8080/tcp".to_owned(), true),
+                ("5432/tcp".to_owned(), false),
+            ]
+        );
+        assert_eq!(
+            port_entries("[::1]:8443->443/tcp, 0.0.0.0:8000-8002->8000-8002/udp"),
+            [
+                ("[::1]:8443 → 443/tcp".to_owned(), true),
+                ("8000-8002 → 8000-8002/udp".to_owned(), true),
+            ]
+        );
+        assert!(port_entries("").is_empty());
+    }
+
+    #[test]
+    fn states_take_the_colour_of_their_outcome() {
+        let container = |state: &str, status: &str| Container {
+            id: String::new(),
+            name: String::new(),
+            image: String::new(),
+            state: state.into(),
+            status: status.into(),
+            ports: String::new(),
+            mounts: String::new(),
+            networks: String::new(),
+            compose_project: String::new(),
+            compose_service: String::new(),
+            compose_working_dir: String::new(),
+        };
+        for (state, status, expected) in [
+            ("running", "Up 2 hours", "running"),
+            ("running", "Up 2 hours (unhealthy)", "warning"),
+            ("paused", "Up 2 hours (Paused)", "paused"),
+            ("restarting", "Restarting (1) 3 seconds ago", "busy"),
+            ("exited", "Exited (0) 3 days ago", "stopped"),
+            ("exited", "Exited (137) 1 minute ago", "failed"),
+            ("created", "Created", "stopped"),
+            ("dead", "Dead", "failed"),
+        ] {
+            assert_eq!(tone(&container(state, status)), expected, "{status}");
+        }
+    }
+
+    #[test]
+    fn port_bindings_prefer_published_addresses() {
+        let details = |ports: serde_json::Value, bindings: serde_json::Value| ContainerDetails {
+            id: String::new(),
+            name: String::new(),
+            image: String::new(),
+            state: String::new(),
+            restart: String::new(),
+            retries: 0,
+            memory: 0,
+            nano_cpus: 0,
+            network: String::new(),
+            ports,
+            bindings,
+            mounts: serde_json::Value::Null,
+        };
+        let running = details(
+            serde_json::json!({"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8080"}], "443/tcp": [{"HostIp": "::1", "HostPort": "8443"}], "9000/tcp": null}),
+            serde_json::json!({"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8080"}]}),
+        );
+        assert_eq!(
+            port_bindings(&running),
+            [
+                ("[::1]:8443 → 443/tcp".to_owned(), "Published"),
+                ("127.0.0.1:8080 → 80/tcp".to_owned(), "Published"),
+                ("9000/tcp".to_owned(), "Exposed only"),
+            ]
+        );
+        // A stopped container publishes nothing; its configured bindings remain.
+        let stopped = details(
+            serde_json::json!({}),
+            serde_json::json!({"80/tcp": [{"HostIp": "", "HostPort": "8080"}]}),
+        );
+        assert_eq!(
+            port_bindings(&stopped),
+            [("*:8080 → 80/tcp".to_owned(), "Configured")]
+        );
+    }
+
     #[test]
     fn logs_without_visible_output_read_as_no_logs() {
         for logs in ["", "\n", "\x1b[0m\n", "\r\n\n"] {

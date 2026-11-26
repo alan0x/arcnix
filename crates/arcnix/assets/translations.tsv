@@ -3304,3 +3304,26 @@ APFS 容器 {}	APFS container {}
 已通过系统软件包安装。	Already installed from system packages.
 两份副本会续期同一批证书。请先移除另一份，再安装这一份。	Both copies would renew the same certificates. Remove the other one before installing this one.
 两份副本会争用同一个 Docker 套接字，且各自保存自己的镜像和容器。请先移除另一份，再安装这一份。	Both copies would try to use the same Docker socket, and each keeps its own images and containers. Remove the other one before installing this one.
+{} 个运行中，共 {} 个	{} of {} running
+{} 个运行中 · {} 个已停止	{} running · {} stopped
+{} 个未使用	{} unused
+未使用	Unused
+容器	Container
+镜像 ID	Image ID
+容器 ID	Container ID
+内存限制	Memory limit
+不限	Unlimited
+没有暴露的端口	No ports are exposed
+没有挂载	No mounts
+读写	Read-write
+只读	Read-only
+资源用量	Resource usage
+CPU	CPU
+使用中	In use
+挂载点	Mount point
+按名称、镜像或端口搜索	Search by name, image or port
+搜索卷	Search volumes
+按容器或端口搜索	Search by container or port
+搜索镜像	Search images
+暂无 Compose 项目	No Compose projects
+用 Docker Compose 安装应用后，可在这里管理。	Install an application with Docker Compose to manage it here.
