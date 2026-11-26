@@ -9,13 +9,12 @@
 use anyhow::{Result, bail, ensure};
 use serde_json::Value;
 
-use crate::configurations;
-use crate::docker;
 use crate::host::HostOs;
 use crate::remote::RemoteSession;
 use crate::remote_tasks::quote;
 use crate::scripts::Template;
 use crate::server_apps::execute;
+use crate::{configurations, docker};
 
 pub const DEFAULT_CONFIG: &str = "/etc/docker/daemon.json";
 const KEY: &str = "registry-mirrors";
@@ -71,7 +70,7 @@ impl Daemon {
     /// when the file doesn't list any.
     pub fn configured(&self) -> Vec<String> {
         if let Config::Text(text) = &self.config
-            && let Ok(value) = serde_json::from_str::<Value>(text)
+            && let Ok(value) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}'))
             && let Some(list) = value.get(KEY).and_then(Value::as_array)
         {
             return list
@@ -231,7 +230,7 @@ fn plain(value: &str) -> Option<String> {
     (!value.contains(['"', '\'', '\\', '$', '`'])).then(|| value.to_owned())
 }
 
-/// Reads the output of [`SETUP_SCRIPT`] together with `docker info`.
+/// Reads the service inspection output together with `docker info`.
 pub fn parse(text: &str, registry: docker::Registry) -> Result<Daemon> {
     let unexpected = || anyhow::anyhow!("Unexpected Docker service details");
     let mut rest = text;
@@ -690,9 +689,10 @@ pub fn publish(daemon: &Daemon, mirrors: &[String]) -> Result<Template> {
         ),
         reload: "systemctl --no-ask-password reload docker.service".into(),
         health: format!(
-            "python3 -I -c {} \"$1\" {}",
+            "python3 -I -c {} \"$1\" {} {}",
             quote(HEALTH),
-            quote(&format!("unix://{socket}"))
+            quote(&format!("unix://{socket}")),
+            quote(&configurations::hash(daemon.mirrors.join("\0").as_bytes()))
         ),
         health_seconds: 15,
         ..Default::default()
@@ -708,10 +708,10 @@ pub fn publish(daemon: &Daemon, mirrors: &[String]) -> Result<Template> {
 /// The health check, run as root with the live daemon.json and the service's
 /// socket: the daemon answers and uses the mirrors the file lists. Comparing
 /// with the file, not the new list, keeps it right when a failed publish
-/// restores the original. A file without the key passes, because reloading
-/// it keeps whatever mirrors the daemon had.
-const HEALTH: &str = r#"import json, subprocess, sys
-path, host = sys.argv[1], sys.argv[2]
+/// restores the original. When the restored file has no mirror setting, a
+/// reload can leave the new mirrors active. Verify the original runtime list.
+const HEALTH: &str = r#"import hashlib, json, subprocess, sys
+path, host, original = sys.argv[1:]
 out = subprocess.run(['docker', '--host', host, 'info', '--format', '{{json .RegistryConfig.Mirrors}}'], capture_output=True, text=True, timeout=10, check=True).stdout
 used = json.loads(out.strip() or 'null') or []
 try:
@@ -719,7 +719,9 @@ try:
         listed = json.load(f).get('registry-mirrors')
 except FileNotFoundError:
     listed = None
-sys.exit(0 if listed is None or used == [m if m.endswith('/') else m + '/' for m in listed] else 1)
+if listed is None:
+    sys.exit(0 if hashlib.sha256('\0'.join(used).encode()).hexdigest() == original else 1)
+sys.exit(0 if used == [m if m.endswith('/') else m + '/' for m in listed] else 1)
 "#;
 
 /// What a mirror answered when asked for the registry API from the server.
@@ -1091,8 +1093,9 @@ mod tests {
         assert_eq!(
             spec.health,
             format!(
-                "python3 -I -c {} \"$1\" 'unix:///var/run/docker.sock'",
-                quote(HEALTH)
+                "python3 -I -c {} \"$1\" 'unix:///var/run/docker.sock' {}",
+                quote(HEALTH),
+                quote(&configurations::hash(b""))
             )
         );
         assert!(!job.record.create);
