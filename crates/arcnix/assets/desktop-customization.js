@@ -140,7 +140,7 @@
         event.stopImmediatePropagation();
         const exit = canvas.querySelector('.overview-exit');
         if (exit) exit.click();
-        else send(canvas, {kind: 'dock_overview', app: app.id});
+        else desktopMotion.openOverview(() => send(canvas, {kind: 'dock_overview', app: app.id}));
     }, true);
 
     function openContextMenu(canvas, target, x, y) {

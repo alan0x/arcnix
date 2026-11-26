@@ -1036,7 +1036,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   z-index: 2; pointer-events: none;
 }
 .desktop-window-layer.window-overview {
-  display: grid !important; pointer-events: auto; isolation: isolate; overflow: auto; overscroll-behavior: contain;
+  display: grid !important; pointer-events: auto; isolation: isolate; overflow: hidden auto; overscroll-behavior: contain;
   grid-template-columns: repeat(var(--overview-columns, 1), minmax(0, 1fr));
   grid-template-rows: auto repeat(var(--overview-rows, 1), minmax(150px, 1fr));
   gap: clamp(8px, 1.5vw, 20px); padding: clamp(12px, 2vw, 28px);
@@ -2459,6 +2459,14 @@ html.desktop-motion { view-transition-name: none; }
 }
 .desktop-motion-close::view-transition-old(arcnix-desktop-window) { animation-name: desktop-window-close; animation-duration: 180ms; }
 .desktop-motion-resize::view-transition-new(arcnix-desktop-window) { animation-name: desktop-window-fade-in; }
+.desktop-motion-overview::view-transition-group(*) {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(.22,.75,.25,1);
+}
+.desktop-motion-overview::view-transition-image-pair(*) { isolation: isolate; }
+.desktop-motion-overview::view-transition-old(*) { animation: desktop-window-fade-out 180ms ease-out both; }
+.desktop-motion-overview::view-transition-new(*) { animation: desktop-window-fade-in 200ms ease-out both; }
+.desktop-motion-overview::view-transition-old(*), .desktop-motion-overview::view-transition-new(*) { mix-blend-mode: plus-lighter; }
 .desktop-shortcut .desktop-app-icon { transition: transform 170ms cubic-bezier(.2,.75,.25,1); }
 @media (hover: hover) {
   .desktop-shortcut:hover .desktop-app-icon { transform: scale(1.04); }
@@ -2478,6 +2486,7 @@ html.desktop-motion { view-transition-name: none; }
 @keyframes desktop-window-close { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(12px) scale(.93); } }
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(arcnix-desktop-window), ::view-transition-old(arcnix-desktop-window), ::view-transition-new(arcnix-desktop-window) { animation: none !important; }
+  .desktop-motion-overview::view-transition-group(*), .desktop-motion-overview::view-transition-old(*), .desktop-motion-overview::view-transition-new(*) { animation: none !important; }
   .desktop-shortcut .desktop-app-icon, .desktop-dock-app .desktop-app-icon { transition: none !important; }
   .desktop-shortcut:hover .desktop-app-icon, .desktop-dock-app:hover .desktop-app-icon { transform: none; }
 }
