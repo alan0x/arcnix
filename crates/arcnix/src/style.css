@@ -560,6 +560,24 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
   .sapid-switch-thumb { transition: left 140ms ease-out, background-color 160ms ease-out; }
 }
 .desktop-wallpaper-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.wallpaper-prism, .wallpaper-prism-light {
+  background: #d9dfe9 url("/wallpapers/prism-light.webp") center / cover no-repeat;
+}
+.desktop-dark .wallpaper-prism, .wallpaper-prism-dark {
+  background: #080e2b url("/wallpapers/prism-dark.webp") center / cover no-repeat;
+}
+.wallpaper-valley, .wallpaper-valley-light {
+  background: #807bce url("/wallpapers/valley-light.webp") center / cover no-repeat;
+}
+.desktop-dark .wallpaper-valley, .wallpaper-valley-dark {
+  background: #130a32 url("/wallpapers/valley-dark.webp") center / cover no-repeat;
+}
+.wallpaper-tide, .wallpaper-tide-light {
+  background: #dca15b url("/wallpapers/tide-light.webp") center / cover no-repeat;
+}
+.desktop-dark .wallpaper-tide, .wallpaper-tide-dark {
+  background: #2d1508 url("/wallpapers/tide-dark.webp") center / cover no-repeat;
+}
 .wallpaper-seaside, .wallpaper-seaside-sunrise {
   background: #dfb99e url("/wallpapers/seaside-sunrise.webp") center / cover no-repeat;
 }
@@ -597,8 +615,15 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-wallpaper-mode { color: var(--desktop-ink); margin-top: 3px; font-size: 15px; line-height: 1.35; font-weight: 500; }
 .desktop-wallpaper-mode:empty { display: none; }
 .desktop-wallpaper-address { color: var(--desktop-ink); opacity: .9; margin-top: 7px; font-size: 12px; line-height: 1.45; text-wrap: pretty; overflow-wrap: anywhere; }
-.desktop-canvas:has(.desktop-wallpaper-image, .wallpaper-seaside, .wallpaper-aurora, .wallpaper-fjord) :is(.desktop-wallpaper-name, .desktop-wallpaper-mode, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
-  color: #fff; text-shadow: 0 1px 3px #000, 0 1px 12px #000c;
+.desktop-light .desktop-canvas:has(.wallpaper-prism, .wallpaper-tide) {
+  --wallpaper-ink: #171921;
+  --wallpaper-text-shadow: 0 0 2px #fffc, 0 0 6px #fff9;
+}
+.desktop-canvas:has(.desktop-wallpaper-image, .wallpaper-prism, .wallpaper-valley, .wallpaper-tide,
+  .wallpaper-seaside, .wallpaper-aurora, .wallpaper-fjord)
+  :is(.desktop-wallpaper-name, .desktop-wallpaper-mode, .desktop-wallpaper-address, .desktop-shortcut .desktop-app-label) {
+  color: var(--wallpaper-ink, #fff);
+  text-shadow: var(--wallpaper-text-shadow, 0 1px 3px #000, 0 1px 12px #000c);
 }
 .desktop-shortcuts {
   --shortcut-icon-size: var(--desktop-icon-preview, var(--desktop-icon-ideal));

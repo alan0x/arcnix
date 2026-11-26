@@ -347,7 +347,31 @@ def main():
             expect(desktop_button('Monitor')).to_be_visible()
             expect(desktop_button('Terminal')).to_be_visible()
             settings().get_by_role('button', name='Appearance', exact=True).click()
-            expect(settings().locator('.theme-preset-select')).to_have_text(['Fjord', 'Aurora', 'Seaside'])
+            new_presets = ['Prism', 'Valley', 'Tide']
+            expect(settings().locator('.theme-preset-select')).to_have_text(new_presets + ['Fjord', 'Aurora', 'Seaside'])
+            art = p.locator('.desktop-wallpaper-art')
+            scheme = settings().get_by_role('radiogroup', name='Color scheme', exact=True)
+            for preset in new_presets:
+                choice = settings().get_by_role('button', name=preset, exact=True)
+                choice.click()
+                expect(choice).to_have_attribute('aria-pressed', 'true')
+                expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name('Auto')
+                swatches = choice.locator('..').locator('.theme-wallpaper-swatch')
+                slug = preset.lower()
+                check_wallpaper(swatches.first, f'{slug}-light')
+                check_wallpaper(swatches.last, f'{slug}-dark')
+                gallery_swatch = settings().locator(f'.wallpaper-swatch.wallpaper-{slug}')
+                for mode in ('Light', 'Dark'):
+                    scheme.get_by_role('radio', name=mode, exact=True).check()
+                    check_wallpaper(art, f'{slug}-{mode.lower()}')
+                    check_wallpaper(gallery_swatch, f'{slug}-{mode.lower()}')
+            themes = settings().locator('.desktop-settings-card').filter(
+                has=p.get_by_role('group', name='Themes', exact=True),
+            )
+            themes.get_by_role('button', name='Reset', exact=True).click()
+            expect(settings().get_by_role('button', name='Prism', exact=True)).to_have_attribute('aria-pressed', 'true')
+            expect(scheme.get_by_role('radio', checked=True)).to_have_accessible_name('Auto')
+            check_wallpaper(art, 'prism-light')
             seaside = settings().get_by_role('button', name='Seaside', exact=True)
             p.emulate_media(reduced_motion='no-preference')
             p.evaluate("""() => {
@@ -673,7 +697,7 @@ def main():
                 assert preferences_pane.evaluate('el => el.scrollTop === 0'), label
                 if label == 'Appearance':
                     gallery = settings().get_by_role('group', name='Wallpaper', exact=True)
-                    expect(gallery.locator('.wallpaper-choice')).to_have_count(3)
+                    expect(gallery.locator('.wallpaper-choice')).to_have_count(6)
                     gallery.scroll_into_view_if_needed()
                     app.screenshot('compact-wallpaper-settings.png')
             p.set_viewport_size(dict(width=1440, height=980))
