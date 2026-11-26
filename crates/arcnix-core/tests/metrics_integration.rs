@@ -345,7 +345,16 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
     let session = pending.authenticate("arcnix-test", &fingerprint)?;
     assert_eq!(session.host_os()?, HostOs::Windows);
     assert!(!session.sftp_available());
-    assert_eq!(session.read_disk_inventory()?.filesystems[0].target, "/C:");
+    let inventory = session.read_disk_inventory()?;
+    assert_eq!(inventory.disks[0].path, r"\\.\PHYSICALDRIVE0");
+    let system = inventory.disks[0]
+        .partitions
+        .iter()
+        .find(|partition| partition.mounts == [r"C:\"])
+        .context("C: should be attributed to its partition")?;
+    assert_eq!(system.space.available, Some(1500));
+    let unattributed: Vec<_> = inventory.filesystems.iter().map(|fs| &fs.target).collect();
+    assert_eq!(unattributed, [r"E:\"]);
     assert_eq!(
         session.read_network_inventory()?.interfaces[0].name,
         "Ethernet"
