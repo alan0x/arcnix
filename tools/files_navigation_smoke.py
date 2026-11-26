@@ -35,6 +35,7 @@ def main():
             crumb = pathbar.locator('.breadcrumb.current')
             back = pathbar.get_by_role('button', name='Back', exact=True)
             forward = pathbar.get_by_role('button', name='Forward', exact=True)
+            up = pathbar.get_by_role('button', name='Parent folder', exact=True)
 
             def go(label, path):
                 sidebar.get_by_role('button', name=label, exact=True).click()
@@ -42,6 +43,7 @@ def main():
 
             go('Filesystem', '/')
             expect(back).to_be_disabled()
+            expect(up).to_be_disabled()
             go('Home', '/home/arcnix')
             go('Desktop', '/home/arcnix/Desktop')
             separators = pathbar.locator('.breadcrumbs .glyph-chevron-right')
@@ -83,6 +85,18 @@ def main():
             go('Documents', '/home/arcnix/Documents')
             expect(forward).to_be_disabled()
             go('Desktop', '/home/arcnix/Desktop')
+
+            up.click()
+            expect(crumb).to_have_attribute('aria-label', '/home/arcnix')
+            back.click()
+            expect(crumb).to_have_attribute('aria-label', '/home/arcnix/Desktop')
+
+            for view, pane_class in [('Icon grid', 'icons-view'), ('Detailed list', 'details-view')]:
+                files.get_by_role('button', name='File view options', exact=True).click()
+                page.locator('.file-actions-menu').get_by_role('button', name=view, exact=True).click()
+                row = files.locator(f'.files-pane.{pane_class} .file-row').filter(has_text='notes-today.txt')
+                expect(row.locator('.file-label')).to_have_css('font-size', '14px')
+                expect(row.locator('.file-size')).to_have_css('font-size', '14px')
 
             expect(pathbar.get_by_role('button', name='Search files', exact=True)).to_be_enabled()
             crumb.press('Control+f')

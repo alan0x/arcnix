@@ -1556,9 +1556,24 @@ pub(crate) fn pathbar(
     let enabled = state.map(move |s| !remote || s.connected && s.sftp_available);
     row().class("pathbar").fill((
         when(files, move || {
+            let parent = |s: &State| {
+                if workspace::ready(s, true) {
+                    desktop_file_picker::parent(&s.remote_path)
+                } else {
+                    None
+                }
+            };
+            let parent_ui = history_ui.clone();
             row().class("files-history").fill((
                 history_button(history_ui.clone(), true),
                 history_button(history_ui.clone(), false),
+                i18n::desktop::icon_action("Parent folder", Icon::Up)
+                    .enabled(state.map(move |s| parent(s).is_some()))
+                    .on_press(move || {
+                        if let Some(path) = state.with(parent) {
+                            navigate(&parent_ui, true, path);
+                        }
+                    }),
             ))
         }),
         when(!files, move || {
