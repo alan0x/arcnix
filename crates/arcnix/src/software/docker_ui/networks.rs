@@ -41,9 +41,7 @@ impl Ui {
             s.docker.networks.error.clear();
         });
         // Attached containers come from the container list.
-        if self.state.with(|s| s.docker.snapshot.is_none()) {
-            self.docker_send(AppAction::DockerSnapshot);
-        }
+        self.docker_send(AppAction::DockerSnapshot);
     }
 
     /// Opens Arcnix's terminal with the command for a shell in the selected
@@ -51,8 +49,7 @@ impl Ui {
     pub(super) fn docker_shell(&self) {
         let command = self.state.with(|s| {
             let container = selected(s)?;
-            let windows = s.metrics.remote_platform == Some(arcnix_core::host::HostOs::Windows);
-            arcnix_core::docker::shell_command(&container.name, windows).ok()
+            arcnix_core::docker::shell_command(&container.id, s.metrics.remote_platform?).ok()
         });
         if let Some(command) = command {
             self.terminal_with_command(command);
@@ -61,7 +58,11 @@ impl Ui {
 }
 
 pub(super) fn can_shell(s: &State) -> bool {
-    s.terminal_available() && selected(s).is_some_and(|c| c.state == "running")
+    s.terminal_available()
+        && s.metrics
+            .remote_platform
+            .is_some_and(|os| os != arcnix_core::host::HostOs::Unknown)
+        && selected(s).is_some_and(|c| c.state == "running")
 }
 
 /// Takes the network list and passes on other replies.
