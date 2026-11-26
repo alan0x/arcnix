@@ -143,7 +143,7 @@ pub fn unquote(word: &str) -> String {
 pub fn parse(text: &str) -> Result<Vec<Directive>> {
     let tokens = tokens(text)?;
     let mut position = 0;
-    let directives = parse_block(text, &tokens, &mut position, false)?;
+    let directives = parse_block(text, &tokens, &mut position, 0)?;
     ensure!(
         position == tokens.len(),
         "Unexpected `}}` in the Nginx configuration"
@@ -155,13 +155,18 @@ fn parse_block(
     text: &str,
     tokens: &[(Token, Range<usize>)],
     position: &mut usize,
-    nested: bool,
+    depth: usize,
 ) -> Result<Vec<Directive>> {
+    const MAX_DEPTH: usize = 64;
+    ensure!(
+        depth <= MAX_DEPTH,
+        "Nginx configuration blocks are nested too deeply"
+    );
     let mut out = Vec::new();
     while *position < tokens.len() {
         let (kind, range) = tokens[*position].clone();
         match kind {
-            Token::Close if nested => return Ok(out),
+            Token::Close if depth > 0 => return Ok(out),
             Token::Close => bail!("Unexpected `}}` in the Nginx configuration"),
             Token::Open | Token::End => bail!("Expected a directive name"),
             Token::Word => {}
@@ -192,7 +197,7 @@ fn parse_block(
                     break;
                 }
                 Token::Open => {
-                    let children = parse_block(text, tokens, position, true)?;
+                    let children = parse_block(text, tokens, position, depth + 1)?;
                     let Some((Token::Close, close)) = tokens.get(*position).cloned() else {
                         bail!("Block `{name}` is missing its `}}`");
                     };
@@ -211,7 +216,7 @@ fn parse_block(
             }
         }
     }
-    ensure!(!nested, "A block is missing its `}}`");
+    ensure!(depth == 0, "A block is missing its `}}`");
     Ok(out)
 }
 
@@ -236,6 +241,7 @@ pub struct Summary {
     /// Some `listen` names an address other than all addresses or loopback,
     /// so a request to this server's local address may not reach the site.
     pub addressed: bool,
+    pub(crate) health_endpoint: Option<(String, u16, bool)>,
 }
 
 fn servers(directives: &[Directive]) -> Vec<&Directive> {
@@ -294,6 +300,37 @@ fn addressed(listen: &Directive) -> bool {
         host,
         "*" | "0.0.0.0" | "::" | "127.0.0.1" | "::1" | "localhost"
     )
+}
+
+fn health_endpoint(server: &Directive) -> Option<(String, u16, bool)> {
+    let name = server
+        .find("server_name")
+        .flat_map(|directive| &directive.args)
+        .find(|name| name.contains('.') && !name.contains(['*', '~']))?;
+    let legacy_ssl = server
+        .first("ssl")
+        .is_some_and(|directive| directive.args.as_slice() == ["on"]);
+    let (port, tls) = server
+        .find("listen")
+        .filter(|listen| {
+            // The local HTTP checker uses TCP over IPv4, without PROXY headers.
+            !listen
+                .args
+                .first()
+                .is_some_and(|address| address.starts_with('['))
+                && !listen
+                    .args
+                    .iter()
+                    .skip(1)
+                    .any(|arg| matches!(arg.as_str(), "quic" | "proxy_protocol"))
+        })
+        .filter_map(|listen| {
+            let (port, _) = port(listen)?;
+            let tls = legacy_ssl || listen.args.iter().skip(1).any(|arg| arg == "ssl");
+            Some((port, tls))
+        })
+        .min_by_key(|&(port, tls)| (port != if tls { 443 } else { 80 }, tls, port))?;
+    Some((name.clone(), port, tls))
 }
 
 fn redirect_only(server: &Directive) -> bool {
@@ -362,6 +399,7 @@ pub fn summary(directives: &[Directive]) -> Summary {
         .find(|s| !redirect_only(s))
         .or(servers.first());
     out.serves = main.map(|s| serves(s)).unwrap_or_default();
+    out.health_endpoint = main.and_then(|s| health_endpoint(s));
     out
 }
 
@@ -763,6 +801,18 @@ pub fn apply(text: &str, before: &Settings, after: &Settings) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_bounds_block_nesting() {
+        let blocks = |depth| format!("{}{}", "block { ".repeat(depth), "} ".repeat(depth));
+        assert!(parse(&blocks(64)).is_ok());
+        assert!(
+            parse(&blocks(65))
+                .unwrap_err()
+                .to_string()
+                .contains("nested too deeply")
+        );
+    }
 
     const PROXY: &str = "# Shop
 server {
