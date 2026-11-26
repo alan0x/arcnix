@@ -3505,3 +3505,9 @@ Windows 上的镜像仓库登录由 Docker Desktop 管理	Registry logins are ma
 请输入镜像仓库，例如 ghcr.io 或 registry.example.com:5000，或留空表示 Docker Hub	Enter a registry such as ghcr.io or registry.example.com:5000, or leave it empty for Docker Hub
 请输入镜像仓库的用户名	Enter the user name for the registry
 请输入密码或访问令牌	Enter the password or access token
+网络	Networks
+子网	Subnet
+内置	Built-in
+内部	Internal
+Shell	Shell
+搜索网络	Search networks

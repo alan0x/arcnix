@@ -8,6 +8,7 @@ use crate::*;
 mod cleanup;
 mod login;
 mod mirrors;
+mod networks;
 mod pull;
 mod run;
 mod updates;
@@ -20,6 +21,7 @@ pub(crate) struct DockerState {
     pub(crate) updates: updates::UpdatesState,
     pub(crate) cleanup: cleanup::CleanupState,
     pub(crate) login: login::LoginState,
+    pub(crate) networks: networks::NetworkState,
     snapshot: Option<Snapshot>,
     images: Vec<docker::Image>,
     stats: Option<docker::Stats>,
@@ -198,6 +200,7 @@ impl Ui {
         match self.state.with(|s| s.docker.view) {
             3 => self.compose_refresh(),
             4 => self.docker_send(AppAction::DockerImages),
+            5 => self.docker_networks_refresh(),
             _ => self.docker_send(AppAction::DockerSnapshot),
         }
     }
@@ -362,6 +365,9 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         return;
     };
     let Some(result) = login::event(ui, serial, result) else {
+        return;
+    };
+    let Some(result) = networks::event(ui, serial, result) else {
         return;
     };
     if !ui.state.with(|s| s.docker.pending == Some(serial)) {
@@ -964,6 +970,20 @@ fn detail(ui: Ui) -> impl Widget {
             container_button(&ui, "Resume", Icon::Play, Operation::Resume),
             text_action("Configure", Icon::Settings).class("button with-icon compact").enabled(state.map(|s| actionable(s) && s.docker.details.as_ref().is_some_and(|d| d.id == s.docker.selected))).on_press(move || configure.docker_configure()),
             container_button(&ui, "Remove…", Icon::Clear, Operation::Remove),
+            {
+                let shell = ui.clone();
+                text_action("Shell", Icon::Terminal)
+                    .class(state.map(|s| {
+                        if selected(s).is_some_and(|c| c.state == "running") {
+                            "button with-icon compact"
+                        } else {
+                            "hidden"
+                        }
+                        .to_owned()
+                    }))
+                    .enabled(state.map(networks::can_shell))
+                    .on_press(move || shell.docker_shell())
+            },
         )),
         row().class("docker-detail-tabs").fill((
             btn("Inspect", move || state.revise(|s| s.docker.detail_tab = DetailTab::Inspect))
@@ -1266,12 +1286,13 @@ fn column_titles(labels: &[&'static str], class: &'static str) -> impl Widget + 
             .collect::<Vec<_>>(),
     )
 }
-const SECTIONS: [&str; 5] = [
+const SECTIONS: [&str; 6] = [
     "Containers",
     "Volumes",
     "Ports",
     "Projects",
     "Container images",
+    "Networks",
 ];
 /// How many items a section lists, once Docker has reported them.
 fn section_count(s: &State, view: u8) -> String {
@@ -1288,7 +1309,8 @@ fn section_count(s: &State, view: u8) -> String {
                 .count()
         }),
         3 => compose_ui::project_count(s),
-        _ => (!s.docker.images.is_empty()).then_some(s.docker.images.len()),
+        4 => (!s.docker.images.is_empty()).then_some(s.docker.images.len()),
+        _ => networks::count(s),
     };
     count.map(|n| n.to_string()).unwrap_or_default()
 }
@@ -1301,6 +1323,7 @@ fn navigation(ui: Ui) -> impl Widget {
         Icon::Plug,
         Icon::Folder,
         Icon::Layers,
+        Icon::Browser,
     ];
     let items = SECTIONS
         .into_iter()
@@ -1329,7 +1352,7 @@ fn navigation(ui: Ui) -> impl Widget {
                     });
                     if view == 3 {
                         ui.compose_enter();
-                    } else if view == 4 {
+                    } else if view >= 4 {
                         ui.docker_refresh();
                     }
                 })
@@ -1514,6 +1537,7 @@ fn filters(state: Cage<State>) -> impl Widget {
                             0 => "Search by name, image or port",
                             1 => "Search volumes",
                             2 => "Search by container or port",
+                            5 => "Search networks",
                             _ => "Search images",
                         })),
                         ..Default::default()
@@ -1628,8 +1652,12 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 let ui = ui.clone();
                 move || compose_ui::projects(ui.clone())
             }),
-            when(state.map(|s| s.docker.view == 4), move || {
-                images(ui.clone())
+            when(state.map(|s| s.docker.view == 4), {
+                let ui = ui.clone();
+                move || images(ui.clone())
+            }),
+            when(state.map(|s| s.docker.view == 5), move || {
+                networks::view(ui.clone())
             }),
         )),
     ));

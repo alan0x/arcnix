@@ -465,6 +465,87 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
         .collect()
 }
 
+/// The command that opens a shell in a running container, for Arcnix's
+/// terminal: bash when the image has it, otherwise sh. It names the
+/// container, so the user's own Docker setup in that shell applies.
+pub fn shell_command(container: &str, windows: bool) -> Result<String> {
+    ensure!(
+        !container.is_empty()
+            && container.len() <= 255
+            && container.as_bytes()[0].is_ascii_alphanumeric()
+            && container
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
+        "Invalid container name"
+    );
+    Ok(if windows {
+        format!("docker exec -it {container} sh")
+    } else {
+        format!(
+            "docker exec -it {container} sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'"
+        )
+    })
+}
+
+/// A Docker network and the subnets it hands out.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    #[serde(default)]
+    pub internal: bool,
+    #[serde(default)]
+    pub subnets: Vec<String>,
+}
+impl Network {
+    /// bridge, host and none, which Docker creates and keeps.
+    pub fn built_in(&self) -> bool {
+        matches!(self.name.as_str(), "bridge" | "host" | "none")
+    }
+}
+const NETWORK_LIMIT: usize = 64;
+pub fn parse_networks(text: &str) -> Result<Vec<Network>> {
+    let mut networks: Vec<Network> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(NETWORK_LIMIT)
+        .map(|line| Ok(serde_json::from_str(line)?))
+        .collect::<Result<_>>()?;
+    networks.sort_by(|a, b| (!a.built_in(), &a.name).cmp(&(!b.built_in(), &b.name)));
+    Ok(networks)
+}
+pub fn networks(session: &RemoteSession) -> Result<Vec<Network>> {
+    let ids = DockerRequest::single(
+        "networks",
+        &["network", "ls", "--no-trunc", "--format", "{{.ID}}"],
+    )
+    .run(session)?
+    .stdout;
+    let ids: Vec<&str> = ids
+        .lines()
+        .map(str::trim)
+        .filter(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        .take(NETWORK_LIMIT)
+        .collect();
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut args = vec![
+        "network".to_owned(),
+        "inspect".into(),
+        "--format".into(),
+        r#"{"id":{{json .Id}},"name":{{json .Name}},"driver":{{json .Driver}},"scope":{{json .Scope}},"internal":{{json .Internal}},"subnets":[{{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{json $c.Subnet}}{{end}}]}"#.into(),
+    ];
+    args.extend(ids.iter().map(|id| (*id).to_owned()));
+    let request = DockerRequest {
+        operation: "networks",
+        steps: vec![Step::Call(args, false)],
+    };
+    parse_networks(&request.run(session)?.stdout)
+}
+
 /// A registry this SSH user is logged in to, and where Docker keeps the
 /// credentials.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1253,5 +1334,32 @@ mod tests {
                 .shell(PREFIX)
                 .ends_with("arcnix_docker logout ghcr.io 2>&1")
         );
+    }
+
+    #[test]
+    fn shells_and_networks_are_read_safely() {
+        assert_eq!(
+            shell_command("web-app_1", false).unwrap(),
+            "docker exec -it web-app_1 sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'"
+        );
+        assert_eq!(
+            shell_command("web", true).unwrap(),
+            "docker exec -it web sh"
+        );
+        for bad in ["", "-it", "a b", "a;id", "a$(id)"] {
+            assert!(shell_command(bad, false).is_err(), "{bad}");
+        }
+        let networks = parse_networks(concat!(
+            r#"{"id":"a","name":"repro_default","driver":"bridge","scope":"local","internal":false,"subnets":["172.18.0.0/16"]}"#,
+            "\n",
+            r#"{"id":"b","name":"host","driver":"host","scope":"local","internal":false,"subnets":[]}"#,
+            "\n",
+            r#"{"id":"c","name":"bridge","driver":"bridge","scope":"local","internal":false,"subnets":["172.17.0.0/16","fd00::/64"]}"#,
+        ))
+        .unwrap();
+        let names: Vec<_> = networks.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["bridge", "host", "repro_default"]);
+        assert_eq!(networks[0].subnets, ["172.17.0.0/16", "fd00::/64"]);
+        assert!(networks[0].built_in() && !networks[2].built_in());
     }
 }
