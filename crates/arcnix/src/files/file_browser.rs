@@ -176,7 +176,7 @@ fn tab_title(path: &str, view: files_tabs::Location, tag: Option<files_ui::TagFi
     } else if view == files_tabs::Location::Apps {
         i18n::translate("Apps")
     } else if let Some(tag) = tag {
-        i18n::translate(tag.label())
+        i18n::desktop::translate(tag.label())
     } else {
         path.rsplit('/')
             .next()
