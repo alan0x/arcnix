@@ -44,6 +44,22 @@ def main():
                                     newAnimation: style('new').animationName,
                                     blend: style('new').mixBlendMode,
                                 };
+                                if (active.classList.contains('app-monitor')) {
+                                    const animations = document.getAnimations().filter(a =>
+                                        a.effect?.pseudoElement?.startsWith('::view-transition-'));
+                                    const backdrop = part => getComputedStyle(root,
+                                        `::view-transition-${part}(arcnix-desktop-overview)`);
+                                    const behind = [...active.parentElement.children].filter(el =>
+                                        el !== active && el.matches('.desktop-window:not(.hidden)'));
+                                    motion.foregroundZ = style('group').zIndex;
+                                    motion.backgrounds = behind.map(el => getComputedStyle(el).viewTransitionName);
+                                    motion.layers = [0, 110, 219, 280, 340].map(time => {
+                                        for (const a of animations) { a.pause(); a.currentTime = time; }
+                                        return [Number(style('new').opacity), Number(backdrop('old').opacity),
+                                                Number(backdrop('new').opacity)];
+                                    });
+                                    for (const a of animations) { a.currentTime = 0; a.play(); }
+                                }
                             }
                         }).catch(() => {});
                         transition.finished.catch(() => {}).then(() => motion.finished = true);
@@ -162,9 +178,16 @@ def main():
             eventually(lambda: not p.locator('html').evaluate("el => el.classList.contains('desktop-motion')"))
             thumbnail = monitor_window.bounding_box()
             index = p.evaluate('overviewMotions.length')
-            tiles.click()
+            monitor.click()
             eventually(lambda: p.evaluate('(i) => overviewMotions[i]?.finished', index))
-            assert_opaque(p.evaluate('(i) => overviewMotions[i]', index))
+            restored = p.evaluate('(i) => overviewMotions[i]', index)
+            assert_opaque(restored)
+            assert restored['foregroundZ'] == '1', restored
+            assert restored['backgrounds'] and set(restored['backgrounds']) == {'none'}, restored
+            assert restored['layers'][:3] == [[1, 1, 0]] * 3, restored
+            foreground, old_layer, new_layer = restored['layers'][3]
+            assert foreground == 1 and 0 < old_layer < 1 and 0 < new_layer < 1, restored
+            assert restored['layers'][4] == [1, 0, 1], restored
             assert monitor_window.bounding_box() == normal and normal != thumbnail
             settings.click()
 
@@ -182,6 +205,10 @@ def main():
                 window.overviewFallback = [];
                 const animate = Element.prototype.animate;
                 Element.prototype.animate = function(frames, options) {
+                    if (this.matches('.desktop-window-layer') && !this.matches('.window-overview'))
+                        window.backdropTiming = [options.delay, options.duration];
+                    if (this.matches('.desktop-window') && options.delay && frames[0].opacity === 0)
+                        window.backgroundTiming = [options.delay, options.duration, options.fill];
                     if (this.matches('.app-settings.desktop-window') && !this.closest('.window-overview'))
                         window.restoreFrames = frames;
                     if (this.matches('.window-overview,.overview-tile,.app-settings.desktop-window'))
@@ -200,6 +227,8 @@ def main():
             assert all('opacity' not in frame for frame in frames), frames
             assert 'translate(' in frames[0]['transform'] and 'scale(' in frames[0]['transform'], frames
             assert frames[-1]['transform'] == 'none', frames
+            assert p.evaluate('window.backdropTiming') == [220, 120]
+            assert p.evaluate('window.backgroundTiming') == [220, 120, 'backwards']
         print(out)
 
 

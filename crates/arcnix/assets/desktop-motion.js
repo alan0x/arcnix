@@ -3,7 +3,7 @@
 const desktopMotion = (() => {
     const reduced = matchMedia('(prefers-reduced-motion: reduce)');
     const forwarded = new WeakSet(), animations = new Set();
-    const overviewRects = new Map();
+    let overviewFallback;
     let transition = null, stateNode = null, previous = null, pendingDeliver = null;
     const stateObserver = new MutationObserver(changed);
     function state() {
@@ -20,9 +20,9 @@ const desktopMotion = (() => {
     function appClass(element) {
         return element && ([ ...element.classList ].find(name=>name.startsWith('files-window-') || name.startsWith('tab-window-')) || [...element.classList].find(name=>name.startsWith('app-')));
     }
-    function animate(element,frames,duration) {
+    function animate(element,frames,duration,delay=0) {
         if(!element || reduced.matches || !element.animate)return;
-        const animation=element.animate(frames,{duration,easing:'cubic-bezier(.2,.75,.25,1)'});
+        const animation=element.animate(frames,{duration,delay,fill:delay?'backwards':'none',easing:'cubic-bezier(.2,.75,.25,1)'});
         animations.add(animation);
         animation.finished.catch(()=>{}).then(()=>animations.delete(animation));
     }
@@ -32,7 +32,7 @@ const desktopMotion = (() => {
         desktopGeometry.sync(current);
         if(!current || !old || signature(current)===signature(old))return;
         if(!current.shown || current.epoch!==old.epoch){
-            overviewRects.clear();
+            overviewFallback=null;
             transition?.skipTransition();
             for(const animation of animations)animation.cancel();
             return;
@@ -40,18 +40,23 @@ const desktopMotion = (() => {
         if(transition || reduced.matches)return;
         if(Boolean(current.overviewCount)!==Boolean(old.overviewCount)){
             if(current.overviewCount){
-                overviewRects.clear();
+                overviewFallback=null;
                 animate(document.querySelector('.window-overview'),[{opacity:.3},{opacity:1}],180);
                 for(const tile of document.querySelectorAll('.window-overview > .overview-tile'))
                     animate(tile,[{transform:'translateY(10px) scale(.975)'},{transform:'none'}],200);
             } else {
-                for(const [app,from] of overviewRects){
-                    const element=windowFor(app),to=element?.getBoundingClientRect();
-                    if(!to?.width || !to.height)continue;
+                const element=windowFor(current.app),to=element?.getBoundingClientRect();
+                if(overviewFallback?.app===current.app && to?.width && to.height){
+                    const {from,backgroundColor,backdropFilter}=overviewFallback;
                     const transform=`translate(${from.left-to.left}px, ${from.top-to.top}px) scale(${from.width/to.width}, ${from.height/to.height})`;
                     animate(element,[{transformOrigin:'top left',transform},{transformOrigin:'top left',transform:'none'}],220);
+                    const layer=element.parentElement;
+                    animate(layer,[{backgroundColor,backdropFilter},{backgroundColor:'transparent',backdropFilter:'blur(0px)'}],120,220);
+                    for(const other of layer.querySelectorAll(':scope > .desktop-window:not(.hidden)')){
+                        if(other!==element)animate(other,[{opacity:0},{opacity:1}],120,220);
+                    }
                 }
-                overviewRects.clear();
+                overviewFallback=null;
             }
             return;
         }
@@ -135,23 +140,36 @@ const desktopMotion = (() => {
         let delivered=false,active;
         const root=document.documentElement;
         const named=new Set();
-        const overviewWindows=new Set();
+        const layer=motion==='overview' && stateNode?.closest('.server-desktop')?.querySelector('.desktop-window-layer');
+        const source=before.overviewCount && layer && (button?.closest('.overview-tile') || layer.querySelector('.overview-current'));
         const name=(element,value)=>{
             element.style.viewTransitionName=value;
             named.add(element);
         };
-        const mark=()=>{
+        const mark=(after=false)=>{
             if(motion==='overview'){
-                const layer=stateNode?.closest('.server-desktop')?.querySelector('.desktop-window-layer');
                 if(layer)name(layer,'arcnix-desktop-overview');
+                if(before.overviewCount){
+                    // Capture only the returning tile separately. Both background
+                    // scenes keep their own paint order inside the layer snapshot.
+                    if(source){
+                        const id=appClass(source);
+                        if(!after)name(source,`arcnix-overview-${id}`);
+                        else {
+                            source.style.removeProperty('view-transition-name');
+                            const destination=windowFor(id);
+                            if(destination?.classList.contains('active')){
+                                name(destination,`arcnix-overview-${id}`);
+                                destination.style.viewTransitionClass='returning-window';
+                                layer.style.viewTransitionClass='overview-return-backdrop';
+                            }
+                        }
+                    }
+                    return;
+                }
                 for(const element of layer?.querySelectorAll(':scope > .desktop-window:not(.hidden)') || []){
                     const id=appClass(element);
-                    if(!id)continue;
-                    name(element,`arcnix-overview-${id}`);
-                    if(before.overviewCount){
-                        if(overviewWindows.has(id))element.style.viewTransitionClass='returning-window';
-                        else overviewWindows.add(id);
-                    }
+                    if(id)name(element,`arcnix-overview-${id}`);
                 }
                 return;
             }
@@ -182,7 +200,7 @@ const desktopMotion = (() => {
             active=document.startViewTransition(async()=>{
                 deliver();
                 await settle(before,()=>{
-                    mark();
+                    mark(true);
                     if(app && launchRect)windowOffset(app,launchRect);
                 });
             });
@@ -233,9 +251,11 @@ const desktopMotion = (() => {
         }
         if(!canTransition()){
             if(motion.motion==='overview' && before.overviewCount){
-                overviewRects.clear();
-                for(const tile of document.querySelectorAll('.window-overview > .overview-tile'))
-                    overviewRects.set(appClass(tile),tile.getBoundingClientRect());
+                const tile=button.closest('.overview-tile') || document.querySelector('.window-overview > .overview-current');
+                if(tile){
+                    const {backgroundColor,backdropFilter}=getComputedStyle(tile.parentElement);
+                    overviewFallback={app:appClass(tile),from:tile.getBoundingClientRect(),backgroundColor,backdropFilter};
+                }
             }
             return;
         }

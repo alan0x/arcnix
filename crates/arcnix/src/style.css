@@ -2582,13 +2582,21 @@ html.desktop-motion { view-transition-name: none; }
 .desktop-motion-close::view-transition-old(arcnix-desktop-window) { animation-name: desktop-window-close; animation-duration: 180ms; }
 .desktop-motion-resize::view-transition-new(arcnix-desktop-window) { animation-name: desktop-window-fade-in; }
 .desktop-motion-overview::view-transition-group(*) {
-  animation-duration: 220ms;
+  animation-duration: var(--overview-travel);
   animation-timing-function: cubic-bezier(.22,.75,.25,1);
 }
+.desktop-motion-overview { --overview-travel: 220ms; }
+.desktop-motion-overview::view-transition-group(.returning-window) { z-index: 1; }
 .desktop-motion-overview::view-transition-image-pair(*) { isolation: isolate; }
 .desktop-motion-overview::view-transition-old(*) { animation: desktop-window-fade-out 180ms ease-out both; }
 .desktop-motion-overview::view-transition-new(*) { animation: desktop-window-fade-in 200ms ease-out both; }
 .desktop-motion-overview::view-transition-old(*), .desktop-motion-overview::view-transition-new(*) { mix-blend-mode: plus-lighter; }
+.desktop-motion-overview::view-transition-old(.overview-return-backdrop),
+.desktop-motion-overview::view-transition-new(.overview-return-backdrop) {
+  animation-delay: var(--overview-travel);
+  animation-duration: 120ms;
+  animation-timing-function: linear;
+}
 /* A window present in both layouts travels as one opaque surface. The group animates its bounds. */
 .desktop-motion-overview::view-transition-old(.returning-window) { animation: none; opacity: 0; }
 .desktop-motion-overview::view-transition-new(.returning-window) {
