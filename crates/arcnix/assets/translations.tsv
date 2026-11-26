@@ -3426,7 +3426,7 @@ Docker Hub 的名称最多两段，例如 bitnami/redis	Docker Hub names have at
 卷名称或服务器文件夹	Volume name or server folder
 容器内路径	Path in the container
 移除卷	Remove volume
-变量值保存在项目的 compose.yaml 中，只有当前 SSH 用户可以读取。	Values are saved in the project's compose.yaml, which only this SSH user can read.
+环境变量值会保存在项目文件和部署任务中。密码或令牌请使用挂载的密钥文件。	Environment values are saved in the project files and deployment task. Use file-mounted secrets for passwords or tokens.
 变量名	Variable name
 值	Value
 移除变量	Remove variable
