@@ -55,10 +55,14 @@ impl From<DockItem> for Shortcut {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Wallpaper {
+    #[default]
+    #[serde(alias = "mist", alias = "silk")]
+    Prism,
+    Valley,
+    Tide,
     #[serde(alias = "terracotta", alias = "arcnix", alias = "afterglow")]
     Seaside,
     Aurora,
-    #[default]
     #[serde(alias = "dunes")]
     Fjord,
     Remote(String),

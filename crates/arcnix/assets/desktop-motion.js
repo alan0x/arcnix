@@ -1,6 +1,6 @@
 // Desktop presentation only. Rust still owns app state and session lifetimes.
 // View transitions use browser snapshots; no app DOM, terminal or file is copied.
-(() => {
+const desktopMotion = (() => {
     const reduced = matchMedia('(prefers-reduced-motion: reduce)');
     const forwarded = new WeakSet(), animations = new Set();
     let transition = null, stateNode = null, previous = null, pendingDeliver = null;
@@ -10,7 +10,7 @@
         catch (_) { return null; }
     }
     function signature(value) {
-        return JSON.stringify(value && [value.shown,value.epoch,value.app,value.fullscreen,
+        return JSON.stringify(value && [value.shown,value.epoch,value.app,value.fullscreen,value.overviewCount,
             value.windows.map(window=>[window.class,window.maximized])]);
     }
     function windowFor(app) {
@@ -35,9 +35,19 @@
             for(const animation of animations)animation.cancel();
             return;
         }
+        if(transition || reduced.matches)return;
+        if(Boolean(current.overviewCount)!==Boolean(old.overviewCount)){
+            if(current.overviewCount){
+                animate(document.querySelector('.window-overview'),[{opacity:.3},{opacity:1}],180);
+                for(const tile of document.querySelectorAll('.window-overview > .overview-tile'))
+                    animate(tile,[{transform:'translateY(10px) scale(.975)'},{transform:'none'}],200);
+            } else {
+                animate(windowFor(current.app),[{opacity:.7,transform:'scale(.985)'},{opacity:1,transform:'none'}],180);
+            }
+            return;
+        }
         // Links inside apps and hosts without view transitions use the live entrance.
-        if(transition || reduced.matches || !current.app
-            || old.windows.some(window=>window.class===current.app))return;
+        if(!current.app || old.windows.some(window=>window.class===current.app))return;
         const window=windowFor(current.app);
         const switching=Boolean(old.app);
         animate(switching ? window?.querySelector('.desktop-window-content') : window,
@@ -64,6 +74,8 @@
         try { button.click(); } finally { forwarded.delete(button); }
     }
     function kind(button,before) {
+        if(before.overviewCount && button.matches('.overview-exit,.overview-select,.desktop-dock-app'))
+            return {motion:'overview'};
         if(button.matches('.desktop-shortcut,.desktop-dock-app')){
             const app=appClass(button);
             return app && !before.windows.some(window=>windowFor(window.class)?.classList.contains(app))
@@ -110,19 +122,29 @@
             check();
         });
     }
-    function start(button,{motion,app},before) {
+    function start(action,{motion,app},before,button) {
         let delivered=false,active;
         const root=document.documentElement;
         const named=new Set();
-        const mark=()=>{
-            const element=windowFor(app);
-            if(element){
-                element.style.viewTransitionName='arcnix-desktop-window';
-                named.add(element);
-            }
+        const name=(element,value)=>{
+            element.style.viewTransitionName=value;
+            named.add(element);
         };
-        const deliver=()=>{if(!delivered){delivered=true;if(pendingDeliver===deliver)pendingDeliver=null;forward(button);}};
-        const launcher=button.matches('.desktop-dock-app') ? button : button.querySelector('.desktop-app-icon');
+        const mark=()=>{
+            if(motion==='overview'){
+                const layer=stateNode?.closest('.server-desktop')?.querySelector('.desktop-window-layer');
+                if(layer)name(layer,'arcnix-desktop-overview');
+                for(const element of layer?.querySelectorAll(':scope > .desktop-window:not(.hidden)') || []){
+                    const id=appClass(element);
+                    if(id)name(element,`arcnix-overview-${id}`);
+                }
+                return;
+            }
+            const element=windowFor(app);
+            if(element)name(element,'arcnix-desktop-window');
+        };
+        const deliver=()=>{if(!delivered){delivered=true;if(pendingDeliver===deliver)pendingDeliver=null;action();}};
+        const launcher=button?.matches('.desktop-dock-app') ? button : button?.querySelector('.desktop-app-icon');
         const launchRect=launcher?.getBoundingClientRect();
         if(motion==='minimize') {
             const family=[...button.closest('.desktop-window').classList].find(name=>name.startsWith('app-'));
@@ -143,7 +165,7 @@
                 deliver();
                 await settle(before,()=>{
                     mark();
-                    if(launchRect)windowOffset(app,launchRect);
+                    if(app && launchRect)windowOffset(app,launchRect);
                 });
             });
             transition=active;
@@ -159,15 +181,29 @@
             transition=null;deliver();
         }
     }
+    function flushPending() {
+        // Commit the earlier intent first, even when the new click leaves Desktop.
+        if(pendingDeliver){transition?.skipTransition();pendingDeliver();}
+    }
+    function canTransition() {
+        return !reduced.matches && document.visibilityState==='visible'
+            && typeof document.startViewTransition==='function'
+            && CSS.supports('view-transition-name','arcnix-desktop-window');
+    }
+    function play(action,motion,before,button) {
+        if(!transition){start(action,motion,before,button);return;}
+        // Fast clicks stay in native order after the previous update has committed.
+        const previous=transition;
+        previous.skipTransition();
+        previous.updateCallbackDone.catch(()=>{}).then(action);
+    }
     document.addEventListener('click',event=>{
         if(!(event.target instanceof Element))return;
         if(forwarded.has(event.target.closest('button')))return;
-        // A second input can arrive before the browser takes its first snapshot.
-        // Commit the earlier intent first, even when the new click leaves Desktop.
-        if(pendingDeliver){transition?.skipTransition();pendingDeliver();}
+        flushPending();
         if(event.button!==0
             || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)return;
-        const button=event.target.closest('.desktop-shortcut,.desktop-dock-app,.window-minimize,.window-close,.window-maximize');
+        const button=event.target.closest('.desktop-shortcut,.desktop-dock-app,.window-minimize,.window-close,.window-maximize,.overview-exit,.overview-select');
         if(!button || button.disabled || forwarded.has(button))return;
         const before=state();
         if(!before?.shown || document.visibilityState!=='visible')return;
@@ -177,16 +213,9 @@
             animate(button.querySelector('.desktop-app-icon'),
                 [{transform:'scale(.88)'},{transform:'translateY(-6px) scale(1.08)',offset:.55},{transform:'none'}],245);
         }
-        if(typeof document.startViewTransition!=='function'
-            || !CSS.supports('view-transition-name','arcnix-desktop-window'))return;
+        if(!canTransition())return;
         event.preventDefault();event.stopImmediatePropagation();
-        if(transition){
-            // Fast clicks stay in native order. Skip the previous visual, then
-            // forward this intent exactly once after its update has committed.
-            const previous=transition;
-            previous.skipTransition();
-            previous.updateCallbackDone.catch(()=>{}).then(()=>forward(button));
-        } else start(button,motion,before);
+        play(()=>forward(button),motion,before,button);
     },true);
     document.addEventListener('dblclick', event => {
         const target = event.target;
@@ -204,4 +233,10 @@
         transition?.skipTransition();
         for(const animation of animations)animation.cancel();
     });
+    return {openOverview(action){
+        flushPending();
+        const before=state();
+        if(!before?.shown || !canTransition()){action();return;}
+        play(action,{motion:'overview'},before);
+    }};
 })();

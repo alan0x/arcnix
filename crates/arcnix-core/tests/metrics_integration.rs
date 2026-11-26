@@ -44,6 +44,25 @@ fn samples_the_read_only_mac_twice() -> Result<()> {
     Ok(())
 }
 
+/// Mounts attributed to a partition, an APFS volume or a shared pool no longer
+/// appear in the unattributed `filesystems` list.
+fn mounted(inventory: &arcnix_core::disks::Snapshot, target: &str) -> bool {
+    let volumes = inventory
+        .disks
+        .iter()
+        .flat_map(|disk| &disk.partitions)
+        .flat_map(|partition| &partition.volumes)
+        .chain(inventory.pools.iter().flat_map(|pool| &pool.volumes))
+        .chain(&inventory.filesystems);
+    inventory
+        .disks
+        .iter()
+        .flat_map(|disk| &disk.partitions)
+        .flat_map(|partition| &partition.mounts)
+        .chain(volumes.map(|volume| &volume.target))
+        .any(|mount| mount == target)
+}
+
 fn response(cpu: &str, memory: &str, uptime: &str, network: &str, disk: &str) -> String {
     format!(
         "ARCNIX_METRICS_V1\nARCNIX_CPU_BEGIN\n{cpu}\nARCNIX_CPU_END\nARCNIX_MEMORY_BEGIN\n{memory}\nARCNIX_MEMORY_END\nARCNIX_LOAD_BEGIN\n0.25 0.50 0.75 1/100 321\nARCNIX_LOAD_END\nARCNIX_UPTIME_BEGIN\n{uptime}\nARCNIX_UPTIME_END\nARCNIX_NETWORK_BEGIN\n{network}\nARCNIX_NETWORK_END\nARCNIX_DISK_BEGIN\n{disk}\nARCNIX_DISK_END\nARCNIX_METRICS_END\n"
@@ -282,13 +301,7 @@ fn native_linux_ssh_reads_metrics_and_host_inventory() -> Result<()> {
             .iter()
             .any(|interface| interface.name == "lo")
     );
-    assert!(
-        session
-            .read_disk_inventory()?
-            .filesystems
-            .iter()
-            .any(|filesystem| filesystem.target == "/")
-    );
+    assert!(mounted(&session.read_disk_inventory()?, "/"));
     session.discover_system_logs()?;
     Ok(())
 }
@@ -332,7 +345,24 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
     let session = pending.authenticate("arcnix-test", &fingerprint)?;
     assert_eq!(session.host_os()?, HostOs::Windows);
     assert!(!session.sftp_available());
-    assert_eq!(session.read_disk_inventory()?.filesystems[0].target, "/C:");
+    let inventory = session.read_disk_inventory()?;
+    assert_eq!(inventory.disks[0].path, r"\\.\PHYSICALDRIVE0");
+    // The EFI partition has no drive letter but is still listed.
+    assert_eq!(inventory.disks[0].partitions.len(), 2);
+    assert!(
+        inventory.disks[0]
+            .partitions
+            .iter()
+            .any(|partition| partition.mounts.is_empty())
+    );
+    let system = inventory.disks[0]
+        .partitions
+        .iter()
+        .find(|partition| partition.mounts == [r"C:\"])
+        .context("C: should be attributed to its partition")?;
+    assert_eq!(system.space.available, Some(1500));
+    let unattributed: Vec<_> = inventory.filesystems.iter().map(|fs| &fs.target).collect();
+    assert_eq!(unattributed, [r"E:\"]);
     assert_eq!(
         session.read_network_inventory()?.interfaces[0].name,
         "Ethernet"
@@ -542,11 +572,11 @@ fn samples_darwin_over_native_openssh() -> Result<()> {
     let disks = session.read_disk_inventory()?;
     assert!(
         disks
-            .devices
+            .disks
             .iter()
             .any(|disk| disk.path.starts_with("/dev/disk"))
     );
-    assert!(disks.filesystems.iter().any(|mount| mount.target == "/"));
+    assert!(mounted(&disks, "/"));
     let network = session.read_network_inventory()?;
     assert!(
         network

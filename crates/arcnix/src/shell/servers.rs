@@ -284,7 +284,14 @@ pub(crate) fn sidebar(ui: Ui) -> impl Widget {
             counts
         })
         .with_partial_eq();
-    col().class("sidebar server-explorer").fill((
+    let width = state.map(|s| {
+        let style = glory::style::Style::new();
+        match s.config.settings.server_sidebar_width {
+            Some(width) => style.width(glory::style::Length::Px(f64::from(width))),
+            None => style,
+        }
+    });
+    col().class("sidebar server-explorer").style(width).fill((
         row()
             .class(state.map(|s| {
                 if s.group_menu.as_deref() == Some("") {

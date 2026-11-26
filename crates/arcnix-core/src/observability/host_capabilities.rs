@@ -122,9 +122,7 @@ impl PortInventoryReader for RemoteSession {
             return unsupported(os, "Administrator port inventory");
         }
         let inventory = match os {
-            HostOs::Linux => {
-                resource_ports::read(self, administrator, password, cancel).map(Inventory::Linux)
-            }
+            HostOs::Linux => resource_ports::read(self, administrator, password, cancel),
             HostOs::MacOs => darwin_host::ports(self).map(Inventory::Observed),
             HostOs::Windows => windows_host::ports(self).map(Inventory::Observed),
             os => unsupported(os, "Listening port inventory"),

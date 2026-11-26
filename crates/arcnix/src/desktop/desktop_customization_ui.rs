@@ -434,7 +434,10 @@ pub(crate) fn launchers(ui: Ui, dock: bool) -> impl Widget {
     })
 }
 
-const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 3] = [
+const BUILT_IN_WALLPAPERS: [(Wallpaper, &str, &str); 6] = [
+    (Wallpaper::Prism, "Prism", "wallpaper-prism"),
+    (Wallpaper::Valley, "Valley", "wallpaper-valley"),
+    (Wallpaper::Tide, "Tide", "wallpaper-tide"),
     (Wallpaper::Fjord, "Fjord", "wallpaper-fjord"),
     (Wallpaper::Aurora, "Aurora", "wallpaper-aurora"),
     (Wallpaper::Seaside, "Seaside", "wallpaper-seaside"),
@@ -472,11 +475,17 @@ fn wallpaper_class(wallpaper: &Wallpaper) -> &'static str {
     BUILT_IN_WALLPAPERS
         .iter()
         .find(|(picture, ..)| picture == wallpaper)
-        .map_or("wallpaper-fjord", |(_, _, class)| *class)
+        .map_or("wallpaper-prism", |(_, _, class)| *class)
 }
 
 pub(crate) fn wallpaper_preview_class(wallpaper: &Wallpaper, dark: bool) -> &'static str {
     match wallpaper {
+        Wallpaper::Prism if dark => "wallpaper-prism-dark",
+        Wallpaper::Prism => "wallpaper-prism-light",
+        Wallpaper::Valley if dark => "wallpaper-valley-dark",
+        Wallpaper::Valley => "wallpaper-valley-light",
+        Wallpaper::Tide if dark => "wallpaper-tide-dark",
+        Wallpaper::Tide => "wallpaper-tide-light",
         Wallpaper::Fjord if dark => "wallpaper-fjord-dark",
         Wallpaper::Fjord => "wallpaper-fjord-light",
         Wallpaper::Aurora if dark => "wallpaper-aurora-dark",
