@@ -182,6 +182,9 @@ fn volume_valid(name: &str) -> bool {
 enum Step {
     Marker(&'static str),
     Call(Vec<String>, bool),
+    /// A call that may take longer than the usual 25 seconds, such as a
+    /// prune; its error output is merged. Windows keeps the usual limit.
+    Slow(Vec<String>),
 }
 
 struct DockerRequest {
@@ -257,6 +260,19 @@ impl DockerRequest {
                     )
                     .unwrap();
                 }
+                Step::Slow(args) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| shell_arg(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    // Within the 90-second limit of a server request.
+                    writeln!(
+                        command,
+                        "if command -v timeout >/dev/null 2>&1; then timeout -k 2s 85s docker --host \"$arcnix_socket\" {args} 2>&1; elif command -v gtimeout >/dev/null 2>&1; then gtimeout -k 2s 85s docker --host \"$arcnix_socket\" {args} 2>&1; else docker --host \"$arcnix_socket\" {args} 2>&1; fi"
+                    )
+                    .unwrap();
+                }
             }
         }
         command.trim_end().to_owned()
@@ -289,6 +305,15 @@ impl DockerRequest {
                         if *merge { "true" } else { "false" }
                     )
                     .unwrap();
+                }
+                Step::Slow(args) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| windows_arg(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .replace('\'', "''");
+                    writeln!(script, "Run-Docker '{args}' $true").unwrap();
                 }
             }
         }
@@ -828,6 +853,9 @@ pub enum Prune {
 }
 
 fn image_target_valid(target: &str) -> bool {
+    if target.trim() != target {
+        return false;
+    }
     let hex = target.strip_prefix("sha256:").unwrap_or(target);
     (hex.len() == 64 || (12..64).contains(&hex.len()) && !target.starts_with("sha256:"))
         && hex
@@ -890,7 +918,7 @@ fn prune_request(prune: Prune) -> DockerRequest {
     };
     DockerRequest {
         operation: "prune",
-        steps: vec![Step::Call(args.iter().map(|a| (*a).into()).collect(), true)],
+        steps: vec![Step::Slow(args.iter().map(|a| (*a).into()).collect())],
     }
 }
 
@@ -1297,20 +1325,18 @@ mod tests {
         assert_eq!(rows[0].kind, "Images");
         assert_eq!(rows[0].active, "5");
         assert_eq!(rows[1].reclaimable, "0B");
-        assert!(
-            prune_request(Prune::Untagged)
-                .shell(PREFIX)
-                .ends_with("arcnix_docker image prune --force 2>&1")
-        );
+        assert!(prune_request(Prune::Untagged).shell(PREFIX).contains(
+            "timeout -k 2s 85s docker --host \"$arcnix_socket\" image prune --force 2>&1"
+        ));
         assert!(
             prune_request(Prune::Unused)
                 .shell(PREFIX)
-                .ends_with("arcnix_docker image prune --all --force 2>&1")
+                .contains("docker --host \"$arcnix_socket\" image prune --all --force 2>&1")
         );
         assert!(
             prune_request(Prune::BuildCache)
                 .shell(PREFIX)
-                .ends_with("arcnix_docker builder prune --force 2>&1")
+                .contains("docker --host \"$arcnix_socket\" builder prune --force 2>&1")
         );
         // Volumes are never pruned.
         for prune in [Prune::Untagged, Prune::Unused, Prune::BuildCache] {

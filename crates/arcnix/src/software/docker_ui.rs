@@ -1802,7 +1802,7 @@ fn images(ui: Ui) -> impl Widget {
                         ),
                         {
                             let remove = remove.clone();
-                            icon_action("Remove image", Icon::Clear)
+                            icon_action("Remove image", Icon::Minus)
                                 .class("icon-button docker-image-remove")
                                 .enabled(state.map(ready))
                                 .on_press(move || {
