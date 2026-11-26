@@ -667,7 +667,7 @@ fn server_installations(ui: Ui, app: App) -> impl Widget {
     ))
 }
 /// Whether this source already provides an installation of `app`.
-fn source_in_use(s: &State, app: App, source: u8) -> bool {
+pub(crate) fn source_in_use(s: &State, app: App, source: u8) -> bool {
     installations(s, app).iter().any(|item| {
         matches!(
             (source, item),
