@@ -169,6 +169,27 @@ pub(crate) fn panes(
         ))
 }
 
+pub(crate) fn server_sidebar_divider(ui: Ui) -> impl Widget {
+    fragment((
+        view()
+            .class("server-sidebar-splitter")
+            .role(Role::Group)
+            .focus(FocusMode::TabStop)
+            .name(i18n::bind("Resize sidebar")),
+        input()
+            .class("server-sidebar-width-input hidden")
+            .on(value_changed, move |event| {
+                if let Event::ValueChanged { value, .. } = event
+                    && let Ok(width) = value.parse::<u16>()
+                    && (176..=480).contains(&width)
+                    && ui.state.with(|s| s.config.settings.server_sidebar_width) != Some(width)
+                {
+                    ui.update_preferences(|prefs| prefs.server_sidebar_width = Some(width));
+                }
+            }),
+    ))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum FileSidebar {
     Files,
@@ -176,6 +197,13 @@ pub(crate) enum FileSidebar {
 }
 
 impl FileSidebar {
+    fn hidden(self, s: &State) -> bool {
+        match self {
+            Self::Files => files_ui::preferences(s).sidebar_hidden,
+            Self::Picker => s.desktop_file_picker_sidebar_hidden,
+        }
+    }
+
     fn width(self, s: &State) -> u16 {
         let prefs = &s.config.settings;
         match self {
@@ -204,15 +232,25 @@ pub(crate) fn files_body<W: Widget + 'static>(
     let state = ui.state;
     row().class("files-body").fill((
         when(
-            state.map(move |s| match kind {
-                FileSidebar::Files => s.sftp_available && !files_ui::preferences(s).sidebar_hidden,
-                FileSidebar::Picker => !s.desktop_file_picker_sidebar_hidden,
-            }),
+            state.map(move |s| matches!(kind, FileSidebar::Picker) || s.sftp_available),
             move || {
                 let ui = ui.clone();
                 fragment((
                     col()
-                        .class("files-sidebar-frame")
+                        .class(state.map(move |s| {
+                            if kind.hidden(s) {
+                                "files-sidebar-frame files-sidebar-closed"
+                            } else {
+                                "files-sidebar-frame"
+                            }
+                            .to_owned()
+                        }))
+                        .semantics(state.map(move |s| {
+                            Some(Box::new(Semantics {
+                                inert: kind.hidden(s),
+                                ..Default::default()
+                            }))
+                        }))
                         .style(
                             state.map(move |s| {
                                 Style::new().width(Length::Px(f64::from(kind.width(s))))

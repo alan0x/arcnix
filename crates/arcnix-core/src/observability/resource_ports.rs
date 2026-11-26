@@ -1,5 +1,5 @@
 //! Bounded Linux TCP/UDP inventory and identity-checked process termination.
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -12,6 +12,9 @@ use crate::remote::RemoteSession;
 
 pub const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 pub const ROW_LIMIT: usize = 4096;
+const SS_HEADER: &str = "ARCNIX_RESOURCE_PORTS_SS_V1\n";
+const SS_IPV6: &str = "\nARCNIX_RESOURCE_PORTS_SS_IPV6\n";
+const SS_READ_ONLY: &str = "Python 3 is unavailable. Showing read-only ports from ss.";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,7 +99,7 @@ fn valid_boot_id(value: &str) -> bool {
             }
         })
 }
-fn validate_listener(row: &Listener) -> Result<()> {
+fn validate_listener_identity(row: &Listener) -> Result<()> {
     let address: IpAddr = row.address.parse()?;
     ensure!(
         matches!(row.protocol.as_str(), "tcp" | "udp")
@@ -107,30 +110,36 @@ fn validate_listener(row: &Listener) -> Result<()> {
             && row.holders.len() <= 8,
         "Invalid port listener identity"
     );
-    let mut seen = HashSet::new();
-    for holder in &row.holders {
-        ensure!(
-            holder.pid > 0
-                && holder.start_ticks > 0
-                && !holder.command.is_empty()
-                && visible(&holder.command, 64)
-                && holder
-                    .executable
-                    .as_ref()
-                    .is_none_or(|v| visible(v, 1024) && v.starts_with('/'))
-                && holder
-                    .unit
-                    .as_ref()
-                    .is_none_or(|v| visible(v, 256) && v.ends_with(".service") && !v.contains('/'))
-                && seen.insert((holder.pid, holder.start_ticks, holder.fd)),
-            "Invalid port process metadata"
-        );
-    }
     Ok(())
 }
+
+fn valid_holder(holder: &Holder, seen: &mut HashSet<(u32, u64, u32)>) -> bool {
+    holder.pid > 0
+        && holder.start_ticks > 0
+        && !holder.command.is_empty()
+        && visible(&holder.command, 64)
+        && holder
+            .executable
+            .as_ref()
+            .is_none_or(|v| visible(v, 1024) && v.starts_with('/'))
+        && holder
+            .unit
+            .as_ref()
+            .is_none_or(|v| visible(v, 256) && v.ends_with(".service") && !v.contains('/'))
+        && seen.insert((holder.pid, holder.start_ticks, holder.fd))
+}
+
 impl Target {
     pub fn validate(&self) -> Result<()> {
-        validate_listener(&self.listener)?;
+        validate_listener_identity(&self.listener)?;
+        let mut seen = HashSet::new();
+        ensure!(
+            self.listener
+                .holders
+                .iter()
+                .all(|holder| valid_holder(holder, &mut seen)),
+            "Invalid port process metadata"
+        );
         ensure!(
             valid_boot_id(&self.boot_id)
                 && self.namespace > 0
@@ -172,7 +181,7 @@ pub fn parse(value: &str, secrets: &[&str]) -> Result<Snapshot> {
     );
     let mut seen = HashSet::new();
     for row in &mut snapshot.rows {
-        validate_listener(row)?;
+        validate_listener_identity(row)?;
         ensure!(
             seen.insert((
                 row.protocol.clone(),
@@ -183,6 +192,15 @@ pub fn parse(value: &str, secrets: &[&str]) -> Result<Snapshot> {
             )),
             "Duplicate port listener identity"
         );
+        let mut owners = HashSet::new();
+        let count = row.holders.len();
+        row.holders
+            .retain(|holder| valid_holder(holder, &mut owners));
+        if row.holders.len() < count {
+            row.holders_limited = true;
+            snapshot.unreadable =
+                (snapshot.unreadable + (count - row.holders.len()) as u32).min(500000);
+        }
         for holder in &mut row.holders {
             holder.command =
                 crate::configuration_compare::redact_text(&holder.command, secrets, 2048).0;
@@ -193,6 +211,98 @@ pub fn parse(value: &str, secrets: &[&str]) -> Result<Snapshot> {
     }
     Ok(snapshot)
 }
+
+fn ss_owner(value: &str, secrets: &[&str]) -> Option<(u32, Option<String>)> {
+    let (name, fields) = value.trim_start_matches('(').rsplit_once(",pid=")?;
+    let pid = fields
+        .split(',')
+        .next()?
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid > 0)?;
+    let name = name.trim_matches('"');
+    let program = (!name.is_empty() && visible(name, 64))
+        .then(|| crate::configuration_compare::redact_text(name, secrets, 2048).0);
+    Some((pid, program))
+}
+
+fn parse_ss(value: &str, secrets: &[&str]) -> Result<ObservedPorts> {
+    let tables = value
+        .strip_prefix(SS_HEADER)
+        .and_then(|v| v.split_once(SS_IPV6))
+        .ok_or_else(|| anyhow::anyhow!("Invalid ss port inventory"))?;
+    let mut rows = BTreeSet::new();
+    let mut warnings = vec![SS_READ_ONLY.into()];
+    'tables: for (ipv4, table) in [(true, tables.0), (false, tables.1)] {
+        for line in table.lines().filter(|line| !line.trim().is_empty()) {
+            let mut fields = line.split_whitespace();
+            let protocol = match (fields.next(), fields.next()) {
+                (Some("tcp"), Some("LISTEN")) => "tcp",
+                (Some("udp"), Some(_)) => "udp",
+                _ => continue,
+            };
+            let Some((address, port)) =
+                fields.nth(2).and_then(|endpoint| endpoint.rsplit_once(':'))
+            else {
+                continue;
+            };
+            let Ok(port) = port.parse::<u16>() else {
+                continue;
+            };
+            if port == 0 {
+                continue;
+            }
+            let address = address
+                .trim_matches(['[', ']'])
+                .split('%')
+                .next()
+                .unwrap_or_default();
+            let address = if address == "*" {
+                if ipv4 { "0.0.0.0" } else { "::" }
+            } else {
+                address
+            };
+            let Ok(address) = address.parse::<IpAddr>() else {
+                continue;
+            };
+            if address.is_ipv4() != ipv4 {
+                continue;
+            }
+            let mut owners = line
+                .split_once("users:(")
+                .into_iter()
+                .flat_map(|(_, owners)| owners.trim_end_matches(')').split("),("))
+                .filter_map(|owner| ss_owner(owner, secrets))
+                .take(8)
+                .peekable();
+            let missing_owner = owners.peek().is_none();
+            let entries = owners
+                .map(|(pid, program)| (Some(pid), program))
+                .chain(missing_owner.then_some((None, None)));
+            for (pid, program) in entries {
+                rows.insert(ObservedPort {
+                    protocol,
+                    address,
+                    port,
+                    pid,
+                    program,
+                });
+                if rows.len() > ROW_LIMIT {
+                    rows.pop_last();
+                    warnings.push(
+                        "Scan limit reached; some ports or process details may be missing".into(),
+                    );
+                    break 'tables;
+                }
+            }
+        }
+    }
+    Ok(ObservedPorts {
+        rows: rows.into_iter().collect(),
+        warnings,
+    })
+}
+
 pub fn execution(
     target: Option<&Target>,
     administrator: bool,
@@ -222,13 +332,31 @@ pub fn execution(
     } else {
         ("Read resource ports", "read", source, String::new())
     };
+    let python = format!(
+        "exec timeout --kill-after=2 15 python3 -I -c {}{argument}",
+        crate::remote_tasks::quote(&source)
+    );
+    let script = if target.is_some() {
+        python
+    } else {
+        format!(
+            "if command -v python3 >/dev/null 2>&1; then\n{python}\nfi\n\
+             if ! command -v ss >/dev/null 2>&1; then\n\
+             printf '%s\\n' 'Listening port inventory requires Python 3 or iproute2 (ss).' >&2\n\
+             exit 127\nfi\n\
+             export LC_ALL=C\n\
+             printf '%s\\n' '{}'\n\
+             timeout --kill-after=2 7 ss -H -O -n -a -t -u -p -4 || exit $?\n\
+             printf '\\n%s\\n' '{}'\n\
+             exec timeout --kill-after=2 7 ss -H -O -n -a -t -u -p -6",
+            SS_HEADER.trim_end(),
+            SS_IPV6.trim()
+        )
+    };
     crate::operations::shell_execution(
         &crate::operations::Plan {
             label: label.into(),
-            script: format!(
-                "# arcnix:resource-ports:{marker}\ncd /\nexec timeout --kill-after=2 15 python3 -I -c {}{argument}",
-                crate::remote_tasks::quote(&source)
-            ),
+            script: format!("# arcnix:resource-ports:{marker}\ncd /\n{script}"),
             administrator,
             is_root: root,
             sudo_available,
@@ -335,9 +463,15 @@ pub fn read(
     administrator: bool,
     sudo: Option<&str>,
     cancel: &AtomicBool,
-) -> Result<Snapshot> {
+) -> Result<Inventory> {
     let output = run(remote, None, administrator, sudo, cancel)?;
-    redact_result(parse(&output, &[sudo.unwrap_or_default()]), sudo)
+    let secrets = [sudo.unwrap_or_default()];
+    let result = if output.starts_with(SS_HEADER) {
+        parse_ss(&output, &secrets).map(Inventory::Observed)
+    } else {
+        parse(&output, &secrets).map(Inventory::Linux)
+    };
+    redact_result(result, sudo)
 }
 pub fn terminate(
     remote: &RemoteSession,
@@ -415,14 +549,83 @@ mod tests {
             bad["rows"][0][field] = value;
             assert!(parse(&bad.to_string(), &[]).is_err());
         }
-        let mut bad = sample();
-        bad["rows"][0]["holders"][0]["command"] = json!("bad\ncommand");
-        assert!(parse(&bad.to_string(), &[]).is_err());
         let mut partial = sample();
         partial["matched"] = json!(2);
         assert!(parse(&partial.to_string(), &[]).is_err());
         partial["limits"] = json!(["response"]);
         assert!(parse(&partial.to_string(), &[]).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn inventory_keeps_ports_and_valid_owners_when_metadata_is_unusable() -> Result<()> {
+        let mut input = sample();
+        let holders = input["rows"][0]["holders"].as_array_mut().unwrap();
+        let mut bad = holders[0].clone();
+        bad["fd"] = json!(4);
+        bad["command"] = json!("bad\ncommand");
+        holders.push(bad);
+        holders.push(holders[0].clone());
+        let snapshot = parse(&input.to_string(), &[])?;
+        assert_eq!(snapshot.rows[0].holders.len(), 1);
+        assert!(snapshot.rows[0].holders_limited);
+        assert_eq!(snapshot.unreadable, 2);
+
+        input["rows"][0]["holders"][0]["start_ticks"] = json!(0);
+        input["rows"][0]["holders"][2]["executable"] = json!("not/an/absolute/path");
+        let snapshot = parse(&input.to_string(), &[])?;
+        assert_eq!(snapshot.rows[0].port, 5353);
+        assert!(snapshot.rows[0].holders.is_empty());
+        let listener: Listener = serde_json::from_value(input["rows"][0].clone())?;
+        let target = Target {
+            boot_id: snapshot.boot_id,
+            namespace: 123,
+            holder: listener.holders[0].clone(),
+            listener,
+        };
+        assert!(target.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ss_fallback_lists_listening_tcp_and_bound_udp_with_visible_owners() -> Result<()> {
+        let input = format!(
+            "{SS_HEADER}tcp LISTEN 0 32 127.0.0.1:8080 0.0.0.0:* users:((\"test worker\",pid=1,fd=4),(\"secret\",pid=12,fd=8))\n\
+             tcp ESTAB 0 0 127.0.0.1:8123 127.0.0.1:8080\n\
+             udp ESTAB 0 0 127.0.0.53%lo:53 127.0.0.1:10053{SS_IPV6}\
+             tcp LISTEN 0 32 *:443 *:*\n\
+             udp UNCONN 0 0 [::1]:5353 [::]:*\n"
+        );
+        let observed = parse_ss(&input, &["secret"])?;
+        assert_eq!(observed.rows.len(), 5);
+        assert!(
+            observed
+                .rows
+                .iter()
+                .any(|r| r.pid == Some(1) && r.program.as_deref() == Some("test worker"))
+        );
+        assert!(observed.rows.iter().any(|r| {
+            r.pid == Some(12)
+                && r.program
+                    .as_deref()
+                    .is_some_and(|name| !name.contains("secret"))
+        }));
+        assert!(
+            observed
+                .rows
+                .iter()
+                .any(|r| r.address.to_string() == "::" && r.port == 443)
+        );
+        assert!(
+            observed
+                .rows
+                .iter()
+                .any(|r| r.address.to_string() == "127.0.0.53" && r.port == 53)
+        );
+        assert_eq!(observed.warnings, [SS_READ_ONLY]);
+        let command = execution(None, false, false, false, false)?.command;
+        assert!(command.contains("command -v python3"));
+        assert!(command.contains("ss -H -O -n -a -t -u -p"));
         Ok(())
     }
     #[test]

@@ -80,12 +80,13 @@ def check_appearance_choices(panel):
     assert indicator.evaluate('(el, pseudo) => getComputedStyle(el, pseudo).transitionDuration', pseudo) == '0s'
     panel.page.emulate_media(reduced_motion=None)
     gallery = panel.get_by_role('group', name='Wallpaper', exact=True)
-    expect(gallery.locator('.wallpaper-choice')).to_have_text(['Fjord', 'Aurora', 'Seaside'])
+    presets = ('Prism', 'Valley', 'Tide', 'Fjord', 'Aurora', 'Seaside')
+    expect(gallery.locator('.wallpaper-choice')).to_have_text(list(presets))
     selected_wallpaper = gallery.locator('.wallpaper-choice[aria-pressed=true]')
     background = panel.page.locator('.desktop-wallpaper-art')
     preset_accents = set()
     for mode in ('Light', 'Dark'):
-        for preset in ('Fjord', 'Aurora', 'Seaside'):
+        for preset in presets:
             card = button(preset).locator('..')
             card.click(position={'x': 20, 'y': 20})
             expect(button(preset)).to_have_attribute('aria-pressed', 'true')
@@ -137,7 +138,7 @@ def check_appearance_choices(panel):
                 panel.locator('.setting-color-scheme:visible').get_by_role('radio', name='Auto', exact=True).check()
                 expect(selected_wallpaper).to_have_text('Aurora')
                 expect(background).to_have_class('desktop-wallpaper-art wallpaper-aurora')
-    assert len(preset_accents) == 6
+    assert len(preset_accents) == 2 * len(presets)
     button('Fjord').click()
 
 
@@ -170,7 +171,7 @@ def main():
             grid = desktop.locator('.desktop-shortcuts')
             expect(desktop).to_have_attribute('data-desktop-icon-style', 'outline')
             expect(desktop).to_have_class('server-desktop theme-light desktop-light')
-            expect(desktop.locator('.wallpaper-fjord')).to_have_count(1)
+            expect(desktop.locator('.desktop-wallpaper-art.wallpaper-prism')).to_have_count(1)
             expect(desktop.locator('.desktop-wallpaper-copy')).to_have_count(0)
             assert theme_file.read_text(encoding='utf-8') == legacy
             assert desktop_settings_dir(theme_file) is None
@@ -513,7 +514,7 @@ def main():
                         const tiles = [...grid.children].filter(el => el.classList.contains('wallpaper-choice'));
                         const bounds = grid.getBoundingClientRect();
                         const boxes = tiles.map(tile => tile.getBoundingClientRect());
-                        return boxes.length === 3 && boxes.at(-1).top > boxes[0].top &&
+                        return boxes.length === 6 && boxes.at(-1).top > boxes[0].top &&
                             boxes.every(box => box.left >= bounds.left - 1 && box.right <= bounds.right + 1);
                     }''')
                     panel.screenshot(path=str(out / 'compact-appearance.png'))

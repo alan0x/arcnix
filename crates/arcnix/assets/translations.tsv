@@ -1896,6 +1896,7 @@ TCP 监听	TCP listeners
 正在结束进程…	Ending process…
 正在读取监听端口…	Reading listening ports…
 尚未读取监听端口	No listening port snapshot yet
+服务器缺少 Python 3，正在显示 ss 提供的只读端口列表。	Python 3 is unavailable. Showing read-only ports from ss.
 {} 个端口 · 显示 {} 个 · 采样于 {} · UID {}	{} ports · {} shown · Sampled {} · UID {}
 协议 / 地址	Protocol / address
 PID / 程序	PID / program
@@ -2358,6 +2359,9 @@ Podman 无需后台守护进程即可运行 OCI 容器，也可以以普通用�
 中	Medium
 大	Large
 自动隐藏程序坞	Automatically hide the dock
+流光	Prism
+幻山	Valley
+金潮	Tide
 极光	Aurora
 峡湾	Fjord
 海滨	Seaside
@@ -2606,6 +2610,9 @@ Player 无法识别受支持的视频格式	Player could not identify a supporte
 纯色	Solid color
 默认	Default
 样式	Style
+流光壁纸	Prism wallpaper
+幻山壁纸	Valley wallpaper
+金潮壁纸	Tide wallpaper
 峡湾壁纸	Fjord wallpaper
 极光壁纸	Aurora wallpaper
 海滨壁纸	Seaside wallpaper
@@ -3293,6 +3300,10 @@ Arcnix 未发现可识别的自动续期方式（Certbot、acme.sh、lego 或续
 APFS 容器 {}	APFS container {}
 分区 {}	Partition {}
 每个环形图显示此系统可见磁盘的分区大小比例。条形图显示文件系统的可用空间。APFS 宗卷共享容器中的空间。选择挂载点可浏览文件。	Each ring shows the partition sizes on a disk visible to this system. Bars show available filesystem space. APFS volumes share space in their container. Select a mount to browse its files.
+已通过 Snap 安装。	Already installed from Snap.
+已通过系统软件包安装。	Already installed from system packages.
+两份副本会续期同一批证书。请先移除另一份，再安装这一份。	Both copies would renew the same certificates. Remove the other one before installing this one.
+两份副本会争用同一个 Docker 套接字，且各自保存自己的镜像和容器。请先移除另一份，再安装这一份。	Both copies would try to use the same Docker socket, and each keeps its own images and containers. Remove the other one before installing this one.
 {} 个运行中，共 {} 个	{} of {} running
 {} 个运行中 · {} 个已停止	{} running · {} stopped
 {} 个未使用	{} unused

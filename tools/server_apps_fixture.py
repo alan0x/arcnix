@@ -664,9 +664,16 @@ def windows_inventory_reply(server, channel, command):
             result = dict(name=server.windows_time_zone, choices=zones)
         elif "ToUnixTimeSeconds" in script and "Offset.TotalMinutes" in script:
             result = dict(seconds=1768046400, offset_minutes=480 if server.windows_time_zone == zones[1] else 0)
-        elif "Win32_DiskDrive" in script and "Win32_LogicalDisk" in script:
-            result = dict(devices=[dict(path=r"\\.\PHYSICALDRIVE0", size=2000, model="Fixture disk", kind="Fixed")],
-                          volumes=[dict(drive="C:", size=2000, free=1500, filesystem="NTFS", name="System")])
+        elif "Get-Partition" in script and "Win32_LogicalDisk" in script:
+            efi = dict(number=1, size=100, kind="System", paths=[],
+                       volume=dict(name=None, kind="FAT32", size=100, free=60))
+            # The script only sends drive letters; the volume path checks that the parser drops others too.
+            system = dict(number=2, size=2000, kind="Basic", paths=["C:\\", "\\\\?\\Volume{fixture}\\"],
+                          volume=dict(name="System", kind="NTFS", size=2000, free=1500))
+            # Win32_LogicalDisk also reports C:, which the parser must not list twice.
+            result = dict(devices=[dict(number=0, model="Fixture disk", size=2100, partitions=[efi, system])],
+                          other=[dict(target="C:\\", name="System", kind="NTFS", size=2000, free=1500),
+                                 dict(target="E:\\", name="USB", kind="exFAT", size=512, free=256)])
         elif "Get-NetIPInterface" in script and "Get-NetIPAddress" in script:
             result = dict(interfaces=[dict(ifindex=1, ifname="Ethernet", operstate="Connected",
                                           addr_info=[dict(local="192.0.2.8", prefixlen=24)])],

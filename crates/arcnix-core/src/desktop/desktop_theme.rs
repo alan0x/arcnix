@@ -13,6 +13,30 @@ use crate::desktop_customization::{Wallpaper, validate_image_path};
 #[cfg(feature = "bundled-wallpapers")]
 pub const BUNDLED_WALLPAPERS: &[(&str, &[u8])] = &[
     (
+        "prism-light",
+        include_bytes!("../../assets/wallpapers/prism-light.webp"),
+    ),
+    (
+        "prism-dark",
+        include_bytes!("../../assets/wallpapers/prism-dark.webp"),
+    ),
+    (
+        "valley-light",
+        include_bytes!("../../assets/wallpapers/valley-light.webp"),
+    ),
+    (
+        "valley-dark",
+        include_bytes!("../../assets/wallpapers/valley-dark.webp"),
+    ),
+    (
+        "tide-light",
+        include_bytes!("../../assets/wallpapers/tide-light.webp"),
+    ),
+    (
+        "tide-dark",
+        include_bytes!("../../assets/wallpapers/tide-dark.webp"),
+    ),
+    (
         "fjord",
         include_bytes!("../../assets/wallpapers/fjord.webp"),
     ),
@@ -127,6 +151,10 @@ impl IconStyle {
 #[serde(rename_all = "snake_case")]
 pub enum Preset {
     #[default]
+    #[serde(alias = "mist", alias = "silk")]
+    Prism,
+    Valley,
+    Tide,
     Fjord,
     Aurora,
     #[serde(alias = "terracotta", alias = "afterglow")]
@@ -134,10 +162,20 @@ pub enum Preset {
 }
 
 impl Preset {
-    pub const ALL: [Self; 3] = [Self::Fjord, Self::Aurora, Self::Seaside];
+    pub const ALL: [Self; 6] = [
+        Self::Prism,
+        Self::Valley,
+        Self::Tide,
+        Self::Fjord,
+        Self::Aurora,
+        Self::Seaside,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Prism => "Prism",
+            Self::Valley => "Valley",
+            Self::Tide => "Tide",
             Self::Fjord => "Fjord",
             Self::Aurora => "Aurora",
             Self::Seaside => "Seaside",
@@ -146,6 +184,24 @@ impl Preset {
 
     pub fn theme(self) -> Theme {
         let (wallpaper, light_accent, dark_accent, icons) = match self {
+            Self::Prism => (
+                Wallpaper::Prism,
+                [102, 126, 159],
+                [104, 168, 247],
+                IconStyle::Outline,
+            ),
+            Self::Valley => (
+                Wallpaper::Valley,
+                [146, 107, 218],
+                [180, 132, 241],
+                IconStyle::Outline,
+            ),
+            Self::Tide => (
+                Wallpaper::Tide,
+                [200, 153, 78],
+                [222, 165, 79],
+                IconStyle::Outline,
+            ),
             Self::Fjord => (
                 Wallpaper::Fjord,
                 [135, 206, 235],
@@ -658,10 +714,36 @@ mod tests {
             .appearance
             .themes
             .editable(prefs.appearance.wallpaper.as_ref(), prefs.theme);
-        assert_eq!(theme.resolve(), Preset::default().theme());
+        assert_eq!(theme.resolve(), Preset::Prism.theme());
         assert!(!prefs.appearance.show_server);
         assert!(prefs.appearance.show_apps);
         assert!(parse_preferences(r#"{"version":2}"#).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_legacy_fjord_wallpaper_survives_the_new_default() -> Result<()> {
+        for name in ["fjord", "dunes"] {
+            let prefs =
+                parse_preferences(&format!(r#"{{"appearance":{{"wallpaper":"{name}"}}}}"#))?;
+            let theme = prefs.appearance.theme_settings(prefs.theme).resolve();
+            assert_eq!(theme.background(false), &Wallpaper::Fjord);
+            assert_eq!(theme.background(true), &Wallpaper::Fjord);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn retired_theme_settings_resolve_and_serialize_as_prism() -> Result<()> {
+        for name in ["mist", "silk"] {
+            let config = format!(r#"{{"appearance":{{"theme":"{name}","wallpaper":"{name}"}}}}"#);
+            let prefs = parse_preferences(&config)?;
+            assert_eq!(prefs.appearance.theme, Some(Preset::Prism));
+            assert_eq!(prefs.appearance.wallpaper, Some(Wallpaper::Prism));
+            let appearance = serde_json::to_value(&prefs.appearance)?;
+            assert_eq!(appearance["theme"], "prism");
+            assert_eq!(appearance["wallpaper"], "prism");
+        }
         Ok(())
     }
 
@@ -777,7 +859,7 @@ mod tests {
             crate::desktop_customization::Layout::default().icon_pixels()
         );
         let theme = prefs.appearance.theme_settings(prefs.theme).resolve();
-        assert_eq!(theme.background(true), &Wallpaper::Fjord);
+        assert_eq!(theme.background(true), &Wallpaper::Prism);
         assert_eq!(theme.icon_family, IconFamily::Line);
         assert_eq!(theme.icons, IconStyle::Outline);
         assert_eq!(theme.mode, Mode::Dark);

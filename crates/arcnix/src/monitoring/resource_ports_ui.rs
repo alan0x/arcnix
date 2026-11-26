@@ -511,7 +511,14 @@ fn observed_panel(ui: Ui) -> impl Widget {
                 s.ports
                     .observed
                     .as_ref()
-                    .map(|snapshot| snapshot.warnings.join("\n"))
+                    .map(|snapshot| {
+                        snapshot
+                            .warnings
+                            .iter()
+                            .map(|warning| i18n::translate(warning))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
                     .unwrap_or_default()
             })),
         text()

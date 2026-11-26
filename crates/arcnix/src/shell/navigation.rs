@@ -506,7 +506,12 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
             rail(ui.clone()),
             when(state.map(|s| s.navigation == Page::Servers), {
                 let ui = ui.clone();
-                move || servers::sidebar(ui.clone())
+                move || {
+                    fragment((
+                        servers::sidebar(ui.clone()),
+                        splitter::server_sidebar_divider(ui.clone()),
+                    ))
+                }
             })
             .otherwise({
                 let ui = ui.clone();
