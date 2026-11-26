@@ -4,7 +4,7 @@ import json
 import os
 import time
 
-from desktop_fixture import Desktop, Peer, ROOT, expect
+from desktop_fixture import Desktop, Peer, ROOT, eventually, expect
 from server_apps_fixture import desktop_settings_dir, read_desktop_settings
 
 
@@ -19,6 +19,7 @@ def main():
         (desktop / 'notes-today.txt').write_text('sample notes')
         (desktop / 'notes-old.PDF').write_text('sample document')
         (desktop / 'floorplan.png').write_text('sample picture')
+        (desktop / '歌词-gyp.docx').touch()
         noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
         for filename, day in [('notes-today.txt', noon), ('notes-old.PDF', noon - timedelta(days=1))]:
             timestamp = day.timestamp()
@@ -97,6 +98,19 @@ def main():
                 row = files.locator(f'.files-pane.{pane_class} .file-row').filter(has_text='notes-today.txt')
                 expect(row.locator('.file-label')).to_have_css('font-size', '14px')
                 expect(row.locator('.file-size')).to_have_css('font-size', '14px')
+                if pane_class == 'icons-view':
+                    sample = files.locator('.icons-view .file-row').filter(has_text='歌词-gyp.docx')
+                    files.get_by_role('button', name='File view options', exact=True).click()
+                    menu = page.locator('.file-actions-menu')
+                    for pixels in (24, 64, 96, 48):
+                        menu.get_by_role('button', name=f'{pixels} px', exact=True).click()
+                        icon = sample.locator('.file-entry-icon')
+                        eventually(lambda: abs(icon.bounding_box()['width'] - pixels) < 0.1)
+                        for selector in ('.file-label', '.file-size'):
+                            height, line = sample.locator(selector).evaluate(
+                                'el => [el.getBoundingClientRect().height, parseFloat(getComputedStyle(el).lineHeight)]')
+                            assert height >= line - 0.5, (pixels, selector, height, line)
+                    menu.get_by_role('slider', name='File icon size').press('Escape')
 
             expect(pathbar.get_by_role('button', name='Search files', exact=True)).to_be_enabled()
             crumb.press('Control+f')

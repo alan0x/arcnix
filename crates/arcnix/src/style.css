@@ -523,7 +523,8 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .files-pane.icons-view .file-list, .files-inactive-preview.icons-view {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--file-icon-size) + 56px)), 1fr));
 }
-.files-pane.icons-view .file-row { height: calc(var(--file-icon-size) + 66px); min-height: calc(var(--file-icon-size) + 66px); }
+.files-pane.icons-view .file-row { height: auto; min-height: calc(var(--file-icon-size) + 66px); }
+.files-pane.icons-view .file-name { flex: none; height: auto; }
 .file-entry-icon.hidden-file-icon { opacity: .6; }
 :is(.files-pane, .files-inactive-preview).icons-view .file-entry-icon { width: var(--file-icon-size) !important; height: var(--file-icon-size) !important; }
 .file-view-heading { padding: 4px 8px; font-size: var(--font-small); color: var(--muted); }
