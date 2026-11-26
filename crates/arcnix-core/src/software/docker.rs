@@ -1422,7 +1422,7 @@ mod tests {
             assert!(!command.chars().any(char::is_control));
             assert!(shell_command("web", os).is_err());
         }
-        assert!(inspect_networks(&[&id; 8]).windows().is_ok());
+        assert!(inspect_networks(&[id.as_str(); 8]).windows().is_ok());
         let networks = parse_networks(concat!(
             r#"{"id":"a","name":"repro_default","driver":"bridge","scope":"local","internal":false,"subnets":["172.18.0.0/16"]}"#,
             "\n",
