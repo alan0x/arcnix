@@ -86,6 +86,7 @@ icons! {
     Container => "box";
     Layers => "layers";
     Plug => "plug";
+    Key => "key";
     Stop => "stop";
     Database => "database", "pgadmin";
     WebServer => "web-server", "nginx";

@@ -56,6 +56,15 @@ pub enum Action {
         id: String,
     },
     DockerPrune(docker::Prune),
+    DockerLogins,
+    /// The password goes to `docker login` on standard input. This enum is
+    /// never printed, so it doesn't reach logs.
+    DockerLogin {
+        registry: String,
+        username: String,
+        password: zeroize::Zeroizing<String>,
+    },
+    DockerLogout(String),
     NginxRead,
     /// A command from `nginx::logs_command`.
     NginxLogs(String),
@@ -100,6 +109,8 @@ pub enum Reply {
     ImageConfig(arcnix_core::docker::ImageConfig),
     DiskUsage(Vec<docker::Usage>),
     Cleaned(String),
+    Logins(Vec<docker::Login>),
+    LoggedIn(String),
     Nginx(arcnix_core::nginx::Reading),
     NginxLogs(String),
     NginxCertificates(arcnix_core::nginx::Certificates),
@@ -184,6 +195,13 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             Reply::Cleaned(docker::remove_image(session, &target, &id)?)
         }
         Action::DockerPrune(prune) => Reply::Cleaned(docker::prune(session, prune)?),
+        Action::DockerLogins => Reply::Logins(docker::logins(session)?),
+        Action::DockerLogin {
+            registry,
+            username,
+            password,
+        } => Reply::LoggedIn(docker::login(session, &registry, &username, &password)?),
+        Action::DockerLogout(registry) => Reply::LoggedIn(docker::logout(session, &registry)?),
         Action::NginxRead => Reply::Nginx(arcnix_core::nginx::read(session)?),
         Action::NginxLogs(command) => {
             Reply::NginxLogs(arcnix_core::nginx::read_logs(session, &command)?)

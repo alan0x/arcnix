@@ -6,6 +6,7 @@ use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
 
 mod cleanup;
+mod login;
 mod mirrors;
 mod pull;
 mod run;
@@ -18,6 +19,7 @@ pub(crate) struct DockerState {
     pub(crate) run: run::RunState,
     pub(crate) updates: updates::UpdatesState,
     pub(crate) cleanup: cleanup::CleanupState,
+    pub(crate) login: login::LoginState,
     snapshot: Option<Snapshot>,
     images: Vec<docker::Image>,
     stats: Option<docker::Stats>,
@@ -357,6 +359,9 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         return;
     };
     let Some(result) = cleanup::event(ui, serial, result) else {
+        return;
+    };
+    let Some(result) = login::event(ui, serial, result) else {
         return;
     };
     if !ui.state.with(|s| s.docker.pending == Some(serial)) {
@@ -1441,6 +1446,16 @@ fn header(ui: Ui) -> impl Widget {
                         .on_press(move || ui.docker_cleanup_open())
                 }
             }),
+            when(state.map(|s| s.docker.view == 4 && pull::offered(s)), {
+                let ui = ui.clone();
+                move || {
+                    let ui = ui.clone();
+                    icon_action("Registry logins", Icon::Key)
+                        .class("icon-button")
+                        .enabled(state.map(ready))
+                        .on_press(move || ui.docker_logins_open())
+                }
+            }),
             when(state.map(|s| s.docker.view == 4), {
                 let ui = ui.clone();
                 move || {
@@ -1782,6 +1797,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
         pull::dialog(ui.clone()),
         run::dialog(ui.clone()),
         cleanup::dialogs(ui.clone()),
+        login::dialog(ui.clone()),
         when(state.map(|s| s.dialog == Some(Dialog::DockerAction)), {
             let ui = ui.clone();
             move || {

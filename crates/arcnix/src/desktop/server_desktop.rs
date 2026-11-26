@@ -465,6 +465,7 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::DockerRun
                     | Dialog::DockerCleanup
                     | Dialog::DockerRemoveImage
+                    | Dialog::DockerLogins
                     | Dialog::NginxNewSite
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess
