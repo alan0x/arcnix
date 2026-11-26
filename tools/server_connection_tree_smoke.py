@@ -53,6 +53,9 @@ def main():
                 const caption = range.getBoundingClientRect();
                 return caption.left >= box.right && caption.top < box.bottom && caption.bottom > box.top;
             }"""), 'The checkbox and its caption must share one row'
+            # Sapid gives the caption an inline colour that is unreadable on the dark theme.
+            muted = label.evaluate("el => getComputedStyle(el).getPropertyValue('--muted').trim()")
+            expect(label).to_have_css('color', f'rgb{tuple(bytes.fromhex(muted[1:]))}')
 
             toggle.check()
             expect(tree.locator('.tree-no-results')).to_have_text('No matching connected servers')
