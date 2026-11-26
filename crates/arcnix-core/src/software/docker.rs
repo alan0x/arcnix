@@ -908,9 +908,10 @@ pub fn parse_image_config(text: &str) -> Result<ImageConfig> {
             };
             Some((port.parse::<u16>().ok().filter(|p| *p > 0)?, protocol))
         })
-        .take(16)
         .collect();
+    // Sorted by number before the cap, so 80 isn't dropped for 10000.
     ports.sort_by_key(|(port, protocol)| (*port, *protocol == crate::container_app::Protocol::Udp));
+    ports.truncate(16);
     let volumes = raw
         .volumes
         .unwrap_or_default()

@@ -3517,3 +3517,6 @@ Windows 上的镜像仓库登录由 Docker Desktop 管理	Registry logins are ma
 内部	Internal
 Shell	Shell
 搜索网络	Search networks
+这些设置太长，无法运行。请缩短环境变量的值或路径。	These settings are too long to run. Shorten the environment values or paths.
+名为 {name} 的项目已存在	A project named {name} already exists
+变量值为单行，最多 2048 个字符	A variable's value is one line of up to 2048 characters

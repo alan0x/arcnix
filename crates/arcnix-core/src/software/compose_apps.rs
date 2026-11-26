@@ -165,7 +165,13 @@ printf '%s' {manifest} | base64 -d > "$arcnix_dir/.{manifest_file}.tmp"
 {extra}
 mv -fT "$arcnix_dir/.{manifest_file}.tmp" "$arcnix_dir/{manifest_file}"
 cd "$arcnix_dir"
-timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml config --quiet
+if ! timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml config --quiet; then
+  # Nothing was started; leave no folder behind, so the name can be used again.
+  cd "$arcnix_base"
+  rm -rf -- "$arcnix_dir"
+  printf 'Compose refused the file; the project folder was removed\n' >&2
+  exit 1
+fi
 timeout -k 5s 900s docker --host "$arcnix_socket" compose --project-name 'arcnix-{name}' --file compose.yaml up --detach --no-build --wait --wait-timeout 120
 printf 'ARCNIX_COMPOSE_INSTALLED_V1\n'
 "#,
@@ -247,7 +253,8 @@ if [ -d "$arcnix_base" ]; then
    head -c 4097 "$arcnix_dir/arcnix.json" | base64 -w 0; printf '\n'
   elif [ -f "$arcnix_dir/arcnix-container.json" ] && [ ! -L "$arcnix_dir/arcnix-container.json" ]; then
    printf 'ARCNIX_CONTAINER\n'
-   head -c 65537 "$arcnix_dir/arcnix-container.json" | base64 -w 0; printf '\n'
+   printf '%s' "${{arcnix_dir##*/}}" | base64 -w 0; printf '\n'
+   head -c 8193 "$arcnix_dir/arcnix-container.json" | base64 -w 0; printf '\n'
   else
    continue
   fi
@@ -289,6 +296,17 @@ pub fn parse(text: &str) -> Result<Projects> {
             }
             Some(marker @ ("ARCNIX_PROJECT" | "ARCNIX_CONTAINER")) => {
                 ensure!(result.entries.len() < 200, "Too many Compose projects");
+                // Container projects also name their folder.
+                let folder = if marker == "ARCNIX_CONTAINER" {
+                    let folder = STANDARD.decode(
+                        lines
+                            .next()
+                            .ok_or_else(|| anyhow::anyhow!("Incomplete Compose project"))?,
+                    )?;
+                    String::from_utf8(folder).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 let manifest = STANDARD.decode(
                     lines
                         .next()
@@ -299,24 +317,27 @@ pub fn parse(text: &str) -> Result<Projects> {
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("Incomplete Compose project"))?,
                 )?;
-                let limit = if marker == "ARCNIX_PROJECT" {
-                    4096
-                } else {
-                    65536
-                };
-                ensure!(
-                    manifest.len() <= limit && yaml.len() <= 16384,
-                    "Compose project is too large"
-                );
+                let fits = yaml.len() <= 16384;
                 let definition = if marker == "ARCNIX_PROJECT" {
+                    ensure!(
+                        fits && manifest.len() <= 4096,
+                        "Compose project is too large"
+                    );
                     let definition: Definition = serde_json::from_slice(&manifest)?;
                     definition.validate()?;
                     Manifest::Template(definition)
                 } else {
-                    // A project from a later Arcnix, or one edited by hand
-                    // into something invalid, is left out, not an error.
+                    // A project from a later Arcnix, one edited by hand into
+                    // something invalid, too large or a copy of another
+                    // folder, is left out, not an error. Actions find a
+                    // project by name, so it must match its folder.
+                    if !fits || manifest.len() > 8192 {
+                        continue;
+                    }
                     match crate::container_app::parse_manifest(&manifest) {
-                        Ok(Some(app)) => Manifest::Container(app),
+                        Ok(Some(app)) if app.name == folder && !seen.contains(&app.name) => {
+                            Manifest::Container(app)
+                        }
                         _ => continue,
                     }
                 };
@@ -441,21 +462,34 @@ mod tests {
     fn container_projects_are_listed_and_later_versions_skipped() {
         let b64 = |s: &str| STANDARD.encode(s);
         let template = serde_json::to_string(&Definition::default()).unwrap();
-        let app = crate::container_app::ContainerApp {
-            name: "redis".into(),
-            image: "redis:7".into(),
-            ..Default::default()
+        let app = |name: &str| {
+            serde_json::to_string(&crate::container_app::ContainerApp {
+                name: name.into(),
+                image: "redis:7".into(),
+                ..Default::default()
+            })
+            .unwrap()
         };
-        let container = serde_json::to_string(&app).unwrap();
+        let container = |folder: &str, manifest: &str| {
+            format!(
+                "ARCNIX_CONTAINER\n{}\n{}\n{}\n",
+                b64(folder),
+                b64(manifest),
+                b64("services: {}\n")
+            )
+        };
         let text = format!(
-            "ARCNIX_COMPOSE_V1\n{}\nARCNIX_PROJECT\n{}\n{}\nARCNIX_CONTAINER\n{}\n{}\nARCNIX_CONTAINER\n{}\n{}\nARCNIX_COMPOSE_END\n",
+            "ARCNIX_COMPOSE_V1\n{}\nARCNIX_PROJECT\n{}\n{}\n{}{}{}{}{}ARCNIX_COMPOSE_END\n",
             b64("/home/u/.arcnix/apps"),
             b64(&template),
             b64("services: {}\n"),
-            b64(&container),
-            b64("services: {}\n"),
-            b64(r#"{"version": 2, "name": "future"}"#),
-            b64("services: {}\n"),
+            container("redis", &app("redis")),
+            // A later version, a copied folder, a name taken by another
+            // project and an oversized manifest are each left out.
+            container("future", r#"{"version": 2, "name": "future"}"#),
+            container("redis-copy", &app("redis")),
+            container("nginx", &app("nginx")),
+            container("big", &format!("{}{}", app("big"), " ".repeat(9000))),
         );
         let projects = parse(&text).unwrap();
         let names: Vec<_> = projects
