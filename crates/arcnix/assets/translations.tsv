@@ -3094,3 +3094,16 @@ GPU 使用率	GPU utilization
 从程序坞取消固定	Unpin from Dock
 在桌面显示	Show on desktop
 从桌面隐藏	Hide from desktop
+磁盘容量	Disk capacity
+未报告分区	No partitions reported
+未报告磁盘	No disks reported by this system
+已列分区之外	Outside listed partitions
+其他已挂载文件系统	Other mounted filesystems
+可用空间未知	Available space unknown
+{} 可用 · {} 已用	{} available · {} used
+{} 共享可用	{} shared available
+{} 可用	{} available
+{} 已用	{} used
+APFS 容器 {}	APFS container {}
+分区 {}	Partition {}
+每个环形图显示此系统可见磁盘的分区大小比例。条形图显示文件系统的可用空间。APFS 宗卷共享容器中的空间。选择挂载点可浏览文件。	Each ring shows the partition sizes on a disk visible to this system. Bars show available filesystem space. APFS volumes share space in their container. Select a mount to browse its files.

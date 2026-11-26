@@ -9,10 +9,16 @@ use crate::remote::RemoteSession;
 use crate::resource_ports::{ObservedPort, ObservedPorts};
 use crate::{disks, network, processes};
 
-pub(super) const DISKS: &str = r#"set -eu
+pub(crate) const DISKS: &str = r#"set -eu
 export LC_ALL=C
-plist=$(/usr/sbin/diskutil list -plist)
+plist=$(/usr/sbin/diskutil list -plist physical)
 printf '%s' "$plist" | /usr/bin/plutil -convert json -o - -- -
+printf '\nARCNIX_DARWIN_APFS\n'
+if plist=$(/usr/sbin/diskutil apfs list -plist 2>/dev/null); then
+    printf '%s' "$plist" | /usr/bin/plutil -convert json -o - -- - || printf '{}'
+else
+    printf '{}'
+fi
 printf '\nARCNIX_DARWIN_MOUNTS\n'
 /bin/df -Pkl
 "#;
@@ -31,73 +37,247 @@ struct Disk {
     content: Option<String>,
     mount_point: Option<String>,
     volume_name: Option<String>,
-    #[serde(rename = "APFSVolumes", default)]
-    volumes: Vec<Disk>,
+    #[serde(rename = "APFSContainerReference")]
+    apfs_container: Option<String>,
     #[serde(default)]
     partitions: Vec<Disk>,
 }
 
-pub(super) fn parse_disks(output: &str) -> Result<disks::Snapshot> {
-    let (list, mounts) = output
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ApfsList {
+    #[serde(default)]
+    containers: Vec<ApfsContainer>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ApfsContainer {
+    container_reference: String,
+    capacity_ceiling: Option<u64>,
+    capacity_free: Option<u64>,
+    #[serde(default)]
+    physical_stores: Vec<ApfsDevice>,
+    #[serde(default)]
+    volumes: Vec<ApfsDevice>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ApfsDevice {
+    device_identifier: String,
+    name: Option<String>,
+    capacity_in_use: Option<u64>,
+}
+
+fn disk_path(id: &str) -> Result<String> {
+    ensure!(
+        id.starts_with("disk") && id.bytes().all(|b| b.is_ascii_alphanumeric()),
+        "Invalid macOS disk identifier"
+    );
+    Ok(format!("/dev/{id}"))
+}
+
+pub(crate) fn parse_disks(output: &str) -> Result<disks::Snapshot> {
+    let (inventory, mounts) = output
         .split_once("\nARCNIX_DARWIN_MOUNTS\n")
         .context("Incomplete macOS disk inventory")?;
+    let (list, apfs) = inventory
+        .split_once("\nARCNIX_DARWIN_APFS\n")
+        .context("Missing macOS APFS inventory")?;
+    let list: DiskList = serde_json::from_str(list)?;
+    let apfs: ApfsList = serde_json::from_str(apfs)?;
     let mut warnings = Vec::new();
-    let filesystems = super::metrics::parse_disks(mounts, &mut warnings)
+    let mut filesystems = super::metrics::parse_disks(mounts, &mut warnings)
         .into_iter()
-        .map(|row| {
-            let capacity = row.used_bytes as f64 + row.available_bytes as f64;
-            disks::Filesystem {
-                source: row.filesystem,
-                target: row.mount,
-                kind: String::new(),
+        .filter(|row| row.mount.starts_with('/') && !row.mount.chars().any(char::is_control))
+        .map(|row| disks::Filesystem {
+            source: row.filesystem,
+            label: String::new(),
+            target: row.mount,
+            kind: String::new(),
+            space: disks::Space {
                 size: Some(row.total_bytes),
                 used: Some(row.used_bytes),
                 available: Some(row.available_bytes),
-                percent: if capacity > 0. {
-                    format!("{:.1}%", 100. * row.used_bytes as f64 / capacity)
-                } else {
-                    "—".into()
-                },
-            }
+            },
         })
         .collect::<Vec<_>>();
-    fn collect(disk: Disk, depth: usize, devices: &mut Vec<disks::Device>) -> Result<()> {
-        ensure!(
-            depth < 16 && devices.len() < 2000,
-            "macOS disk inventory exceeds the limit"
-        );
-        ensure!(
-            disk.device_identifier.starts_with("disk")
-                && disk
-                    .device_identifier
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric()),
-            "Invalid macOS disk identifier"
-        );
-        devices.push(disks::Device {
-            path: format!("/dev/{}", disk.device_identifier),
-            kind: if depth == 0 { "disk" } else { "volume" }.into(),
-            size: disk.size,
-            filesystem: disk.content.unwrap_or_default(),
-            model: disk.volume_name.unwrap_or_default(),
-            mounts: disk.mount_point.into_iter().collect(),
-            readonly: false,
-            depth,
-        });
-        for child in disk.partitions.into_iter().chain(disk.volumes) {
-            collect(child, depth + 1, devices)?;
+    ensure!(
+        list.all_disks_and_partitions.len() <= 2000
+            && apfs.containers.len() <= 2000
+            && filesystems.len() <= 4096,
+        "macOS disk inventory exceeds the limit"
+    );
+
+    let mut result = disks::Snapshot::default();
+    for disk in list.all_disks_and_partitions {
+        let path = disk_path(&disk.device_identifier)?;
+        let size = disk.size;
+        let mut partitions = Vec::new();
+        let parts = if disk.partitions.is_empty()
+            && (disk.volume_name.is_some()
+                || disk.mount_point.is_some()
+                || disk.apfs_container.is_some()
+                || filesystems.iter().any(|fs| fs.source == path))
+        {
+            vec![disk]
+        } else {
+            disk.partitions
+        };
+        ensure!(parts.len() <= 2000, "Too many macOS partitions");
+        for part in parts {
+            let path = disk_path(&part.device_identifier)?;
+            let pool = part.apfs_container.as_deref().map(disk_path).transpose()?;
+            let mount = filesystems.iter().position(|fs| fs.source == path);
+            let (space, mounts) = if let Some(index) = mount {
+                let fs = filesystems.remove(index);
+                (fs.space, vec![fs.target])
+            } else {
+                let mounts = part
+                    .mount_point
+                    .into_iter()
+                    .filter(|path| path.starts_with('/') && !path.chars().any(char::is_control))
+                    .collect();
+                (disks::Space::default(), mounts)
+            };
+            partitions.push(disks::Partition {
+                path,
+                label: part.volume_name.unwrap_or_default(),
+                kind: part.content.unwrap_or_default(),
+                size: part.size,
+                space,
+                mounts,
+                pool,
+                ..Default::default()
+            });
         }
-        Ok(())
+        result.disks.push(disks::Disk {
+            path,
+            size,
+            model: String::new(),
+            partitions,
+        });
     }
 
-    let mut devices = Vec::new();
-    for disk in serde_json::from_str::<DiskList>(list)?.all_disks_and_partitions {
-        collect(disk, 0, &mut devices)?;
+    for container in apfs.containers {
+        let path = disk_path(&container.container_reference)?;
+        let stores = container
+            .physical_stores
+            .iter()
+            .map(|store| disk_path(&store.device_identifier))
+            .collect::<Result<Vec<_>>>()?;
+        let space =
+            disks::Space::from_available(container.capacity_ceiling, container.capacity_free);
+        let mut volumes = Vec::new();
+        for volume in container.volumes {
+            let device = disk_path(&volume.device_identifier)?;
+            // A signed system snapshot is mounted as /dev/diskNsMsK.
+            let mut matched = false;
+            filesystems.retain(|fs| {
+                let snapshot = fs
+                    .source
+                    .strip_prefix(&device)
+                    .and_then(|tail| tail.strip_prefix('s'))
+                    .is_some_and(|tail| {
+                        !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit())
+                    });
+                if fs.source != device && !snapshot {
+                    return true;
+                }
+                matched = true;
+                volumes.push(disks::Filesystem {
+                    source: device.clone(),
+                    label: volume.name.clone().unwrap_or_default(),
+                    target: fs.target.clone(),
+                    kind: "APFS".into(),
+                    space: disks::Space {
+                        used: volume.capacity_in_use,
+                        ..Default::default()
+                    },
+                });
+                false
+            });
+            if !matched {
+                volumes.push(disks::Filesystem {
+                    source: device,
+                    label: volume.name.unwrap_or_default(),
+                    target: String::new(),
+                    kind: "APFS".into(),
+                    space: disks::Space {
+                        used: volume.capacity_in_use,
+                        ..Default::default()
+                    },
+                });
+            }
+        }
+        let mut parts = result
+            .disks
+            .iter_mut()
+            .flat_map(|disk| &mut disk.partitions)
+            .filter(|part| stores.contains(&part.path));
+        if stores.len() == 1
+            && let Some(part) = parts.next()
+        {
+            part.pool = Some(path);
+            part.space = space;
+            part.volumes = volumes;
+        } else {
+            for part in parts {
+                part.pool = Some(path.clone());
+            }
+            result.pools.push(disks::SharedPool {
+                path,
+                stores,
+                space,
+                volumes,
+            });
+        }
     }
-    Ok(disks::Snapshot {
-        devices,
-        filesystems,
-    })
+    result.filesystems = filesystems;
+    Ok(result)
+}
+
+#[cfg(test)]
+#[test]
+fn groups_apfs_volumes_without_counting_the_container_per_volume_or_store() {
+    let data = r#"{"AllDisksAndPartitions":[
+  {"DeviceIdentifier":"disk0","Size":1000,"Partitions":[
+    {"DeviceIdentifier":"disk0s1","Size":600,"Content":"Apple_APFS"},
+    {"DeviceIdentifier":"disk0s2","Size":300,"Content":"Apple_APFS"}]},
+  {"DeviceIdentifier":"disk1","Size":500,"Partitions":[{"DeviceIdentifier":"disk1s1","Size":400}]}
+]}
+ARCNIX_DARWIN_APFS
+{"Containers":[
+  {"ContainerReference":"disk2","CapacityCeiling":600,"CapacityFree":100,
+   "PhysicalStores":[{"DeviceIdentifier":"disk0s1"}],
+   "Volumes":[{"DeviceIdentifier":"disk2s1","Name":"System","CapacityInUse":200},
+              {"DeviceIdentifier":"disk2s2","Name":"Data","CapacityInUse":300}]},
+  {"ContainerReference":"disk3","CapacityCeiling":700,"CapacityFree":300,
+   "PhysicalStores":[{"DeviceIdentifier":"disk0s2"},{"DeviceIdentifier":"disk1s1"}]}
+]}
+ARCNIX_DARWIN_MOUNTS
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/disk2s1s1 1024 400 100 80% /
+/dev/disk2s2 1024 500 100 83% /System/Volumes/Data
+"#;
+    let inventory = parse_disks(data).unwrap();
+    assert_eq!(inventory.disks.len(), 2);
+    let partitions = &inventory.disks[0].partitions;
+    assert_eq!(partitions[0].space.available, Some(100));
+    assert_eq!(partitions[0].volumes[0].target, "/");
+    assert_eq!(partitions[0].volumes[1].space.used, Some(300));
+    assert!(
+        partitions[0]
+            .volumes
+            .iter()
+            .all(|v| v.space.available.is_none())
+    );
+    assert_eq!(partitions[1].pool.as_deref(), Some("/dev/disk3"));
+    assert_eq!(partitions[1].space.available, None);
+    assert_eq!(inventory.disks[1].partitions[0].space.available, None);
+    assert_eq!(inventory.pools[0].space.available, Some(300));
+    assert!(inventory.filesystems.is_empty());
 }
 
 pub(super) const NETWORK: &str = r#"export LC_ALL=C
