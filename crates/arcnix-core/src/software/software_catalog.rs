@@ -83,24 +83,31 @@ impl App {
 }
 macro_rules! app { ($id:literal,$name:literal,$mark:literal,$category:ident,$color:literal,$summary:literal,$uses:literal,$description:literal,$url:literal,[$($package:literal),+],$snap:expr,$compose:expr) => { App{id:$id,name:$name,mark:$mark,category:Category::$category,color:$color,summary:$summary,uses:$uses,description:$description,website:$url,native:[$($package),+],snap:$snap,compose:$compose,local:false,related:&[],single:None} }; }
 pub const APPS: &[App] = &[
-    app!(
-        "docker",
-        "Docker",
-        "D",
-        Containers,
-        "blue",
-        "Container engine",
-        "Run containers and manage their networks, images and volumes",
-        "Docker Engine runs applications in isolated containers built from images. Once it is installed, the Docker app in Arcnix manages its containers, images, networks and volumes.",
-        "https://www.docker.com/",
-        ["docker.io", "moby-engine", "docker", "docker", "docker"],
-        Some(Snap {
-            name: "docker",
-            publisher: "Canonical",
-            classic: false
-        }),
-        None
-    ),
+    App {
+        // The snap's daemon also listens on /var/run/docker.sock but keeps its
+        // data under /var/snap/docker/common/var-lib-docker.
+        single: Some(
+            "Both copies would try to use the same Docker socket, and each keeps its own images and containers. Remove the other one before installing this one.",
+        ),
+        ..app!(
+            "docker",
+            "Docker",
+            "D",
+            Containers,
+            "blue",
+            "Container engine",
+            "Run containers and manage their networks, images and volumes",
+            "Docker Engine runs applications in isolated containers built from images. Once it is installed, the Docker app in Arcnix manages its containers, images, networks and volumes.",
+            "https://www.docker.com/",
+            ["docker.io", "moby-engine", "docker", "docker", "docker"],
+            Some(Snap {
+                name: "docker",
+                publisher: "Canonical",
+                classic: false
+            }),
+            None
+        )
+    },
     App {
         related: &["certbot"],
         ..app!(
@@ -668,6 +675,24 @@ mod tests {
             "postgresql"
         );
         assert!(get("certbot").unwrap().snap.unwrap().classic);
+        // Docker CE counts as the package Docker that conflicts with the snap.
+        let docker = get("docker").unwrap();
+        for manager in [Manager::Apt, Manager::Dnf, Manager::Yum] {
+            assert!(docker.matches_package(manager, "docker-ce"));
+            assert_eq!(
+                for_package(Source::Native(manager), "docker-ce").map(|app| app.id),
+                Some("docker")
+            );
+        }
+        assert!(docker.single.is_some() && get("certbot").unwrap().single.is_some());
+        // The warning compares a package copy with a snap copy, so it needs both.
+        for app in APPS.iter().filter(|app| app.single.is_some()) {
+            assert!(
+                app.snap.is_some() && app.package(Manager::Apt).is_some(),
+                "{}",
+                app.id
+            );
+        }
         assert!(get("git").unwrap().compose.is_none());
         let mut ids = std::collections::HashSet::new();
         for app in APPS {

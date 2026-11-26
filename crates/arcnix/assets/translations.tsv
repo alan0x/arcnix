@@ -3303,3 +3303,4 @@ APFS 容器 {}	APFS container {}
 已通过 Snap 安装。	Already installed from Snap.
 已通过系统软件包安装。	Already installed from system packages.
 两份副本会续期同一批证书。请先移除另一份，再安装这一份。	Both copies would renew the same certificates. Remove the other one before installing this one.
+两份副本会争用同一个 Docker 套接字，且各自保存自己的镜像和容器。请先移除另一份，再安装这一份。	Both copies would try to use the same Docker socket, and each keeps its own images and containers. Remove the other one before installing this one.
