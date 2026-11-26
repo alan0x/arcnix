@@ -104,6 +104,7 @@ pub struct Stats {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub platform: Option<HostOs>,
     pub version: String,
     pub containers: Vec<Container>,
     pub volumes: Vec<Volume>,
@@ -438,7 +439,9 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot> {
     Ok(snapshot)
 }
 pub fn snapshot(session: &RemoteSession) -> Result<Snapshot> {
-    parse_snapshot(&snapshot_request().run(session)?.stdout)
+    let mut snapshot = parse_snapshot(&snapshot_request().run(session)?.stdout)?;
+    snapshot.platform = Some(session.host_os()?);
+    Ok(snapshot)
 }
 pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
     let request = DockerRequest::single(
@@ -518,6 +521,20 @@ pub fn parse_networks(text: &str) -> Result<Vec<Network>> {
         .collect::<Result<_>>()?;
     Ok(networks)
 }
+fn inspect_networks(ids: &[&str]) -> DockerRequest {
+    let mut args = vec![
+        "network".to_owned(),
+        "inspect".into(),
+        "--format".into(),
+        r#"{"id":{{json .Id}},"name":{{json .Name}},"driver":{{json .Driver}},"scope":{{json .Scope}},"internal":{{json .Internal}},"subnets":[{{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{json $c.Subnet}}{{end}}]}"#.into(),
+    ];
+    args.extend(ids.iter().map(|id| (*id).to_owned()));
+    DockerRequest {
+        operation: "networks",
+        steps: vec![Step::Call(args, false)],
+    }
+}
+
 pub fn networks(session: &RemoteSession) -> Result<Vec<Network>> {
     let ids = DockerRequest::single(
         "networks",
@@ -541,18 +558,7 @@ pub fn networks(session: &RemoteSession) -> Result<Vec<Network>> {
     };
     let mut networks = Vec::new();
     for ids in ids.chunks(batch) {
-        let mut args = vec![
-        "network".to_owned(),
-        "inspect".into(),
-        "--format".into(),
-        r#"{"id":{{json .Id}},"name":{{json .Name}},"driver":{{json .Driver}},"scope":{{json .Scope}},"internal":{{json .Internal}},"subnets":[{{range $i, $c := .IPAM.Config}}{{if $i}},{{end}}{{json $c.Subnet}}{{end}}]}"#.into(),
-    ];
-        args.extend(ids.iter().map(|id| (*id).to_owned()));
-        let request = DockerRequest {
-            operation: "networks",
-            steps: vec![Step::Call(args, false)],
-        };
-        networks.extend(parse_networks(&request.run(session)?.stdout)?);
+        networks.extend(parse_networks(&inspect_networks(ids).run(session)?.stdout)?);
     }
     networks.sort_by(|a, b| (!a.built_in(), &a.name).cmp(&(!b.built_in(), &b.name)));
     Ok(networks)
@@ -1381,6 +1387,7 @@ mod tests {
             assert!(!command.chars().any(char::is_control));
             assert!(shell_command("web", os).is_err());
         }
+        assert!(inspect_networks(&[&id; 8]).windows().is_ok());
         let networks = parse_networks(concat!(
             r#"{"id":"a","name":"repro_default","driver":"bridge","scope":"local","internal":false,"subnets":["172.18.0.0/16"]}"#,
             "\n",

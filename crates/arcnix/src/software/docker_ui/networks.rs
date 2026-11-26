@@ -49,7 +49,8 @@ impl Ui {
     pub(super) fn docker_shell(&self) {
         let command = self.state.with(|s| {
             let container = selected(s)?;
-            arcnix_core::docker::shell_command(&container.id, s.metrics.remote_platform?).ok()
+            arcnix_core::docker::shell_command(&container.id, s.docker.snapshot.as_ref()?.platform?)
+                .ok()
         });
         if let Some(command) = command {
             self.terminal_with_command(command);
@@ -59,8 +60,10 @@ impl Ui {
 
 pub(super) fn can_shell(s: &State) -> bool {
     s.terminal_available()
-        && s.metrics
-            .remote_platform
+        && s.docker
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.platform)
             .is_some_and(|os| os != arcnix_core::host::HostOs::Unknown)
         && selected(s).is_some_and(|c| c.state == "running")
 }
