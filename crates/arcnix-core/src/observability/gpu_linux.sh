@@ -1,4 +1,3 @@
-# arcnix:gpu:linux
 export LC_ALL=C
 for card in /sys/class/drm/card[0-9]*; do
     case "$card" in *-*) continue;; esac
