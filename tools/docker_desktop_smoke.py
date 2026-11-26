@@ -93,7 +93,7 @@ def main():
             page.locator('.docker-tabs').get_by_role('button', name='Ports', exact=True).click()
             expect(page.locator('.docker-port-row')).to_have_count(2)
             expect(page.locator('.docker-port-row').filter(has=page.get_by_role('button', name='worker', exact=True))).to_contain_text('Host network')
-            page.locator('.docker-ports').get_by_role('button', name='Server listeners', exact=True).click()
+            page.locator('.docker-toolbar').get_by_role('button', name='Server listeners', exact=True).click()
             expect(page.locator('.desktop-window.active .desktop-window-title')).to_have_text('Monitor')
             expect(page.locator('.monitor-titlebar .monitor-heading')).to_have_text('Processes')
             expect(page.locator('.monitor-port-details .resource-ports')).to_be_visible()
