@@ -312,7 +312,7 @@ fn environment(state: Cage<State>) -> impl Widget {
             state.revise(|s| s.docker.run.environment.push(Default::default()))
         }),
         text().class("subtle").content(i18n::bind(
-            "Values are saved in the project's compose.yaml, which only this SSH user can read.",
+            "Environment values are saved in the project files and deployment task. Use file-mounted secrets for passwords or tokens.",
         )),
         each(state.map(|s| (0..s.docker.run.environment.len()).collect::<Vec<_>>()))
             .key(|i| *i)
