@@ -369,8 +369,21 @@ def reply(server, channel, command):
     for record in list(server.hosted_tasks.values()):
         server.task_finished(record)
     if marker == '# arcnix:disks:read':
-        devices=dict(blockdevices=[dict(name='vda',path='/dev/vda',type='disk',size=64*1024**3,model='Fixture disk',ro=False,children=[dict(name='vda1',path='/dev/vda1',type='part',size=64*1024**3,fstype='ext4',mountpoints=['/'])]),dict(name='vdb',path='/dev/vdb',type='disk',size=256*1024**3,model='Data disk',ro=False,children=[dict(name='vdb1',path='/dev/vdb1',type='part',size=256*1024**3,fstype='ext4',mountpoints=['/data'])])])
-        mounts=dict(filesystems=[dict(source='/dev/vda1',target='/',fstype='ext4',size=64*1024**3,used=16*1024**3,avail=48*1024**3,**{'use%':'25%'}),dict(source='/dev/vdb1',target='/data',fstype='ext4',size=256*1024**3,used=32*1024**3,avail=224*1024**3,**{'use%':'12%'}),dict(source='proc',target='/proc',fstype='proc')])
+        gib = 1024**3
+        devices = dict(blockdevices=[
+            dict(path='/dev/vda', type='disk', size=64*gib, model='Fixture disk', children=[
+                {'path': '/dev/vda1', 'type': 'part', 'size': 56*gib, 'fstype': 'ext4', 'maj:min': '252:1'},
+                dict(path='/dev/vda2', type='part', size=8*gib, fstype='swap'),
+            ]),
+            dict(path='/dev/vdb', type='disk', size=256*gib, model='Data disk', children=[
+                dict(path='/dev/vdb1', type='part', size=256*gib, fstype='ext4'),
+            ]),
+        ])
+        mounts = dict(filesystems=[
+            {'source': '/dev/root', 'target': '/', 'fstype': 'ext4', 'size': 56*gib, 'used': 16*gib, 'avail': 40*gib, 'maj:min': '252:1'},
+            dict(source='/dev/vdb1', target='/data', fstype='ext4', size=256*gib, used=32*gib, avail=224*gib),
+            dict(source='proc', target='/proc', fstype='proc'),
+        ])
         return send('ARCNIX_DISKS_V1\n'+json.dumps(devices)+'\nARCNIX_FILESYSTEMS\n'+json.dumps(mounts)+'\nARCNIX_DISKS_END\n')
     if marker == '# arcnix:compose:list':
         directory=root/'home'/server.username/'.arcnix/apps'

@@ -9,89 +9,155 @@ use crate::remote::RemoteSession;
 use crate::resource_ports::{ObservedPort, ObservedPorts};
 use crate::{disks, network, processes};
 
-pub(super) const DISKS: &str = r#"
-$devices = @(Get-CimInstance Win32_DiskDrive | ForEach-Object {
-    @{ path = $_.DeviceID; model = $_.Model; kind = $_.MediaType; size = $_.Size }
+pub(crate) const DISKS: &str = r#"
+$volumes = @(Get-Volume -ErrorAction SilentlyContinue)
+$byPath = @{}
+foreach ($v in $volumes) { if ($v.Path) { $byPath[$v.Path] = $v } }
+$partitions = @(Get-Partition -ErrorAction SilentlyContinue)
+$devices = @(Get-Disk | Where-Object { $_.BusType -notin @('File Backed Virtual', 'Spaces') } | Sort-Object Number | ForEach-Object {
+    $disk = $_
+    $parts = @($partitions | Where-Object DiskNumber -eq $disk.Number | Sort-Object Offset | ForEach-Object {
+        $p = $_
+        $v = $null
+        foreach ($path in $p.AccessPaths) {
+            if ($byPath.ContainsKey($path)) { $v = $byPath[$path]; break }
+        }
+        if (!$v) { $v = Get-Volume -Partition $p -ErrorAction SilentlyContinue | Select-Object -First 1 }
+        $paths = @($p.AccessPaths | Where-Object { $_ -match '^[A-Za-z]:\\' })
+        @{ number = $p.PartitionNumber; size = $p.Size; kind = [string]$p.Type; paths = $paths; volume = @{
+            name = $v.FileSystemLabel; kind = $v.FileSystem; size = $v.Size; free = $v.SizeRemaining
+        } }
+    })
+    @{ number = $disk.Number; model = $disk.FriendlyName; size = $disk.Size; partitions = $parts }
 })
-$volumes = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2 OR DriveType=3' | ForEach-Object {
-    @{ drive = $_.DeviceID; size = $_.Size; free = $_.FreeSpace; filesystem = $_.FileSystem; name = $_.VolumeName }
+$other = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2 OR DriveType=3' -ErrorAction SilentlyContinue | ForEach-Object {
+    @{ target = ($_.DeviceID + '\'); name = $_.VolumeName; kind = $_.FileSystem; size = $_.Size; free = $_.FreeSpace }
 })
-$result = @{ devices = $devices; volumes = $volumes }
+$result = @{ devices = $devices; other = $other }
 "#;
 
 #[derive(Deserialize)]
+pub(crate) struct DiskReply {
+    devices: Vec<Disk>,
+    other: Vec<Volume>,
+}
+
+#[derive(Deserialize)]
 struct Disk {
-    path: String,
+    number: u32,
     model: Option<String>,
-    kind: Option<String>,
     size: Option<u64>,
+    partitions: Vec<Partition>,
+}
+
+#[derive(Deserialize)]
+struct Partition {
+    number: u32,
+    size: Option<u64>,
+    kind: String,
+    paths: Vec<String>,
+    volume: Volume,
 }
 
 #[derive(Deserialize)]
 struct Volume {
-    drive: String,
+    target: Option<String>,
+    name: Option<String>,
+    kind: Option<String>,
     size: Option<u64>,
     free: Option<u64>,
-    filesystem: Option<String>,
-    name: Option<String>,
+}
+
+fn drive_path(path: &str) -> bool {
+    matches!(path.as_bytes(), [letter, b':', b'\\', ..] if letter.is_ascii_alphabetic())
+        && !path.chars().any(char::is_control)
+}
+
+impl Volume {
+    fn space(&self) -> disks::Space {
+        let size = self.size.filter(|size| *size > 0);
+        disks::Space::from_available(
+            size,
+            self.free.filter(|free| size.is_some_and(|s| *free <= s)),
+        )
+    }
+}
+
+impl DiskReply {
+    pub(crate) fn snapshot(self) -> Result<disks::Snapshot> {
+        ensure!(
+            self.devices.len() <= 2000
+                && self
+                    .devices
+                    .iter()
+                    .map(|d| d.partitions.len())
+                    .sum::<usize>()
+                    <= 2000
+                && self.other.len() <= 4096,
+            "Windows disk inventory exceeds the limit"
+        );
+        let disks = self
+            .devices
+            .into_iter()
+            .map(|row| disks::Disk {
+                path: format!(r"\\.\PHYSICALDRIVE{}", row.number),
+                model: row.model.unwrap_or_default(),
+                size: row.size.filter(|size| *size > 0),
+                partitions: row
+                    .partitions
+                    .into_iter()
+                    .map(|p| disks::Partition {
+                        path: format!("Partition {}", p.number),
+                        space: p.volume.space(),
+                        label: p.volume.name.unwrap_or_default(),
+                        kind: match p.volume.kind.filter(|kind| !kind.is_empty()) {
+                            Some(fs) if p.kind != "Basic" && !p.kind.is_empty() => {
+                                format!("{} · {fs}", p.kind)
+                            }
+                            Some(fs) => fs,
+                            None => p.kind,
+                        },
+                        size: p.size,
+                        mounts: p.paths.into_iter().filter(|p| drive_path(p)).collect(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let mounted: BTreeSet<_> = disks
+            .iter()
+            .flat_map(|disk| &disk.partitions)
+            .flat_map(|part| &part.mounts)
+            .map(|path| path.to_ascii_lowercase())
+            .collect();
+        let filesystems = self
+            .other
+            .into_iter()
+            .filter_map(|mut row| {
+                let target = row.target.take()?;
+                if !drive_path(&target) || mounted.contains(&target.to_ascii_lowercase()) {
+                    return None;
+                }
+                Some(disks::Filesystem {
+                    target,
+                    space: row.space(),
+                    source: String::new(),
+                    label: row.name.unwrap_or_default(),
+                    kind: row.kind.unwrap_or_default(),
+                })
+            })
+            .collect();
+        Ok(disks::Snapshot {
+            disks,
+            filesystems,
+            ..Default::default()
+        })
+    }
 }
 
 pub(super) fn disks(remote: &RemoteSession) -> Result<disks::Snapshot> {
-    #[derive(Deserialize)]
-    struct Reply {
-        devices: Vec<Disk>,
-        volumes: Vec<Volume>,
-    }
-    let reply = json::<Reply>(remote, DISKS, "Disk inventory")?;
-    ensure!(
-        reply.devices.len() <= 2000 && reply.volumes.len() <= 4096,
-        "Windows disk inventory exceeds the limit"
-    );
-    let devices = reply
-        .devices
-        .into_iter()
-        .map(|row| disks::Device {
-            path: row.path,
-            model: row.model.unwrap_or_default(),
-            kind: row.kind.unwrap_or_default(),
-            size: row.size,
-            filesystem: String::new(),
-            mounts: Vec::new(),
-            readonly: false,
-            depth: 0,
-        })
-        .collect();
-    let filesystems = reply
-        .volumes
-        .into_iter()
-        .filter_map(|row| {
-            let drive = row.drive.as_bytes();
-            if !matches!(drive, [letter, b':'] if letter.is_ascii_alphabetic()) {
-                return None;
-            }
-            let used = row
-                .size
-                .zip(row.free)
-                .and_then(|(size, free)| size.checked_sub(free));
-            let percent = used.zip(row.size.filter(|size| *size > 0)).map_or_else(
-                || "—".into(),
-                |(used, size)| format!("{:.1}%", 100. * used as f64 / size as f64),
-            );
-            Some(disks::Filesystem {
-                target: format!("/{}", row.drive),
-                source: row.name.filter(|v| !v.is_empty()).unwrap_or(row.drive),
-                kind: row.filesystem.unwrap_or_default(),
-                size: row.size,
-                used,
-                available: row.free,
-                percent,
-            })
-        })
-        .collect();
-    Ok(disks::Snapshot {
-        devices,
-        filesystems,
-    })
+    json::<DiskReply>(remote, DISKS, "Disk inventory")?.snapshot()
 }
 
 pub(super) const NETWORK: &str = r#"

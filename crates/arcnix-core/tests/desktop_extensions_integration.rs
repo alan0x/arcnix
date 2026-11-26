@@ -34,7 +34,12 @@ fn native_desktop_storage_bootstrap_and_persistent_terminal() -> anyhow::Result<
     };
     let disk = arcnix_core::disks::parse(&run(arcnix_core::disks::command())?)?;
     ensure!(
-        !disk.devices.is_empty() && !disk.filesystems.is_empty(),
+        !disk.disks.is_empty()
+            && disk.disks.iter().any(|disk| {
+                disk.partitions
+                    .iter()
+                    .any(|p| p.mounts.iter().any(|mount| mount == "/"))
+            }),
         "Actual disks or filesystems were not returned"
     );
     let root = format!("/tmp/arcnix-desktop-ext-{}", arcnix_core::new_id());

@@ -1836,10 +1836,40 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .disks-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .disks-status:empty, .disks-error:empty { display: none; }
 .disks-toolbar,.services-filters,.software-sources,.install-sources,.compose-toolbar,.compose-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:none}
-.disk-filter{min-width:100px;flex:1}.disk-device-list,.disk-mount-list{display:flex;flex-direction:column;gap:6px}
-.disk-device-row{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(min(100%,84px),1fr));gap:8px;padding:10px;border:1px solid var(--line);border-radius:6px;font-size:13px;min-width:0;background:var(--surface)}
-.disk-device-row>span{overflow-wrap:anywhere}.disk-name{font-weight:600;white-space:pre-wrap;overflow-wrap:anywhere}
-.disk-mount-row{display:flex!important;flex-direction:column;align-items:flex-start;gap:7px;text-align:left;padding:12px!important;border:1px solid var(--line)!important;border-radius:7px!important;background:var(--surface)!important;color:var(--text)!important;white-space:normal!important;font-size:13px;opacity:1!important}
+.disk-filter { min-width: 100px; flex: 1; }
+.disk-filter input, input.disk-filter { width: 100%; border-color: var(--line) !important; background: var(--input) !important; color: var(--text) !important; }
+.disk-filter input::placeholder, input.disk-filter::placeholder { color: var(--muted); }
+.disk-card-list, .disk-other { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.disk-card-list:empty { display: none; }
+.disk-card { container-type: inline-size; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 15px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.disk-card-heading, .disk-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; min-width: 0; }
+.disk-card-heading { font-size: 15px; }
+.disk-name { font-weight: 600; overflow-wrap: anywhere; }
+.disk-card .subtle { overflow-wrap: anywhere; }
+.disk-layout { display: grid !important; grid-template-columns: 160px minmax(0, 1fr); gap: 18px; align-items: start; }
+.disk-chart { position: relative; width: 150px; max-width: 100%; aspect-ratio: 1; margin: 5px auto; }
+.disk-donut { position: absolute; inset: 0; width: 100%; height: 100%; }
+.disk-total { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; gap: 3px; padding-inline: 12%; font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.disk-total .subtle { font-size: 11px; font-weight: 400; }
+.disk-partitions, .disk-partition, .disk-volumes, .disk-volume, .disk-space { display: flex; flex-direction: column; min-width: 0; }
+.disk-partition, .disk-volume { padding: 8px 0; gap: 6px; font-size: 13px; }
+.disk-partitions > .disk-partition + .disk-partition, .disk-volume + .disk-volume { border-top: 1px solid var(--line); }
+.disk-partition.disk-line { flex-direction: row; gap: 4px 9px; }
+.disk-swatch { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 3px; align-self: center; }
+.disk-capacity { margin-inline-start: auto; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
+.disk-mounts { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.disk-mounts:empty { display: none; }
+.disk-mount-link { border: 0 !important; padding: 0 !important; min-height: 0 !important; color: var(--accent) !important; background: transparent !important; justify-content: flex-start !important; white-space: normal !important; overflow-wrap: anywhere; text-align: start; text-decoration: underline; text-underline-offset: 2px; max-width: 100%; }
+.disk-space { gap: 5px; }
+.disk-space-label { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.disk-space-track { height: 5px; overflow: hidden; border-radius: 3px; background: var(--line); }
+.disk-space-available { height: 100%; border-radius: inherit; background: var(--accent); }
+.disk-volumes { margin-inline-start: 6px; padding-inline-start: 10px; border-inline-start: 2px solid var(--line); }
+.disk-other-toggle { align-self: flex-start; }
+@container (max-width: 405px) {
+  .disk-layout { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .disk-chart { width: 130px; }
+}
 .services-page .operation-services{min-height:0}.services-page .operations-toolbar{flex-wrap:wrap;gap:6px}.services-page .services-filters{margin:10px 0}
 .services-filters [aria-pressed=true],.software-sources [aria-pressed=true],.install-sources [aria-pressed=true],.compose-project-row[aria-pressed=true]{background:var(--accent-bg)!important;border-color:var(--accent)!important}
 .services-page .operations-details{max-height:220px;overflow:auto}.services-page .software-error:empty{display:none}.services-page .service-state{min-width:170px;font-size:12px}
@@ -1850,7 +1880,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .compose-projects{display:flex;flex-direction:column;flex:1;min-height:0;gap:12px;overflow:auto}.compose-project-list{display:flex;flex-direction:column;gap:6px}
 .compose-project-row{text-align:left;white-space:normal!important;overflow-wrap:anywhere}.compose-project-path,.compose-install-path{font-size:12px;overflow-wrap:anywhere}
 .docker-toolbar{gap:8px}.docker-toolbar .docker-filter{width:clamp(105px,23cqw,220px);max-width:100%}
-@media(max-width:1100px){.disk-device-row>span:nth-child(n+4){font-size:12px}.services-page .service-row{flex-wrap:wrap}.services-page .service-state{min-width:0}}
+@media(max-width:1100px){.services-page .service-row{flex-wrap:wrap}.services-page .service-state{min-width:0}}
 
 /* Each theme scope owns inherited text as well as palette variables. */
 .theme-dark,.theme-light{color:var(--text)}

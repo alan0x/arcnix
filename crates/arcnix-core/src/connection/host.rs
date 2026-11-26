@@ -188,26 +188,33 @@ pub(crate) fn powershell7_json<T: DeserializeOwned>(
     powershell_json_with(remote, script, capability, "pwsh.exe")
 }
 
+pub(crate) fn powershell_json_script(script: &str) -> String {
+    format!(
+        "$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$WarningPreference='SilentlyContinue'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n{script}\n[Console]::WriteLine('ARCNIX_HOST_JSON_V1')\n[Console]::WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 6))"
+    )
+}
+
 fn powershell_json_with<T: DeserializeOwned>(
     remote: &RemoteSession,
     script: &str,
     capability: &'static str,
     executable: &str,
 ) -> Result<T> {
-    let command = encoded_powershell_command(
-        executable,
-        &format!(
-            "$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$WarningPreference='SilentlyContinue'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n{script}\n[Console]::WriteLine('ARCNIX_HOST_JSON_V1')\n[Console]::WriteLine((ConvertTo-Json -InputObject $result -Compress -Depth 6))"
-        ),
-    );
+    let command = encoded_powershell_command(executable, &powershell_json_script(script));
     // Windows OpenSSH can pass commands through cmd.exe.
     ensure!(
         command.len() < 8191,
         "Windows command exceeds the shell limit"
     );
     let output = checked_host_command(remote, &command, capability)?;
+    parse_powershell_json(&output.stdout, capability)
+}
+
+pub(crate) fn parse_powershell_json<T: DeserializeOwned>(
+    output: &str,
+    capability: &'static str,
+) -> Result<T> {
     let (header, payload) = output
-        .stdout
         .trim()
         .split_once('\n')
         .context("Missing Windows command response")?;

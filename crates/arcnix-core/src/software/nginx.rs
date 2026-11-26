@@ -1354,26 +1354,16 @@ pub fn health_address(summary: &Summary) -> String {
     if summary.addressed {
         return String::new();
     }
-    let Some(name) = summary
-        .names
-        .iter()
-        .find(|n| !n.contains(['*', '~']) && n.contains('.'))
-    else {
+    let Some((name, port, tls)) = &summary.health_endpoint else {
         return String::new();
     };
-    let plain = summary.ports.contains(&80);
-    let scheme = if summary.https && !plain {
-        "https"
+    let scheme = if *tls { "https" } else { "http" };
+    let default_port = if *tls { 443 } else { 80 };
+    let port = if *port == default_port {
+        String::new()
     } else {
-        "http"
+        format!(":{port}")
     };
-    let port = summary
-        .ports
-        .iter()
-        .find(|p| !matches!(p, 80 | 443))
-        .filter(|_| !summary.ports.iter().any(|p| matches!(p, 80 | 443)))
-        .map(|p| format!(":{p}"))
-        .unwrap_or_default();
     format!("{scheme}://{name}{port}/")
 }
 
@@ -1789,29 +1779,41 @@ mod tests {
 
     #[test]
     fn health_addresses_follow_the_listening_ports() {
-        let summary = |names: &[&str], ports: &[u16], https| Summary {
-            names: names.iter().map(|n| n.to_string()).collect(),
-            ports: ports.to_vec(),
-            https,
-            ..Default::default()
-        };
-        assert_eq!(
-            health_address(&summary(&["shop.example.com"], &[80, 443], true)),
-            "http://shop.example.com/"
-        );
-        assert_eq!(
-            health_address(&summary(&["shop.example.com"], &[443], true)),
-            "https://shop.example.com/"
-        );
-        assert_eq!(
-            health_address(&summary(
-                &["*.example.com", "app.example.com"],
-                &[8080],
-                false
-            )),
-            "http://app.example.com:8080/"
-        );
-        assert_eq!(health_address(&summary(&["localhost"], &[80], false)), "");
+        for (listen, names, expected) in [
+            (
+                "listen 80; listen 443 ssl;",
+                "shop.example.com",
+                "http://shop.example.com/",
+            ),
+            (
+                "listen 443 ssl;",
+                "shop.example.com",
+                "https://shop.example.com/",
+            ),
+            (
+                "listen 8080; listen 8443 ssl;",
+                "*.example.com app.example.com",
+                "http://app.example.com:8080/",
+            ),
+            (
+                "listen 443;",
+                "shop.example.com",
+                "http://shop.example.com:443/",
+            ),
+            (
+                "listen 80 ssl;",
+                "shop.example.com",
+                "https://shop.example.com:80/",
+            ),
+            ("listen 443 quic;", "shop.example.com", ""),
+            ("listen [::]:80;", "shop.example.com", ""),
+            ("listen 80 proxy_protocol;", "shop.example.com", ""),
+            ("listen 80;", "localhost", ""),
+        ] {
+            let config = format!("server {{ {listen} server_name {names}; }}");
+            let summary = nginx_config::summary(&nginx_config::parse(&config).unwrap());
+            assert_eq!(health_address(&summary), expected, "{config}");
+        }
         let bound = nginx_config::summary(
             &nginx_config::parse("server { listen 203.0.113.5:80; server_name a.example.com; }")
                 .unwrap(),
