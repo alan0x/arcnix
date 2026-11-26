@@ -465,6 +465,129 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
         .collect()
 }
 
+/// One line of `docker system df`: images, containers, local volumes or the
+/// build cache.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct Usage {
+    #[serde(rename = "Type")]
+    pub kind: String,
+    #[serde(rename = "TotalCount")]
+    pub total: String,
+    #[serde(rename = "Active")]
+    pub active: String,
+    #[serde(rename = "Size")]
+    pub size: String,
+    #[serde(rename = "Reclaimable")]
+    pub reclaimable: String,
+}
+pub fn parse_disk_usage(text: &str) -> Result<Vec<Usage>> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .map(|line| Ok(serde_json::from_str(line)?))
+        .collect()
+}
+pub fn disk_usage(session: &RemoteSession) -> Result<Vec<Usage>> {
+    let request = DockerRequest::single("disk-usage", &["system", "df", "--format", "{{json .}}"]);
+    parse_disk_usage(&request.run(session)?.stdout)
+}
+
+/// What a cleanup removes. Volumes and stopped containers are left alone:
+/// their data can't be pulled again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prune {
+    /// Images with no tag, usually left behind by a newer pull.
+    Untagged,
+    /// Every image no container uses, tagged or not.
+    Unused,
+    /// Docker's build cache.
+    BuildCache,
+}
+
+fn image_target_valid(target: &str) -> bool {
+    let hex = target.strip_prefix("sha256:").unwrap_or(target);
+    (hex.len() == 64 || (12..64).contains(&hex.len()) && !target.starts_with("sha256:"))
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || crate::docker_pull::checked_reference(target).is_ok()
+}
+
+fn remove_image_request(target: &str) -> Result<DockerRequest> {
+    ensure!(image_target_valid(target), "Invalid image name or ID");
+    Ok(DockerRequest {
+        operation: "remove-image",
+        steps: vec![Step::Call(
+            vec!["image".into(), "rm".into(), target.into()],
+            true,
+        )],
+    })
+}
+
+/// Removes one image by `repository:tag` or ID, without `--force`. With the
+/// containerd image store Docker untags an image in use instead of refusing,
+/// so the caller checks for containers first.
+pub fn remove_image(session: &RemoteSession, target: &str, expected_id: &str) -> Result<String> {
+    let removal = remove_image_request(target)?;
+    ensure!(
+        expected_id.strip_prefix("sha256:").is_some_and(id_valid),
+        "Invalid image ID"
+    );
+    let current = DockerRequest::single(
+        "image-id",
+        &["image", "inspect", "--format", "{{.Id}}", target],
+    )
+    .run(session)?;
+    ensure!(
+        current.stdout.trim() == expected_id,
+        "The image changed. Refresh before removing it."
+    );
+    let filter = format!("ancestor={expected_id}");
+    let containers = DockerRequest::single(
+        "image-users",
+        &["ps", "--all", "--quiet", "--filter", &filter],
+    )
+    .run(session)?;
+    ensure!(
+        containers.stdout.trim().is_empty(),
+        "A container depends on this image. Refresh the container list."
+    );
+    let output = check(
+        execute_lossy(session, &removal.command(session)?, LIMIT)?,
+        merged_failure,
+    )?;
+    Ok(output.stdout.trim().to_owned())
+}
+
+fn prune_request(prune: Prune) -> DockerRequest {
+    let args: &[&str] = match prune {
+        Prune::Untagged => &["image", "prune", "--force"],
+        Prune::Unused => &["image", "prune", "--all", "--force"],
+        Prune::BuildCache => &["builder", "prune", "--force"],
+    };
+    DockerRequest {
+        operation: "prune",
+        steps: vec![Step::Call(args.iter().map(|a| (*a).into()).collect(), true)],
+    }
+}
+
+/// Runs a cleanup and returns Docker's summary, such as
+/// "Total reclaimed space: 1.91MB".
+pub fn prune(session: &RemoteSession, prune: Prune) -> Result<String> {
+    let output = check(
+        execute_lossy(session, &prune_request(prune).command(session)?, LIMIT)?,
+        merged_failure,
+    )?;
+    Ok(output
+        .stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with("Total reclaimed space") || line.starts_with("Total:"))
+        .unwrap_or("Nothing to remove")
+        .to_owned())
+}
+
 /// What an image declares about running it: the ports it exposes, such as
 /// `80/tcp`, and the paths it keeps data in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -836,6 +959,55 @@ mod tests {
         assert_eq!(
             parse_image_config(r#"{"ports":null,"volumes":null}"#).unwrap(),
             ImageConfig::default()
+        );
+    }
+
+    #[test]
+    fn disk_usage_and_cleanups_stay_bounded() {
+        let rows = parse_disk_usage(concat!(
+            r#"{"Active":"5","Reclaimable":"497.8MB (100%)","Size":"497.8MB","TotalCount":"5","Type":"Images"}"#,
+            "\n",
+            r#"{"Active":"0","Reclaimable":"0B","Size":"0B","TotalCount":"0","Type":"Build Cache"}"#,
+        ))
+        .unwrap();
+        assert_eq!(rows[0].kind, "Images");
+        assert_eq!(rows[0].active, "5");
+        assert_eq!(rows[1].reclaimable, "0B");
+        assert!(
+            prune_request(Prune::Untagged)
+                .shell(PREFIX)
+                .ends_with("arcnix_docker image prune --force 2>&1")
+        );
+        assert!(
+            prune_request(Prune::Unused)
+                .shell(PREFIX)
+                .ends_with("arcnix_docker image prune --all --force 2>&1")
+        );
+        assert!(
+            prune_request(Prune::BuildCache)
+                .shell(PREFIX)
+                .ends_with("arcnix_docker builder prune --force 2>&1")
+        );
+        // Volumes are never pruned.
+        for prune in [Prune::Untagged, Prune::Unused, Prune::BuildCache] {
+            assert!(!prune_request(prune).shell(PREFIX).contains("volume"));
+        }
+        assert!(
+            remove_image_request("nginx:1.27")
+                .unwrap()
+                .shell(PREFIX)
+                .ends_with("arcnix_docker image rm nginx:1.27 2>&1")
+        );
+        assert!(remove_image_request("65645c7bb6a0").is_ok());
+        assert!(remove_image_request(&format!("sha256:{}", "a".repeat(64))).is_ok());
+        for bad in ["--force", "nginx;id", "Nginx", "-x", "a b"] {
+            assert!(remove_image_request(bad).is_err(), "{bad}");
+        }
+        assert!(
+            !remove_image_request("nginx")
+                .unwrap()
+                .shell(PREFIX)
+                .contains("--force")
         );
     }
 }

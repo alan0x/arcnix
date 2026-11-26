@@ -463,6 +463,8 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::DockerMirrors
                     | Dialog::DockerPull
                     | Dialog::DockerRun
+                    | Dialog::DockerCleanup
+                    | Dialog::DockerRemoveImage
                     | Dialog::NginxNewSite
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess

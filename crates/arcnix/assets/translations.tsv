@@ -3459,9 +3459,35 @@ Arcnix 会在 ~/.arcnix/apps 中写入一个 Compose 项目并启动它，和 Ap
 所有已拉取的镜像都是最新的。	Every pulled image is up to date.
 {n} 个镜像有更新。“更新”会拉取新镜像；容器在重新创建前仍使用旧镜像。Arcnix 项目可在“项目”中更新。	{n} images have updates. Update pulls the new image; a container keeps the old one until it is recreated. Arcnix projects are updated in Projects.
 {unknown} 个无法检查。	{unknown} couldn't be checked.
+镜像已变化。请刷新后再移除。	The image changed. Refresh before removing it.
+有容器依赖此镜像。请刷新容器列表。	A container depends on this image. Refresh the container list.
 未检查：已达到检查时限	Not checked: the time limit was reached
 未检查：一次要检查的镜像太多	Not checked: too many images at once
 标签 {tag} 已不再发布	The tag {tag} is no longer published
 镜像仓库 {host} 需要登录后才回应	The registry {host} only answers after you log in
 镜像仓库 {host} 没有说明该标签指向哪个镜像	The registry {host} didn't say which image the tag points to
 1 个镜像有更新。“更新”会拉取新镜像；容器在重新创建前仍使用旧镜像。Arcnix 项目可在“项目”中更新。	1 image has an update. Update pulls the new image; a container keeps the old one until it is recreated. Arcnix projects are updated in Projects.
+清理	Clean up
+清理磁盘空间	Clean up disk space
+移除镜像	Remove image
+Docker 会保留拉取过的每个镜像和构建缓存，直到它们被移除。卷和已停止的容器不在这里清理，因为它们的数据无法重新拉取。	Docker keeps every image it pulled and its build cache until they are removed. Volumes and stopped containers are left alone here, because their data can't be pulled again.
+正在读取 Docker 的磁盘用量…	Reading Docker's disk usage…
+可回收：	Reclaimable:
+{active} / {total} 正在使用	{active} of {total} in use
+构建缓存	Build cache
+无标签镜像	Untagged images
+未使用的镜像	Unused images
+移除无标签镜像…	Remove untagged…
+移除未使用的镜像…	Remove unused…
+清除缓存…	Clear cache…
+此操作无法撤销。	This can't be undone.
+{count} 个无标签镜像，通常是拉取新版本后留下的。	{count} untagged images, usually left behind when a newer one was pulled.
+每个镜像都有容器在使用。	Every image is used by a container.
+— 没有容器使用它们。需要时 Docker 会重新拉取。	— no container uses them. Docker pulls an image again when it is needed.
+{size} 的层用于加快 docker build。	{size} of layers kept to speed up docker build.
+ 等另外 {more} 个	 and {more} more
+没有容器使用此镜像。需要时 Docker 可以重新拉取。	No container uses this image. Docker can pull it again when it is needed.
+正在被 {names} 使用。	Used by {names}.
+请先移除或重新创建这些容器；否则 Docker 只会去掉这个标签。	Remove or recreate these containers first; Docker would only take the tag away.
+没有可移除的内容	Nothing to remove
+运行容器	Run a container
