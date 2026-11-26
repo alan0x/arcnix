@@ -62,7 +62,7 @@ pub enum Action {
     DockerLogin {
         registry: String,
         username: String,
-        password: String,
+        password: zeroize::Zeroizing<String>,
     },
     DockerLogout(String),
     NginxRead,

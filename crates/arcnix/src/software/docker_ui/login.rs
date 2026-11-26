@@ -29,7 +29,10 @@ fn can_log_in(s: &State) -> bool {
 
 /// Docker Hub's login appears under its old index address.
 fn shown(registry: &str) -> String {
-    if registry.contains("index.docker.io") {
+    if matches!(
+        registry,
+        "https://index.docker.io/v1/" | "index.docker.io" | "docker.io"
+    ) {
         "Docker Hub".into()
     } else {
         registry.to_owned()
@@ -73,7 +76,7 @@ impl Ui {
         self.docker_login_send(AppAction::DockerLogin {
             registry,
             username,
-            password,
+            password: zeroize::Zeroizing::new(password),
         });
     }
 
