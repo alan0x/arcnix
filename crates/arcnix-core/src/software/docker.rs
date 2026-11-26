@@ -83,14 +83,21 @@ pub struct Image {
     /// or `<none>` for an image built or loaded on the server.
     #[serde(default)]
     pub digest: String,
+    /// Every digest recorded for this tag: the classic image store keeps one
+    /// per pull when a registry republishes a tag. `image ls --digests`
+    /// lists each on its own row; they are merged into one image here.
+    #[serde(default)]
+    pub digests: Vec<String>,
 }
 
 impl Image {
     /// The `repository:tag` a registry knows this image by, when it was
     /// pulled from one.
     pub fn pulled_reference(&self) -> Option<String> {
-        (self.repository != "<none>" && self.tag != "<none>" && self.digest.starts_with("sha256:"))
-            .then(|| format!("{}:{}", self.repository, self.tag))
+        (self.repository != "<none>"
+            && self.tag != "<none>"
+            && self.digests.iter().any(|d| d.starts_with("sha256:")))
+        .then(|| format!("{}:{}", self.repository, self.tag))
     }
 }
 
@@ -175,6 +182,9 @@ fn volume_valid(name: &str) -> bool {
 enum Step {
     Marker(&'static str),
     Call(Vec<String>, bool),
+    /// A call that may take longer than the usual 25 seconds, such as a
+    /// prune; its error output is merged. Windows keeps the usual limit.
+    Slow(Vec<String>),
 }
 
 struct DockerRequest {
@@ -250,6 +260,19 @@ impl DockerRequest {
                     )
                     .unwrap();
                 }
+                Step::Slow(args) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| shell_arg(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    // Within the 90-second limit of a server request.
+                    writeln!(
+                        command,
+                        "if command -v timeout >/dev/null 2>&1; then timeout -k 2s 85s docker --host \"$arcnix_socket\" {args} 2>&1; elif command -v gtimeout >/dev/null 2>&1; then gtimeout -k 2s 85s docker --host \"$arcnix_socket\" {args} 2>&1; else docker --host \"$arcnix_socket\" {args} 2>&1; fi"
+                    )
+                    .unwrap();
+                }
             }
         }
         command.trim_end().to_owned()
@@ -282,6 +305,15 @@ impl DockerRequest {
                         if *merge { "true" } else { "false" }
                     )
                     .unwrap();
+                }
+                Step::Slow(args) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| windows_arg(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .replace('\'', "''");
+                    writeln!(script, "Run-Docker '{args}' $true").unwrap();
                 }
             }
         }
@@ -465,7 +497,32 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
             ensure!(index < ROW_LIMIT, "Too many Docker images");
             Ok(serde_json::from_str(row)?)
         })
-        .collect()
+        .collect::<Result<Vec<Image>>>()
+        .map(merge_digests)
+}
+
+/// One image per ID, repository and tag, with every digest recorded for it.
+fn merge_digests(rows: Vec<Image>) -> Vec<Image> {
+    let mut images: Vec<Image> = Vec::new();
+    for mut row in rows {
+        let digest = row.digest.clone();
+        if let Some(image) = images
+            .iter_mut()
+            .find(|i| i.id == row.id && i.repository == row.repository && i.tag == row.tag)
+        {
+            if digest.starts_with("sha256:") && !image.digests.contains(&digest) {
+                image.digests.push(digest);
+            }
+            continue;
+        }
+        row.digests = if digest.starts_with("sha256:") {
+            vec![digest]
+        } else {
+            vec![]
+        };
+        images.push(row);
+    }
+    images
 }
 
 /// Prepare an interactive shell on the same local daemon and container as the inventory.
@@ -519,7 +576,13 @@ pub fn parse_networks(text: &str) -> Result<Vec<Network>> {
         .take(NETWORK_LIMIT)
         .map(|line| Ok(serde_json::from_str(line)?))
         .collect::<Result<_>>()?;
-    Ok(networks)
+    Ok(networks
+        .into_iter()
+        .map(|mut network: Network| {
+            network.subnets.retain(|s| !s.trim().is_empty());
+            network
+        })
+        .collect())
 }
 fn inspect_networks(ids: &[&str]) -> DockerRequest {
     let mut args = vec![
@@ -558,7 +621,18 @@ pub fn networks(session: &RemoteSession) -> Result<Vec<Network>> {
     };
     let mut networks = Vec::new();
     for ids in ids.chunks(batch) {
-        networks.extend(parse_networks(&inspect_networks(ids).run(session)?.stdout)?);
+        let request = inspect_networks(ids);
+        let output = execute(session, &request.command(session)?, LIMIT)?;
+        // A network removed since the list was read fails the command, but
+        // Docker still prints the others.
+        let output = if output.exit_code != 0 && output.stdout.trim().is_empty()
+            || matches!(output.exit_code, 124 | 137)
+        {
+            check(output, |output| output.stderr.trim())?
+        } else {
+            output
+        };
+        networks.extend(parse_networks(&output.stdout)?);
     }
     networks.sort_by(|a, b| (!a.built_in(), &a.name).cmp(&(!b.built_in(), &b.name)));
     Ok(networks)
@@ -577,9 +651,14 @@ pub struct Login {
 }
 
 /// Project the configuration on the server; only registry and helper names cross SSH.
+/// Docker installed as a snap keeps its configuration under ~/snap/docker.
 const LOGINS_SCRIPT: &str = concat!(
     r#"set -eu
-config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then PATH="$PATH:/snap/bin"; fi
+case "${DOCKER_CONFIG:-}:$(command -v docker 2>/dev/null || true)" in
+    :/snap/*) config="$HOME/snap/docker/current/.docker/config.json" ;;
+    *) config="${DOCKER_CONFIG:-$HOME/.docker}/config.json" ;;
+esac
 [ -e "$config" ] || { printf '{}'; exit 0; }
 [ -f "$config" ] || { printf "Invalid Docker configuration file\n" >&2; exit 1; }
 command -v python3 >/dev/null || { printf 'Reading Docker logins requires Python 3 on the server\n' >&2; exit 1; }
@@ -635,10 +714,10 @@ pub fn logins(session: &RemoteSession) -> Result<Vec<Login>> {
         &format!("# arcnix:docker:logins\n{LOGINS_SCRIPT}"),
         128 * 1024,
     )?;
+    let error = output.stderr.trim();
     ensure!(
         output.exit_code == 0,
-        "Docker's logins can't be read: {}",
-        output.stderr.trim()
+        "Docker's logins can't be read: {error}"
     );
     parse_logins(&output.stdout)
 }
@@ -707,8 +786,12 @@ pub fn login(
         "Registry logins are managed in Docker Desktop on Windows"
     );
     ensure!(
-        !password.is_empty() && password.len() <= 4000 && !password.contains(['\n', '\r', '\0']),
+        !password.is_empty() && !password.contains(['\n', '\r', '\0']),
         "Enter the password or access token"
+    );
+    ensure!(
+        password.len() <= 4000,
+        "The password or access token is longer than 4000 characters"
     );
     let command = login_request(registry, username)?.command(session)?;
     let mut stdout = Vec::new();
@@ -732,6 +815,10 @@ pub fn login(
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
         exit_code: output.exit_code,
     };
+    ensure!(
+        output.exit_code != 124,
+        "The registry didn't answer within 25 seconds"
+    );
     let output = check(output, merged_failure)?;
     Ok(output.stdout.trim().to_owned())
 }
@@ -749,6 +836,10 @@ fn logout_request(registry: &str) -> Result<DockerRequest> {
 }
 
 pub fn logout(session: &RemoteSession, registry: &str) -> Result<String> {
+    ensure!(
+        session.host_os()? != HostOs::Windows,
+        "Registry logins are managed in Docker Desktop on Windows"
+    );
     let output = check(
         execute_lossy(session, &logout_request(registry)?.command(session)?, LIMIT)?,
         merged_failure,
@@ -796,6 +887,9 @@ pub enum Prune {
 }
 
 fn image_target_valid(target: &str) -> bool {
+    if target.trim() != target {
+        return false;
+    }
     let hex = target.strip_prefix("sha256:").unwrap_or(target);
     (hex.len() == 64 || (12..64).contains(&hex.len()) && !target.starts_with("sha256:"))
         && hex
@@ -858,7 +952,7 @@ fn prune_request(prune: Prune) -> DockerRequest {
     };
     DockerRequest {
         operation: "prune",
-        steps: vec![Step::Call(args.iter().map(|a| (*a).into()).collect(), true)],
+        steps: vec![Step::Slow(args.iter().map(|a| (*a).into()).collect())],
     }
 }
 
@@ -908,9 +1002,10 @@ pub fn parse_image_config(text: &str) -> Result<ImageConfig> {
             };
             Some((port.parse::<u16>().ok().filter(|p| *p > 0)?, protocol))
         })
-        .take(16)
         .collect();
+    // Sorted by number before the cap, so 80 isn't dropped for 10000.
     ports.sort_by_key(|(port, protocol)| (*port, *protocol == crate::container_app::Protocol::Udp));
+    ports.truncate(16);
     let volumes = raw
         .volumes
         .unwrap_or_default()
@@ -1264,20 +1359,18 @@ mod tests {
         assert_eq!(rows[0].kind, "Images");
         assert_eq!(rows[0].active, "5");
         assert_eq!(rows[1].reclaimable, "0B");
-        assert!(
-            prune_request(Prune::Untagged)
-                .shell(PREFIX)
-                .ends_with("arcnix_docker image prune --force 2>&1")
-        );
+        assert!(prune_request(Prune::Untagged).shell(PREFIX).contains(
+            "timeout -k 2s 85s docker --host \"$arcnix_socket\" image prune --force 2>&1"
+        ));
         assert!(
             prune_request(Prune::Unused)
                 .shell(PREFIX)
-                .ends_with("arcnix_docker image prune --all --force 2>&1")
+                .contains("docker --host \"$arcnix_socket\" image prune --all --force 2>&1")
         );
         assert!(
             prune_request(Prune::BuildCache)
                 .shell(PREFIX)
-                .ends_with("arcnix_docker builder prune --force 2>&1")
+                .contains("docker --host \"$arcnix_socket\" builder prune --force 2>&1")
         );
         // Volumes are never pruned.
         for prune in [Prune::Untagged, Prune::Unused, Prune::BuildCache] {
@@ -1428,12 +1521,36 @@ mod tests {
             "\n",
             r#"{"id":"b","name":"host","driver":"host","scope":"local","internal":false,"subnets":[]}"#,
             "\n",
-            r#"{"id":"c","name":"bridge","driver":"bridge","scope":"local","internal":false,"subnets":["172.17.0.0/16","fd00::/64"]}"#,
+            r#"{"id":"c","name":"bridge","driver":"bridge","scope":"local","internal":false,"subnets":["172.17.0.0/16","","fd00::/64"]}"#,
         ))
         .unwrap();
         let names: Vec<_> = networks.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, ["repro_default", "host", "bridge"]);
         assert_eq!(networks[2].subnets, ["172.17.0.0/16", "fd00::/64"]);
         assert!(networks[2].built_in() && !networks[0].built_in());
+    }
+
+    #[test]
+    fn rows_for_one_tag_with_several_digests_are_one_image() {
+        let row = |id: &str, tag: &str, digest: &str| Image {
+            id: id.into(),
+            repository: "nginx".into(),
+            tag: tag.into(),
+            size: "1MB".into(),
+            digest: digest.into(),
+            digests: vec![],
+        };
+        let a = format!("sha256:{}", "a".repeat(64));
+        let b = format!("sha256:{}", "b".repeat(64));
+        let images = merge_digests(vec![
+            row("1", "latest", &a),
+            row("1", "latest", &b),
+            row("1", "1.27", &a),
+            row("2", "<none>", "<none>"),
+        ]);
+        assert_eq!(images.len(), 3);
+        assert_eq!(images[0].digests, [a.clone(), b]);
+        assert_eq!(images[1].digests, [a]);
+        assert!(images[2].digests.is_empty() && images[2].pulled_reference().is_none());
     }
 }

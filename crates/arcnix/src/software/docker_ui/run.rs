@@ -107,16 +107,24 @@ impl Ui {
             };
         });
         self.open_dialog(Dialog::DockerRun);
+        // The project list says which names are taken.
+        self.compose_enter();
     }
 
     fn docker_run(&self) {
         if !self.state.with(can_run) {
             return;
         }
-        match self
-            .state
-            .with(|s| s.docker.run.app().and_then(|app| app.install()))
-        {
+        let template = self.state.with(|s| {
+            let app = s.docker.run.app()?;
+            anyhow::ensure!(
+                !compose_ui::project_names(s).contains(&app.name),
+                "A project named {} already exists",
+                app.name
+            );
+            app.install()
+        });
+        match template {
             Ok(template) => self.choose_server_script(template),
             Err(error) => self
                 .state
@@ -124,16 +132,21 @@ impl Ui {
         }
     }
 
-    /// After a Run task on this server: show the new project in Projects.
+    /// After a Run task on this server: show the project in Projects, where
+    /// a failed one can also be removed. Only while the Docker app is in
+    /// view, since the task can take a couple of minutes.
     pub(crate) fn docker_run_finished(&self, task: &str) {
         // The task is named "Run <image> as <project>".
         let started = self.state.with(|s| {
+            if s.workspace_page != WorkspacePage::Docker {
+                return None;
+            }
             s.scripts.tasks.iter().find_map(|t| {
-                let succeeded = t.targets.iter().any(|target| {
-                    s.selected.as_ref() == Some(&target.id)
-                        && target.status == arcnix_core::tasks::Status::Succeeded
-                });
-                (t.id == task && t.script_id == "builtin:compose-application" && succeeded)
+                let here = t
+                    .targets
+                    .iter()
+                    .any(|target| s.selected.as_ref() == Some(&target.id));
+                (t.id == task && t.script_id == "builtin:compose-application" && here)
                     .then(|| t.name.strip_prefix("Run ")?.rsplit_once(" as "))
                     .flatten()
                     .map(|(_, name)| name.to_owned())

@@ -45,6 +45,12 @@ fn shown(registry: &str) -> String {
     }
 }
 
+/// Whether Arcnix can log out of this entry; others are left to `docker
+/// logout` on the server.
+fn can_log_out(registry: &str) -> bool {
+    arcnix_core::docker::checked_registry(registry).is_ok()
+}
+
 impl Ui {
     fn docker_login_send(&self, action: AppAction) {
         let serial = self.send(Action::ServerApps(action));
@@ -176,7 +182,10 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
                                 )),
                                 btn("Log out", move || ui.docker_log_out(registry.clone()))
                                     .class("button compact")
-                                    .enabled(rows.state.map(idle)),
+                                    .enabled(rows.state.map({
+                                        let registry = login.registry.clone();
+                                        move |s| idle(s) && can_log_out(&registry)
+                                    })),
                             ))
                         }),
                 ),
@@ -257,5 +266,10 @@ mod tests {
     fn docker_hub_is_named_plainly() {
         assert_eq!(shown("https://index.docker.io/v1/"), "Docker Hub");
         assert_eq!(shown("ghcr.io"), "ghcr.io");
+        assert_eq!(
+            shown("evil.example.com/index.docker.io"),
+            "evil.example.com/index.docker.io"
+        );
+        assert!(can_log_out("ghcr.io") && !can_log_out("ghcr.io/owner"));
     }
 }

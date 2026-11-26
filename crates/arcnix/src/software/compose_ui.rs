@@ -10,6 +10,19 @@ pub(crate) struct ComposeState {
     error: String,
     preview: bool,
 }
+/// The names of the projects Arcnix manages, once they have been listed.
+pub(crate) fn project_names(s: &State) -> Vec<String> {
+    s.compose
+        .projects
+        .as_ref()
+        .map(|p| {
+            p.entries
+                .iter()
+                .map(|e| e.definition.name().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 /// How many projects Arcnix manages, once they have been listed.
 pub(crate) fn project_count(s: &State) -> Option<usize> {
     s.compose.projects.as_ref().map(|p| p.entries.len())

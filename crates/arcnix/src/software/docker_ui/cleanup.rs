@@ -55,12 +55,23 @@ fn untagged(image: &Image) -> bool {
     image.repository == "<none>" || image.tag == "<none>"
 }
 
-/// Images no container uses, by name.
+/// Whether any tag of this image (the same ID) is used by a container, as
+/// Docker decides what is in use.
+fn in_use(s: &State, image: &Image) -> bool {
+    s.docker
+        .images
+        .iter()
+        .filter(|other| other.id == image.id)
+        .any(|other| !users(s, other).is_empty())
+}
+
+/// Images no container uses, by name. The list is for display; the server
+/// decides what is removed.
 fn unused(s: &State) -> Vec<String> {
     s.docker
         .images
         .iter()
-        .filter(|image| users(s, image).is_empty())
+        .filter(|image| !in_use(s, image))
         .map(|image| {
             if untagged(image) {
                 let id = image.id.strip_prefix("sha256:").unwrap_or(&image.id);
@@ -90,14 +101,18 @@ impl Ui {
         if !self.state.with(ready) {
             return;
         }
-        self.state
-            .revise(|s| s.docker.cleanup = CleanupState::default());
-        self.open_dialog(Dialog::DockerCleanup);
-        // The snapshot says which containers use which image.
-        if self.state.with(|s| s.docker.snapshot.is_none()) {
-            self.docker_send(AppAction::DockerSnapshot);
+        // A cleanup still running keeps its state, so its result arrives.
+        let running = self.state.with(|s| s.docker.cleanup.pending.is_some());
+        if !running {
+            self.state
+                .revise(|s| s.docker.cleanup = CleanupState::default());
         }
-        self.docker_cleanup_send(AppAction::DockerDiskUsage);
+        self.open_dialog(Dialog::DockerCleanup);
+        // A fresh container list, for showing which images are in use.
+        self.docker_send(AppAction::DockerSnapshot);
+        if !running {
+            self.docker_cleanup_send(AppAction::DockerDiskUsage);
+        }
     }
 
     fn docker_prune(&self, prune: Prune) {
@@ -129,6 +144,9 @@ impl Ui {
         } else {
             name.clone()
         };
+        if self.state.with(|s| s.docker.cleanup.pending.is_some()) {
+            return;
+        }
         self.state.revise(|s| {
             s.docker.cleanup = CleanupState {
                 target: Some(Removal {
@@ -139,9 +157,7 @@ impl Ui {
                 ..Default::default()
             }
         });
-        if self.state.with(|s| s.docker.snapshot.is_none()) {
-            self.docker_send(AppAction::DockerSnapshot);
-        }
+        self.docker_send(AppAction::DockerSnapshot);
         self.open_dialog(Dialog::DockerRemoveImage);
     }
 
@@ -169,6 +185,7 @@ pub(super) fn event(
         return Some(result);
     }
     let mut cleaned = false;
+    let mut failed = false;
     ui.state.revise(|s| {
         let c = &mut s.docker.cleanup;
         c.pending = None;
@@ -178,10 +195,17 @@ pub(super) fn event(
                 c.result = summary;
                 cleaned = true;
             }
-            Err(error) => c.error = error,
+            Err(error) => {
+                // A cleanup that timed out may still have removed some images.
+                failed = c.usage.is_some() || c.target.is_some();
+                c.error = error;
+            }
             _ => c.error = "Invalid Docker response".into(),
         }
     });
+    if failed {
+        ui.docker_send(AppAction::DockerImages);
+    }
     if cleaned {
         if ui
             .state
@@ -315,7 +339,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                         Prune::Untagged,
                         "Untagged images",
                         |s| {
-                            let count = s.docker.images.iter().filter(|i| untagged(i) && users(s, i).is_empty()).count();
+                            let count = s.docker.images.iter().filter(|i| untagged(i) && !in_use(s, i)).count();
                             i18n::translate(&format!("{count} untagged images, usually left behind when a newer one was pulled."))
                         },
                         "Remove untagged…",
@@ -343,19 +367,21 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                         Prune::BuildCache,
                         "Build cache",
                         |s| {
-                            let size = s
+                            let Some(size) = s
                                 .docker
                                 .cleanup
                                 .usage
                                 .as_ref()
                                 .and_then(|u| u.iter().find(|u| u.kind == "Build Cache"))
                                 .map(|u| u.size.clone())
-                                .unwrap_or_default();
+                            else {
+                                return String::new();
+                            };
                             i18n::translate(&format!("{size} of layers kept to speed up docker build."))
                         },
                         "Clear cache…",
                     ),
-                    text().class("docker-cleanup-result").content(state.map(|s| s.docker.cleanup.result.clone())),
+                    text().class("docker-cleanup-result").content(state.map(|s| i18n::translate(&s.docker.cleanup.result))),
                     text().class("error").content(state.map(|s| s.docker.cleanup.error.clone())),
                 )),
                 (),

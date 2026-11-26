@@ -181,15 +181,23 @@ impl ContainerApp {
                 port.host > 0 && port.container > 0,
                 "Ports are numbers from 1 to 65535"
             );
-            addresses.push(address);
+            // An IPv4 address written as IPv6 (::ffff:127.0.0.1) is IPv4.
+            addresses.push(match address {
+                std::net::IpAddr::V6(v6) => {
+                    v6.to_ipv4_mapped().map_or(address, std::net::IpAddr::V4)
+                }
+                v4 => v4,
+            });
         }
-        // Two mappings can't take the same server port and protocol; 0.0.0.0
-        // takes the port on every address.
+        // Two mappings can't take the same server port and protocol on one
+        // address family; 0.0.0.0 (or ::) takes it on every address of its
+        // family, so 0.0.0.0 and :: may share a port, as Docker's 80:80 does.
         for (i, (a, a_ip)) in self.ports.iter().zip(&addresses).enumerate() {
             for (b, b_ip) in self.ports[..i].iter().zip(&addresses) {
                 ensure!(
                     !(a.host == b.host
                         && a.protocol == b.protocol
+                        && a_ip.is_ipv4() == b_ip.is_ipv4()
                         && (a_ip == b_ip || a_ip.is_unspecified() || b_ip.is_unspecified())),
                     "Server port {} is used twice",
                     a.host
@@ -260,11 +268,16 @@ impl ContainerApp {
                     s(&volume.target),
                     volume.read_only
                 ));
+                // Create a missing server folder, whatever the Compose version.
+                if volume.is_folder() {
+                    out.push_str("        bind:\n          create_host_path: true\n");
+                }
             }
         }
         if !self.environment.is_empty() {
             out.push_str("    environment:\n");
             for (key, value) in &self.environment {
+                // Quoted, so YAML reads names such as TRUE or null as text.
                 out.push_str(&format!(
                     "      {}: {}\n",
                     s(key),
@@ -302,6 +315,11 @@ impl ContainerApp {
     pub fn install(&self) -> Result<crate::scripts::Template> {
         let yaml = self.yaml()?;
         let manifest = serde_json::to_string(self)?;
+        // The task carries both files base64-encoded; a task is at most 8 KiB.
+        ensure!(
+            (yaml.len() + manifest.len()) * 4 / 3 + 2500 <= 8192,
+            "These settings are too long to run. Shorten the environment values or paths."
+        );
         crate::compose_apps::install_task(
             &self.name,
             &yaml,
@@ -397,6 +415,8 @@ mod tests {
         source: "/srv/redis/conf"
         target: "/usr/local/etc/redis"
         read_only: true
+        bind:
+          create_host_path: true
     environment:
       "REDIS_ARGS": "--save 60 1 $$HOME"
 volumes:
@@ -499,5 +519,64 @@ volumes:
             ..Default::default()
         };
         assert!(long.install().unwrap().snippet.name.len() <= 128);
+    }
+
+    #[test]
+    fn ports_conflict_only_within_an_address_family() {
+        let port = |address: &str, host: u16| Port {
+            address: address.into(),
+            host,
+            container: 80,
+            protocol: Protocol::Tcp,
+        };
+        let with = |ports: Vec<Port>| ContainerApp {
+            name: "web".into(),
+            image: "nginx".into(),
+            ports,
+            ..Default::default()
+        };
+        assert!(
+            with(vec![port("0.0.0.0", 80), port("::", 80)])
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            with(vec![port("0.0.0.0", 80), port("::1", 80)])
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            with(vec![port("127.0.0.1", 80), port("::ffff:127.0.0.1", 80)])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            with(vec![port("0.0.0.0", 80), port("127.0.0.1", 80)])
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn settings_too_long_for_a_task_are_refused_clearly() {
+        let mut app = app();
+        app.environment = (0..6)
+            .map(|i| (format!("K{i}"), "x".repeat(2000)))
+            .collect();
+        assert!(app.validate().is_ok());
+        assert!(
+            app.install()
+                .unwrap_err()
+                .to_string()
+                .contains("too long to run")
+        );
+        // Names YAML would read as booleans or null stay text.
+        let mut odd = self::app();
+        odd.environment = vec![("TRUE".into(), "1".into()), ("null".into(), "2".into())];
+        let yaml = odd.yaml().unwrap();
+        assert!(
+            yaml.contains("      \"TRUE\": \"1\"\n") && yaml.contains("      \"null\": \"2\"\n"),
+            "{yaml}"
+        );
     }
 }
