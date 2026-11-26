@@ -50,6 +50,9 @@ pub enum Action {
     DockerDaemon,
     DockerMirrorTest(String),
     DockerImageConfig(String),
+    DockerDiskUsage,
+    DockerRemoveImage(String),
+    DockerPrune(docker::Prune),
     NginxRead,
     /// A command from `nginx::logs_command`.
     NginxLogs(String),
@@ -92,6 +95,8 @@ pub enum Reply {
     DockerDaemon(arcnix_core::docker_daemon::Daemon),
     MirrorTest(arcnix_core::docker_daemon::MirrorTest),
     ImageConfig(arcnix_core::docker::ImageConfig),
+    DiskUsage(Vec<docker::Usage>),
+    Cleaned(String),
     Nginx(arcnix_core::nginx::Reading),
     NginxLogs(String),
     NginxCertificates(arcnix_core::nginx::Certificates),
@@ -171,6 +176,11 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::DockerImageConfig(image) => {
             Reply::ImageConfig(arcnix_core::docker::image_config(session, &image)?)
         }
+        Action::DockerDiskUsage => Reply::DiskUsage(docker::disk_usage(session)?),
+        Action::DockerRemoveImage(target) => {
+            Reply::Cleaned(docker::remove_image(session, &target)?)
+        }
+        Action::DockerPrune(prune) => Reply::Cleaned(docker::prune(session, prune)?),
         Action::NginxRead => Reply::Nginx(arcnix_core::nginx::read(session)?),
         Action::NginxLogs(command) => {
             Reply::NginxLogs(arcnix_core::nginx::read_logs(session, &command)?)

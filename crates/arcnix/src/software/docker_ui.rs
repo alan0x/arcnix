@@ -5,6 +5,7 @@ use crate::i18n::desktop::{icon_action, text_action};
 use crate::server_apps_worker::{Action as AppAction, Reply};
 use crate::*;
 
+mod cleanup;
 mod mirrors;
 mod pull;
 mod run;
@@ -16,6 +17,7 @@ pub(crate) struct DockerState {
     pub(crate) pull: pull::PullState,
     pub(crate) run: run::RunState,
     pub(crate) updates: updates::UpdatesState,
+    pub(crate) cleanup: cleanup::CleanupState,
     snapshot: Option<Snapshot>,
     images: Vec<docker::Image>,
     stats: Option<docker::Stats>,
@@ -352,6 +354,9 @@ pub(crate) fn event(ui: &Ui, serial: u64, result: std::result::Result<Reply, Str
         return;
     };
     let Some(result) = run::event(ui, serial, result) else {
+        return;
+    };
+    let Some(result) = cleanup::event(ui, serial, result) else {
         return;
     };
     if !ui.state.with(|s| s.docker.pending == Some(serial)) {
@@ -1430,8 +1435,18 @@ fn header(ui: Ui) -> impl Widget {
                 let ui = ui.clone();
                 move || {
                     let ui = ui.clone();
-                    text_action("Registry mirrors", Icon::Settings)
-                        .class("button with-icon compact")
+                    icon_action("Clean up disk space", Icon::Clear)
+                        .class("icon-button")
+                        .enabled(state.map(ready))
+                        .on_press(move || ui.docker_cleanup_open())
+                }
+            }),
+            when(state.map(|s| s.docker.view == 4), {
+                let ui = ui.clone();
+                move || {
+                    let ui = ui.clone();
+                    icon_action("Registry mirrors", Icon::Settings)
+                        .class("icon-button")
                         .enabled(state.map(ready))
                         .on_press(move || ui.docker_mirrors_open())
                 }
@@ -1648,6 +1663,7 @@ fn images(ui: Ui) -> impl Widget {
             .children(move |item| {
                 let image = item.value;
                 let run = ui.clone();
+                let remove = ui.clone();
                 row().class("docker-image-row").fill((
                     row().class("docker-image-name").fill((
                         text()
@@ -1718,16 +1734,27 @@ fn images(ui: Ui) -> impl Widget {
                             move || {
                                 let run = run.clone();
                                 let image = image;
-                                btn("Run", move || {
-                                    let (image, _) = image.get();
-                                    run.docker_run_open(format!(
-                                        "{}:{}",
-                                        image.repository, image.tag
-                                    ));
-                                })
-                                .class("button compact docker-image-run")
+                                icon_action("Run a container", Icon::Play)
+                                    .class("icon-button docker-image-run")
+                                    .on_press(move || {
+                                        let (image, _) = image.get();
+                                        run.docker_run_open(format!(
+                                            "{}:{}",
+                                            image.repository, image.tag
+                                        ));
+                                    })
                             },
                         ),
+                        {
+                            let remove = remove.clone();
+                            icon_action("Remove image", Icon::Clear)
+                                .class("icon-button docker-image-remove")
+                                .enabled(state.map(ready))
+                                .on_press(move || {
+                                    let (image, _) = image.get();
+                                    remove.docker_remove_image_open(image);
+                                })
+                        },
                     )),
                     text()
                         .class("docker-image-tag")
@@ -1754,6 +1781,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
         mirrors::dialog(ui.clone()),
         pull::dialog(ui.clone()),
         run::dialog(ui.clone()),
+        cleanup::dialogs(ui.clone()),
         when(state.map(|s| s.dialog == Some(Dialog::DockerAction)), {
             let ui = ui.clone();
             move || {

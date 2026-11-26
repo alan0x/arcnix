@@ -24,7 +24,7 @@ fn next_request() -> u64 {
 }
 
 /// The `repository:tag` a container's image names, with Docker's default tag.
-fn normalized(image: &str) -> String {
+pub(super) fn normalized(image: &str) -> String {
     let has_tag = image
         .rsplit_once(':')
         .is_some_and(|(_, tag)| !tag.contains('/'));
