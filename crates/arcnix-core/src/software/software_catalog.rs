@@ -684,12 +684,15 @@ mod tests {
                 Some("docker")
             );
         }
-        let single: Vec<_> = APPS
-            .iter()
-            .filter(|app| app.single.is_some())
-            .map(|app| app.id)
-            .collect();
-        assert_eq!(single, ["docker", "certbot"]);
+        assert!(docker.single.is_some() && get("certbot").unwrap().single.is_some());
+        // The warning compares a package copy with a snap copy, so it needs both.
+        for app in APPS.iter().filter(|app| app.single.is_some()) {
+            assert!(
+                app.snap.is_some() && app.package(Manager::Apt).is_some(),
+                "{}",
+                app.id
+            );
+        }
         assert!(get("git").unwrap().compose.is_none());
         let mut ids = std::collections::HashSet::new();
         for app in APPS {
