@@ -66,7 +66,7 @@ fn platforms(tag: &Tag) -> String {
 
 impl Ui {
     /// Runs `work` on its own thread and hands the result to `done`.
-    fn docker_registry_request<T: Send + 'static>(
+    pub(crate) fn docker_registry_request<T: Send + 'static>(
         &self,
         work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
         done: impl FnOnce(&mut State, std::result::Result<T, String>) + 'static,

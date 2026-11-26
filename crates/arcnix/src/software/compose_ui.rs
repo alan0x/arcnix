@@ -157,6 +157,7 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
         ),
         when(state.map(|s| selected(s).is_some()), move || {
             let apply = apply.clone();
+            let update = apply.clone();
             let stop = stop.clone();
             let restart = restart.clone();
             let remove = remove.clone();
@@ -184,6 +185,11 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
                 row().class("compose-actions").fill((
                     btn("Apply…", move || {
                         apply.compose_action(compose_apps::Action::Apply)
+                    })
+                    .class("button compact")
+                    .enabled(state.map(idle)),
+                    btn("Update…", move || {
+                        update.compose_action(compose_apps::Action::Update)
                     })
                     .class("button compact")
                     .enabled(state.map(idle)),
