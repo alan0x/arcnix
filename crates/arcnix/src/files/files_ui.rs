@@ -800,15 +800,23 @@ pub(crate) fn tag_results(ui: Ui, window: u32) -> impl Widget {
                         empty_state(Icon::Search, "No matching items", "files-tags-empty")
                     })
                 }),
-                col()
-                    .class("files-tags-list")
-                    .fill(each(paths).key(String::clone).children(move |item| {
+                col().class("files-tags-list").fill((
+                    when(
+                        state.map(move |_| paths.with(|rows| !rows.is_empty())),
+                        || {
+                            row().class("files-tag-columns").fill((
+                                text().content(i18n::bind("名称")),
+                                text().content(i18n::bind("Original path")),
+                            ))
+                        },
+                    ),
+                    each(paths).key(String::clone).children(move |item| {
                         let path = item.value;
                         let open = item_ui.clone();
                         let clear = item_ui.clone();
                         row().class("files-tag-result").fill((
                             sapid::button()
-                                .class("files-place files-tag-item")
+                                .class("files-tag-item")
                                 .name(path)
                                 .fill((
                                     text()
@@ -835,7 +843,8 @@ pub(crate) fn tag_results(ui: Ui, window: u32) -> impl Widget {
                                     });
                                 }),
                         ))
-                    })),
+                    }),
+                )),
             ))
         },
     )

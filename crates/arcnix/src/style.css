@@ -2482,12 +2482,26 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .files-tab-select > .folder-color-dot { margin-inline-end: 5px; }
 .tag-all { --folder-tag: conic-gradient(#ee646b, #ed9251, #dba928, #46af72, #4299eb, #b276dd, #ee646b); }
 .files-tags-view { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.files-tags-list { overflow: auto; min-height: 0; padding-inline: 10px; }
-.files-tags-list:has(.files-tag-result) { padding-block: 5px; }
-.files-tag-result { display: flex; align-items: center; gap: 4px; min-width: 0; border-bottom: 1px solid var(--file-row-line); }
-.files-tag-item { display: grid !important; grid-template-columns: 8px minmax(0, 1fr); column-gap: 10px; row-gap: 1px; flex: 1; min-width: 0; padding-block: 6px !important; }
-.files-tag-item > .folder-color-dot { grid-row: span 2; }
-.files-tag-item-path { grid-column: 2; font-size: var(--font-small); }
+.files-tags-list { display: block; overflow: auto; min-height: 0; }
+.files-tag-columns, .files-tag-result {
+  display: grid !important; grid-template-columns: 8px minmax(0, 1fr) minmax(0, 1.6fr) 30px;
+  align-items: center; column-gap: 12px; min-height: 32px; padding-inline: 12px;
+}
+.files-tag-columns {
+  position: sticky; top: 0; z-index: 1; background: var(--surface); color: var(--muted);
+  border-bottom: 1px solid var(--line); font-size: var(--font-small); user-select: none;
+}
+.files-tag-result { border-bottom: 1px solid var(--file-row-line); }
+.files-tag-columns > :first-child { grid-column: span 2; }
+.files-tag-result:hover { background: var(--raised); }
+.files-tag-item {
+  display: grid !important; grid-column: span 3; grid-template-columns: subgrid;
+  align-self: stretch; align-items: center; min-width: 0; padding: 4px 0 !important;
+  border: 0 !important; background: transparent !important; color: var(--text) !important;
+  text-align: start !important; font-size: var(--font-label);
+}
+.files-tag-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-tag-item-path { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-small); }
 .tag-red { --folder-tag: #ee646b; }
 .tag-orange { --folder-tag: #ed9251; }
 .tag-yellow { --folder-tag: #dba928; }
