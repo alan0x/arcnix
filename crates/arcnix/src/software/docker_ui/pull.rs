@@ -1,9 +1,12 @@
 //! Pulling an image by reference: a server task that runs `docker pull`, so
 //! a long download keeps going when Arcnix closes. The Images list refreshes
-//! when the task finishes.
+//! when the task finishes. The dialog can also search Docker Hub and list
+//! a repository's tags to choose from.
 use arcnix_core::docker_pull;
 
 use super::*;
+
+mod browse;
 
 #[derive(Clone, Default)]
 pub(crate) struct PullState {
@@ -13,6 +16,7 @@ pub(crate) struct PullState {
     /// The image list request sent after a pull, apart from the Docker
     /// app's own requests so neither replaces the other.
     refresh: Option<u64>,
+    browse: browse::BrowseState,
 }
 
 /// Server tasks run on Linux with systemd. Until the server's system is
@@ -102,6 +106,7 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
             ui.clone(),
             "Pull image",
             col().class("docker-pull-form").fill((
+                browse::section(ui.clone()),
                 text().class("hint").content(i18n::bind(
                     "Enter an image the way docker pull takes it: nginx:1.27, or ghcr.io/owner/app:1.0 for another registry. Without a tag, Docker pulls latest. Images from Docker Hub go through the registry mirrors.",
                 )),
@@ -113,6 +118,14 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
                         s.docker.pull.reference = v;
                         s.docker.pull.error.clear();
                     },
+                ),
+                row().class("docker-pull-actions").fill(
+                    btn("Show tags", {
+                        let ui = ui.clone();
+                        move || ui.docker_typed_tags()
+                    })
+                    .class("button compact")
+                    .enabled(state.map(|s| !s.docker.pull.reference.trim().is_empty())),
                 ),
                 field(
                     "Platform (optional, such as linux/arm64)",
@@ -139,7 +152,19 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
             )),
             sapid::button()
                 .class("button primary docker-pull-start")
-                .label(i18n::bind("Pull"))
+                // Names the image, which may be scrolled out of view after
+                // choosing a tag.
+                .label(state.map(|s| {
+                    let reference = s.docker.pull.reference.trim();
+                    if reference.is_empty() {
+                        i18n::translate("Pull")
+                    } else if reference.chars().count() > 48 {
+                        let short: String = reference.chars().take(47).collect();
+                        format!("{} {short}…", i18n::translate("Pull"))
+                    } else {
+                        format!("{} {reference}", i18n::translate("Pull"))
+                    }
+                }))
                 .enabled(state.map(can_pull))
                 .on_press(move || pull.docker_pull()),
         )

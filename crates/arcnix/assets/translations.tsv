@@ -3381,3 +3381,22 @@ Docker 返回了无效的响应	Invalid Docker response
 平台留空时拉取适合服务器本身的版本。拉取作为任务在服务器上运行：和其他任务一样用 sudo 启动，以当前 SSH 用户运行，关闭 Arcnix 不会中断。拉取完成前，此服务器上的其他 Arcnix 任务无法启动。	Leave the platform empty to pull the server's own. The pull runs on the server as a task: it starts with sudo like other tasks, runs as this SSH user, and keeps going when Arcnix closes. Other Arcnix tasks on this server can't start until it finishes.
 另一个服务器任务正在运行。请在它完成后再拉取。	Another server task is running. Pull when it finishes.
 镜像名最多 255 个字符	An image name can be at most 255 characters
+搜索 Docker Hub	Search Docker Hub
+正在搜索…	Searching…
+没有找到仓库	No repositories found
+搜索和标签列表从这台电脑直接请求镜像仓库。	Searches and tag lists go from this computer to the registry.
+官方	Official
+次拉取	pulls
+标签：	Tags of
+筛选标签	Filter tags
+筛选	Filter
+正在列出标签…	Listing tags…
+没有匹配的标签	No tags match
+选择一个标签以拉取。	Choose a tag to pull it.
+显示标签	Show tags
+请输入不超过 100 个字符的搜索内容	Enter up to 100 characters to search for
+请输入不超过 128 个字符的标签筛选	Enter up to 128 characters to filter tags
+镜像仓库的响应过大	The registry's answer is too large
+无法读取 Docker Hub 的搜索结果	Docker Hub's search answer isn't readable
+无法读取 Docker Hub 的标签列表	Docker Hub's tag list isn't readable
+无法读取镜像仓库的标签列表	The registry's tag list isn't readable

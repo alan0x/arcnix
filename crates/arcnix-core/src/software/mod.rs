@@ -2,6 +2,7 @@ pub mod compose_apps;
 pub mod docker;
 pub mod docker_daemon;
 pub mod docker_pull;
+pub mod docker_registry;
 pub mod installation_plan;
 pub mod installers;
 mod native_packages;
