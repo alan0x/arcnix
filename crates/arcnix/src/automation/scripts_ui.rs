@@ -390,6 +390,11 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
         }
         _ => false,
     };
+    // The Docker app checks for itself whether a finished task concerns it.
+    let finished = match &event {
+        batch_worker::Event::Complete(id) => Some(id.clone()),
+        _ => None,
+    };
     // Service, site and configuration tasks can change what Nginx shows.
     let refresh_nginx = match &event {
         batch_worker::Event::Complete(id)
@@ -512,7 +517,10 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
     }
     if let Some(id) = refresh_nginx {
         ui.nginx_task_finished(&id);
+    }
+    if let Some(id) = finished {
         ui.docker_task_finished(&id);
+        ui.docker_pull_finished(&id);
     }
     if refresh_software {
         ui.refresh_software_inventory();
