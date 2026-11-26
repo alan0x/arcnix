@@ -144,6 +144,31 @@ fn client() -> Result<&'static Client> {
     Ok(CLIENT.get_or_init(|| client))
 }
 
+/// The client for update checks. A manifest `HEAD` may be redirected to a
+/// storage host, as registry.k8s.io does, so it follows HTTPS redirects to
+/// other hosts; reqwest drops the Authorization header when the host changes.
+fn digest_client() -> Result<&'static Client> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = Client::builder()
+        .user_agent(concat!("Arcnix/", env!("CARGO_PKG_VERSION")))
+        .timeout(STEP)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else if usable_https_url(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()?;
+    Ok(CLIENT.get_or_init(|| client))
+}
+
 /// What can go wrong reaching a registry, worded for one message each.
 #[derive(Clone, Copy)]
 enum Place<'a> {
@@ -493,7 +518,7 @@ fn current_digest_until(reference: &str, deadline: Instant) -> Result<Option<Str
     } else {
         Place::Registry(&host)
     };
-    let client = client()?;
+    let client = digest_client()?;
     let mut url = Url::parse(&format!("https://{host}/"))?;
     url.path_segments_mut()
         .map_err(|()| anyhow::anyhow!("Invalid registry address"))?
@@ -511,21 +536,22 @@ fn current_digest_until(reference: &str, deadline: Instant) -> Result<Option<Str
         }
     };
     let mut response = send(request(&None), deadline, place)?;
+    let login = || anyhow::anyhow!("The registry {host} only answers after you log in");
     if response.status() == StatusCode::UNAUTHORIZED {
-        let token = Some(anonymous_token(
-            client,
-            response.headers(),
-            &host,
-            &name,
-            deadline,
-        )?);
+        let token = Some(
+            anonymous_token(client, response.headers(), &host, &name, deadline)
+                .map_err(|_| login())?,
+        );
         response = send(request(&token), deadline, place)?;
     }
     match response.status() {
         StatusCode::NOT_FOUND => bail!("The tag {tag} is no longer published"),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            bail!("The registry {host} only answers after you log in")
+        // Docker Hub answers 401 for a repository it doesn't have, which is
+        // what an image built on the server and never pushed looks like.
+        StatusCode::UNAUTHORIZED if hub => {
+            bail!("Docker Hub doesn't publish {repository}; it may have been built on the server")
         }
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(login()),
         status if !status.is_success() => {
             let status = status.as_u16();
             bail!("The registry {host} answered with HTTP {status}")
@@ -546,36 +572,50 @@ fn current_digest_until(reference: &str, deadline: Instant) -> Result<Option<Str
     })
 }
 
-/// Checks each pulled image, given as `(repository:tag, local digest)`,
-/// against its registry, each reference once. Images past the limit or the
-/// time budget are reported as not checked.
-pub fn check(images: &[(String, String)]) -> Vec<(String, Freshness)> {
+/// Checks each pulled image, given as `(repository:tag, digests Docker
+/// recorded for it)`, against its registry, each reference once. After a
+/// registry can't be reached, its other images aren't asked again. Images
+/// past the limit or the time budget are reported as not checked.
+pub fn check(images: &[(String, Vec<String>)]) -> Vec<(String, Freshness)> {
     let deadline = Instant::now() + CHECK_BUDGET;
     let mut seen = std::collections::HashSet::new();
+    let mut unreachable: Vec<(String, String)> = Vec::new();
     let mut results = Vec::new();
     for (reference, local) in images {
         if !seen.insert(reference.clone()) {
             continue;
         }
+        let host = match source(reference) {
+            Ok(Source::Registry { host, .. }) => host,
+            _ => "registry-1.docker.io".to_owned(),
+        };
         let now = Instant::now();
         let freshness = if now >= deadline {
             Freshness::Unknown("Not checked: the time limit was reached".into())
         } else if results.len() >= CHECK_LIMIT {
             Freshness::Unknown("Not checked: too many images at once".into())
+        } else if let Some((_, reason)) = unreachable.iter().find(|(h, _)| *h == host) {
+            Freshness::Unknown(reason.clone())
         } else {
-            freshness(
+            let freshness = freshness(
                 current_digest_until(reference, deadline.min(now + DEADLINE)),
                 local,
-            )
+            );
+            if let Freshness::Unknown(reason) = &freshness
+                && reason.contains("can't be reached")
+            {
+                unreachable.push((host, reason.clone()));
+            }
+            freshness
         };
         results.push((reference.clone(), freshness));
     }
     results
 }
 
-fn freshness(current: Result<Option<String>>, local: &str) -> Freshness {
+fn freshness(current: Result<Option<String>>, local: &[String]) -> Freshness {
     match current {
-        Ok(Some(remote)) if remote == local => Freshness::Current,
+        Ok(Some(remote)) if local.contains(&remote) => Freshness::Current,
         Ok(Some(remote)) => Freshness::Newer(remote),
         Ok(None) => Freshness::Current,
         Err(error) => Freshness::Unknown(format!("{error:#}")),
@@ -1025,12 +1065,21 @@ mod tests {
     fn freshness_compares_the_registry_digest_with_the_pulled_one() {
         let a = format!("sha256:{}", "a".repeat(64));
         let b = format!("sha256:{}", "b".repeat(64));
-        assert_eq!(freshness(Ok(Some(a.clone())), &a), Freshness::Current);
-        assert_eq!(freshness(Ok(Some(b.clone())), &a), Freshness::Newer(b));
+        let local = vec![a.clone()];
+        assert_eq!(freshness(Ok(Some(a.clone())), &local), Freshness::Current);
+        assert_eq!(
+            freshness(Ok(Some(b.clone())), &local),
+            Freshness::Newer(b.clone())
+        );
+        // An image pulled under several index digests is current if any matches.
+        assert_eq!(
+            freshness(Ok(Some(b.clone())), &[a.clone(), b]),
+            Freshness::Current
+        );
         // A reference pinned by digest never changes.
-        assert_eq!(freshness(Ok(None), &a), Freshness::Current);
+        assert_eq!(freshness(Ok(None), &local), Freshness::Current);
         assert!(matches!(
-            freshness(Err(anyhow::anyhow!("offline")), &a),
+            freshness(Err(anyhow::anyhow!("offline")), &local),
             Freshness::Unknown(reason) if reason == "offline"
         ));
         assert_eq!(

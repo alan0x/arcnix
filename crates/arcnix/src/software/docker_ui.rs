@@ -699,6 +699,18 @@ fn container_list(ui: Ui) -> impl Widget {
                                             .to_owned()
                                         }))
                                         .content(i18n::bind("Update available")),
+                                    text()
+                                        .class(state.map(move |_| {
+                                            if updates::superseded(
+                                                &container.get().container().image,
+                                            ) {
+                                                "docker-badge update"
+                                            } else {
+                                                "hidden"
+                                            }
+                                            .to_owned()
+                                        }))
+                                        .content(i18n::bind("Running an older image")),
                                 ))
                                 .on_press(move || {
                                     select.docker_select(container.get().container().id.clone())

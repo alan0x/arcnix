@@ -23,8 +23,15 @@ fn next_request() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The `repository:tag` a container's image names, with Docker's default tag.
+/// The `repository:tag` a container's image names, the way the image list
+/// writes it: Docker Hub's `docker.io/` and `library/` left out, and the
+/// default tag added.
 pub(super) fn normalized(image: &str) -> String {
+    let image = image
+        .strip_prefix("docker.io/")
+        .or_else(|| image.strip_prefix("index.docker.io/"))
+        .unwrap_or(image);
+    let image = image.strip_prefix("library/").unwrap_or(image);
     let has_tag = image
         .rsplit_once(':')
         .is_some_and(|(_, tag)| !tag.contains('/'));
@@ -33,6 +40,17 @@ pub(super) fn normalized(image: &str) -> String {
     } else {
         format!("{image}:latest")
     }
+}
+
+/// Whether a container runs an image its tag no longer points to: Docker
+/// then shows the image's ID instead of a name, as after an update was
+/// pulled. The container keeps the old image until it is recreated.
+pub(super) fn superseded(image: &str) -> bool {
+    let id = image.strip_prefix("sha256:").unwrap_or(image);
+    id.len() >= 12
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Whether the registry has a newer image than the one pulled for
@@ -44,7 +62,7 @@ pub(super) fn newer(s: &State, reference: &str) -> bool {
         return false;
     };
     !s.docker.images.iter().any(|image| {
-        image.pulled_reference().as_deref() == Some(&reference) && &image.digest == remote
+        image.pulled_reference().as_deref() == Some(&reference) && image.digests.contains(remote)
     })
 }
 
@@ -57,14 +75,31 @@ pub(super) fn summary(s: &State) -> String {
     if !u.checked {
         return String::new();
     }
-    let newer = u.results.keys().filter(|r| newer(s, r)).count();
-    let unknown = u
+    // Only images still on the server count.
+    let present: Vec<String> = s
+        .docker
+        .images
+        .iter()
+        .filter_map(|i| i.pulled_reference())
+        .collect();
+    let results: Vec<(&String, &Freshness)> = u
         .results
-        .values()
-        .filter(|f| matches!(f, Freshness::Unknown(_)))
+        .iter()
+        .filter(|(r, _)| present.contains(r))
+        .collect();
+    let newer = results.iter().filter(|(r, _)| newer(s, r)).count();
+    let unknown = results
+        .iter()
+        .filter(|(_, f)| matches!(f, Freshness::Unknown(_)))
         .count();
+    if results.is_empty() {
+        return i18n::translate("No image pulled from a registry to check.");
+    }
+    if unknown == results.len() {
+        return i18n::translate("None of the images could be checked.");
+    }
     let mut line = match newer {
-        0 => i18n::translate("Every pulled image is up to date."),
+        0 => i18n::translate("Every image that could be checked is up to date."),
         1 => i18n::translate(
             "1 image has an update. Update pulls the new image; a container keeps the old one until it is recreated. Arcnix projects are updated in Projects.",
         ),
@@ -99,11 +134,11 @@ impl Ui {
             if s.docker.updates.checking {
                 return None;
             }
-            let images: Vec<(String, String)> = s
+            let images: Vec<(String, Vec<String>)> = s
                 .docker
                 .images
                 .iter()
-                .filter_map(|image| Some((image.pulled_reference()?, image.digest.clone())))
+                .filter_map(|image| Some((image.pulled_reference()?, image.digests.clone())))
                 .collect();
             let u = &mut s.docker.updates;
             u.request = next_request();
@@ -151,6 +186,11 @@ mod tests {
             "localhost:5000/app:latest"
         );
         assert_eq!(normalized("localhost:5000/app:1"), "localhost:5000/app:1");
+        assert_eq!(normalized("docker.io/library/postgres:16"), "postgres:16");
+        assert_eq!(normalized("docker.io/nginx"), "nginx:latest");
+        assert_eq!(normalized("library/nginx:1.27"), "nginx:1.27");
+        assert!(superseded("65645c7bb6a0"));
+        assert!(!superseded("nginx:1.27") && !superseded("abc"));
         let pinned = format!("nginx@sha256:{}", "a".repeat(64));
         assert_eq!(normalized(&pinned), pinned);
     }

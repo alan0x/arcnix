@@ -83,14 +83,21 @@ pub struct Image {
     /// or `<none>` for an image built or loaded on the server.
     #[serde(default)]
     pub digest: String,
+    /// Every digest recorded for this tag: the classic image store keeps one
+    /// per pull when a registry republishes a tag. `image ls --digests`
+    /// lists each on its own row; they are merged into one image here.
+    #[serde(default)]
+    pub digests: Vec<String>,
 }
 
 impl Image {
     /// The `repository:tag` a registry knows this image by, when it was
     /// pulled from one.
     pub fn pulled_reference(&self) -> Option<String> {
-        (self.repository != "<none>" && self.tag != "<none>" && self.digest.starts_with("sha256:"))
-            .then(|| format!("{}:{}", self.repository, self.tag))
+        (self.repository != "<none>"
+            && self.tag != "<none>"
+            && self.digests.iter().any(|d| d.starts_with("sha256:")))
+        .then(|| format!("{}:{}", self.repository, self.tag))
     }
 }
 
@@ -465,7 +472,32 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
             ensure!(index < ROW_LIMIT, "Too many Docker images");
             Ok(serde_json::from_str(row)?)
         })
-        .collect()
+        .collect::<Result<Vec<Image>>>()
+        .map(merge_digests)
+}
+
+/// One image per ID, repository and tag, with every digest recorded for it.
+fn merge_digests(rows: Vec<Image>) -> Vec<Image> {
+    let mut images: Vec<Image> = Vec::new();
+    for mut row in rows {
+        let digest = row.digest.clone();
+        if let Some(image) = images
+            .iter_mut()
+            .find(|i| i.id == row.id && i.repository == row.repository && i.tag == row.tag)
+        {
+            if digest.starts_with("sha256:") && !image.digests.contains(&digest) {
+                image.digests.push(digest);
+            }
+            continue;
+        }
+        row.digests = if digest.starts_with("sha256:") {
+            vec![digest]
+        } else {
+            vec![]
+        };
+        images.push(row);
+    }
+    images
 }
 
 /// Prepare an interactive shell on the same local daemon and container as the inventory.
@@ -1436,5 +1468,29 @@ mod tests {
         assert_eq!(names, ["repro_default", "host", "bridge"]);
         assert_eq!(networks[2].subnets, ["172.17.0.0/16", "fd00::/64"]);
         assert!(networks[2].built_in() && !networks[0].built_in());
+    }
+
+    #[test]
+    fn rows_for_one_tag_with_several_digests_are_one_image() {
+        let row = |id: &str, tag: &str, digest: &str| Image {
+            id: id.into(),
+            repository: "nginx".into(),
+            tag: tag.into(),
+            size: "1MB".into(),
+            digest: digest.into(),
+            digests: vec![],
+        };
+        let a = format!("sha256:{}", "a".repeat(64));
+        let b = format!("sha256:{}", "b".repeat(64));
+        let images = merge_digests(vec![
+            row("1", "latest", &a),
+            row("1", "latest", &b),
+            row("1", "1.27", &a),
+            row("2", "<none>", "<none>"),
+        ]);
+        assert_eq!(images.len(), 3);
+        assert_eq!(images[0].digests, [a.clone(), b]);
+        assert_eq!(images[1].digests, [a]);
+        assert!(images[2].digests.is_empty() && images[2].pulled_reference().is_none());
     }
 }
