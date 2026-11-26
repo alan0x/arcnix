@@ -85,6 +85,7 @@ enum Dialog {
     DockerRun,
     DockerCleanup,
     DockerRemoveImage,
+    DockerLogins,
     NginxNewSite,
     TerminalRename {
         id: u64,

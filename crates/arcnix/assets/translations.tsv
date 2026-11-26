@@ -3488,3 +3488,20 @@ Docker 会保留拉取过的每个镜像和构建缓存，直到它们被移除�
 请先移除或重新创建这些容器；否则 Docker 只会去掉这个标签。	Remove or recreate these containers first; Docker would only take the tag away.
 没有可移除的内容	Nothing to remove
 运行容器	Run a container
+镜像仓库登录	Registry logins
+登录	Log in
+退出登录	Log out
+登录后，此服务器可以拉取私有镜像，包括通过“拉取镜像”。Docker 把登录信息保存在此 SSH 用户的 ~/.docker/config.json 中。	Logging in lets this server pull private images, including with Pull image. Docker keeps the login in this SSH user's ~/.docker/config.json.
+正在读取 Docker 的登录信息…	Reading Docker's logins…
+此服务器尚未登录任何镜像仓库。	This server isn't logged in to any registry.
+由 {helper} 凭据助手保存	Kept by the {helper} credential helper
+保存在 config.json 中，经过 base64 编码但未加密	Kept in config.json, base64-encoded but not encrypted
+镜像仓库（留空表示 Docker Hub）	Registry (empty for Docker Hub)
+用户名	User name
+密码或访问令牌	Password or access token
+没有凭据助手时，Docker 以 base64 编码保存密码：能读取此用户文件的人都可以解码。建议使用只读权限的访问令牌。	Without a credential helper, Docker stores the password base64-encoded: anyone who can read this user's files can decode it. Prefer an access token with read-only scope.
+Windows 上的镜像仓库登录由 Docker Desktop 管理	Registry logins are managed in Docker Desktop on Windows
+无法读取 Docker 的 config.json	Docker's config.json isn't readable
+请输入镜像仓库，例如 ghcr.io 或 registry.example.com:5000，或留空表示 Docker Hub	Enter a registry such as ghcr.io or registry.example.com:5000, or leave it empty for Docker Hub
+请输入镜像仓库的用户名	Enter the user name for the registry
+请输入密码或访问令牌	Enter the password or access token

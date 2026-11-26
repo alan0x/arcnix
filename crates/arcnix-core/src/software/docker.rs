@@ -465,6 +465,191 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
         .collect()
 }
 
+/// A registry this SSH user is logged in to, and where Docker keeps the
+/// credentials.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Login {
+    /// The registry as Docker names it, such as `https://index.docker.io/v1/`
+    /// for Docker Hub or `ghcr.io`.
+    pub registry: String,
+    /// The credential helper that holds the password, or None when Docker
+    /// keeps it base64-encoded in config.json.
+    pub helper: Option<String>,
+}
+
+/// Reads `config.json` with every secret blanked on the server, so only the
+/// registry names and helper names are sent.
+const LOGINS_SCRIPT: &str = r#"set -u
+config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+[ -f "$config" ] && [ -r "$config" ] || { printf '{}'; exit 0; }
+head -c 65536 -- "$config" | sed -E 's/"(auth|identitytoken|registrytoken|password|username)"[[:space:]]*:[[:space:]]*"[^"]*"/"\1":""/g'"#;
+
+pub fn parse_logins(text: &str) -> Result<Vec<Login>> {
+    #[derive(Deserialize)]
+    struct Config {
+        #[serde(default)]
+        auths: Option<std::collections::BTreeMap<String, Value>>,
+        #[serde(default, rename = "credsStore")]
+        store: Option<String>,
+        #[serde(default, rename = "credHelpers")]
+        helpers: Option<std::collections::BTreeMap<String, String>>,
+    }
+    let config: Config = serde_json::from_str(text.trim())
+        .map_err(|_| anyhow::anyhow!("Docker's config.json isn't readable"))?;
+    let helpers = config.helpers.unwrap_or_default();
+    let store = config.store.filter(|s| !s.is_empty());
+    let mut logins: Vec<Login> = config
+        .auths
+        .unwrap_or_default()
+        .into_keys()
+        .map(|registry| Login {
+            helper: helpers.get(&registry).cloned().or_else(|| store.clone()),
+            registry,
+        })
+        .collect();
+    // A registry with its own helper may not appear under auths.
+    for (registry, helper) in helpers {
+        if !logins.iter().any(|l| l.registry == registry) {
+            logins.push(Login {
+                registry,
+                helper: Some(helper),
+            });
+        }
+    }
+    logins.truncate(64);
+    Ok(logins)
+}
+
+pub fn logins(session: &RemoteSession) -> Result<Vec<Login>> {
+    ensure!(
+        session.host_os()? != HostOs::Windows,
+        "Registry logins are managed in Docker Desktop on Windows"
+    );
+    let output = execute(
+        session,
+        &format!("# arcnix:docker:logins\n{LOGINS_SCRIPT}"),
+        128 * 1024,
+    )?;
+    ensure!(
+        output.exit_code == 0,
+        "Docker's logins can't be read: {}",
+        output.stderr.trim()
+    );
+    parse_logins(&output.stdout)
+}
+
+/// A registry host for `docker login`, or empty for Docker Hub.
+pub fn checked_registry(registry: &str) -> Result<String> {
+    let registry = registry.trim().trim_end_matches('/');
+    let registry = registry
+        .strip_prefix("https://")
+        .or_else(|| registry.strip_prefix("http://"))
+        .unwrap_or(registry);
+    if registry.is_empty() {
+        return Ok(String::new());
+    }
+    ensure!(
+        registry == "index.docker.io/v1"
+            || crate::docker_pull::checked_reference(&format!("{registry}/x"))
+                .is_ok_and(|_| registry.contains(['.', ':']) || registry == "localhost")
+                && !registry.contains('/'),
+        "Enter a registry such as ghcr.io or registry.example.com:5000, or leave it empty for Docker Hub"
+    );
+    Ok(if registry == "index.docker.io/v1" {
+        "https://index.docker.io/v1/".into()
+    } else {
+        registry.to_owned()
+    })
+}
+
+fn login_request(registry: &str, username: &str) -> Result<DockerRequest> {
+    let registry = checked_registry(registry)?;
+    let username = username.trim();
+    ensure!(
+        !username.is_empty()
+            && username.len() <= 256
+            && !username.starts_with('-')
+            && !username.chars().any(char::is_control),
+        "Enter the user name for the registry"
+    );
+    let mut args = vec![
+        "login".to_owned(),
+        "--username".into(),
+        username.into(),
+        "--password-stdin".into(),
+    ];
+    if !registry.is_empty() {
+        args.push(registry);
+    }
+    Ok(DockerRequest {
+        operation: "login",
+        steps: vec![Step::Call(args, true)],
+    })
+}
+
+/// Logs this SSH user in to a registry. The password goes to Docker on
+/// standard input, never on a command line, and isn't kept by Arcnix.
+/// Returns Docker's message, which says where the credentials were stored.
+pub fn login(
+    session: &RemoteSession,
+    registry: &str,
+    username: &str,
+    password: &str,
+) -> Result<String> {
+    ensure!(
+        session.host_os()? != HostOs::Windows,
+        "Registry logins are managed in Docker Desktop on Windows"
+    );
+    ensure!(
+        !password.is_empty() && password.len() <= 4000 && !password.contains(['\n', '\r', '\0']),
+        "Enter the password or access token"
+    );
+    let command = login_request(registry, username)?.command(session)?;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let output = session.exec_stream(
+        &command,
+        Some(password.as_bytes()),
+        std::time::Duration::from_secs(60),
+        |stream, bytes| match stream {
+            crate::remote::CommandStream::Stdout if stdout.len() < LIMIT => {
+                stdout.extend_from_slice(bytes)
+            }
+            crate::remote::CommandStream::Stderr if stderr.len() < LIMIT => {
+                stderr.extend_from_slice(bytes)
+            }
+            _ => {}
+        },
+    )?;
+    let output = crate::CommandOutput {
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        exit_code: output.exit_code,
+    };
+    let output = check(output, merged_failure)?;
+    Ok(output.stdout.trim().to_owned())
+}
+
+fn logout_request(registry: &str) -> Result<DockerRequest> {
+    let registry = checked_registry(registry)?;
+    let mut args = vec!["logout".to_owned()];
+    if !registry.is_empty() {
+        args.push(registry);
+    }
+    Ok(DockerRequest {
+        operation: "logout",
+        steps: vec![Step::Call(args, true)],
+    })
+}
+
+pub fn logout(session: &RemoteSession, registry: &str) -> Result<String> {
+    let output = check(
+        execute_lossy(session, &logout_request(registry)?.command(session)?, LIMIT)?,
+        merged_failure,
+    )?;
+    Ok(output.stdout.trim().to_owned())
+}
+
 /// One line of `docker system df`: images, containers, local volumes or the
 /// build cache.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -988,6 +1173,85 @@ mod tests {
                 .unwrap()
                 .shell(PREFIX)
                 .contains("--force")
+        );
+    }
+
+    #[test]
+    fn logins_are_listed_without_their_secrets() {
+        let plain =
+            r#"{"auths":{"https://index.docker.io/v1/":{"auth":""},"127.0.0.1:5001":{"auth":""}}}"#;
+        assert_eq!(
+            parse_logins(plain).unwrap(),
+            [
+                Login {
+                    registry: "127.0.0.1:5001".into(),
+                    helper: None
+                },
+                Login {
+                    registry: "https://index.docker.io/v1/".into(),
+                    helper: None
+                },
+            ]
+        );
+        let helped = r#"{"auths":{"ghcr.io":{}},"credsStore":"pass","credHelpers":{"123.dkr.ecr.us-east-1.amazonaws.com":"ecr-login"}}"#;
+        assert_eq!(
+            parse_logins(helped).unwrap(),
+            [
+                Login {
+                    registry: "ghcr.io".into(),
+                    helper: Some("pass".into())
+                },
+                Login {
+                    registry: "123.dkr.ecr.us-east-1.amazonaws.com".into(),
+                    helper: Some("ecr-login".into())
+                },
+            ]
+        );
+        assert!(parse_logins("{}").unwrap().is_empty());
+        // The script blanks every secret before anything is sent.
+        for key in [
+            "auth",
+            "identitytoken",
+            "registrytoken",
+            "password",
+            "username",
+        ] {
+            assert!(LOGINS_SCRIPT.contains(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn logins_keep_the_password_off_the_command_line() {
+        assert_eq!(checked_registry("").unwrap(), "");
+        assert_eq!(checked_registry("https://ghcr.io/").unwrap(), "ghcr.io");
+        assert_eq!(
+            checked_registry("registry.example.com:5000").unwrap(),
+            "registry.example.com:5000"
+        );
+        assert_eq!(
+            checked_registry("https://index.docker.io/v1/").unwrap(),
+            "https://index.docker.io/v1/"
+        );
+        for bad in ["ghcr.io/owner", "nginx", "-x", "a b", "ghcr.io;id"] {
+            assert!(checked_registry(bad).is_err(), "{bad}");
+        }
+        let command = login_request("ghcr.io", "octo").unwrap().shell(PREFIX);
+        assert!(
+            command.ends_with("arcnix_docker login --username octo --password-stdin ghcr.io 2>&1"),
+            "{command}"
+        );
+        let hub = login_request("", "user name").unwrap().shell(PREFIX);
+        assert!(
+            hub.ends_with("arcnix_docker login --username 'user name' --password-stdin 2>&1"),
+            "{hub}"
+        );
+        assert!(login_request("ghcr.io", "-p").is_err());
+        assert!(login_request("ghcr.io", "").is_err());
+        assert!(
+            logout_request("ghcr.io")
+                .unwrap()
+                .shell(PREFIX)
+                .ends_with("arcnix_docker logout ghcr.io 2>&1")
         );
     }
 }
