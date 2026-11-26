@@ -265,7 +265,11 @@ impl ContainerApp {
         if !self.environment.is_empty() {
             out.push_str("    environment:\n");
             for (key, value) in &self.environment {
-                out.push_str(&format!("      {}: {}\n", s(key), s(&value.replace('$', "$$"))));
+                out.push_str(&format!(
+                    "      {}: {}\n",
+                    s(key),
+                    s(&value.replace('$', "$$"))
+                ));
             }
         }
         let named: Vec<&str> = self
