@@ -3345,3 +3345,12 @@ Rootless Docker 读取 ~/.config/docker/daemon.json。请在其中修改 registr
 Docker Desktop 自行管理守护进程设置。请在“设置 → Docker Engine”中修改 registry-mirrors。	Docker Desktop manages its daemon settings. Change registry-mirrors in Settings → Docker Engine.
 Arcnix 在此服务器上没有找到 docker.service，因此不知道 Docker 的设置在哪里。	Arcnix found no docker.service on this server, so it doesn't know where Docker's settings are.
 docker.service 启动 dockerd 的方式 Arcnix 无法检查，因此不会修改加速地址。	docker.service starts dockerd in a way Arcnix can't check, so it leaves the mirrors alone.
+Arcnix 不知道此系统上 Docker 的设置在哪里。	Arcnix doesn't know where Docker's settings are on this system.
+docker.service 只监听网络地址，Arcnix 无法检查加速地址的更改是否生效。	docker.service listens only on network addresses, so Arcnix can't check a change to the mirrors.
+Arcnix 无法只修改此文件中的加速地址。请改用“文件”编辑。	Arcnix couldn't change only the mirrors in this file. Edit it in Files instead.
+Docker 配置文件使用 Windows 换行。请先在“文件”中转换为 LF。	The daemon configuration file has Windows line endings. Convert it to LF in Files first.
+Docker 配置文件必须是一个 JSON 对象	The daemon configuration file must hold a JSON object
+Docker 配置文件中 registry-mirrors 出现了两次	registry-mirrors appears twice in the daemon configuration file
+Docker 配置文件超过 128 KiB	The daemon configuration file is larger than 128 KiB
+修改后的 Docker 配置文件将超过 128 KiB	The daemon configuration file would be larger than 128 KiB
+Docker 返回了无效的响应	Invalid Docker response

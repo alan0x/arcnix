@@ -35,6 +35,8 @@ pub enum Setup {
         /// setting given both as an option and in the file is refused.
         options: Vec<String>,
         config: String,
+        /// The local socket the service listens on, for checking the result.
+        socket: String,
     },
     /// The Docker snap; its daemon.json belongs to the snap.
     Snap,
@@ -60,6 +62,8 @@ pub struct Daemon {
     pub mirrors: Vec<String>,
     pub setup: Setup,
     pub config: Config,
+    /// Whether the server can run the mirror test, a POSIX shell script.
+    pub testable: bool,
 }
 
 impl Daemon {
@@ -110,6 +114,14 @@ snap=$(systemctl show snap.docker.dockerd.service -p LoadState --value 2>/dev/nu
 printf 'ARCNIX_UNIT %s\n' "$unit"
 printf 'ARCNIX_SNAP %s\n' "$snap"
 printf 'ARCNIX_START %s\n' "$start"
+printf 'ARCNIX_ENV %s\n' "$(systemctl show docker.service -p Environment --value 2>/dev/null || true)"
+systemctl show docker.service -p EnvironmentFiles --value 2>/dev/null | while IFS= read -r line; do
+  file=${line% (ignore_errors=*}
+  [ -n "$file" ] || continue
+  if [ -r "$file" ]; then grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' -- "$file" | head -n 200 | sed 's/^/ARCNIX_ENVFILE /'
+  elif [ -e "$file" ]; then printf 'ARCNIX_ENVFILE_UNREADABLE %s\n' "$file"
+  fi
+done
 config=$(printf '%s' "$start" | sed -n 's/.*--config-file[= ]\([^ ;]*\).*/\1/p')
 config=${config:-/etc/docker/daemon.json}
 printf 'ARCNIX_CONFIG %s\n' "$config"
@@ -121,17 +133,25 @@ fi"#;
 /// Reads the daemon's mirrors and how it is started.
 pub fn read(session: &RemoteSession) -> Result<Daemon> {
     let registry = docker::registry(session)?;
-    if session.host_os()? != HostOs::Linux {
+    let host = session.host_os()?;
+    if host != HostOs::Linux {
         return Ok(Daemon {
             mirrors: registry.mirrors,
-            setup: Setup::Desktop,
+            setup: if matches!(host, HostOs::MacOs | HostOs::Windows) {
+                Setup::Desktop
+            } else {
+                Setup::Unknown(
+                    "Arcnix doesn't know where Docker's settings are on this system.".into(),
+                )
+            },
             config: Config::Missing,
+            testable: host == HostOs::MacOs,
         });
     }
     let output = execute(
         session,
         &format!("# arcnix:docker:daemon\n{SETUP_SCRIPT}"),
-        CONFIG_LIMIT + 8192,
+        CONFIG_LIMIT + 64 * 1024,
     )?;
     ensure!(
         output.exit_code == 0,
@@ -141,24 +161,113 @@ pub fn read(session: &RemoteSession) -> Result<Daemon> {
     parse(&output.stdout, registry)
 }
 
+/// What docker.service's environment gives a variable: a plain value, or
+/// None when it uses quoting or expansion Arcnix doesn't follow.
+struct Environment {
+    values: std::collections::HashMap<String, Option<String>>,
+    /// Every variable is known: an unset one is empty.
+    complete: bool,
+}
+
+impl Environment {
+    fn read(assignments: &str, files: &[String], unreadable: bool) -> Self {
+        let mut values = std::collections::HashMap::new();
+        let mut complete = !unreadable;
+        if assignments.contains(['"', '\\']) {
+            complete = false;
+        } else {
+            for word in assignments.split_whitespace() {
+                if let Some((key, value)) = word.split_once('=') {
+                    values.insert(key.to_owned(), plain(value));
+                }
+            }
+        }
+        // Settings from files override Environment=.
+        for line in files {
+            if let Some((key, value)) = line.trim_start().split_once('=') {
+                let value = value.trim();
+                let value = [('"', '"'), ('\'', '\'')]
+                    .iter()
+                    .find_map(|(a, b)| value.strip_prefix(*a)?.strip_suffix(*b))
+                    .unwrap_or(value);
+                values.insert(key.trim().to_owned(), plain(value));
+            }
+        }
+        Self { values, complete }
+    }
+
+    /// The dockerd words after systemd expands `$NAME` (split on spaces) and
+    /// `${NAME}` (one word). None when a word can't be expanded safely.
+    fn expand(&self, argv: &str) -> Option<Vec<String>> {
+        let mut words = Vec::new();
+        for word in argv.split_whitespace() {
+            if !word.contains('$') {
+                words.push(word.to_owned());
+                continue;
+            }
+            let (name, braced) = match word.strip_prefix("${").and_then(|w| w.strip_suffix('}')) {
+                Some(name) => (name, true),
+                None => (word.strip_prefix('$')?, false),
+            };
+            if name.is_empty()
+                || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                || name.starts_with(|c: char| c.is_ascii_digit())
+            {
+                return None;
+            }
+            match self.values.get(name) {
+                Some(Some(value)) if braced && value.contains(char::is_whitespace) => return None,
+                Some(Some(value)) => words.extend(value.split_whitespace().map(str::to_owned)),
+                Some(None) => return None,
+                None if self.complete => {}
+                None => return None,
+            }
+        }
+        Some(words)
+    }
+}
+
+fn plain(value: &str) -> Option<String> {
+    (!value.contains(['"', '\'', '\\', '$', '`'])).then(|| value.to_owned())
+}
+
 /// Reads the output of [`SETUP_SCRIPT`] together with `docker info`.
 pub fn parse(text: &str, registry: docker::Registry) -> Result<Daemon> {
-    let mut lines = text.splitn(5, '\n');
-    let mut field = |name: &str| -> Result<String> {
-        let line = lines.next().unwrap_or_default();
-        let prefix = format!("ARCNIX_{name} ");
+    let unexpected = || anyhow::anyhow!("Unexpected Docker service details");
+    let mut rest = text;
+    let mut next = || {
+        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        rest = after;
+        line
+    };
+    let field = |line: &str, name: &str| -> Result<String> {
+        let prefix = format!("ARCNIX_{name}");
         match line.strip_prefix(&prefix) {
-            Some(value) => Ok(value.to_owned()),
-            None if line == prefix.trim_end() => Ok(String::new()),
-            None => bail!("Unexpected Docker service details"),
+            Some("") => Ok(String::new()),
+            Some(value) => value
+                .strip_prefix(' ')
+                .map(str::to_owned)
+                .ok_or_else(unexpected),
+            None => Err(unexpected()),
         }
     };
-    let unit = field("UNIT")?;
-    let snap = field("SNAP")?;
-    let start = field("START")?;
-    let path = field("CONFIG")?;
-    let rest = lines.next().unwrap_or_default();
-    let (state, body) = rest.split_once('\n').unwrap_or((rest, ""));
+    let unit = field(next(), "UNIT")?;
+    let snap = field(next(), "SNAP")?;
+    let start = field(next(), "START")?;
+    let assignments = field(next(), "ENV")?;
+    let (mut files, mut unreadable) = (Vec::new(), false);
+    let path = loop {
+        let line = next();
+        if let Some(value) = line.strip_prefix("ARCNIX_ENVFILE ") {
+            files.push(value.to_owned());
+        } else if line.starts_with("ARCNIX_ENVFILE_UNREADABLE") {
+            unreadable = true;
+        } else {
+            break field(line, "CONFIG")?;
+        }
+    };
+    let state = next();
+    let body = rest;
     let config = match state {
         "missing" => Config::Missing,
         "unreadable" => Config::Unreadable,
@@ -174,7 +283,11 @@ pub fn parse(text: &str, registry: docker::Registry) -> Result<Daemon> {
     let setup = if registry.rootless() {
         Setup::Rootless
     } else if unit == "loaded" {
-        service(&start, &path)
+        service(
+            &start,
+            &path,
+            &Environment::read(&assignments, &files, unreadable),
+        )
     } else if snap == "loaded" {
         Setup::Snap
     } else {
@@ -188,12 +301,14 @@ pub fn parse(text: &str, registry: docker::Registry) -> Result<Daemon> {
             Config::Missing
         },
         setup,
+        testable: true,
     })
 }
 
 /// The dockerd command line from systemd's `ExecStart` property, such as
-/// `{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// ; ... }`.
-fn service(start: &str, config: &str) -> Setup {
+/// `{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// ; ... }`,
+/// with the service's environment variables expanded.
+fn service(start: &str, config: &str, environment: &Environment) -> Setup {
     let complex = || {
         Setup::Unknown(
             "docker.service starts dockerd in a way Arcnix can't check, so it leaves the mirrors alone."
@@ -208,31 +323,63 @@ fn service(start: &str, config: &str) -> Setup {
     };
     // Exactly one dockerd command, with plain words that need no quoting.
     if start.matches("argv[]=").count() != 1
-        || argv.contains(['"', '\'', '\\', '$', '`'])
+        || argv.contains(['"', '\'', '\\', '`'])
         || !config.starts_with('/')
     {
         return complex();
     }
-    let mut words = argv.split_whitespace();
+    let Some(words) = environment.expand(argv) else {
+        return complex();
+    };
+    let mut words = words.into_iter();
     let Some(dockerd) = words.next().filter(|w| w.ends_with("/dockerd")) else {
         return complex();
     };
-    let mut options = Vec::new();
-    let mut skip = false;
-    for word in words {
-        if std::mem::take(&mut skip) {
+    let (mut options, mut hosts) = (Vec::new(), Vec::new());
+    let mut words = words.peekable();
+    while let Some(word) = words.next() {
+        if word == "--config-file" || word.starts_with("--config-file=") {
+            // A file named only through the environment isn't the one read.
+            let named = word
+                .strip_prefix("--config-file=")
+                .map(str::to_owned)
+                .or_else(|| words.next());
+            if named.as_deref() != Some(config) {
+                return complex();
+            }
             continue;
         }
-        if word == "--config-file" {
-            skip = true;
-        } else if !word.starts_with("--config-file=") {
-            options.push(word.to_owned());
+        if let Some(host) = word
+            .strip_prefix("--host=")
+            .or_else(|| word.strip_prefix("-H="))
+        {
+            hosts.push(host.to_owned());
+        } else if (word == "-H" || word == "--host")
+            && let Some(host) = words.peek()
+        {
+            hosts.push(host.clone());
         }
+        options.push(word);
     }
+    // Checking the result needs a local socket: the default one behind
+    // systemd's fd://, or a unix:// address the service names.
+    let socket = match hosts.iter().find_map(|h| h.strip_prefix("unix://")) {
+        Some(path) if path.starts_with('/') => path.to_owned(),
+        Some(_) => return complex(),
+        None if hosts.is_empty() || hosts.iter().any(|h| h == "fd://") => {
+            "/var/run/docker.sock".into()
+        }
+        None => {
+            return Setup::Unknown(
+                "docker.service listens only on network addresses, so Arcnix can't check a change to the mirrors.".into(),
+            );
+        }
+    };
     Setup::Service {
-        dockerd: dockerd.into(),
+        dockerd: dockerd.clone(),
         options,
         config: config.into(),
+        socket,
     }
 }
 
@@ -302,9 +449,14 @@ pub fn checked_mirrors(mirrors: &[String]) -> Result<Vec<String>> {
 /// value changes; every other byte of an existing file is kept.
 pub fn with_mirrors(text: Option<&str>, mirrors: &[String]) -> Result<String> {
     let mirrors = checked_mirrors(mirrors)?;
+    // dockerd ignores a byte order mark; keep it in front of the result.
+    let (bom, text) = match text.and_then(|t| t.strip_prefix('\u{feff}')) {
+        Some(rest) => ("\u{feff}", Some(rest)),
+        None => ("", text),
+    };
     let Some(text) = text.filter(|t| !t.trim().is_empty()) else {
         return Ok(format!(
-            "{{\n  \"{KEY}\": {}\n}}\n",
+            "{bom}{{\n  \"{KEY}\": {}\n}}\n",
             array(&mirrors, "  ", "  ", true)
         ));
     };
@@ -366,7 +518,7 @@ pub fn with_mirrors(text: Option<&str>, mirrors: &[String]) -> Result<String> {
         result.len() <= CONFIG_LIMIT,
         "The daemon configuration file would be larger than 128 KiB"
     );
-    Ok(result)
+    Ok(format!("{bom}{result}"))
 }
 
 fn array(mirrors: &[String], indent: &str, unit: &str, lines: bool) -> String {
@@ -518,6 +670,7 @@ pub fn publish(daemon: &Daemon, mirrors: &[String]) -> Result<Template> {
         dockerd,
         options,
         config,
+        socket,
     } = &daemon.setup
     else {
         unreachable!("read_only covers other setups");
@@ -527,9 +680,7 @@ pub fn publish(daemon: &Daemon, mirrors: &[String]) -> Result<Template> {
         _ => None,
     };
     let content = with_mirrors(current, mirrors)?;
-    let mirrors = checked_mirrors(mirrors)?;
     let options: String = options.iter().map(|o| format!(" {}", quote(o))).collect();
-    let expected = serde_json::to_string(&reported(&mirrors))?;
     let spec = configurations::Spec {
         path: config.clone(),
         kind: configurations::Kind::Custom,
@@ -539,8 +690,9 @@ pub fn publish(daemon: &Daemon, mirrors: &[String]) -> Result<Template> {
         ),
         reload: "systemctl --no-ask-password reload docker.service".into(),
         health: format!(
-            "test \"$(docker --host unix:///var/run/docker.sock info --format '{{{{json .RegistryConfig.Mirrors}}}}' 2>/dev/null)\" = {}",
-            quote(&expected)
+            "python3 -I -c {} \"$1\" {}",
+            quote(HEALTH),
+            quote(&format!("unix://{socket}"))
         ),
         health_seconds: 15,
         ..Default::default()
@@ -552,6 +704,23 @@ pub fn publish(daemon: &Daemon, mirrors: &[String]) -> Result<Template> {
     };
     job.template()
 }
+
+/// The health check, run as root with the live daemon.json and the service's
+/// socket: the daemon answers and uses the mirrors the file lists. Comparing
+/// with the file, not the new list, keeps it right when a failed publish
+/// restores the original. A file without the key passes, because reloading
+/// it keeps whatever mirrors the daemon had.
+const HEALTH: &str = r#"import json, subprocess, sys
+path, host = sys.argv[1], sys.argv[2]
+out = subprocess.run(['docker', '--host', host, 'info', '--format', '{{json .RegistryConfig.Mirrors}}'], capture_output=True, text=True, timeout=10, check=True).stdout
+used = json.loads(out.strip() or 'null') or []
+try:
+    with open(path, encoding='utf-8-sig') as f:
+        listed = json.load(f).get('registry-mirrors')
+except FileNotFoundError:
+    listed = None
+sys.exit(0 if listed is None or used == [m if m.endswith('/') else m + '/' for m in listed] else 1)
+"#;
 
 /// What a mirror answered when asked for the registry API from the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -572,7 +741,7 @@ pub fn test_command(mirror: &str) -> Result<String> {
     let mirror = checked_mirror(mirror)?;
     let url = quote(&format!("{}/v2/", mirror.trim_end_matches('/')));
     Ok(format!(
-        "# arcnix:docker:mirror-test\nif command -v curl >/dev/null 2>&1; then\n  curl -sS -o /dev/null -w 'ARCNIX_STATUS %{{http_code}}\\n' --max-time 10 {url}\nelif command -v wget >/dev/null 2>&1; then\n  wget -q -S -O /dev/null -T 10 -t 1 {url} 2>&1 | sed -n 's/^  HTTP\\/[0-9.]* \\([0-9]*\\).*/ARCNIX_STATUS \\1/p' | tail -n 1\nelse\n  echo ARCNIX_NO_TOOL\nfi"
+        "# arcnix:docker:mirror-test\nif command -v curl >/dev/null 2>&1; then\n  curl -gsSL -o /dev/null -w 'ARCNIX_STATUS %{{http_code}}\\n' --max-time 10 {url}\nelif command -v wget >/dev/null 2>&1; then\n  tries=; wget --version >/dev/null 2>&1 && tries='-t 1'\n  out=$(wget -S -O /dev/null -T 10 $tries {url} 2>&1)\n  printf '%s\\n' \"$out\" | sed -n 's/^ *HTTP\\/[0-9.]* \\([0-9][0-9]*\\).*/ARCNIX_STATUS \\1/p' | tail -n 1\n  printf '%s\\n' \"$out\" | grep -v '^ ' | tail -n 1 >&2\nelse\n  echo ARCNIX_NO_TOOL\nfi"
     ))
 }
 
@@ -746,8 +915,20 @@ mod tests {
     const START: &str = "{ path=/usr/bin/dockerd ; argv[]=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }";
 
     fn output(unit: &str, snap: &str, start: &str, config: &str, file: &str) -> String {
+        with_env(unit, snap, start, "", "", config, file)
+    }
+
+    fn with_env(
+        unit: &str,
+        snap: &str,
+        start: &str,
+        env: &str,
+        files: &str,
+        config: &str,
+        file: &str,
+    ) -> String {
         format!(
-            "ARCNIX_UNIT {unit}\nARCNIX_SNAP {snap}\nARCNIX_START {start}\nARCNIX_CONFIG {config}\n{file}"
+            "ARCNIX_UNIT {unit}\nARCNIX_SNAP {snap}\nARCNIX_START {start}\nARCNIX_ENV {env}\n{files}ARCNIX_CONFIG {config}\n{file}"
         )
     }
 
@@ -775,6 +956,7 @@ mod tests {
                     "--containerd=/run/containerd/containerd.sock"
                 ]),
                 config: DEFAULT_CONFIG.into(),
+                socket: "/var/run/docker.sock".into(),
             }
         );
         assert_eq!(daemon.config, Config::Text("{}\n".into()));
@@ -908,7 +1090,10 @@ mod tests {
         );
         assert_eq!(
             spec.health,
-            "test \"$(docker --host unix:///var/run/docker.sock info --format '{{json .RegistryConfig.Mirrors}}' 2>/dev/null)\" = '[\"https://mirror.example.com/\"]'"
+            format!(
+                "python3 -I -c {} \"$1\" 'unix:///var/run/docker.sock'",
+                quote(HEALTH)
+            )
         );
         assert!(!job.record.create);
         assert!(template.snippet.administrator);
@@ -948,9 +1133,137 @@ mod tests {
         assert_eq!(parse_test(&out("ARCNIX_NO_TOOL\n", "")), MirrorTest::NoTool);
         let command = test_command("https://mirror.example.com/").unwrap();
         assert!(
-            command.contains("'https://mirror.example.com/v2/'"),
+            command.contains("curl -gsSL") && command.contains("'https://mirror.example.com/v2/'"),
             "{command}"
         );
         assert!(test_command("mirror.example.com").is_err());
+    }
+
+    #[test]
+    fn options_from_the_service_environment_are_expanded() {
+        let start = START.replace(
+            "containerd.sock ;",
+            "containerd.sock $DOCKER_OPTS ${EXTRA} $UNSET ;",
+        );
+        let options = |env: &str, files: &str| {
+            let daemon = parse(
+                &with_env(
+                    "loaded",
+                    "",
+                    &start,
+                    env,
+                    files,
+                    DEFAULT_CONFIG,
+                    "missing\n",
+                ),
+                registry(&[], false),
+            )
+            .unwrap();
+            match &daemon.setup {
+                Setup::Service { options, .. } => Ok(options.clone()),
+                _ => Err(daemon.read_only().unwrap_or_default()),
+            }
+        };
+        // Debian's /etc/default/docker sets nothing by default.
+        assert_eq!(
+            options("EXTRA=--live-restore", "").unwrap(),
+            m(&[
+                "-H",
+                "fd://",
+                "--containerd=/run/containerd/containerd.sock",
+                "--live-restore"
+            ])
+        );
+        // A file's value overrides Environment= and splits into words.
+        let split = options(
+            "EXTRA=",
+            "ARCNIX_ENVFILE DOCKER_OPTS=\"--debug --log-level=warn\"\n",
+        )
+        .unwrap();
+        assert!(
+            split.ends_with(&m(&["--debug", "--log-level=warn"])),
+            "{split:?}"
+        );
+        // Values Arcnix can't follow, or an unreadable file, leave the mirrors alone.
+        for (env, files) in [
+            ("", "ARCNIX_ENVFILE DOCKER_OPTS=\"$OTHER\"\n"),
+            ("", "ARCNIX_ENVFILE_UNREADABLE /etc/default/docker\n"),
+            ("\"DOCKER_OPTS=a b\"", ""),
+        ] {
+            assert!(
+                options(env, files).unwrap_err().contains("can't check"),
+                "{env} {files}"
+            );
+        }
+        // A mirror option hidden in the environment is still found.
+        let daemon = parse(
+            &with_env(
+                "loaded",
+                "",
+                &start,
+                "",
+                "ARCNIX_ENVFILE DOCKER_OPTS=--registry-mirror=https://a.example.com\n",
+                DEFAULT_CONFIG,
+                "missing\n",
+            ),
+            registry(&[], false),
+        )
+        .unwrap();
+        assert!(daemon.read_only().unwrap().contains("--registry-mirror"));
+    }
+
+    #[test]
+    fn the_result_is_checked_on_the_services_own_socket() {
+        let socket = |hosts: &str| {
+            let start = START.replace("-H fd://", hosts);
+            let daemon = parse(
+                &output("loaded", "", &start, DEFAULT_CONFIG, "missing\n"),
+                registry(&[], false),
+            )
+            .unwrap();
+            match &daemon.setup {
+                Setup::Service { socket, .. } => Ok(socket.clone()),
+                _ => Err(daemon.read_only().unwrap_or_default()),
+            }
+        };
+        assert_eq!(socket("").unwrap(), "/var/run/docker.sock");
+        assert_eq!(socket("--host=fd://").unwrap(), "/var/run/docker.sock");
+        assert_eq!(
+            socket("-H unix:///srv/docker.sock").unwrap(),
+            "/srv/docker.sock"
+        );
+        assert_eq!(
+            socket("-H tcp://127.0.0.1:2375 -H unix:///srv/docker.sock").unwrap(),
+            "/srv/docker.sock"
+        );
+        assert!(
+            socket("-H tcp://0.0.0.0:2375")
+                .unwrap_err()
+                .contains("network addresses")
+        );
+        // A config file named only in the environment isn't the file read.
+        let start = START.replace("containerd.sock ;", "containerd.sock $OPTS ;");
+        let daemon = parse(
+            &with_env(
+                "loaded",
+                "",
+                &start,
+                "OPTS=--config-file=/srv/d.json",
+                "",
+                DEFAULT_CONFIG,
+                "missing\n",
+            ),
+            registry(&[], false),
+        )
+        .unwrap();
+        assert!(daemon.read_only().unwrap().contains("can't check"));
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_kept() {
+        assert_eq!(
+            with_mirrors(Some("\u{feff}{\"a\": 1}"), &m(&["https://a.example.com"])).unwrap(),
+            "\u{feff}{\"registry-mirrors\": [\"https://a.example.com\"], \"a\": 1}"
+        );
     }
 }

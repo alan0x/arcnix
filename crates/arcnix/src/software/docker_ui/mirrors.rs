@@ -18,12 +18,15 @@ pub(crate) struct MirrorState {
     results: Vec<(String, String, &'static str)>,
 }
 
+/// The list can be changed: Arcnix manages this daemon's mirrors, and no
+/// read is pending that would replace the edits.
 fn editable(s: &State) -> bool {
-    s.docker
-        .mirrors
-        .daemon
-        .as_ref()
-        .is_some_and(|d| d.read_only().is_none())
+    let m = &s.docker.mirrors;
+    m.pending.is_none() && m.daemon.as_ref().is_some_and(|d| d.read_only().is_none())
+}
+
+fn testable(s: &State) -> bool {
+    ready(s) && s.docker.mirrors.daemon.as_ref().is_some_and(|d| d.testable)
 }
 
 fn can_publish(s: &State) -> bool {
@@ -267,12 +270,16 @@ pub(super) fn dialog(ui: Ui) -> impl Widget {
                                     s.docker.mirrors.results.iter().find(|(a, ..)| *a == shown).map(|r| r.1.clone()).unwrap_or_default()
                                 })),
                         )),
-                        btn("Test", {
+                        when(state.map(|s| s.docker.mirrors.daemon.as_ref().is_some_and(|d| d.testable)), {
                             let ui = ui.clone();
-                            move || ui.docker_mirror_test(test.clone())
-                        })
-                        .class("button compact")
-                        .enabled(state.map(ready)),
+                            move || {
+                                let ui = ui.clone();
+                                let test = test.clone();
+                                btn("Test", move || ui.docker_mirror_test(test.clone()))
+                                    .class("button compact")
+                                    .enabled(state.map(testable))
+                            }
+                        }),
                         when(state.map(editable), move || {
                             let ui = ui.clone();
                             icon_action("Remove mirror", Icon::Close)
