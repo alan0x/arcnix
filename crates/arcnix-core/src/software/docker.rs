@@ -9,7 +9,7 @@ use crate::server_apps::{execute, execute_lossy};
 
 const LIMIT: usize = 2 * 1024 * 1024;
 const ROW_LIMIT: usize = 1000;
-const PREFIX: &str = r#"set -eu
+pub(super) const PREFIX: &str = r#"set -eu
 command -v timeout >/dev/null 2>&1 || { printf 'The server needs the timeout command\n' >&2; exit 1; }
 if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH="$PATH:/snap/bin"; fi
 command -v docker >/dev/null 2>&1 || { printf 'Docker is no longer installed\n' >&2; exit 1; }

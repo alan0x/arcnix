@@ -41,7 +41,7 @@ pub use observability::{
     system_logs,
 };
 pub use software::{
-    compose_apps, docker, docker_daemon, installation_plan, installers, nginx, nginx_config,
-    nginx_site, packages, pgadmin, server_inventory, software_capabilities, software_catalog,
-    software_install, updates,
+    compose_apps, docker, docker_daemon, docker_pull, installation_plan, installers, nginx,
+    nginx_config, nginx_site, packages, pgadmin, server_inventory, software_capabilities,
+    software_catalog, software_install, updates,
 };
