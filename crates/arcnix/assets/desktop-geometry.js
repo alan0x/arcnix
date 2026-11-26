@@ -13,6 +13,8 @@ const desktopGeometry = (() => {
     const pending = new Map();
     const openingAreas = new Map();
     const fullSpanOffsets = new WeakMap();
+    const resizes = new Map();
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
     function reachable(limits, titlebarHeight) {
         const width = Math.min(titlebarWidthToKeep, limits.width);
@@ -118,7 +120,22 @@ const desktopGeometry = (() => {
         return layout?.windows?.find(item => element.classList.contains(item.class));
     }
 
-    function drawWindows() {
+    function cancelResizes() {
+        for (const animation of resizes.values()) animation.cancel();
+        resizes.clear();
+    }
+
+    function animateResize(element, start, {x, y, width, height}) {
+        const end = {left: `${x}px`, top: `${y}px`, width: `${width}px`, height: `${height}px`};
+        if (Object.keys(end).every(property => start[property] === end[property])) return;
+        const animation = element.animate([start, end], {duration: 180, easing: 'cubic-bezier(.2,.75,.25,1)'});
+        resizes.set(element, animation);
+        animation.finished.catch(() => {}).then(() => {
+            if (resizes.get(element) === animation) resizes.delete(element);
+        });
+    }
+
+    function drawWindows(maximizeChanges) {
         if (!layout?.shown || !canvas?.offsetWidth || !canvas.offsetHeight) return;
         const limits = desktopFrame.workArea(canvas);
         for (const edge of ['left', 'right', 'bottom', 'width']) {
@@ -146,9 +163,18 @@ const desktopGeometry = (() => {
             }
             const bounds = preferredBounds(item, limits);
             const range = reachable(limits, element.querySelector('.desktop-window-titlebar').offsetHeight);
-            draw(element, item.maximized
+            const nextBounds = item.maximized
                 ? {x: 0, y: 0, width: limits.width, height: limits.height}
-                : place(element, bounds, limits, range), limits);
+                : place(element, bounds, limits, range);
+            let start;
+            if (maximizeChanges?.has(item.class) && element.animate && element.hasAttribute('data-positioned')) {
+                // Sample the actual rectangle, including an in-flight restore or maximize.
+                const {left, top, width, height} = getComputedStyle(element);
+                start = {left, top, width, height};
+                resizes.get(element)?.cancel();
+            }
+            draw(element, nextBounds, limits);
+            if (start) animateResize(element, start, nextBounds);
         }
     }
 
@@ -196,6 +222,7 @@ const desktopGeometry = (() => {
         const current = desktopFrame.workArea(canvas);
         if (observedArea && Object.keys(current).every(key => current[key] === observedArea[key])) return;
         observedArea = current;
+        cancelResizes();
         finish(false);
         drawWindows();
     }
@@ -213,6 +240,10 @@ const desktopGeometry = (() => {
         const nextCanvas = document.querySelector('.desktop-canvas');
         const reset = next?.epoch !== layout?.epoch || nextCanvas !== canvas;
         const changedFrame = reset || !!next?.overviewCount !== !!layout?.overviewCount || !next?.shown || next.fullscreen !== layout?.fullscreen;
+        if (changedFrame) cancelResizes();
+        else for (const [element, animation] of resizes) {
+            if (!element.isConnected || element.classList.contains('hidden')) animation.cancel();
+        }
         if (changedFrame || (gesture && !next.windows.some(item => item.class === gesture.app && !item.maximized))) {
             finish(false);
         }
@@ -233,10 +264,18 @@ const desktopGeometry = (() => {
                 }
             }
         }
+        let maximizeChanges;
+        if (!changedFrame && layout?.shown && !next.overviewCount && !reducedMotion.matches) {
+            const previous = new Map(layout.windows.map(item => [item.class, item.maximized]));
+            maximizeChanges = new Set(next.windows.filter(item =>
+                previous.has(item.class) && previous.get(item.class) !== item.maximized).map(item => item.class));
+        }
         canvas = nextCanvas;
         layout = next;
-        drawWindows();
+        drawWindows(maximizeChanges);
     }
+
+    reducedMotion.addEventListener('change', () => { if (reducedMotion.matches) cancelResizes(); });
 
     document.addEventListener('focusin', event => {
         raise(event.target.closest?.('.desktop-window:not(.hidden)'));

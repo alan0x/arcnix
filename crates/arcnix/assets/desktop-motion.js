@@ -99,7 +99,6 @@ const desktopMotion = (() => {
         if(!app)return null;
         if(button.matches('.window-close'))return {motion:'close',app};
         if(button.matches('.window-minimize'))return {motion:'minimize',app};
-        if(button.matches('.window-maximize'))return {motion:'resize',app};
         return null;
     }
     function windowOffset(app,anchor) {
@@ -243,6 +242,11 @@ const desktopMotion = (() => {
         if(!button || button.disabled || forwarded.has(button))return;
         const before=state();
         if(!before?.shown || document.visibilityState!=='visible')return;
+        // Geometry animates maximize and restore on the live window.
+        if(button.matches('.window-maximize')){
+            transition?.skipTransition();
+            return;
+        }
         const motion=kind(button,before);
         if(!motion || reduced.matches)return;
         if(button.matches('.desktop-shortcut')){

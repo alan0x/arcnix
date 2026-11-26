@@ -2580,7 +2580,6 @@ html.desktop-motion { view-transition-name: none; }
   transform-origin: 50% 65%;
 }
 .desktop-motion-close::view-transition-old(arcnix-desktop-window) { animation-name: desktop-window-close; animation-duration: 180ms; }
-.desktop-motion-resize::view-transition-new(arcnix-desktop-window) { animation-name: desktop-window-fade-in; }
 .desktop-motion-overview::view-transition-group(*) {
   animation-duration: var(--overview-travel);
   animation-timing-function: cubic-bezier(.22,.75,.25,1);

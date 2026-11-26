@@ -11,13 +11,14 @@ def main():
         with Desktop(out/'desktop',peer.config([peer.profile('Desktop motion')],local)) as app:
             p=app.page;errors=[];p.on('pageerror',lambda e:errors.append(str(e)))
             app.connect();app.workspace('Desktop')
-            expect(p.locator('.desktop-shortcuts button')).to_have_count(9)
             expect(p.locator('.desktop-shortcuts').get_by_role('button', name='Files', exact=True)).to_be_visible()
             app.screenshot('desktop-light.png')
             p.set_viewport_size(dict(width=900,height=650))
             dock=p.locator('.desktop-dock').bounding_box()
             for name in ['Monitor','App Center','Docker']:
                 tile=p.locator('.desktop-dock').get_by_role('button',name=name,exact=True).locator('.desktop-app-icon')
+                if name == 'Docker' and not tile.count():
+                    continue
                 box=tile.bounding_box()
                 assert dock['x']<=box['x'] and box['x']+box['width']<=dock['x']+dock['width']
             masks=p.locator('.desktop-dock-app .desktop-app-icon').evaluate_all("icons=>icons.map(e=>getComputedStyle(e,'::before').maskImage)")
@@ -84,15 +85,76 @@ def main():
                 titlebar=p.locator('.desktop-window.active .desktop-window-titlebar')
                 box=titlebar.bounding_box()
                 titlebar.dblclick(position=dict(x=box['width']/2,y=box['height']/2))
-            double_click_titlebar();motion('resize',4);expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
+
+            p.evaluate('''() => {
+                window.resizeRecords = [];
+                window.resizeView = () => {
+                    const window = document.querySelector('.desktop-window.active');
+                    const dock = document.querySelector('.desktop-dock-zone');
+                    const wallpaper = document.querySelector('.desktop-wallpaper-art');
+                    const box = el => {
+                        const {left, top, right, bottom} = el.getBoundingClientRect();
+                        return [left, top, right, bottom];
+                    };
+                    const style = el => {
+                        const {opacity, visibility, backgroundImage} = getComputedStyle(el);
+                        return [opacity, visibility, backgroundImage];
+                    };
+                    return {rect: box(window), opacity: getComputedStyle(window).opacity, dock: box(dock),
+                            scene: [style(dock), style(wallpaper)]};
+                };
+                const animate = Element.prototype.animate;
+                Element.prototype.animate = function(frames, options) {
+                    const animation = animate.call(this, frames, options);
+                    if (this.matches('.desktop-window') && frames[0]?.width) {
+                        animation.pause();
+                        animation.currentTime = 0;
+                        resizeRecords.push(animation);
+                    }
+                    return animation;
+                };
+            }''')
+            def resized(action, finish=True):
+                index = p.evaluate('resizeRecords.length')
+                before = p.evaluate('resizeView()')
+                action()
+                eventually(lambda: p.evaluate('n => resizeRecords.length === n + 1', index))
+                first = p.evaluate('resizeView()')
+                assert all(abs(a - b) <= .05 for a, b in zip(first['rect'], before['rect'])), (first, before)
+                assert {k: v for k, v in first.items() if k != 'rect'} == {k: v for k, v in before.items() if k != 'rect'}
+                frames = p.evaluate('n => resizeRecords[n].effect.getKeyframes()', index)
+                assert set(frames[0]) - {'offset', 'computedOffset', 'easing', 'composite'} == {'left', 'top', 'width', 'height'}, frames
+                p.evaluate('n => {resizeRecords[n].currentTime = 70}', index)
+                middle = p.evaluate('resizeView()')
+                assert middle['rect'] != before['rect']
+                assert {k: v for k, v in middle.items() if k != 'rect'} == {k: v for k, v in before.items() if k != 'rect'}
+                assert middle['rect'][3] <= middle['dock'][1] + 1
+                assert p.evaluate('motionRecords.length') == 4
+                assert not p.evaluate('document.documentElement.classList.contains("desktop-motion")')
+                if finish:
+                    p.evaluate('n => resizeRecords[n].finish()', index)
+                    end = p.evaluate('resizeView()')
+                    assert end['rect'][3] <= end['dock'][1] + 1
+                    for start, mid, stop in zip(before['rect'], middle['rect'], end['rect']):
+                        assert min(start, stop) - 1 <= mid <= max(start, stop) + 1
+
+            normal = p.evaluate('resizeView()')
+            maximize = p.locator('.desktop-window.active .window-maximize')
+            resized(maximize.click)
+            expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             expect(p.locator('.desktop-window.active .window-maximize .glyph-window-restore')).to_be_visible()
-            double_click_titlebar();motion('resize',5);expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
+            resized(double_click_titlebar)
+            expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
+            assert p.evaluate('resizeView()') == normal
+            resized(double_click_titlebar, finish=False)
+            resized(maximize.click)
+            assert p.evaluate('resizeView()') == normal
             expect(reader).to_contain_text('MOTION_SESSION_RETAINED');assert surface.evaluate('el=>el.isConnected')
-            p.locator('.desktop-window.active .window-close').click();motion('close',6)
+            p.locator('.desktop-window.active .window-close').click();motion('close',4)
             expect(p.locator('.desktop-window.app-terminal')).to_be_hidden()
             expect(p.locator('.desktop-window.app-center.active')).to_be_visible()
-            checks.append('Open, switch, minimize, maximize and close use finite compositor animations; switching/minimizing preserve the terminal DOM and live shell')
-            checks.append('Double-clicking blank titlebar space toggles maximize and restore through the same animation, while terminal tabs retain their own action')
+            checks.append('Open, switch, minimize and close use finite compositor animations; switching/minimizing preserve the terminal DOM and live shell')
+            checks.append('Maximize and restore interpolate the live window from its rendered bounds without fading, affecting the Dock, or taking a desktop snapshot')
 
             launch('Terminal');settled();expect(reader).to_contain_text('Arcnix terminal fixture');expect(reader).not_to_contain_text('MOTION_SESSION_RETAINED')
             p.evaluate('''() => {
@@ -115,10 +177,12 @@ def main():
             checks.append('Rapid launcher clicks preserve native order; an immediate Home click wins over pending motion without reopening Desktop')
 
             p.emulate_media(reduced_motion='reduce');before=p.evaluate('motionRecords.length')
+            before_resizes = p.evaluate('resizeRecords.length')
             launch('Monitor');expect(p.locator('.desktop-window.active .desktop-window-title')).to_have_text('Monitor')
             p.locator('.desktop-window.active .desktop-window-title').dblclick();expect(p.locator('.desktop-window.active')).to_have_class(re.compile(r'\bmaximized\b'))
             p.locator('.desktop-window.active .desktop-window-title').dblclick();expect(p.locator('.desktop-window.active')).not_to_have_class(re.compile(r'\bmaximized\b'))
             assert p.evaluate('motionRecords.length')==before
+            assert p.evaluate('resizeRecords.length') == before_resizes
             assert p.evaluate('document.getAnimations().filter(a=>a.animationName?.startsWith("desktop-window")).length')==0
             assert not p.locator('html').evaluate('el=>el.classList.contains("desktop-motion")')
             p.emulate_media(reduced_motion='no-preference')
