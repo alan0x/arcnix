@@ -576,7 +576,13 @@ pub fn parse_networks(text: &str) -> Result<Vec<Network>> {
         .take(NETWORK_LIMIT)
         .map(|line| Ok(serde_json::from_str(line)?))
         .collect::<Result<_>>()?;
-    Ok(networks)
+    Ok(networks
+        .into_iter()
+        .map(|mut network: Network| {
+            network.subnets.retain(|s| !s.trim().is_empty());
+            network
+        })
+        .collect())
 }
 fn inspect_networks(ids: &[&str]) -> DockerRequest {
     let mut args = vec![
@@ -615,7 +621,18 @@ pub fn networks(session: &RemoteSession) -> Result<Vec<Network>> {
     };
     let mut networks = Vec::new();
     for ids in ids.chunks(batch) {
-        networks.extend(parse_networks(&inspect_networks(ids).run(session)?.stdout)?);
+        let request = inspect_networks(ids);
+        let output = execute(session, &request.command(session)?, LIMIT)?;
+        // A network removed since the list was read fails the command, but
+        // Docker still prints the others.
+        let output = if output.exit_code != 0 && output.stdout.trim().is_empty()
+            || matches!(output.exit_code, 124 | 137)
+        {
+            check(output, |output| output.stderr.trim())?
+        } else {
+            output
+        };
+        networks.extend(parse_networks(&output.stdout)?);
     }
     networks.sort_by(|a, b| (!a.built_in(), &a.name).cmp(&(!b.built_in(), &b.name)));
     Ok(networks)
@@ -1504,7 +1521,7 @@ mod tests {
             "\n",
             r#"{"id":"b","name":"host","driver":"host","scope":"local","internal":false,"subnets":[]}"#,
             "\n",
-            r#"{"id":"c","name":"bridge","driver":"bridge","scope":"local","internal":false,"subnets":["172.17.0.0/16","fd00::/64"]}"#,
+            r#"{"id":"c","name":"bridge","driver":"bridge","scope":"local","internal":false,"subnets":["172.17.0.0/16","","fd00::/64"]}"#,
         ))
         .unwrap();
         let names: Vec<_> = networks.iter().map(|n| n.name.as_str()).collect();

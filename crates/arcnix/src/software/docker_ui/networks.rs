@@ -40,7 +40,8 @@ impl Ui {
             s.docker.networks.pending = Some(serial);
             s.docker.networks.error.clear();
         });
-        // Attached containers come from the container list.
+        // Attached containers come from the container list, read again so
+        // it matches the networks.
         self.docker_send(AppAction::DockerSnapshot);
     }
 
@@ -98,6 +99,8 @@ pub(super) fn view(ui: Ui) -> impl Widget {
         text().class("subtle").content(i18n::bind(state.map(|s| {
             if s.docker.networks.list.is_none() && s.docker.networks.pending.is_some() {
                 "Loading…"
+            } else if s.docker.networks.list.as_ref().is_some_and(Vec::is_empty) {
+                "Docker reported no networks."
             } else {
                 ""
             }
