@@ -94,6 +94,7 @@ dependencies = [
  "dispatch2",
  "flate2",
  "glory",
+ "gtk",
  "hayro",
  "kartis",
  "keyring",

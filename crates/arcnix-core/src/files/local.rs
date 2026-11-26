@@ -138,17 +138,25 @@ pub(crate) fn hidden_attribute(metadata: &fs::Metadata) -> bool {
 }
 
 pub fn list_dir(path: &Path) -> Result<(PathBuf, Vec<FileEntry>)> {
-    let path = fs::canonicalize(path).context("Cannot open local directory")?;
+    let path = fs::canonicalize(path)
+        .with_context(|| format!("Cannot open local directory {}", path.display()))?;
     let mut entries = Vec::new();
-    for item in fs::read_dir(&path)? {
-        let item = item?;
-        let metadata = fs::symlink_metadata(item.path())?;
+    let read_error = || format!("Cannot list local directory {}", path.display());
+    for item in fs::read_dir(&path).with_context(read_error)? {
+        let item = item.with_context(read_error)?;
+        let item_path = item.path();
+        let metadata = fs::symlink_metadata(&item_path)
+            .with_context(|| format!("Cannot read metadata for {}", item_path.display()))?;
+        let is_dir = if is_link(&metadata) {
+            item_path.is_dir()
+        } else {
+            metadata.is_dir()
+        };
         let name = item
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Filename is not valid Unicode"))?;
-        let entry_path = item
-            .path()
+        let entry_path = item_path
             .into_os_string()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Path is not valid Unicode"))?;
@@ -156,7 +164,7 @@ pub fn list_dir(path: &Path) -> Result<(PathBuf, Vec<FileEntry>)> {
             hidden_attribute: hidden_attribute(&metadata),
             name,
             path: entry_path,
-            is_dir: item.path().is_dir(),
+            is_dir,
             is_symlink: is_link(&metadata),
             size: metadata.len(),
             modified: metadata
@@ -424,6 +432,22 @@ mod tests {
         assert_eq!(delete(&root.targets()?)?, 1);
         assert!(!link.exists());
         assert_eq!(fs::read(outside.0.join("keep"))?, b"must survive");
+        Ok(())
+    }
+    #[test]
+    fn directory_errors_include_the_requested_path_and_io_cause() -> Result<()> {
+        let root = Sandbox::new()?;
+        let path = root.0.join("unavailable-directory");
+        let missing = list_dir(&path).unwrap_err();
+        assert!(missing.to_string().contains(path.to_str().unwrap()));
+        assert_eq!(
+            missing.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        fs::write(&path, b"file")?;
+        let not_directory = list_dir(&path).unwrap_err();
+        assert!(not_directory.to_string().contains(path.to_str().unwrap()));
+        assert!(not_directory.downcast_ref::<std::io::Error>().is_some());
         Ok(())
     }
     #[test]

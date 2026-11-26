@@ -55,6 +55,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSD
 tao = "0.37.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
 
 [target.'cfg(windows)'.dependencies]

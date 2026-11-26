@@ -584,15 +584,15 @@ impl Ui {
     }
 
     fn switch_session(&self, target: Option<String>) {
-        let fresh = self.state.revise(|s| {
+        let load_transfer_directory = self.state.revise(|s| {
             let saved = s.parked.remove(&target);
-            let fresh = saved.is_none();
+            let profile = s
+                .config
+                .servers
+                .iter()
+                .find(|p| Some(&p.id) == target.as_ref());
+            let load_transfer_directory = saved.is_none() && profile.is_some();
             let mut incoming = saved.unwrap_or_else(|| {
-                let profile = s
-                    .config
-                    .servers
-                    .iter()
-                    .find(|p| Some(&p.id) == target.as_ref());
                 let location = profile
                     .and_then(|p| {
                         p.locations
@@ -629,9 +629,9 @@ impl Ui {
                 s.web_browser.viewports.clear();
             }
             s.parked.insert(incoming.selected.clone(), incoming);
-            fresh
+            load_transfer_directory
         });
-        if fresh {
+        if load_transfer_directory {
             self.refresh(false);
         }
     }
@@ -1001,7 +1001,7 @@ impl Ui {
                 }else{state.revise(|s|s.fingerprint=Some(fingerprint));if known.is_some(){events.authenticate(false);}}
             }
             Update::LocalDesktop(result)=>match result {
-                Ok(home)=>{state.revise(|s| {s.connected=true;s.connecting=false;s.sftp_available=true;s.remote_path=home;});events.server_apps_connected();events.refresh(true);events.desktop_enter();}
+                Ok(home)=>{state.revise(|s| {s.connected=true;s.connecting=false;s.sftp_available=true;s.remote_path=home;});events.server_apps_connected();events.desktop_enter();}
                 Err(message)=>{state.revise(|s|{s.connecting=false;s.notice=message;});}
             },
             Update::Connected(sftp,address)=>{state.revise(|s|{s.server_apps.connected_address=address;s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
@@ -2427,7 +2427,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let path = config
         .local_directory
         .clone()
-        .unwrap_or(std::env::current_dir()?);
+        .map_or_else(std::env::current_dir, Ok)?;
     let (update_controller, update_rx) = updates_ui::start()?;
     formatting::configure(config.settings.display);
     let logger = Rc::new(client_logs::Logger::new(store.path()));
@@ -2460,7 +2460,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .unwrap_or("Arcnix 已就绪。新建服务器并连接，或浏览本地目录。"),
     );
-    ui.refresh(false);
     office_sync::restore(&ui)?;
     scripts_ui::restore(&ui);
     let batch_ui = ui.clone();
@@ -2516,7 +2515,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Locale bindings patch the existing document. Remounting it would retire
     // live button identities while their browser activations are still queued.
     window.mount(app(ui.clone()))?;
+    #[cfg(target_os = "linux")]
+    gtk::glib::set_prgname(Some("arcnix"));
     let shell = Shell::new();
+    #[cfg(target_os = "linux")]
+    if let Err(error) = linux_icon::install() {
+        ui.log(format!("Linux desktop icon: {error:#}"));
+    }
     // Tao creates its NSApplication subclass when it constructs the event loop.
     #[cfg(target_os = "macos")]
     macos_menu::install();

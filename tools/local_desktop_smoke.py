@@ -30,11 +30,14 @@ def main():
             expect(catalog.get_by_role('button', name='Terminal', exact=True)).to_have_count(0)
         catalog.get_by_role('button', name='Close dialog', exact=True).click()
         expect(page.locator('.workbench-tabs').get_by_role('button', name='Transfer files')).to_have_count(0)
+        assert 'Could not read directory' not in (app.out / 'logs/arcnix.log').read_text(encoding='utf-8')
 
     name = "local 桌面's note.md"
     out = Path(tempfile.mkdtemp(prefix='local-desktop-', dir=ROOT / 'artifacts'))
-    cfg = dict(version=1, config=dict(servers=[], groups=[], trusted_hosts=[], settings=dict(
-        language='English', theme='Light', show_hidden_files=False, resource_interval_seconds=3)))
+    cfg = dict(version=1, config=dict(servers=[], groups=[], trusted_hosts=[],
+        local_directory=str(out / 'unmounted-transfer-directory'), settings=dict(
+        language='English', theme='Light', show_hidden_files=False, resource_interval_seconds=3,
+        logging=dict(write_file=True))))
     with tempfile.TemporaryDirectory(prefix='arcnix-demo-', dir=Path.home()) as temp:
         directory = Path(temp)
         with Desktop(out, cfg) as app:
