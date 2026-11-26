@@ -20,6 +20,10 @@ def main():
         (desktop / 'notes-old.PDF').write_text('sample document')
         (desktop / 'floorplan.png').write_text('sample picture')
         (desktop / '歌词-gyp.docx').touch()
+        long_name = '00-' + '无空格长文件名' * 8 + '.txt'
+        (desktop / long_name).touch()
+        for index in range(16):
+            (desktop / f'x{index:02}.txt').touch()
         noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
         for filename, day in [('notes-today.txt', noon), ('notes-old.PDF', noon - timedelta(days=1))]:
             timestamp = day.timestamp()
@@ -97,20 +101,31 @@ def main():
                 page.locator('.file-actions-menu').get_by_role('button', name=view, exact=True).click()
                 row = files.locator(f'.files-pane.{pane_class} .file-row').filter(has_text='notes-today.txt')
                 expect(row.locator('.file-label')).to_have_css('font-size', '14px')
-                expect(row.locator('.file-size')).to_have_css('font-size', '14px')
                 if pane_class == 'icons-view':
-                    sample = files.locator('.icons-view .file-row').filter(has_text='歌词-gyp.docx')
+                    expect(row.locator('.file-size')).to_be_hidden()
+                    sample = files.locator('.icons-view .file-row').filter(has_text=long_name)
                     files.get_by_role('button', name='File view options', exact=True).click()
                     menu = page.locator('.file-actions-menu')
                     for pixels in (24, 64, 96, 48):
                         menu.get_by_role('button', name=f'{pixels} px', exact=True).click()
                         icon = sample.locator('.file-entry-icon')
                         eventually(lambda: abs(icon.bounding_box()['width'] - pixels) < 0.1)
-                        for selector in ('.file-label', '.file-size'):
-                            height, line = sample.locator(selector).evaluate(
-                                'el => [el.getBoundingClientRect().height, parseFloat(getComputedStyle(el).lineHeight)]')
-                            assert height >= line - 0.5, (pixels, selector, height, line)
+                        label = sample.locator('.file-label')
+                        height, line = label.evaluate(
+                            'el => [el.getBoundingClientRect().height, parseFloat(getComputedStyle(el).lineHeight)]')
+                        assert abs(height - 4 * line) < 1, (pixels, height, line)
+                        bounds = sample.bounding_box()
+                        label_box = label.bounding_box()
+                        assert label_box['y'] + height <= bounds['y'] + bounds['height'] + 0.5, (pixels, bounds, label_box)
+                        tiles = files.locator('.icons-view .file-row').evaluate_all(
+                            'rows => rows.map(row => row.getBoundingClientRect().toJSON())')
+                        below = [tile for tile in tiles if tile['y'] > bounds['y']]
+                        assert min(tile['y'] for tile in below) >= bounds['y'] + bounds['height']
+                        assert min(tile['height'] for tile in below) < bounds['height']
                     menu.get_by_role('slider', name='File icon size').press('Escape')
+                else:
+                    expect(row.locator('.file-size')).to_be_visible()
+                    expect(row.locator('.file-size')).to_have_css('font-size', '14px')
 
             expect(pathbar.get_by_role('button', name='Search files', exact=True)).to_be_enabled()
             crumb.press('Control+f')
