@@ -347,6 +347,14 @@ fn windows_host_capabilities_over_encoded_ssh_commands() -> Result<()> {
     assert!(!session.sftp_available());
     let inventory = session.read_disk_inventory()?;
     assert_eq!(inventory.disks[0].path, r"\\.\PHYSICALDRIVE0");
+    // The EFI partition has no drive letter but is still listed.
+    assert_eq!(inventory.disks[0].partitions.len(), 2);
+    assert!(
+        inventory.disks[0]
+            .partitions
+            .iter()
+            .any(|partition| partition.mounts.is_empty())
+    );
     let system = inventory.disks[0]
         .partitions
         .iter()

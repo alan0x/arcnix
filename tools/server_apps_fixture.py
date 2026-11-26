@@ -667,6 +667,7 @@ def windows_inventory_reply(server, channel, command):
         elif "Get-Partition" in script and "Win32_LogicalDisk" in script:
             efi = dict(number=1, size=100, kind="System", paths=[],
                        volume=dict(name=None, kind="FAT32", size=100, free=60))
+            # The script only sends drive letters; the volume path checks that the parser drops others too.
             system = dict(number=2, size=2000, kind="Basic", paths=["C:\\", "\\\\?\\Volume{fixture}\\"],
                           volume=dict(name="System", kind="NTFS", size=2000, free=1500))
             # Win32_LogicalDisk also reports C:, which the parser must not list twice.
