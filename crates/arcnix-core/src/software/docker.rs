@@ -451,6 +451,39 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
         .collect()
 }
 
+/// The registry mirrors the daemon uses, and whether it runs rootless.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct Registry {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub mirrors: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    security: Vec<String>,
+}
+impl Registry {
+    pub fn rootless(&self) -> bool {
+        self.security.iter().any(|option| option == "name=rootless")
+    }
+}
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
+}
+pub fn parse_registry(text: &str) -> Result<Registry> {
+    Ok(serde_json::from_str(text.trim())?)
+}
+pub fn registry(session: &RemoteSession) -> Result<Registry> {
+    let request = DockerRequest::single(
+        "registry",
+        &[
+            "info",
+            "--format",
+            r#"{"mirrors":{{json .RegistryConfig.Mirrors}},"security":{{json .SecurityOptions}}}"#,
+        ],
+    );
+    parse_registry(&request.run(session)?.stdout)
+}
+
 pub fn stats(session: &RemoteSession, id: &str) -> Result<Stats> {
     ensure!(id_valid(id), "Invalid container ID");
     let request = DockerRequest::single(

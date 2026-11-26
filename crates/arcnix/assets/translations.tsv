@@ -3327,3 +3327,41 @@ CPU	CPU
 搜索镜像	Search images
 暂无 Compose 项目	No Compose projects
 用 Docker Compose 安装应用后，可在这里管理。	Install an application with Docker Compose to manage it here.
+镜像加速地址	Registry mirrors
+Docker 拉取 Docker Hub 的镜像时，会按顺序尝试这些地址。其他镜像仓库（例如 ghcr.io）的镜像不使用它们。所有加速地址都没有响应时，Docker 会直接从 Docker Hub 拉取。	Docker tries these addresses in order for images from Docker Hub. Images from other registries, such as ghcr.io, don't use them. When no mirror answers, Docker pulls from Docker Hub.
+正在读取 Docker 设置…	Reading Docker's settings…
+Docker 当前使用：	Docker uses now:
+无	none
+测试	Test
+移除加速地址	Remove mirror
+没有加速地址，Docker 直接从 Docker Hub 拉取。	No mirrors. Docker pulls from Docker Hub directly.
+加速地址，例如 https://mirror.example.com	Mirror address, such as https://mirror.example.com
+加速地址	Mirror address
+检查并发布…	Review and publish…
+可作为镜像仓库响应	Answers as a registry
+有响应，但不是镜像仓库：HTTP	Answered, but not as a registry: HTTP
+没有响应	No answer
+服务器上没有可用于测试的 curl 或 wget	The server has neither curl nor wget to test with
+正在测试…	Testing…
+请输入加速地址	Enter a mirror address
+请输入加速地址，例如 https://mirror.example.com	Enter a mirror address such as https://mirror.example.com
+加速地址需以 https:// 或 http:// 开头	A mirror address starts with https:// or http://
+请输入加速地址的主机名	Enter the mirror's host name
+Docker 不接受包含用户名或密码的加速地址	Docker doesn't accept a user name or password in a mirror address
+加速地址不能包含 ? 或 #	A mirror address can't have ? or #
+docker.service 用 --registry-mirror 设置了加速地址。请在那里修改，或删除该选项后在此管理。	docker.service sets mirrors with --registry-mirror. Change them there, or remove the option to manage them here.
+Docker 配置文件只有 root 可读。请将其设为可读（默认不含机密信息），然后刷新。	The daemon configuration file is readable only by root. Make it readable (it holds no secrets by default), then refresh.
+Docker snap 的设置保存在 /var/snap/docker/current/config/daemon.json。请在其中修改 registry-mirrors，然后用 sudo snap restart docker 重启 snap。	The Docker snap keeps its settings in /var/snap/docker/current/config/daemon.json. Change registry-mirrors there, then restart the snap with sudo snap restart docker.
+Rootless Docker 读取 ~/.config/docker/daemon.json。请在其中修改 registry-mirrors，然后运行 systemctl --user restart docker。	Rootless Docker reads ~/.config/docker/daemon.json. Change registry-mirrors there, then run systemctl --user restart docker.
+Docker Desktop 自行管理守护进程设置。请在“设置 → Docker Engine”中修改 registry-mirrors。	Docker Desktop manages its daemon settings. Change registry-mirrors in Settings → Docker Engine.
+Arcnix 在此服务器上没有找到 docker.service，因此不知道 Docker 的设置在哪里。	Arcnix found no docker.service on this server, so it doesn't know where Docker's settings are.
+docker.service 启动 dockerd 的方式 Arcnix 无法检查，因此不会修改加速地址。	docker.service starts dockerd in a way Arcnix can't check, so it leaves the mirrors alone.
+Arcnix 不知道此系统上 Docker 的设置在哪里。	Arcnix doesn't know where Docker's settings are on this system.
+docker.service 只监听网络地址，Arcnix 无法检查加速地址的更改是否生效。	docker.service listens only on network addresses, so Arcnix can't check a change to the mirrors.
+Arcnix 无法只修改此文件中的加速地址。请改用“文件”编辑。	Arcnix couldn't change only the mirrors in this file. Edit it in Files instead.
+Docker 配置文件使用 Windows 换行。请先在“文件”中转换为 LF。	The daemon configuration file has Windows line endings. Convert it to LF in Files first.
+Docker 配置文件必须是一个 JSON 对象	The daemon configuration file must hold a JSON object
+Docker 配置文件中 registry-mirrors 出现了两次	registry-mirrors appears twice in the daemon configuration file
+Docker 配置文件超过 128 KiB	The daemon configuration file is larger than 128 KiB
+修改后的 Docker 配置文件将超过 128 KiB	The daemon configuration file would be larger than 128 KiB
+Docker 返回了无效的响应	Invalid Docker response

@@ -47,6 +47,8 @@ pub enum Action {
     DockerVolume(String),
     DockerLogs(String, u16),
     DockerOperate(String, docker::Operation),
+    DockerDaemon,
+    DockerMirrorTest(String),
     NginxRead,
     /// A command from `nginx::logs_command`.
     NginxLogs(String),
@@ -86,6 +88,8 @@ pub enum Reply {
     Volume(docker::VolumeDetails),
     Logs(String),
     Operated,
+    DockerDaemon(arcnix_core::docker_daemon::Daemon),
+    MirrorTest(arcnix_core::docker_daemon::MirrorTest),
     Nginx(arcnix_core::nginx::Reading),
     NginxLogs(String),
     NginxCertificates(arcnix_core::nginx::Certificates),
@@ -158,6 +162,10 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::DockerInspect(id) => Reply::Container(session.inspect_container(&id)?),
         Action::DockerVolume(name) => Reply::Volume(session.inspect_container_volume(&name)?),
         Action::DockerLogs(id, lines) => Reply::Logs(session.read_container_logs(&id, lines)?),
+        Action::DockerDaemon => Reply::DockerDaemon(arcnix_core::docker_daemon::read(session)?),
+        Action::DockerMirrorTest(mirror) => {
+            Reply::MirrorTest(arcnix_core::docker_daemon::test_mirror(session, &mirror)?)
+        }
         Action::NginxRead => Reply::Nginx(arcnix_core::nginx::read(session)?),
         Action::NginxLogs(command) => {
             Reply::NginxLogs(arcnix_core::nginx::read_logs(session, &command)?)
