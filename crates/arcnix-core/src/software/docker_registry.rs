@@ -466,7 +466,11 @@ const CHECK_BUDGET: Duration = Duration::from_secs(90);
 /// request for its manifest (which downloads nothing and doesn't count
 /// against Docker Hub's pull limit). None for a reference pinned by digest,
 /// which never changes.
-fn current_digest(reference: &str, deadline: Instant) -> Result<Option<String>> {
+pub fn current_digest(reference: &str) -> Result<Option<String>> {
+    current_digest_until(reference, Instant::now() + DEADLINE)
+}
+
+fn current_digest_until(reference: &str, deadline: Instant) -> Result<Option<String>> {
     let reference = crate::docker_pull::checked_reference(reference)?;
     if reference.contains('@') {
         return Ok(None);
@@ -560,7 +564,7 @@ pub fn check(images: &[(String, String)]) -> Vec<(String, Freshness)> {
             Freshness::Unknown("Not checked: too many images at once".into())
         } else {
             freshness(
-                current_digest(reference, deadline.min(now + DEADLINE)),
+                current_digest_until(reference, deadline.min(now + DEADLINE)),
                 local,
             )
         };
