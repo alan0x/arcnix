@@ -47,6 +47,10 @@ SSH 使用源码编译并静态链接的 OpenSSL，支持 OpenSSH Ed25519 私钥
 cargo run --locked -p arcnix --bin arcnix
 ```
 
+Linux 默认使用 WebKitGTK 的共享内存缓冲区传输，避免虚拟显卡环境中的空白窗口，同时保留打开、最小化和关闭桌面应用时的窗口动画。该模式可能增加缓冲区复制开销；如需使用系统默认的 GPU 缓冲区传输，可在启动前设置 `WEBKIT_DMABUF_RENDERER_FORCE_SHM=0`。已有的同名环境变量会被保留。
+
+不要用 `WEBKIT_DISABLE_DMABUF_RENDERER=1` 代替：部分 WebKitGTK 版本会在 `document.startViewTransition()` 时发生段错误，点击桌面「设置」等应用即可触发。参见 [WebKit 问题 324730](https://bugs.webkit.org/show_bug.cgi?id=324730)。
+
 使用独立配置文件：
 
 ```powershell
