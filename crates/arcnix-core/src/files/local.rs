@@ -138,11 +138,11 @@ pub(crate) fn hidden_attribute(metadata: &fs::Metadata) -> bool {
 }
 
 pub fn list_dir(path: &Path) -> Result<(PathBuf, Vec<FileEntry>)> {
-    let path = fs::canonicalize(path)
+    let directory = fs::canonicalize(path)
         .with_context(|| format!("Cannot open local directory {}", path.display()))?;
     let mut entries = Vec::new();
     let read_error = || format!("Cannot list local directory {}", path.display());
-    for item in fs::read_dir(&path).with_context(read_error)? {
+    for item in fs::read_dir(&directory).with_context(read_error)? {
         let item = item.with_context(read_error)?;
         let item_path = item.path();
         let metadata = fs::symlink_metadata(&item_path)
@@ -176,7 +176,7 @@ pub fn list_dir(path: &Path) -> Result<(PathBuf, Vec<FileEntry>)> {
         });
     }
     sort_entries(&mut entries);
-    Ok((path, entries))
+    Ok((directory, entries))
 }
 
 pub(crate) fn sort_entries(entries: &mut [FileEntry]) {
