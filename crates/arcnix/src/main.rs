@@ -758,6 +758,9 @@ impl Ui {
             if s.file_pending.is_some() || (!s.background && s.import_pending.is_some()) {
                 return;
             }
+            if s.dialog == Some(Dialog::DockerLogins) {
+                s.docker.login.clear_password();
+            }
             if s.background {
                 s.dialog = None;
                 s.dialog_error.clear();
@@ -1734,6 +1737,9 @@ fn dismiss_menus(s: &mut State) {
 }
 /// Shows `dialog` in place of any open menu. Callers check [`file_task_busy`].
 fn show_dialog(s: &mut State, dialog: Dialog) {
+    if s.dialog == Some(Dialog::DockerLogins) && dialog != Dialog::DockerLogins {
+        s.docker.login.clear_password();
+    }
     s.workbench.overview = None;
     if dialog != Dialog::FileElevation {
         file_elevation::reset(s);
