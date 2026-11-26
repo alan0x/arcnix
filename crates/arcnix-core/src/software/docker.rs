@@ -558,12 +558,17 @@ pub struct Login {
     pub helper: Option<String>,
 }
 
-/// Reads `config.json` with every secret blanked on the server, so only the
-/// registry names and helper names are sent.
-const LOGINS_SCRIPT: &str = r#"set -u
+/// Project the configuration on the server; only registry and helper names cross SSH.
+const LOGINS_SCRIPT: &str = concat!(
+    r#"set -eu
 config="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
-[ -f "$config" ] && [ -r "$config" ] || { printf '{}'; exit 0; }
-head -c 65536 -- "$config" | sed -E 's/"(auth|identitytoken|registrytoken|password|username)"[[:space:]]*:[[:space:]]*"[^"]*"/"\1":""/g'"#;
+[ -e "$config" ] || { printf '{}'; exit 0; }
+command -v python3 >/dev/null || { printf 'Reading Docker logins requires Python 3 on the server\n' >&2; exit 1; }
+python3 -I - "$config" <<'PY'
+"#,
+    include_str!("docker_login_config.py"),
+    "\nPY"
+);
 
 pub fn parse_logins(text: &str) -> Result<Vec<Login>> {
     #[derive(Deserialize)]
@@ -621,14 +626,15 @@ pub fn logins(session: &RemoteSession) -> Result<Vec<Login>> {
 
 /// A registry host for `docker login`, or empty for Docker Hub.
 pub fn checked_registry(registry: &str) -> Result<String> {
-    let registry = registry.trim().trim_end_matches('/');
+    let registry = registry.trim();
+    if registry.is_empty() {
+        return Ok(String::new());
+    }
+    let registry = registry.trim_end_matches('/');
     let registry = registry
         .strip_prefix("https://")
         .or_else(|| registry.strip_prefix("http://"))
         .unwrap_or(registry);
-    if registry.is_empty() {
-        return Ok(String::new());
-    }
     ensure!(
         registry == "index.docker.io/v1"
             || crate::docker_pull::checked_reference(&format!("{registry}/x"))
@@ -793,13 +799,33 @@ fn remove_image_request(target: &str) -> Result<DockerRequest> {
 /// Removes one image by `repository:tag` or ID, without `--force`. With the
 /// containerd image store Docker untags an image in use instead of refusing,
 /// so the caller checks for containers first.
-pub fn remove_image(session: &RemoteSession, target: &str) -> Result<String> {
+pub fn remove_image(session: &RemoteSession, target: &str, expected_id: &str) -> Result<String> {
+    let removal = remove_image_request(target)?;
+    ensure!(
+        expected_id.strip_prefix("sha256:").is_some_and(id_valid),
+        "Invalid image ID"
+    );
+    let current = DockerRequest::single(
+        "image-id",
+        &["image", "inspect", "--format", "{{.Id}}", target],
+    )
+    .run(session)?;
+    ensure!(
+        current.stdout.trim() == expected_id,
+        "The image changed. Refresh before removing it."
+    );
+    let filter = format!("ancestor={expected_id}");
+    let containers = DockerRequest::single(
+        "image-users",
+        &["ps", "--all", "--quiet", "--filter", &filter],
+    )
+    .run(session)?;
+    ensure!(
+        containers.stdout.trim().is_empty(),
+        "A container depends on this image. Refresh the container list."
+    );
     let output = check(
-        execute_lossy(
-            session,
-            &remove_image_request(target)?.command(session)?,
-            LIMIT,
-        )?,
+        execute_lossy(session, &removal.command(session)?, LIMIT)?,
         merged_failure,
     )?;
     Ok(output.stdout.trim().to_owned())
@@ -1289,16 +1315,6 @@ mod tests {
             ]
         );
         assert!(parse_logins("{}").unwrap().is_empty());
-        // The script blanks every secret before anything is sent.
-        for key in [
-            "auth",
-            "identitytoken",
-            "registrytoken",
-            "password",
-            "username",
-        ] {
-            assert!(LOGINS_SCRIPT.contains(key), "{key}");
-        }
     }
 
     #[test]
@@ -1313,7 +1329,15 @@ mod tests {
             checked_registry("https://index.docker.io/v1/").unwrap(),
             "https://index.docker.io/v1/"
         );
-        for bad in ["ghcr.io/owner", "nginx", "-x", "a b", "ghcr.io;id"] {
+        for bad in [
+            "/",
+            "https://",
+            "ghcr.io/owner",
+            "nginx",
+            "-x",
+            "a b",
+            "ghcr.io;id",
+        ] {
             assert!(checked_registry(bad).is_err(), "{bad}");
         }
         let command = login_request("ghcr.io", "octo").unwrap().shell(PREFIX);

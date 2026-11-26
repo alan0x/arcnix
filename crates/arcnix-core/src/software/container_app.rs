@@ -265,7 +265,11 @@ impl ContainerApp {
         if !self.environment.is_empty() {
             out.push_str("    environment:\n");
             for (key, value) in &self.environment {
-                out.push_str(&format!("      {key}: {}\n", s(&value.replace('$', "$$"))));
+                out.push_str(&format!(
+                    "      {}: {}\n",
+                    s(key),
+                    s(&value.replace('$', "$$"))
+                ));
             }
         }
         let named: Vec<&str> = self
@@ -394,7 +398,7 @@ mod tests {
         target: "/usr/local/etc/redis"
         read_only: true
     environment:
-      REDIS_ARGS: "--save 60 1 $$HOME"
+      "REDIS_ARGS": "--save 60 1 $$HOME"
 volumes:
   "data": {}
 "#

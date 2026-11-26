@@ -14,9 +14,16 @@ pub(crate) struct CleanupState {
     /// The cleanup shown for confirmation.
     confirm: Option<Prune>,
     /// The image the Remove dialog is about: what to remove it by, and its name.
-    target: Option<(String, String)>,
+    target: Option<Removal>,
     result: String,
     error: String,
+}
+
+#[derive(Clone)]
+struct Removal {
+    target: String,
+    display: String,
+    id: String,
 }
 
 /// The containers that run `image` by its tag or ID.
@@ -124,7 +131,11 @@ impl Ui {
         };
         self.state.revise(|s| {
             s.docker.cleanup = CleanupState {
-                target: Some((target, name)),
+                target: Some(Removal {
+                    target,
+                    display: name,
+                    id: image.id,
+                }),
                 ..Default::default()
             }
         });
@@ -135,13 +146,16 @@ impl Ui {
     }
 
     fn docker_remove_image(&self) {
-        let Some((target, _)) = self.state.with(|s| s.docker.cleanup.target.clone()) else {
+        let Some(removal) = self.state.with(|s| s.docker.cleanup.target.clone()) else {
             return;
         };
         if self.state.with(busy) {
             return;
         }
-        self.docker_cleanup_send(AppAction::DockerRemoveImage(target));
+        self.docker_cleanup_send(AppAction::DockerRemoveImage {
+            target: removal.target,
+            id: removal.id,
+        });
     }
 }
 
@@ -353,7 +367,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
             move || {
                 let confirm = remove.clone();
                 let users_of = |s: &State| -> Vec<String> {
-                    let Some((target, _)) = &s.docker.cleanup.target else {
+                    let Some(Removal { target, .. }) = &s.docker.cleanup.target else {
                         return vec![];
                     };
                     s.docker
@@ -370,7 +384,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                 "Remove image",
                 col().class("docker-cleanup").fill((
                     text().class("field-label").content(state.map(|s| {
-                        s.docker.cleanup.target.as_ref().map(|t| t.1.clone()).unwrap_or_default()
+                        s.docker.cleanup.target.as_ref().map(|t| t.display.clone()).unwrap_or_default()
                     })),
                     text().class("hint").content(state.map(move |s| {
                         let users = users_of(s);
@@ -389,7 +403,7 @@ pub(super) fn dialogs(ui: Ui) -> impl Widget {
                 sapid::button()
                     .class("button danger")
                     .label(i18n::bind("Remove"))
-                    .enabled(state.map(move |s| !busy(s) && users_of(s).is_empty()))
+                    .enabled(state.map(move |s| !busy(s) && s.docker.snapshot.is_some() && users_of(s).is_empty()))
                     .on_press(move || confirm.docker_remove_image()),
             )
             },
