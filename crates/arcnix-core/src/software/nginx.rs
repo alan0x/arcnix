@@ -738,11 +738,11 @@ pub fn letsencrypt_mounts(container: &Container) -> Vec<String> {
     {
         missing.push(format!("{0}:{0}:ro", crate::nginx_site::ACME_ROOT));
     }
-    if container
-        .server_path(&format!("{LETSENCRYPT}/live"))
-        .as_deref()
-        != Some(&format!("{LETSENCRYPT}/live"))
-    {
+    // Certbot's live certificate paths link to their versions in archive.
+    if ["live", "archive"].into_iter().any(|directory| {
+        let path = format!("{LETSENCRYPT}/{directory}");
+        container.server_path(&path).as_deref() != Some(path.as_str())
+    }) {
         missing.push(format!("{LETSENCRYPT}:{LETSENCRYPT}:ro"));
     }
     missing
@@ -2048,6 +2048,27 @@ mod tests {
             letsencrypt_mounts(c.docker.as_ref().unwrap()),
             ["/etc/letsencrypt:/etc/letsencrypt:ro"]
         );
+
+        let mut live_only = container().docker.unwrap();
+        live_only.mounts = vec![
+            Mount {
+                src: "/var/www/letsencrypt".into(),
+                dst: "/var/www/letsencrypt".into(),
+            },
+            Mount {
+                src: "/etc/letsencrypt/live".into(),
+                dst: "/etc/letsencrypt/live".into(),
+            },
+        ];
+        assert_eq!(
+            letsencrypt_mounts(&live_only),
+            ["/etc/letsencrypt:/etc/letsencrypt:ro"]
+        );
+        live_only.mounts.push(Mount {
+            src: "/etc/letsencrypt/archive".into(),
+            dst: "/etc/letsencrypt/archive".into(),
+        });
+        assert!(letsencrypt_mounts(&live_only).is_empty());
 
         // Certificates are checked where HTTPS is reachable from the server.
         assert_eq!(

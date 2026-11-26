@@ -348,13 +348,25 @@ pub(crate) fn acme_location(server: &Directive) -> Option<&Directive> {
     })
 }
 
+fn is_redirect_return(directive: &Directive) -> bool {
+    match directive.args.as_slice() {
+        [code, target] => {
+            !target.is_empty() && matches!(code.as_str(), "301" | "302" | "303" | "307" | "308")
+        }
+        [target] => ["http://", "https://", "$scheme"]
+            .iter()
+            .any(|prefix| target.starts_with(prefix)),
+        _ => false,
+    }
+}
+
 /// The `return` of a server block that only redirects: at the server level,
 /// or in `location /` next to nothing but an ACME challenge location (the
 /// shape a redirect needs for Let's Encrypt to reach the challenge).
 pub(crate) fn redirect_return(server: &Directive) -> Option<&Directive> {
     let locations: Vec<&Directive> = server.find("location").collect();
     if locations.is_empty() {
-        return server.first("return");
+        return server.first("return").filter(|d| is_redirect_return(d));
     }
     let root = locations.iter().find(|l| l.args.as_slice() == ["/"])?;
     let only_acme = locations.iter().all(|l| {
@@ -364,6 +376,7 @@ pub(crate) fn redirect_return(server: &Directive) -> Option<&Directive> {
     (only_acme && only_return && server.first("return").is_none() && server.first("root").is_none())
         .then(|| root.first("return"))
         .flatten()
+        .filter(|d| is_redirect_return(d))
 }
 
 pub(crate) fn redirect_only(server: &Directive) -> bool {
@@ -702,6 +715,24 @@ mod tests {
                 .to_string()
                 .contains("nested too deeply")
         );
+    }
+
+    #[test]
+    fn fixed_http_responses_are_not_redirect_only() {
+        for (body, redirects) in [
+            ("return 200 'ready';", false),
+            ("return 304;", false),
+            ("return 301 /next;", true),
+            ("return https://example.test/;", true),
+            ("location / { return 204; }", false),
+            (
+                "location / { return 308 /next; } location ^~ /.well-known/acme-challenge/ {}",
+                true,
+            ),
+        ] {
+            let directives = parse(&format!("server {{ {body} }}")).unwrap();
+            assert_eq!(redirect_only(&directives[0]), redirects, "{body}");
+        }
     }
 
     const PROXY: &str = "# Shop
