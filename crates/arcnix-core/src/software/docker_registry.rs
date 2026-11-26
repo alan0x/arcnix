@@ -466,7 +466,7 @@ const CHECK_BUDGET: Duration = Duration::from_secs(90);
 /// request for its manifest (which downloads nothing and doesn't count
 /// against Docker Hub's pull limit). None for a reference pinned by digest,
 /// which never changes.
-pub fn current_digest(reference: &str) -> Result<Option<String>> {
+fn current_digest(reference: &str, deadline: Instant) -> Result<Option<String>> {
     let reference = crate::docker_pull::checked_reference(reference)?;
     if reference.contains('@') {
         return Ok(None);
@@ -489,7 +489,6 @@ pub fn current_digest(reference: &str) -> Result<Option<String>> {
     } else {
         Place::Registry(&host)
     };
-    let deadline = Instant::now() + DEADLINE;
     let client = client()?;
     let mut url = Url::parse(&format!("https://{host}/"))?;
     url.path_segments_mut()
@@ -547,17 +546,23 @@ pub fn current_digest(reference: &str) -> Result<Option<String>> {
 /// against its registry, each reference once. Images past the limit or the
 /// time budget are reported as not checked.
 pub fn check(images: &[(String, String)]) -> Vec<(String, Freshness)> {
-    let started = Instant::now();
+    let deadline = Instant::now() + CHECK_BUDGET;
     let mut seen = std::collections::HashSet::new();
     let mut results = Vec::new();
     for (reference, local) in images {
         if !seen.insert(reference.clone()) {
             continue;
         }
-        let freshness = if results.len() >= CHECK_LIMIT || started.elapsed() > CHECK_BUDGET {
+        let now = Instant::now();
+        let freshness = if now >= deadline {
+            Freshness::Unknown("Not checked: the time limit was reached".into())
+        } else if results.len() >= CHECK_LIMIT {
             Freshness::Unknown("Not checked: too many images at once".into())
         } else {
-            freshness(current_digest(reference), local)
+            freshness(
+                current_digest(reference, deadline.min(now + DEADLINE)),
+                local,
+            )
         };
         results.push((reference.clone(), freshness));
     }

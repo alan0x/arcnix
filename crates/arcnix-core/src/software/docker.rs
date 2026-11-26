@@ -712,13 +712,33 @@ fn remove_image_request(target: &str) -> Result<DockerRequest> {
 /// Removes one image by `repository:tag` or ID, without `--force`. With the
 /// containerd image store Docker untags an image in use instead of refusing,
 /// so the caller checks for containers first.
-pub fn remove_image(session: &RemoteSession, target: &str) -> Result<String> {
+pub fn remove_image(session: &RemoteSession, target: &str, expected_id: &str) -> Result<String> {
+    let removal = remove_image_request(target)?;
+    ensure!(
+        expected_id.strip_prefix("sha256:").is_some_and(id_valid),
+        "Invalid image ID"
+    );
+    let current = DockerRequest::single(
+        "image-id",
+        &["image", "inspect", "--format", "{{.Id}}", target],
+    )
+    .run(session)?;
+    ensure!(
+        current.stdout.trim() == expected_id,
+        "The image changed. Refresh before removing it."
+    );
+    let filter = format!("ancestor={expected_id}");
+    let containers = DockerRequest::single(
+        "image-users",
+        &["ps", "--all", "--quiet", "--filter", &filter],
+    )
+    .run(session)?;
+    ensure!(
+        containers.stdout.trim().is_empty(),
+        "A container depends on this image. Refresh the container list."
+    );
     let output = check(
-        execute_lossy(
-            session,
-            &remove_image_request(target)?.command(session)?,
-            LIMIT,
-        )?,
+        execute_lossy(session, &removal.command(session)?, LIMIT)?,
         merged_failure,
     )?;
     Ok(output.stdout.trim().to_owned())

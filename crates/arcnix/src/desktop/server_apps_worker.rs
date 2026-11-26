@@ -51,7 +51,10 @@ pub enum Action {
     DockerMirrorTest(String),
     DockerImageConfig(String),
     DockerDiskUsage,
-    DockerRemoveImage(String),
+    DockerRemoveImage {
+        target: String,
+        id: String,
+    },
     DockerPrune(docker::Prune),
     DockerLogins,
     /// The password goes to `docker login` on standard input. This enum is
@@ -188,8 +191,8 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             Reply::ImageConfig(arcnix_core::docker::image_config(session, &image)?)
         }
         Action::DockerDiskUsage => Reply::DiskUsage(docker::disk_usage(session)?),
-        Action::DockerRemoveImage(target) => {
-            Reply::Cleaned(docker::remove_image(session, &target)?)
+        Action::DockerRemoveImage { target, id } => {
+            Reply::Cleaned(docker::remove_image(session, &target, &id)?)
         }
         Action::DockerPrune(prune) => Reply::Cleaned(docker::prune(session, prune)?),
         Action::DockerLogins => Reply::Logins(docker::logins(session)?),
