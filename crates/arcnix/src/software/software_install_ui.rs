@@ -519,7 +519,12 @@ fn conflict_note(s: &State) -> String {
     if !super::app_center_ui::source_in_use(s, app, other) {
         return String::new();
     }
-    format!("{} {}", i18n::translate(installed), i18n::translate(reason))
+    // A line break, not a space, so Chinese has no space after its full stop.
+    format!(
+        "{}\n{}",
+        i18n::translate(installed),
+        i18n::translate(reason)
+    )
 }
 /// Where `source` would install `app` from, or why it can't.
 pub(crate) fn source_note(

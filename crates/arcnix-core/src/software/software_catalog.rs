@@ -63,8 +63,8 @@ pub struct App {
     pub local: bool,
     /// Applications that are commonly used together with this one.
     pub related: &'static [&'static str],
-    /// Why a second installation from a package and a snap conflicts with
-    /// the first; App Center warns before adding one.
+    /// Set when a package copy and a snap copy can't run side by side: the
+    /// reason App Center shows before installing the second copy.
     pub single: Option<&'static str>,
 }
 impl App {

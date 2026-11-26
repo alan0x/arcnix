@@ -2041,6 +2041,13 @@ mod tests {
         assert!(letsencrypt_mounts(c.docker.as_ref().unwrap()).is_empty());
         let command = certificate(&c, &names, "", false).unwrap().snippet.command;
         assert!(command.contains("-w '/srv/web/letsencrypt'"), "{command}");
+        // Docker's PATH line runs first; the snap Certbot line still precedes the check.
+        assert!(
+            command.contains(&format!(
+                "{DOCKER_PATH}\n{SNAP_CERTBOT}\nif ! command -v certbot"
+            )),
+            "{command}"
+        );
         assert!(
             command.contains("--deploy-hook 'sh -c ")
                 && command.contains("web-web-1")
