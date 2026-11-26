@@ -54,7 +54,7 @@ fn native_desktop_storage_bootstrap_and_persistent_terminal() -> anyhow::Result<
     let yaml = definition.yaml()?;
     use sha2::{Digest, Sha256};
     let project = compose_apps::Project {
-        definition: definition.clone(),
+        definition: compose_apps::Manifest::Template(definition.clone()),
         yaml: yaml.clone(),
         digest: format!("{:x}", Sha256::digest(yaml)),
     };

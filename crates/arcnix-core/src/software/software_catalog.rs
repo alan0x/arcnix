@@ -624,7 +624,7 @@ pub fn inventory(remote: &RemoteSession) -> anyhow::Result<Inventory> {
                                         && result
                                             .projects
                                             .iter()
-                                            .any(|project| project.definition.name == name)
+                                            .any(|project| project.definition.name() == name)
                                 });
                         for_container(container).is_some() && !managed
                     })

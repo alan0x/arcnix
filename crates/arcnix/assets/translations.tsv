@@ -3415,3 +3415,41 @@ Docker Hub 的名称最多两段，例如 bitnami/redis	Docker Hub names have at
 无法读取 Docker Hub 的搜索结果：{e}	Docker Hub's search answer isn't readable: {e}
 无法读取 Docker Hub 的标签列表：{e}	Docker Hub's tag list isn't readable: {e}
 无法读取镜像仓库的标签列表：{e}	The registry's tag list isn't readable: {e}
+运行容器	Run container
+运行	Run
+环境变量	Environment variables
+服务器地址 127.0.0.1 只在本服务器上开放端口；0.0.0.0 向所有网络开放。	Server address 127.0.0.1 keeps a port on this server; 0.0.0.0 opens it to every network.
+服务器端口	Server port
+容器端口	Container port
+移除端口	Remove port
+名称（例如 data）表示把文件保存在 Docker 卷中；路径（例如 /srv/app）表示使用服务器上的该文件夹。	A name such as data keeps the files in a Docker volume; a path such as /srv/app uses that folder on the server.
+卷名称或服务器文件夹	Volume name or server folder
+容器内路径	Path in the container
+移除卷	Remove volume
+变量值保存在项目的 compose.yaml 中，只有当前 SSH 用户可以读取。	Values are saved in the project's compose.yaml, which only this SSH user can read.
+变量名	Variable name
+值	Value
+移除变量	Remove variable
+除非手动停止	Unless stopped
+总是	Always
+失败时	On failure
+从不	Never
+Arcnix 会在 ~/.arcnix/apps 中写入一个 Compose 项目并启动它，和 App Center 的 Compose 安装一样。之后可在“项目”中管理。	Arcnix writes a Compose project in ~/.arcnix/apps and starts it, like App Center's Compose installs. Manage it afterwards in Projects.
+正在读取镜像的端口和卷…	Reading the image's ports and volumes…
+运行容器需要服务器上安装 Docker Compose。	Running a container needs Docker Compose on the server.
+另一个服务器任务正在运行。请在它完成后再运行。	Another server task is running. Run when it finishes.
+请输入 1 到 65535 之间的服务器端口	Enter a server port from 1 to 65535
+请输入 1 到 65535 之间的容器端口	Enter a container port from 1 to 65535
+项目名称请使用小写字母、数字和连字符，最多 40 个字符	Use a project name of lower-case letters, digits and hyphens, up to 40
+请输入监听地址，例如 127.0.0.1 或 0.0.0.0	Enter a listening address such as 127.0.0.1 or 0.0.0.0
+端口号为 1 到 65535	Ports are numbers from 1 to 65535
+服务器端口 {port} 被使用了两次	Server port {port} is used twice
+卷可以是名称（例如 data），也可以是服务器上的文件夹（例如 /srv/app）	A volume is a name such as data, or a folder on the server such as /srv/app
+容器内路径以 / 开头，例如 /data	A path in the container starts with /, such as /data
+容器路径 {path} 被使用了两次	The container path {path} is used twice
+变量名由字母、数字和 _ 组成，例如 POSTGRES_PASSWORD	A variable name uses letters, digits and _, such as POSTGRES_PASSWORD
+变量 {key} 被设置了两次	The variable {key} is set twice
+变量值为单行，最多 4096 个字符	A variable's value is one line of up to 4096 characters
+最多添加 16 个端口	Add at most 16 ports
+最多添加 16 个卷	Add at most 16 volumes
+最多添加 64 个环境变量	Add at most 64 environment variables

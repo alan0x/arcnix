@@ -49,6 +49,7 @@ pub enum Action {
     DockerOperate(String, docker::Operation),
     DockerDaemon,
     DockerMirrorTest(String),
+    DockerImageConfig(String),
     NginxRead,
     /// A command from `nginx::logs_command`.
     NginxLogs(String),
@@ -90,6 +91,7 @@ pub enum Reply {
     Operated,
     DockerDaemon(arcnix_core::docker_daemon::Daemon),
     MirrorTest(arcnix_core::docker_daemon::MirrorTest),
+    ImageConfig(arcnix_core::docker::ImageConfig),
     Nginx(arcnix_core::nginx::Reading),
     NginxLogs(String),
     NginxCertificates(arcnix_core::nginx::Certificates),
@@ -165,6 +167,9 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
         Action::DockerDaemon => Reply::DockerDaemon(arcnix_core::docker_daemon::read(session)?),
         Action::DockerMirrorTest(mirror) => {
             Reply::MirrorTest(arcnix_core::docker_daemon::test_mirror(session, &mirror)?)
+        }
+        Action::DockerImageConfig(image) => {
+            Reply::ImageConfig(arcnix_core::docker::image_config(session, &image)?)
         }
         Action::NginxRead => Reply::Nginx(arcnix_core::nginx::read(session)?),
         Action::NginxLogs(command) => {

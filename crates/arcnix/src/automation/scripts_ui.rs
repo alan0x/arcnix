@@ -521,6 +521,7 @@ pub(crate) fn event(ui: &Ui, event: batch_worker::Event) {
     }
     if let Some(id) = finished {
         ui.docker_pull_finished(&id);
+        ui.docker_run_finished(&id);
     }
     if refresh_software {
         ui.refresh_software_inventory();

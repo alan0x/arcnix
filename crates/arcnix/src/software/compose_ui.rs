@@ -23,7 +23,7 @@ fn selected(s: &State) -> Option<Project> {
         .as_ref()?
         .entries
         .iter()
-        .find(|p| p.definition.name == s.compose.selected)
+        .find(|p| p.definition.name() == s.compose.selected)
         .cloned()
 }
 impl Ui {
@@ -78,12 +78,12 @@ pub(crate) fn event(
                 if !v
                     .entries
                     .iter()
-                    .any(|p| p.definition.name == s.compose.selected)
+                    .any(|p| p.definition.name() == s.compose.selected)
                 {
                     s.compose.selected = v
                         .entries
                         .first()
-                        .map(|p| p.definition.name.clone())
+                        .map(|p| p.definition.name().to_owned())
                         .unwrap_or_default();
                 }
                 s.compose.projects = Some(v);
@@ -132,26 +132,26 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
                     .map(|p| p.entries.clone())
                     .unwrap_or_default()
             }))
-            .key(|p| p.definition.name.clone())
+            .key(|p| p.definition.name().to_owned())
             .children(move |item| {
                 let p = item.value;
                 sapid::button()
                     .class("compose-project-row")
-                    .name(p.map(|p| p.definition.name.clone()))
-                    .pressed(state.map(move |s| s.compose.selected == p.get().definition.name))
+                    .name(p.map(|p| p.definition.name().to_owned()))
+                    .pressed(state.map(move |s| s.compose.selected == p.get().definition.name()))
                     .fill((
                         text()
                             .class("docker-resource-name")
-                            .content(p.map(|p| p.definition.name.clone())),
+                            .content(p.map(|p| p.definition.name().to_owned())),
                         text()
                             .class("docker-resource-image")
-                            .content(p.map(|p| p.definition.image.clone())),
-                        text().class("docker-chip").content(
-                            p.map(|p| format!("{}:{}", p.definition.address, p.definition.port)),
-                        ),
+                            .content(p.map(|p| p.definition.image().to_owned())),
+                        text()
+                            .class("docker-chip")
+                            .content(p.map(|p| p.definition.address())),
                     ))
                     .on_press(move || {
-                        state.revise(|s| s.compose.selected = p.get().definition.name)
+                        state.revise(|s| s.compose.selected = p.get().definition.name().to_owned())
                     })
             }),
         ),
@@ -162,9 +162,11 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
             let remove = remove.clone();
             let folder = folder.clone();
             col().class("compose-project-panel").fill((
-                text().class("docker-detail-name").content(
-                    state.map(|s| selected(s).map(|p| p.definition.name).unwrap_or_default()),
-                ),
+                text().class("docker-detail-name").content(state.map(|s| {
+                    selected(s)
+                        .map(|p| p.definition.name().to_owned())
+                        .unwrap_or_default()
+                })),
                 text()
                     .class("compose-project-path")
                     .selectable(true)
@@ -174,7 +176,7 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
                             .as_ref()
                             .and_then(|v| {
                                 selected(s).map(|p| {
-                                    format!("{}/{}/compose.yaml", v.root, p.definition.name)
+                                    format!("{}/{}/compose.yaml", v.root, p.definition.name())
                                 })
                             })
                             .unwrap_or_default()
@@ -201,7 +203,8 @@ pub(crate) fn projects(ui: Ui) -> impl Widget {
                         .on_press(move || {
                             let path = state.with(|s| {
                                 s.compose.projects.as_ref().and_then(|v| {
-                                    selected(s).map(|p| format!("{}/{}", v.root, p.definition.name))
+                                    selected(s)
+                                        .map(|p| format!("{}/{}", v.root, p.definition.name()))
                                 })
                             });
                             if let Some(path) = path {

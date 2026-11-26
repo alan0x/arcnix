@@ -82,6 +82,7 @@ enum Dialog {
     DockerConfigure,
     DockerMirrors,
     DockerPull,
+    DockerRun,
     NginxNewSite,
     TerminalRename {
         id: u64,

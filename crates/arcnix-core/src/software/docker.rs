@@ -451,6 +451,64 @@ pub fn images(session: &RemoteSession) -> Result<Vec<Image>> {
         .collect()
 }
 
+/// What an image declares about running it: the ports it exposes, such as
+/// `80/tcp`, and the paths it keeps data in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImageConfig {
+    pub ports: Vec<(u16, crate::container_app::Protocol)>,
+    pub volumes: Vec<String>,
+}
+pub fn parse_image_config(text: &str) -> Result<ImageConfig> {
+    #[derive(Deserialize)]
+    struct Raw {
+        #[serde(default)]
+        ports: Option<std::collections::BTreeMap<String, Value>>,
+        #[serde(default)]
+        volumes: Option<std::collections::BTreeMap<String, Value>>,
+    }
+    let raw: Raw = serde_json::from_str(text.trim())?;
+    let mut ports: Vec<_> = raw
+        .ports
+        .unwrap_or_default()
+        .keys()
+        .filter_map(|key| {
+            let (port, protocol) = key.split_once('/').unwrap_or((key, "tcp"));
+            let protocol = match protocol {
+                "tcp" => crate::container_app::Protocol::Tcp,
+                "udp" => crate::container_app::Protocol::Udp,
+                _ => return None,
+            };
+            Some((port.parse::<u16>().ok().filter(|p| *p > 0)?, protocol))
+        })
+        .take(16)
+        .collect();
+    ports.sort_by_key(|(port, protocol)| (*port, *protocol == crate::container_app::Protocol::Udp));
+    let volumes = raw
+        .volumes
+        .unwrap_or_default()
+        .into_keys()
+        .filter(|path| {
+            path.starts_with('/') && path.len() <= 1024 && !path.chars().any(char::is_control)
+        })
+        .take(16)
+        .collect();
+    Ok(ImageConfig { ports, volumes })
+}
+pub fn image_config(session: &RemoteSession, reference: &str) -> Result<ImageConfig> {
+    let reference = crate::docker_pull::checked_reference(reference)?;
+    let request = DockerRequest::single(
+        "image-config",
+        &[
+            "image",
+            "inspect",
+            "--format",
+            r#"{"ports":{{json .Config.ExposedPorts}},"volumes":{{json .Config.Volumes}}}"#,
+            &reference,
+        ],
+    );
+    parse_image_config(&request.run(session)?.stdout)
+}
+
 /// The registry mirrors the daemon uses, and whether it runs rootless.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct Registry {
@@ -748,6 +806,22 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "Docker command failed (1): "
+        );
+    }
+
+    #[test]
+    fn image_settings_are_read_for_running_a_container() {
+        use crate::container_app::Protocol::{Tcp, Udp};
+        assert_eq!(
+            parse_image_config(r#"{"ports":{"80/tcp":{},"53/udp":{},"443":{},"x/sctp":{}},"volumes":{"/data":{},"relative":{}}}"#).unwrap(),
+            ImageConfig {
+                ports: vec![(53, Udp), (80, Tcp), (443, Tcp)],
+                volumes: vec!["/data".into()],
+            }
+        );
+        assert_eq!(
+            parse_image_config(r#"{"ports":null,"volumes":null}"#).unwrap(),
+            ImageConfig::default()
         );
     }
 }
