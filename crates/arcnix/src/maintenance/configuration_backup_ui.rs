@@ -227,6 +227,7 @@ impl Ui {
                 i18n::set_language(restored.config.settings.language);
                 self.state.revise(|s| {
                     s.config = restored.config;
+                    s.settings.config_diagnostic = None;
                     s.group = None;
                     s.search.clear();
                     s.collapsed_groups.clear();

@@ -2422,14 +2422,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             return Err("Invalid update startup acknowledgement path".into());
         }
     }
-    let (config, error) = match store.load() {
-        Ok(c) => (c, None),
-        Err(e) => (
-            AppConfig::default(),
-            Some(format!("配置读取失败，禁止覆盖: {e:#}")),
-        ),
-    };
-    if health_marker.is_some() && error.is_some() {
+    let arcnix_core::store::StartupConfig {
+        config,
+        diagnostic,
+        writable,
+    } = store.load_for_startup();
+    if health_marker.is_some() && !writable {
         return Err("Updated application could not load the saved configuration".into());
     }
     let path = config
@@ -2443,11 +2441,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     window.renderer().enable_local_media();
     let scope = window.app().scope();
     i18n::init(scope, config.settings.language);
-    let state = scope.cage(State::new(
-        config,
-        local_display(&path),
-        error.clone().unwrap_or_default(),
-    ));
+    let mut initial = State::new(config, local_display(&path), String::new());
+    initial.settings.config_diagnostic = diagnostic;
+    let state = scope.cage(initial);
     i18n::desktop::init(scope, state);
     let (batch_events, batch_rx) = async_channel::bounded(128);
     let ui = Ui {
@@ -2459,15 +2455,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         logger,
         state,
         store,
-        writable: scope.cage(error.is_none()),
+        writable: scope.cage(writable),
         scope: scope.clone(),
         shell_focus: scope.cage(None),
     };
-    ui.log(
-        error
-            .as_deref()
-            .unwrap_or("Arcnix 已就绪。新建服务器并连接，或浏览本地目录。"),
-    );
+    ui.log(if writable {
+        "Arcnix 已就绪。新建服务器并连接，或浏览本地目录。"
+    } else {
+        "Settings are read-only. Restore a configuration backup to save changes."
+    });
     office_sync::restore(&ui)?;
     scripts_ui::restore(&ui);
     let batch_ui = ui.clone();

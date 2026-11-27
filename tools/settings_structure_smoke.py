@@ -3,16 +3,60 @@ import json, time, re
 from desktop_fixture import ROOT, Desktop, Peer, expect, expect_radio_options, eventually
 
 
+def check_file_checkbox(app, theme):
+    app.settings('Files')
+    checkbox = app.page.get_by_role('checkbox', name='Use thousands separators', exact=True)
+    expect(checkbox).to_be_enabled()
+    appearance = checkbox.evaluate("""input => {
+        const label = getComputedStyle(input.closest('label'));
+        const panel = getComputedStyle(input.closest('.settings-section'));
+        return [getComputedStyle(input).colorScheme, input.getBoundingClientRect().width,
+                label.color, panel.backgroundColor];
+    }""")
+    scheme, width, foreground, background = appearance
+    def luminance(rgb):
+        channels = [int(n) / 255 for n in re.findall(r'\d+', rgb)[:3]]
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return sum(c * w for c, w in zip(linear, (0.2126, 0.7152, 0.0722)))
+    low, high = sorted(map(luminance, (foreground, background)))
+    assert scheme == theme and round(width) == 16 and (high + 0.05) / (low + 0.05) >= 4.5, appearance
+    before = checkbox.is_checked()
+    checkbox.focus()
+    checkbox.press('Space')
+    assert checkbox.is_checked() != before
+    if checkbox.is_checked():
+        assert checkbox.evaluate("e => getComputedStyle(e, '::before').content !== 'none'")
+        app.screenshot(f'file-checkbox-checked-{theme}.png')
+    checkbox.set_checked(before)
+    app.screenshot(f'file-checkbox-{theme}.png')
+
+
 def main():
     out=ROOT/'artifacts/settings-structure-ui'/str(time.time_ns()); out.mkdir(parents=True)
     checks=[]
     with Peer(out) as peer:
         (out/'settings-check.txt').write_text('settings fixture')
         config=peer.config([peer.profile('Settings fixture')],out,updates=dict(automatic_checks=False,automatic_install=False))
+        config['config']['settings']['file_associations'] = {'docx': {'opened_with': ['office', 'future_app']}}
         with Desktop(out,config) as app:
             page=app.page
+            app.settings('General')
+            debug = page.get_by_role('switch', name='Debug mode', exact=True)
+            diagnostic = page.locator('.config-diagnostic')
+            expect(debug).not_to_be_checked()
+            expect(diagnostic).not_to_be_visible()
+            debug.check()
+            expect(diagnostic).to_contain_text('future_app')
+            debug.uncheck()
+            expect(diagnostic).not_to_be_visible()
+            assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['file_associations']['docx']['opened_with'] == ['office']
+            debug.check()
+            diagnostic.get_by_role('button').click()
+            page.locator('.setting-theme:visible').get_by_role('radio', name='Light', exact=True).check()
+            check_file_checkbox(app, 'light')
+            checks.append('Unknown file handlers are repaired, and the configuration diagnostic follows the Debug mode switch')
             expected={
-                'General':['Language','Theme','Configuration backup'],
+                'General':['Language','Theme','Diagnostics','Configuration backup'],
                 'Connection':['Timeout and keepalive'],
                 'Files':['Hidden files','File sizes','Dates and times','Default apps'],
                 'Transfers':['Concurrent transfers','Existing files'], 'Monitoring':['Resource refresh interval'],
@@ -77,6 +121,7 @@ def main():
             assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['display']['dates']=='Iso'
             app.screenshot('files-light.png')
             app.settings('General'); page.locator('.setting-theme:visible').get_by_role('radio', name='Dark', exact=True).check()
+            check_file_checkbox(app, 'dark')
             app.settings('Logging'); app.screenshot('logging-dark.png')
             page.set_viewport_size(dict(width=850,height=780)); app.screenshot('logging-narrow.png')
             assert page.locator('.settings-page').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
@@ -87,6 +132,8 @@ def main():
             app.screenshot('about-chinese-dark.png')
             checks.append('File size previews switch units and precision and reset to decimal with one place; settings support dark/light themes, narrow windows and live Chinese translation')
             app.stop(); app.launch(); page=app.page
+            expect(page.locator('.config-diagnostic')).not_to_be_visible()
+            assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['debug_mode']
             page.locator('.settings-link').click(); page.locator('.context-links').get_by_role('button',name='日志设置',exact=True).click()
             expect(page.get_by_role('checkbox',name='将操作日志写入文件',exact=True)).to_be_checked()
             expect(page.get_by_role('textbox',name='日志目录',exact=True)).to_have_value(str(good))

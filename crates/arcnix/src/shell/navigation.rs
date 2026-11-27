@@ -561,6 +561,23 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                         }),
                     )),
                 col().class("workspace-content").fill((
+                    when(
+                        state.map(|s| {
+                            s.config.settings.debug_mode && s.settings.config_diagnostic.is_some()
+                        }),
+                        move || {
+                            row().class("notice config-diagnostic").fill((
+                                text()
+                                    .class("notice-text")
+                                    .content(i18n::bind(state.map(|s| {
+                                        s.settings.config_diagnostic.clone().unwrap_or_default()
+                                    }))),
+                                close_action("忽略提示").on_press(move || {
+                                    state.revise(|s| s.settings.config_diagnostic = None)
+                                }),
+                            ))
+                        },
+                    ),
                     row()
                         .class(state.map(|s| {
                             if s.notice.is_empty() {

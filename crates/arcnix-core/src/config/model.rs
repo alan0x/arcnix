@@ -216,6 +216,8 @@ impl Theme {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     pub language: Language,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub debug_mode: bool,
     #[serde(default)]
     pub theme: Theme,
     pub show_hidden_files: bool,
@@ -265,6 +267,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             language: Language::English,
+            debug_mode: false,
             theme: Theme::System,
             show_hidden_files: true,
             server_sidebar_width: None,
