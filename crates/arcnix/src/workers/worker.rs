@@ -98,7 +98,7 @@ pub enum Action {
         prefer_content: bool,
         active: Arc<AtomicBool>,
     },
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     ReadHtml(String),
     CodeFile(crate::code_workbench::FileRequest),
     AttachCodePage {
@@ -179,11 +179,11 @@ pub enum Action {
         paused: Arc<AtomicBool>,
         policy: Option<arcnix_core::transfer::ConflictAction>,
     },
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     StartBrowserProxy(Arc<BrowserProxyControl>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     DiagnoseBrowser(String),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     RepairBrowserForwarding {
         sudo: zeroize::Zeroizing<String>,
     },
@@ -227,7 +227,7 @@ impl Action {
         }
     }
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Default)]
 pub struct BrowserProxyControl {
     pub stop: AtomicBool,
@@ -235,7 +235,7 @@ pub struct BrowserProxyControl {
     refused: std::sync::Mutex<Vec<String>>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 impl BrowserProxyControl {
     fn remember_refusal(&self, host: &str, port: u16) {
         let target = if host.contains(':') {
@@ -273,15 +273,15 @@ pub enum Update {
     OfficeSaved(Result<(String, crate::office_reader::Document), String>),
     PgAdmin(crate::pgadmin_ui::Reply),
     Video(Result<Arc<crate::video_player::Source>, String>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     Html(Result<String, String>),
     CodeFile(Result<serde_json::Value, String>),
     TextFile(Result<arcnix_core::text_files::Document, FileFailure>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     BrowserProxy(Result<(u16, String), String>),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     BrowserDiagnosis(arcnix_core::browser_proxy::Diagnosis),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     BrowserForwardingRepaired(Result<(), String>),
     ServerApps(Box<Result<crate::server_apps_worker::Reply, String>>),
     Alive,
@@ -696,7 +696,7 @@ pub(crate) fn start_with_limiter(
         let mut active_server = String::new();
         let mut active_profile: Option<ServerProfile> = None;
         let mut session_access: Option<(String, zeroize::Zeroizing<String>)> = None;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         let mut browser_listeners = std::collections::HashMap::new();
         let mut package_environment: Option<SystemEnvironment> = None;
         for Request {
@@ -1022,7 +1022,7 @@ pub(crate) fn start_with_limiter(
                 }
                 continue;
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Action::ReadHtml(path) = action {
                 let result = session
                     .as_ref()
@@ -1042,7 +1042,7 @@ pub(crate) fn start_with_limiter(
                 send(Update::Html(result));
                 continue;
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Action::RepairBrowserForwarding { sudo } = action {
                 let result = match session.as_ref().filter(|_| {
                     epoch == active_epoch && epoch == generation.load(Ordering::Acquire)
@@ -1056,7 +1056,7 @@ pub(crate) fn start_with_limiter(
                 send(Update::BrowserForwardingRepaired(result));
                 continue;
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Action::DiagnoseBrowser(address) = action {
                 if let Some((profile, access)) = connection() {
                     let profile = profile.clone();
@@ -1082,7 +1082,7 @@ pub(crate) fn start_with_limiter(
                 }
                 continue;
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Action::StartBrowserProxy(control) = action {
                 if let Some((profile, access)) = connection() {
                     let profile = profile.clone();

@@ -117,7 +117,9 @@ pub(crate) enum Command {
     Stop,
 }
 
-pub(crate) use crate::native_viewport::{BoxPx, Viewport};
+#[cfg(windows)]
+pub(crate) use crate::native_viewport::BoxPx;
+pub(crate) use crate::native_viewport::Viewport;
 
 impl Browser {
     pub fn tab(&self, id: u64) -> Option<&Tab> {
@@ -266,7 +268,7 @@ pub(crate) fn html_viewports(s: &State) -> Vec<(u64, u64, Arc<str>, Viewport)> {
     visible_tabs(s)
         .filter_map(|(_, tab, vp)| {
             let html = tab.html.as_ref()?;
-            Some((tab.id, html.serial, html.source.clone()?, vp.clone()))
+            Some((tab.id, tab.html_serial()?, html.source.clone()?, vp.clone()))
         })
         .collect()
 }

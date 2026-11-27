@@ -57,6 +57,16 @@ Linux 默认使用 WebKitGTK 的共享内存缓冲区传输，避免虚拟显卡
 cargo run --locked -p arcnix --bin arcnix -- --config ./my-config.json
 ```
 
+### Ubuntu/Linux 内置浏览器
+
+连接 SSH 后，可从服务器桌面打开 Browser。Linux 使用独立的 WebKitGTK 上下文，通过现有 SOCKS5 隧道访问网页及其 CSS、脚本、请求和远端回环地址。主机名交给 SSH 服务器解析。网页没有桌面界面的 IPC 桥，原生权限、新窗口和下载请求由宿主拒绝。浏览数据保存在配置文件旁的 `browser-data/<服务器配置摘要>`，目录权限为 0700；摘要包括服务器配置与已验证的 SSH 主机指纹。
+
+未指定协议的地址先尝试 HTTPS，连接失败且不涉及证书错误时才尝试 HTTP。明确输入的协议保持不变。证书验证失败会显示错误，不自动添加证书例外或降级。
+
+浏览器通过 GTK 容器嵌入，兼容 Wayland 与 X11。其他桌面窗口或菜单遮挡网页时，Linux 会暂时隐藏原生网页表面，避免网页盖住桌面控件或拦截其输入；遮挡移除后恢复网页。
+
+调试构建可在具有图形会话、Node.js 22+ 和 Paramiko 的 Ubuntu 上运行 `python tools/ubuntu_browser_smoke.py --exe target/debug/arcnix`。脚本使用独立配置与回环 SSH/HTTP/TLS fixture，验证桌面图标、连接保持、远端名称与资源、证书错误、标签页、遮挡和服务器 cookie 隔离；有效 HTTPS 使用 `example.com`。默认验证 X11 与 Wayland，也可用 `--backend x11` 或 `--backend wayland` 指定当前可用的显示后端。结果保存在 `artifacts/ubuntu-issues/runtime`。
+
 界面和状态逻辑由 Rust 编写，Glory Wry 使用系统 WebView 作为桌面渲染宿主；无需 Node、前端打包、Web 服务器或远程 Agent。使用发布的 Glory `0.7.0` 和 Sapid `0.7.1`，不依赖机器上的其他源码仓库。
 
 ## 使用
