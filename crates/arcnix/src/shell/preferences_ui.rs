@@ -331,28 +331,32 @@ pub(crate) fn transfers(ui: Ui) -> impl Widget {
 }
 pub(crate) fn logging(ui: Ui) -> impl Widget {
     let export = ui.clone();
+    let activity = ui.clone();
+    let state = ui.state;
+    let reset = ui.clone();
     fragment((
-        settings::panel_with_reset(
+        settings::panel(
             &ui,
             navigation::SettingsSection::Logging,
-            "Operation log",
-            settings::local_reset(&ui, false, |s, defaults| {
-                s.logging.timestamps = defaults.logging.timestamps
-            }),
+            "Session activity",
             col().class("preferences-stack").fill((
+                text().class("subtle").content(i18n::bind(
+                    "Review recent connections, transfers, and other actions from this session. The activity list is cleared when you quit Arcnix.",
+                )),
                 check(
                     ui.clone(),
-                    "Show timestamps in new log entries",
+                    "Include the time in new entries",
                     |s| s.logging.timestamps,
                     |s, v| s.logging.timestamps = v,
-                ),
-                row().class("choice-list").fill(
+                ).enabled(ui.writable),
+                row().class("choice-list").fill((
+                    btn("View session activity", move || activity.navigate(navigation::Page::Notifications)),
                     sapid::button()
                         .class("button export-log")
-                        .label(i18n::bind("Export current log…"))
+                        .label(i18n::bind("Export session log…"))
                         .on_press(move || {
                             match file_picker::save(
-                                &i18n::translate("Export current log"),
+                                &i18n::translate("Export session log"),
                                 "arcnix-operation.log",
                             )
                             .and_then(|p| {
@@ -361,16 +365,35 @@ pub(crate) fn logging(ui: Ui) -> impl Widget {
                                 }
                                 Ok(())
                             }) {
-                                Ok(()) => export.state.revise(|s| s.settings.log_error.clear()),
+                                Ok(()) => export.state.revise(|s| s.settings.log_export_error.clear()),
                                 Err(e) => export
                                     .state
-                                    .revise(|s| s.settings.log_error = e.to_string()),
+                                    .revise(|s| s.settings.log_export_error = e.to_string()),
                             }
                         }),
-                ),
+                )),
+                settings::feedback(&ui, |s| s.settings.log_export_error.clone(), "software-error"),
             )),
         ),
         log_files(ui),
+        when(state.map(|s| s.settings_section == navigation::SettingsSection::Logging), move || {
+            let reset = reset.clone();
+            let writable = reset.writable;
+            row().class("choice-list").fill(
+                btn("Restore logging defaults", move || {
+                    reset.update_preferences(|s| s.logging = LogSettings::default());
+                    if reset.state.with(|s| s.settings.error.is_empty()) {
+                        reset.state.revise(|s| {
+                            s.settings.log_directory_draft = None;
+                            s.settings.log_error.clear();
+                            s.settings.open_log_feedback.clear();
+                        });
+                    }
+                }).enabled(state.map(move |s| writable.get() &&
+                    (s.config.settings.logging != LogSettings::default() || s.settings.log_directory_draft.is_some())
+                )),
+            )
+        }),
     ))
 }
 pub(crate) fn open_local_log_button(ui: &Ui) -> sapid::Button {
@@ -384,7 +407,7 @@ pub(crate) fn open_local_log_button(ui: &Ui) -> sapid::Button {
             Ok(true) => String::new(),
             Ok(false) if enabled => "The local log will be created with the next activity.".into(),
             Ok(false) => {
-                "No local log file yet. To start one, enable file logging in Settings → Logging."
+                "No local log file yet. Turn on “Automatically save logs to this computer” in Settings → Logging."
                     .into()
             }
             Err(error) => format!(
@@ -408,36 +431,27 @@ fn log_files(ui: Ui) -> impl Widget {
     let directory = ui.clone();
     let apply_directory = ui.clone();
     let browse = ui.clone();
-    let reset = ui.clone();
+    let save = ui.clone();
     let fallback = local_display(ui.logger.directory());
-    settings::panel_with_reset(
+    settings::panel(
         &ui,
         navigation::SettingsSection::Logging,
-        "Log files",
-        settings::reset_button(false, move || {
-            reset.update_preferences(|s| {
-                let defaults = AppSettings::default().logging;
-                s.logging.write_file = defaults.write_file;
-                s.logging.directory = defaults.directory;
-                s.logging.max_size_mib = defaults.max_size_mib;
-                s.logging.retained_files = defaults.retained_files;
-            });
-            if reset.state.with(|s| s.settings.error.is_empty()) {
-                reset.state.revise(|s| {
-                    s.settings.log_directory_draft = None;
-                    s.settings.log_error.clear();
-                });
-            }
-        }),
+        "Local log",
         col().class("preferences-stack").fill((
+            row().class("choice-list settings-choices log-save-switch").fill(
+                sapid::switch()
+                    .size(sapid::Size::Small)
+                    .label_position(sapid::SwitchLabelPosition::Before)
+                    .label(i18n::bind("Automatically save logs to this computer"))
+                    .checked(ui.state.map(|s| s.config.settings.logging.write_file).with_partial_eq())
+                    .enabled(ui.writable)
+                    .on_checked_change(move |enabled| save.update_preferences(|s| s.logging.write_file = enabled)),
+            ),
+            text().class("subtle").content(i18n::bind(
+                "Save new entries to arcnix.log so you can read them after quitting Arcnix.",
+            )),
             row().class("choice-list").fill(open_local_log_button(&ui)),
             open_log_feedback(&ui),
-            check(
-                ui.clone(),
-                "Write operation logs to files",
-                |s| s.logging.write_file,
-                |s, v| s.logging.write_file = v,
-            ),
             col()
                 .class(ui.state.map(|s| {
                     if s.config.settings.logging.write_file {
@@ -448,10 +462,10 @@ fn log_files(ui: Ui) -> impl Widget {
                     .to_owned()
                 }))
                 .fill((
-                    label("Log directory"),
+                    label("Save logs in"),
                     row().class("file-picker-field").fill((
                         input()
-                            .name(i18n::bind("Log directory"))
+                            .name(i18n::bind("Save logs in"))
                             .value(ui.state.map(move |s| {
                                 s.settings.log_directory_draft.clone().unwrap_or_else(|| {
                                     s.config
@@ -472,7 +486,7 @@ fn log_files(ui: Ui) -> impl Widget {
                             }),
                         sapid::button()
                             .class("button")
-                            .label(i18n::bind("Apply directory"))
+                            .label(i18n::bind("Apply"))
                             .enabled(ui.state.map(|s| s.settings.log_directory_draft.is_some()))
                             .on_press(move || {
                                 let value = apply_directory.state.with(|s| {
@@ -501,7 +515,7 @@ fn log_files(ui: Ui) -> impl Widget {
                                     .with(|s| s.config.settings.logging.directory.clone());
                                 match file_picker::folder(
                                     path.as_deref(),
-                                    &i18n::translate("Log directory"),
+                                    &i18n::translate("Save logs in"),
                                 ) {
                                     Ok(Some(path)) => {
                                         browse
@@ -520,14 +534,14 @@ fn log_files(ui: Ui) -> impl Widget {
                     )),
                     text()
                         .class("subtle")
-                        .content(i18n::bind("Leave empty to use the default log directory.")),
+                        .content(i18n::bind("Clear the folder and select Apply to use the default location.")),
                     setting_field(
                         false,
-                        "Maximum log size",
+                        "Maximum size per file",
                         preference_select(
                             &ui,
                             false,
-                            "Maximum log size",
+                            "Maximum size per file",
                             [1u16, 5, 10, 50, 100].map(|n| (n, format!("{n} MiB"))),
                             |s| s.logging.max_size_mib,
                             |s, n| s.logging.max_size_mib = n,
@@ -535,16 +549,19 @@ fn log_files(ui: Ui) -> impl Widget {
                     ),
                     setting_field(
                         false,
-                        "Rotated log files",
+                        "Old log files to keep",
                         preference_select(
                             &ui,
                             false,
-                            "Rotated log files",
+                            "Old log files to keep",
                             [1u8, 3, 5, 10].map(|n| (n, n.to_string())),
                             |s| s.logging.retained_files,
                             |s, n| s.logging.retained_files = n,
                         ),
                     ),
+                    text().class("subtle").content(i18n::bind(
+                        "When a file fills up, Arcnix starts a new one and removes the oldest files beyond this limit.",
+                    )),
                 )),
             settings::feedback(
                 &ui,

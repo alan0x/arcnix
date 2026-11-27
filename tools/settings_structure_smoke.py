@@ -60,7 +60,7 @@ def main():
                 'Connection':['Timeout and keepalive'],
                 'Files':['Hidden files','File sizes','Dates and times','Default apps'],
                 'Transfers':['Concurrent transfers','Existing files'], 'Monitoring':['Resource refresh interval'],
-                'Logging':['Operation log','Log files'], 'Updates':['Updates'], 'About':['Application'],
+                'Logging':['Session activity','Local log'], 'Updates':['Updates'], 'About':['Application'],
             }
             for category,titles in expected.items():
                 app.settings(category)
@@ -95,34 +95,40 @@ def main():
             app.screenshot('activity-local-log.png')
             open_log.focus()
             open_log.press('Enter')
-            expect(page.locator('.local-log-feedback')).to_contain_text('enable file logging in Settings')
+            expect(page.locator('.local-log-feedback')).to_contain_text('Automatically save logs to this computer')
             assert not (out/'logs').exists()
             app.settings('Logging')
-            export=page.get_by_role('button',name='Export current log…',exact=True)
+            reset_log = page.get_by_role('button', name='Restore logging defaults', exact=True)
+            expect(reset_log).to_be_disabled()
+            expect(page.locator('.settings-section:visible').get_by_role('button', name='Reset', exact=True)).to_have_count(0)
+            page.get_by_role('button', name='View session activity', exact=True).click()
+            expect(page.locator('.notifications-page')).to_be_visible()
+            app.settings('Logging')
+            export=page.get_by_role('button',name='Export session log…',exact=True)
             assert export.bounding_box()['width']<300
-            expect(page.get_by_role('textbox',name='Log directory',exact=True)).not_to_be_visible()
-            page.get_by_role('checkbox',name='Write operation logs to files',exact=True).check()
+            expect(page.get_by_role('textbox',name='Save logs in',exact=True)).not_to_be_visible()
+            page.get_by_role('switch',name='Automatically save logs to this computer',exact=True).check()
             expect(page.locator('.local-log-feedback')).not_to_be_visible()
             open_log.click()
             expect(page.locator('.local-log-feedback')).to_contain_text('next activity')
-            directory=page.get_by_role('textbox',name='Log directory',exact=True)
+            directory=page.get_by_role('textbox',name='Save logs in',exact=True)
             expect(directory).to_have_value(str(out/'logs'))
             directory.press('Control+a')
             assert directory.evaluate('el => el.value.slice(el.selectionStart, el.selectionEnd)') == str(out/'logs')
-            expect(page.get_by_role('button',name='Apply directory',exact=True)).to_be_disabled()
+            expect(page.get_by_role('button',name='Apply',exact=True)).to_be_disabled()
             app.screenshot('logging-light.png')
             invalid = out/'invalid-logs'
             (invalid/'arcnix.log').mkdir(parents=True)
-            directory.fill(str(invalid)); page.get_by_role('button',name='Apply directory',exact=True).click()
+            directory.fill(str(invalid)); page.get_by_role('button',name='Apply',exact=True).click()
             open_log.click()
             expect(page.locator('.local-log-feedback')).to_contain_text(str(invalid/'arcnix.log'))
             bad=out/'not-a-directory'; bad.write_text('preserve this file')
-            directory.fill(str(bad)); page.get_by_role('button',name='Apply directory',exact=True).click()
+            directory.fill(str(bad)); page.get_by_role('button',name='Apply',exact=True).click()
             app.servers(); app.connect(); app.settings('Logging')
             expect(page.locator('.log-error')).to_contain_text('Log file error:',timeout=10000)
             assert page.locator('.log-error').inner_text().strip() and bad.read_text()=='preserve this file'
             good=out/'valid-logs'
-            directory.fill(str(good)); page.get_by_role('button',name='Apply directory',exact=True).click()
+            directory.fill(str(good)); page.get_by_role('button',name='Apply',exact=True).click()
             expect(page.locator('.log-error')).not_to_be_visible()
             app.servers(); app.file('settings-check.txt',False).click(button='right'); app.action('Copy selected paths')
             eventually(lambda: (good/'arcnix.log').is_file())
@@ -160,9 +166,42 @@ def main():
             expect(page.locator('.config-diagnostic')).not_to_be_visible()
             assert json.loads(app.config.read_text(encoding='utf-8'))['config']['settings']['debug_mode']
             page.locator('.settings-link').click(); page.locator('.context-links').get_by_role('button',name='日志设置',exact=True).click()
-            expect(page.get_by_role('checkbox',name='将操作日志写入文件',exact=True)).to_be_checked()
-            expect(page.get_by_role('textbox',name='日志目录',exact=True)).to_have_value(str(good))
+            expect(page.get_by_role('switch',name='自动保存日志到本机',exact=True)).to_be_checked()
+            track = page.locator('.log-save-switch .sapid-switch-track')
+            expect(track).not_to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+            expect(page.get_by_role('textbox',name='保存文件夹',exact=True)).to_have_value(str(good))
+            app.screenshot('logging-chinese-on.png')
             checks.append('A fresh process restores the same language, theme and file log preferences after the navigation restructure')
+            current_log = good/'arcnix.log'
+            previous_bytes = current_log.read_bytes()
+            page.get_by_role('checkbox', name='在新记录前显示时间', exact=True).uncheck()
+            page.get_by_role('combobox', name='单个文件大小上限', exact=True).select_option(label='50 MiB')
+            page.get_by_role('combobox', name='保留的旧日志文件数', exact=True).select_option(label='5')
+            page.get_by_role('textbox', name='保存文件夹', exact=True).fill(str(out/'unsaved'))
+            before_reset = json.loads(app.config.read_bytes())['config']['settings']
+            reset_log = page.get_by_role('button', name='恢复日志默认设置', exact=True)
+            reset_log.click()
+            expect(reset_log).to_be_disabled()
+            expect(page.get_by_role('switch', name='自动保存日志到本机', exact=True)).not_to_be_checked()
+            expect(page.get_by_role('checkbox', name='在新记录前显示时间', exact=True)).to_be_checked()
+            expect(page.get_by_role('textbox', name='保存文件夹', exact=True)).not_to_be_visible()
+            after_reset = json.loads(app.config.read_bytes())['config']['settings']
+            assert after_reset.pop('logging') == dict(timestamps=True, write_file=False, directory=None, max_size_mib=10, retained_files=3)
+            before_reset.pop('logging')
+            assert after_reset == before_reset and current_log.read_bytes().startswith(previous_bytes)
+            app.screenshot('logging-chinese-off.png')
+            app.settings('常规')
+            page.locator('.setting-theme:visible').get_by_role('radio', name='浅色', exact=True).check()
+            app.settings('日志设置')
+            page.screenshot(path=str(out/'logging-chinese-light.png'), animations='disabled')
+            autosave = page.get_by_role('switch', name='自动保存日志到本机', exact=True)
+            autosave.focus()
+            autosave.press('Space')
+            expect(autosave).to_be_checked()
+            expect(track).not_to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+            expect(page.get_by_role('textbox', name='保存文件夹', exact=True)).to_have_value(str(out/'logs'))
+            page.screenshot(path=str(out/'logging-chinese-light-on.png'), animations='disabled')
+            checks.append('One scoped reset restores all log preferences and clears the folder draft while preserving saved log contents and other settings')
     result=dict(passed=len(checks),checks=checks,artifacts=str(out)); (out/'results.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result))
 
 

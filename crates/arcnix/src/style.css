@@ -207,6 +207,8 @@
 .help-heading{display:flex;align-items:center;gap:6px;min-width:0}
 .settings-card-heading { display: flex; align-items: center; min-width: 0; gap: 6px; }
 .activity-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.workspace-content .settings-section .log-save-switch { margin-top: 0; }
+.log-file-options { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 16px; }
 .settings-reset { display: inline-flex !important; align-items: center; gap: 6px; flex: none; margin-inline-start: auto; }
 .settings-reset .action-glyph { width: 14px; height: 14px; }
 .context-title.help-heading{justify-content:space-between;gap:8px}
@@ -1486,7 +1488,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .dock-status-settings .desktop-setting-row { grid-template-columns: minmax(0, 1fr) auto; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch { min-width: 56px; min-height: 44px; justify-content: center; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch-track { background: var(--line-hover) !important; }
-:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill) !important; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill, var(--accent)) !important; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch-thumb { background: var(--surface) !important; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch-thumb { box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent); }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }

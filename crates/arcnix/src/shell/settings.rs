@@ -168,6 +168,7 @@ pub(crate) struct SettingsState {
     pub configuration_backup: crate::configuration_backup_ui::BackupState,
     pub error: String,
     pub log_error: String,
+    pub log_export_error: String,
     pub open_log_feedback: String,
     pub log_directory_draft: Option<String>,
     pub transfer_concurrency_draft: Option<String>,
