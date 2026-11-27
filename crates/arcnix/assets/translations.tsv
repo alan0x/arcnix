@@ -3544,3 +3544,67 @@ Docker Hub 不向未登录的用户显示 {repository}；它可能是私有镜�
 Docker 没有报告任何网络。	Docker reported no networks.
 共回收空间：{size}	Total reclaimed space: {size}
 共计：{size}	Total: {size}
+打开 Redis	Open Redis
+键值	Keys
+连接与慢查询	Clients & slowlog
+需要认证	Authentication required
+无法连接	Unreachable
+永不过期	No expiry
+Redis 认证	Redis authentication
+此 Redis 实例需要密码。凭据仅保留在本次会话的内存中，不会保存或出现在命令行参数中。	This Redis instance requires a password. Credentials stay only in memory for this session and are never saved or placed on command lines.
+ACL 用户名（可选）	ACL username (optional)
+解锁	Unlock
+锁定	Lock
+刷新 Redis	Refresh Redis
+总键数	Total keys
+已连接客户端	Connected clients
+每秒操作	Ops / sec
+持久化	Persistence
+模式与角色	Mode & role
+键空间	Keyspace
+所有数据库均无键。	No keys in any database.
+键模式	Key pattern
+模式，例如 user:*	Pattern, e.g. user:*
+扫描	Scan
+新建键…	New key…
+请先启动或连接 Redis 以浏览键值。	Start or connect to Redis to browse keys.
+正在扫描键…	Scanning keys…
+当前数据库没有匹配的键。	No matching keys in this database.
+加载更多键	Load more keys
+选择一个键以查看或编辑其值。	Select a key to inspect or edit its value.
+正在加载键…	Loading key…
+刷新键	Refresh key
+删除键…	Delete key…
+TTL（秒）	TTL (seconds)
+例如 3600	e.g. 3600
+设置 TTL	Set TTL
+设为永不过期	Persist
+二进制值以十六进制预览显示，已禁用编辑。	Binary value shown as hex preview. Editing is disabled.
+较大的值已截断预览，已禁用编辑。	Large value is truncated for preview. Editing is disabled.
+格式化 JSON	Format JSON
+保存值	Save value
+字段	Field
+分值	Score
+移除条目	Remove entry
+刷新诊断信息	Refresh diagnostics
+筛选客户端	Filter clients
+按地址、名称或命令筛选	Filter by address, name, or command
+慢查询日志	Slowlog
+暂无慢查询记录。	No slow queries recorded.
+新建键	New key
+字符串	String
+哈希	Hash
+列表	List
+集合	Set
+有序集合	Sorted set
+键名	Key name
+TTL（秒，可选）	TTL in seconds (optional)
+删除键	Delete key
+键已删除	Key deleted
+已保存	Saved
+启动 Redis	Start Redis
+停止 Redis	Stop Redis
+重启 Redis	Restart Redis
+启动 Redis 容器	Start Redis container
+停止 Redis 容器	Stop Redis container
+重启 Redis 容器	Restart Redis container

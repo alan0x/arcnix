@@ -37,7 +37,7 @@ use shared::*;
 use shell::*;
 use software::{
     app_center_ui, compose_ui, docker_ui, installation_ui, nginx_ui, pgadmin_native, pgadmin_ui,
-    software_install_ui,
+    redis_ui, software_install_ui,
 };
 use terminals::{terminal, *};
 use worker::{Action, Request, Update};
@@ -87,6 +87,8 @@ enum Dialog {
     DockerRemoveImage,
     DockerLogins,
     NginxNewSite,
+    RedisNewKey,
+    RedisDeleteKey,
     TerminalRename {
         id: u64,
     },
@@ -168,6 +170,7 @@ enum WorkspacePage {
     Settings,
     PgAdmin,
     Nginx,
+    Redis,
 }
 
 impl WorkspacePage {
@@ -295,6 +298,7 @@ define_state! {
         server_apps: server_apps_ui::DesktopState = Default::default(),
         docker: docker_ui::DockerState = Default::default(),
         nginx: nginx_ui::NginxState = Default::default(),
+        redis: redis_ui::RedisState = Default::default(),
         disks: disks_ui::DiskState = Default::default(),
         compose: compose_ui::ComposeState = Default::default(),
         install: software_install_ui::InstallState = Default::default(),
@@ -2296,6 +2300,7 @@ fn app(ui: Ui) -> impl Widget {
                     software_install_ui::dialogs(ui.clone()),
                     fragment(docker_ui::dialogs(ui.clone())),
                     fragment(nginx_ui::dialogs(ui.clone())),
+                    fragment(redis_ui::dialogs(ui.clone())),
                     terminal_menu::dialogs(ui.clone()),
                     resource_ports_ui::dialog(ui.clone()),
                 )),
