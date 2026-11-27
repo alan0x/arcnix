@@ -373,6 +373,37 @@ pub(crate) fn logging(ui: Ui) -> impl Widget {
         log_files(ui),
     ))
 }
+pub(crate) fn open_local_log_button(ui: &Ui) -> sapid::Button {
+    let ui = ui.clone();
+    btn("Open local log", move || {
+        let (path, enabled) = ui.state.with(|s| {
+            let logging = &s.config.settings.logging;
+            (ui.logger.active_path(logging), logging.write_file)
+        });
+        let feedback = match client_logs::open_existing(&path) {
+            Ok(true) => String::new(),
+            Ok(false) if enabled => "The local log will be created with the next activity.".into(),
+            Ok(false) => {
+                "No local log file yet. To start one, enable file logging in Settings → Logging."
+                    .into()
+            }
+            Err(error) => format!(
+                "Could not open local log at {}: {error:#}",
+                local_display(&path)
+            ),
+        };
+        ui.state.revise(|s| s.settings.open_log_feedback = feedback);
+    })
+}
+
+pub(crate) fn open_log_feedback(ui: &Ui) -> impl Widget + use<> {
+    settings::feedback(
+        ui,
+        |s| s.settings.open_log_feedback.clone(),
+        "subtle local-log-feedback",
+    )
+}
+
 fn log_files(ui: Ui) -> impl Widget {
     let directory = ui.clone();
     let apply_directory = ui.clone();
@@ -399,6 +430,8 @@ fn log_files(ui: Ui) -> impl Widget {
             }
         }),
         col().class("preferences-stack").fill((
+            row().class("choice-list").fill(open_local_log_button(&ui)),
+            open_log_feedback(&ui),
             check(
                 ui.clone(),
                 "Write operation logs to files",

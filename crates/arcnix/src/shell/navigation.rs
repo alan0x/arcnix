@@ -426,10 +426,14 @@ fn detail(label: &'static str, ui: &Ui, value: fn(&ServerProfile) -> String) -> 
 fn notifications(ui: Ui) -> impl Widget {
     let state = ui.state;
     col().class("notifications-page page-scroll").fill((
-        text().class("page-title").content(i18n::bind("通知与活动")),
+        row().class("activity-heading").fill((
+            text().class("page-title").content(i18n::bind("通知与活动")),
+            preferences_ui::open_local_log_button(&ui),
+        )),
         text().class("subtle").content(i18n::bind(
             "本次会话中的连接、传输与操作记录，最新记录显示在前。",
         )),
+        preferences_ui::open_log_feedback(&ui),
         office_sync::listing(state),
         col().class("notification-feed").fill(
             each(state.map(|s| {
@@ -591,9 +595,15 @@ pub(crate) fn shell(ui: Ui) -> impl Widget {
                             text()
                                 .class("notice-text")
                                 .content(i18n::bind(state.map(|s| s.notice.clone()))),
-                            btn("查看操作日志", move || {
-                                view_log.navigate(Page::Notifications)
-                            }),
+                            when(
+                                state.map(|s| s.navigation != Page::Notifications),
+                                move || {
+                                    let view_log = view_log.clone();
+                                    btn("查看操作日志", move || {
+                                        view_log.navigate(Page::Notifications)
+                                    })
+                                },
+                            ),
                             close_action("忽略提示")
                                 .on_press(move || dismiss.state.revise(|s| s.notice.clear())),
                         )),

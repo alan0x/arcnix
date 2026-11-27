@@ -1819,24 +1819,28 @@ fn modified(timestamp: Option<u64>) -> String {
 fn size(bytes: u64) -> String {
     formatting::bytes(bytes)
 }
+#[cfg(windows)]
+fn shell_open(target: &std::ffi::OsStr) -> anyhow::Result<()> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, w};
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &HSTRING::from(target),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as isize;
+    anyhow::ensure!(code > 32, "ShellExecuteW ({code})");
+    Ok(())
+}
 fn open_url(url: &str) -> anyhow::Result<()> {
     #[cfg(windows)]
-    {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-        use windows::core::{HSTRING, w};
-        let result = unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                &HSTRING::from(url),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            )
-        };
-        anyhow::ensure!(result.0 as isize > 32, "Could not open the link");
-    }
+    shell_open(url.as_ref()).map_err(|_| anyhow::anyhow!("Could not open the link"))?;
     #[cfg(not(windows))]
     {
         let opener = if cfg!(target_os = "macos") {

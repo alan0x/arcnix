@@ -821,6 +821,10 @@ GitHub 项目	Project on GitHub
 应用程序	Application
 版本 {version}	Version {version}
 日志文件	Log files
+打开本地日志	Open local log
+尚无本地日志文件。可在“设置 → 日志设置”中启用文件日志。	No local log file yet. To start one, enable file logging in Settings → Logging.
+下一条活动记录将生成本地日志文件。	The local log will be created with the next activity.
+无法打开本地日志 {path}：{error}	Could not open local log at {path}: {error}
 超时与保活	Timeout and keepalive
 预览	Preview
 留空则使用默认日志目录。	Leave empty to use the default log directory.

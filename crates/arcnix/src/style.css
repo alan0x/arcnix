@@ -206,6 +206,7 @@
 .help-title{font-size:var(--font-body);font-weight:600;color:var(--text)}
 .help-heading{display:flex;align-items:center;gap:6px;min-width:0}
 .settings-card-heading { display: flex; align-items: center; min-width: 0; gap: 6px; }
+.activity-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .settings-reset { display: inline-flex !important; align-items: center; gap: 6px; flex: none; margin-inline-start: auto; }
 .settings-reset .action-glyph { width: 14px; height: 14px; }
 .context-title.help-heading{justify-content:space-between;gap:8px}

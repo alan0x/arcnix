@@ -168,6 +168,7 @@ pub(crate) struct SettingsState {
     pub configuration_backup: crate::configuration_backup_ui::BackupState,
     pub error: String,
     pub log_error: String,
+    pub open_log_feedback: String,
     pub log_directory_draft: Option<String>,
     pub transfer_concurrency_draft: Option<String>,
     pub file_association_filter: String,
@@ -207,6 +208,9 @@ impl Ui {
                     let views_changed = s.config.settings.folder_views
                         != config.settings.folder_views
                         || s.config.settings.folder_defaults != config.settings.folder_defaults;
+                    if s.config.settings.logging != config.settings.logging {
+                        s.settings.open_log_feedback.clear();
+                    }
                     s.config = config;
                     s.settings.error.clear();
                     if views_changed || previous_hidden != s.config.settings.show_hidden_files {
