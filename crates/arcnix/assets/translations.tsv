@@ -3644,4 +3644,9 @@ Redis 密码无效	Invalid Redis password
 无效的 Redis 键列表响应	Invalid Redis key list response
 无效的 Redis 键值响应	Invalid Redis key value response
 无效的 Redis 诊断响应	Invalid Redis diagnostics response
-
+同名键已存在	A key with this name already exists
+创建期间键已变更，请重试	The key changed during creation. Try again
+未找到此容器的 Redis 连接地址	No Redis endpoint found for this container
+Redis 未配置明文端口或 Unix 套接字	Redis has no configured plaintext port or Unix socket
+此键已不存在或不再是字符串	This key no longer holds a string
+编辑期间键已变更，请重新加载后重试	The key changed during editing. Reload it and try again

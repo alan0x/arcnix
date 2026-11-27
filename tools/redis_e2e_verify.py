@@ -84,8 +84,65 @@ def find_binary() -> Path:
     return Path(meta["target_directory"]) / "debug" / ("arcnix.exe" if os.name == "nt" else "arcnix")
 
 
+def verify_key_creation(helper, endpoint):
+    from concurrent.futures import ThreadPoolExecutor
+
+    def create(key, fields):
+        try:
+            helper.op_write({"endpoint": endpoint, "db": 2, "create_only": True, "write_op": {"key": key, **fields}})
+        except helper.RespError as exc:
+            if str(exc) not in ("A key with this name already exists", "The key changed during creation. Try again"):
+                raise
+            return False
+        return True
+
+    for index, fields in enumerate((
+        {"kind": "set_string", "value": "first", "ttl_seconds": 90},
+        {"kind": "set_hash_field", "field": "field", "value": "first"},
+        {"kind": "push_list", "value": "first"},
+        {"kind": "add_set_member", "member": "first"},
+        {"kind": "add_zset_member", "member": "first", "score": 1},
+    )):
+        key = f"create:{index}"
+        assert create(key, fields)
+        changed = {**fields, ("value" if "value" in fields else "member"): "second"}
+        assert not create(key, changed)
+        assert not create(key, {"kind": "set_string", "value": "replacement"})
+        value = helper.op_get_key({"endpoint": endpoint, "db": 2, "key": key})
+        if fields["kind"] == "set_string":
+            assert value["string_value"] == "first" and 0 < value["ttl"] <= 90
+        else:
+            assert [item["value"] for item in value["entries"]] == ["first"]
+
+    def race(i):
+        return create("create:race", {"kind": "push_list", "value": str(i)})
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        winners = [i for i, won in enumerate(pool.map(race, range(8))) if won]
+    assert len(winners) == 1
+    value = helper.op_get_key({"endpoint": endpoint, "db": 2, "key": "create:race"})
+    assert [item["value"] for item in value["entries"]] == [str(winners[0])]
+
+    def edit(key):
+        helper.op_write({"endpoint": endpoint, "db": 2, "write_op": {
+            "kind": "set_string", "key": key, "value": "edited", "keep_ttl": True,
+        }})
+
+    edit("create:0")
+    value = helper.op_get_key({"endpoint": endpoint, "db": 2, "key": "create:0"})
+    assert value["string_value"] == "edited" and 0 < value["ttl"] <= 90
+    for key in ("create:missing", "create:race"):
+        try:
+            edit(key)
+            raise AssertionError("Stale string edit succeeded")
+        except helper.RespError as exc:
+            assert str(exc) == "This key no longer holds a string"
+
+
 def run_helper_unit_tests():
     import importlib.util
+    from unittest.mock import patch
+    from redis_fixture import RespTestServer
 
     helper_path = ROOT / "crates/arcnix-core/src/software/redis_helper.py"
     spec = importlib.util.spec_from_file_location("arcnix_redis_helper_test", helper_path)
@@ -97,6 +154,7 @@ def run_helper_unit_tests():
     assert mod.looks_like_redis("redis:7-alpine", "docker-entrypoint.sh redis-server")
     assert mod.looks_like_redis("valkey/valkey:8", "valkey-server")
     assert mod.looks_like_redis("redis/redis-stack:latest", "/entrypoint.sh")
+    assert mod.looks_like_redis("registry.example:5000/cache/redis:7", "/entrypoint.sh")
     assert not mod.looks_like_redis("oliver006/redis_exporter:latest", "/redis_exporter")
     assert not mod.looks_like_redis("rediscommander/redis-commander:latest", "node app.js")
     assert not mod.looks_like_redis("redis/redisinsight:latest", "node dist/main.js")
@@ -106,6 +164,7 @@ def run_helper_unit_tests():
     assert ep_v6["host"] == "::1" and ep_v6["port"] == 6380
     ep_sock = mod._parse_config_text('port 0\nunixsocket "/var/run/redis/redis.sock"\n')
     assert ep_sock["socket"] == "/var/run/redis/redis.sock"
+    assert mod._parse_config_text("port 0\ntls-port 6380\n") is None
     ep_overflow = mod._parse_config_text("port 999999\n")
     assert ep_overflow["port"] == 6379
 
@@ -116,9 +175,22 @@ def run_helper_unit_tests():
             "6379/tcp": [{"HostIp": "::1", "HostPort": "16379"}],
         },
         {},
-        {},
     )
     assert host == "::1" and port == 16379
+    other_ports = {"8001/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8001"}]}
+    assert mod._pick_container_endpoint(other_ports, {})[:2] == (None, None)
+    assert mod._pick_container_endpoint(other_ports, {"Networks": {"bridge": {"IPAddress": "172.31.0.2"}}})[:2] == ("172.31.0.2", 6379)
+    isolated = {"id": "a" * 64, "name": "isolated", "state": "running", "host": None, "port": None}
+    with (
+        patch.object(mod, "read_host_service", return_value=None),
+        patch.object(mod, "host_installed", return_value=False),
+        patch.object(mod, "read_host_config_endpoint", return_value=(None, None)),
+        patch.object(mod, "read_docker_containers", return_value=([isolated], "")),
+        patch.object(mod, "probe_instance_info") as probe,
+    ):
+        instance, = mod.op_discover({"auth": {"docker:" + isolated["id"]: {"password": "test"}}})["instances"]
+        assert instance["endpoint"] is None and instance["auth_status"]["kind"] == "unreachable"
+        probe.assert_not_called()
 
     # 4. Truncating multi-byte UTF-8 text does not misclassify as binary.
     zh = ("你好世界" * 20).encode("utf-8")
@@ -222,17 +294,28 @@ def run_helper_unit_tests():
     except ValueError:
         pass
 
+    for version in ("7.2.5", "5.0.14"):
+        server = RespTestServer(version=version)
+        try:
+            verify_key_creation(mod, {"host": "127.0.0.1", "port": server.port})
+        finally:
+            server.close()
+
     print("[PASS] redis_helper.py direct unit tests passed", flush=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--helper-only", action="store_true", help="Run the Redis helper regression tests without SSH or a desktop.")
     parser.add_argument(
         "--preview",
         action="store_true",
         help="Start the local SSH + Redis test server and keep Arcnix open for interactive manual E2E testing.",
     )
     args = parser.parse_args()
+    if args.helper_only:
+        run_helper_unit_tests()
+        return 0
 
     run_dir = Path(tempfile.mkdtemp(prefix="arcnix-redis-e2e-"))
     ready_file = run_dir / "fixture-ready.json"

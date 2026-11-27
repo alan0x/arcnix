@@ -271,9 +271,9 @@ def _parse_config_text(text):
             host = "::1"
         else:
             host = binds[0]
-    if port == 0 and unix_socket:
-        return {"host": host, "port": 0, "socket": unix_socket, "container_id": None}
-    return {"host": host, "port": port if 1 <= port <= 65535 else 6379, "socket": None, "container_id": None}
+    if port == 0 and not unix_socket:
+        return None
+    return {"host": host, "port": port, "socket": unix_socket if port == 0 else None, "container_id": None}
 
 
 def read_host_config_endpoint(unit_hint=None):
@@ -324,7 +324,7 @@ def looks_like_redis(image, command):
         return False
     # Match image repo names like redis, bitnami/redis, redis/redis-stack, valkey/valkey
     # or command binaries like redis-server / valkey-server.
-    image_repo = image.lower().split("@", 1)[0].split(":", 1)[0].rsplit("/", 1)[-1]
+    image_repo = image.lower().split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
     if image_repo in ("redis", "redis-stack", "redis-stack-server", "valkey", "valkey-bundle"):
         return True
     return bool(re.search(r'(^|[\s/"\'])(redis-server|valkey-server)([\s"\']|$)', command.lower()))
@@ -345,7 +345,7 @@ def parse_iso_uptime(started_at):
         return None
 
 
-def _pick_container_endpoint(port_map, net_cfg, host_cfg):
+def _pick_container_endpoint(port_map, net_cfg):
     ports_list = []
     candidates = []
     for cport, bindings in (port_map or {}).items():
@@ -357,7 +357,7 @@ def _pick_container_endpoint(port_map, net_cfg, host_cfg):
             if not h_port:
                 continue
             ports_list.append(f"{h_ip}:{h_port}->{cport}")
-            if h_port.isdigit() and cport.endswith("/tcp"):
+            if h_port.isdigit() and cport == "6379/tcp":
                 port_num = int(h_port)
                 if not (1 <= port_num <= 65535):
                     continue
@@ -367,23 +367,18 @@ def _pick_container_endpoint(port_map, net_cfg, host_cfg):
                     target_host = "::1"
                 else:
                     target_host = h_ip
-                priority = 0 if cport == "6379/tcp" else 1
-                candidates.append((priority, target_host, port_num))
+                candidates.append((target_host, port_num))
 
     if candidates:
-        candidates.sort(key=lambda item: item[0])
-        _, connect_host, connect_port = candidates[0]
+        connect_host, connect_port = candidates[0]
         return connect_host, connect_port, ports_list
 
     for net in (net_cfg.get("Networks") or {}).values():
-        ip = (net or {}).get("IPAddress") or ""
+        ip = (net or {}).get("IPAddress") or (net or {}).get("GlobalIPv6Address")
         if ip:
             return ip, 6379, ports_list
 
-    if host_cfg.get("NetworkMode") == "host":
-        return "127.0.0.1", 6379, ports_list
-
-    return "127.0.0.1", 6379, ports_list
+    return None, None, ports_list
 
 
 def read_docker_containers():
@@ -425,7 +420,7 @@ def read_docker_containers():
         restart = (host_cfg.get("RestartPolicy") or {}).get("Name") or ""
 
         connect_host, connect_port, ports_list = _pick_container_endpoint(
-            net_cfg.get("Ports") or {}, net_cfg, host_cfg
+            net_cfg.get("Ports") or {}, net_cfg
         )
 
         containers.append(
@@ -449,8 +444,8 @@ def read_docker_containers():
 
 def connect_and_auth(endpoint, auth=None, db=None):
     client = RespClient(
-        host=endpoint.get("host") or "127.0.0.1",
-        port=int(endpoint.get("port") or 6379),
+        host=endpoint["host"],
+        port=endpoint["port"],
         unix_socket=endpoint.get("socket") or None,
     )
     try:
@@ -512,7 +507,9 @@ def op_discover(req):
         running = bool(service and service.get("active") == "active")
         auth_status = {"kind": "unreachable", "message": "Redis is not running"}
         info_text = None
-        if running or service is None:
+        if endpoint is None:
+            auth_status = {"kind": "unreachable", "message": "Redis has no configured plaintext port or Unix socket"}
+        elif running or service is None:
             auth_status, info_text = probe_instance_info(endpoint, auth_map.get("host"))
             if auth_status["kind"] in ("ok", "required", "failed"):
                 running = True
@@ -539,10 +536,13 @@ def op_discover(req):
             "port": c["port"],
             "socket": None,
             "container_id": c["id"],
-        }
+        } if c["host"] and c["port"] else None
         running = c["state"] == "running"
-        if running:
+        if running and ep is not None:
             auth_status, info_text = probe_instance_info(ep, auth_map.get(key))
+        elif running:
+            auth_status = {"kind": "unreachable", "message": "No Redis endpoint found for this container"}
+            info_text = None
         else:
             auth_status = {"kind": "unreachable", "message": "Container is not running"}
             info_text = None
@@ -843,39 +843,32 @@ def op_write(req):
     db = int(req.get("db", 0))
     op = req["write_op"]
     kind = op["kind"]
+    create_only = req.get("create_only", False)
 
     client = connect_and_auth(endpoint, auth=auth, db=db)
     try:
+        if create_only and kind not in ("set_string", "set_hash_field", "push_list", "add_set_member", "add_zset_member"):
+            raise ValueError("Unsupported initial Redis value")
         if kind == "set_string":
             ttl = op.get("ttl_seconds")
-            keep_ttl = bool(op.get("keep_ttl"))
-            if keep_ttl:
-                try:
-                    client.command("SET", op["key"], op["value"], "KEEPTTL")
-                except RespError as exc:
-                    if "syntax" not in str(exc).lower():
-                        raise
-                    pttl = int(client.command("PTTL", op["key"]))
-                    if pttl > 0:
-                        client.command("SET", op["key"], op["value"], "PX", pttl)
-                    else:
-                        client.command("SET", op["key"], op["value"])
-            elif ttl is not None and int(ttl) > 0:
-                client.command("SET", op["key"], op["value"], "EX", int(ttl))
+            expiry = ("EX", int(ttl)) if ttl is not None else ()
+            if create_only:
+                if client.command("SET", op["key"], op["value"], *expiry, "NX") is None:
+                    raise RespError("A key with this name already exists")
             else:
-                client.command("SET", op["key"], op["value"])
+                edit_string(client, op["key"], op["value"], ("KEEPTTL",) if op.get("keep_ttl") else expiry)
         elif kind == "set_hash_field":
-            client.command("HSET", op["key"], op["field"], op["value"])
+            write_collection(client, create_only, "HSET", op["key"], op["field"], op["value"])
         elif kind == "delete_hash_field":
             client.command("HDEL", op["key"], op["field"])
         elif kind == "push_list":
-            client.command("RPUSH", op["key"], op["value"])
+            write_collection(client, create_only, "RPUSH", op["key"], op["value"])
         elif kind == "add_set_member":
-            client.command("SADD", op["key"], op["member"])
+            write_collection(client, create_only, "SADD", op["key"], op["member"])
         elif kind == "remove_set_member":
             client.command("SREM", op["key"], op["member"])
         elif kind == "add_zset_member":
-            client.command("ZADD", op["key"], str(op["score"]), op["member"])
+            write_collection(client, create_only, "ZADD", op["key"], str(op["score"]), op["member"])
         elif kind == "remove_zset_member":
             client.command("ZREM", op["key"], op["member"])
         elif kind == "set_ttl":
@@ -891,6 +884,48 @@ def op_write(req):
         return {"ok": True}
     finally:
         client.close()
+
+
+def edit_string(client, key, value, expiry):
+    # TYPE and SET must observe the same key. XX also covers expirations on
+    # older Redis versions where expiry alone does not invalidate WATCH.
+    legacy_ttl = False
+    while True:
+        client.command("WATCH", key)
+        if client.command("TYPE", key) != "string":
+            raise RespError("This key no longer holds a string")
+        if legacy_ttl:
+            pttl = client.command("PTTL", key)
+            if pttl == -2:
+                raise RespError("This key no longer holds a string")
+            expiry = () if pttl == -1 else ("PX", max(1, pttl))
+        client.command("MULTI")
+        client.command("SET", key, value, *expiry, "XX")
+        try:
+            result = client.command("EXEC")
+        except RespError as exc:
+            if expiry != ("KEEPTTL",) or "syntax" not in str(exc).lower():
+                raise
+            legacy_ttl = True
+            continue
+        if not result or result[0] is None:
+            raise RespError("The key changed during editing. Reload it and try again")
+        return
+
+
+def write_collection(client, create_only, command, key, *args):
+    if not create_only:
+        client.command(command, key, *args)
+        return
+    # Collection commands have no key-level NX. Watch the absent key until
+    # EXEC so a competing creator cannot have its initial value modified.
+    client.command("WATCH", key)
+    if client.command("EXISTS", key):
+        raise RespError("A key with this name already exists")
+    client.command("MULTI")
+    client.command(command, key, *args)
+    if client.command("EXEC") is None:
+        raise RespError("The key changed during creation. Try again")
 
 
 def main():

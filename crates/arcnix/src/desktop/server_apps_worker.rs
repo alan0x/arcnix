@@ -90,6 +90,7 @@ pub enum Action {
         auth: Option<arcnix_core::redis::Auth>,
     },
     RedisWrite {
+        mode: arcnix_core::redis::WriteMode,
         endpoint: arcnix_core::redis::Endpoint,
         auth: Option<arcnix_core::redis::Auth>,
         db: u8,
@@ -272,12 +273,13 @@ pub fn handle(session: &RemoteSession, action: Action) -> anyhow::Result<Reply> 
             arcnix_core::redis::read_diagnostics(session, &endpoint, auth.as_ref())?,
         ),
         Action::RedisWrite {
+            mode,
             endpoint,
             auth,
             db,
             op,
         } => {
-            arcnix_core::redis::write_key(session, &endpoint, auth.as_ref(), db, &op)?;
+            arcnix_core::redis::write_key(session, &endpoint, auth.as_ref(), db, mode, &op)?;
             Reply::RedisWritten
         }
         Action::DockerOperate(id, operation) => {

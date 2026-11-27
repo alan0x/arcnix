@@ -64,8 +64,6 @@ pub struct Container {
     pub service: String,
     pub directory: String,
     pub ports: Vec<String>,
-    pub host: String,
-    pub port: u16,
 }
 
 impl Container {
@@ -233,7 +231,7 @@ pub struct Instance {
     pub title: String,
     pub service: Option<Service>,
     pub docker: Option<Container>,
-    pub endpoint: Endpoint,
+    pub endpoint: Option<Endpoint>,
     pub installed: bool,
     pub running: bool,
     pub auth_status: AuthStatus,
@@ -260,7 +258,7 @@ impl Instance {
         self.docker.is_some() || self.service.is_some()
     }
     pub fn ready_for_data(&self) -> bool {
-        self.running && self.auth_status == AuthStatus::Ok
+        self.running && self.endpoint.is_some() && self.auth_status == AuthStatus::Ok
     }
 }
 
@@ -335,6 +333,12 @@ pub struct Diagnostics {
     pub clients: Vec<ClientEntry>,
     pub slowlog: Vec<SlowlogEntry>,
     pub clients_truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteMode {
+    Create,
+    Edit,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -664,7 +668,7 @@ struct RawInstance {
     title: String,
     service: Option<Service>,
     docker: Option<Container>,
-    endpoint: Endpoint,
+    endpoint: Option<Endpoint>,
     installed: bool,
     running: bool,
     auth_status: RawAuthStatus,
@@ -780,6 +784,7 @@ pub fn write_key(
     endpoint: &Endpoint,
     auth: Option<&Auth>,
     db: u8,
+    mode: WriteMode,
     op: &WriteOp,
 ) -> Result<()> {
     endpoint.validate()?;
@@ -792,6 +797,7 @@ pub fn write_key(
         "endpoint": endpoint,
         "auth": auth.and_then(Auth::wire),
         "db": db,
+        "create_only": mode == WriteMode::Create,
         "write_op": op.to_json(),
     }))?);
     let _ = run_helper(session, &payload)?;
@@ -918,7 +924,9 @@ pub fn parse_reading(text: &str) -> Result<Reading> {
                 && seen_keys.insert(item.key.clone()),
             "Invalid or duplicate Redis instance key"
         );
-        item.endpoint.validate()?;
+        if let Some(endpoint) = &item.endpoint {
+            endpoint.validate()?;
+        }
         if let Some(container) = &item.docker {
             validate_container_id(&container.id)?;
         }

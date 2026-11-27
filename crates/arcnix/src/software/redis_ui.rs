@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use arcnix_core::redis::{
-    self, Auth, AuthStatus, Control, Diagnostics, Instance, KeySummary, KeyValue, WriteOp,
+    self, Auth, AuthStatus, Control, Diagnostics, Instance, KeySummary, KeyValue, WriteMode,
+    WriteOp,
 };
 use zeroize::Zeroizing;
 
@@ -256,7 +257,9 @@ fn details(s: &State) -> String {
         }
         None => {}
     }
-    parts.push(inst.endpoint.display_address());
+    if let Some(endpoint) = &inst.endpoint {
+        parts.push(endpoint.display_address());
+    }
     parts.join(" · ")
 }
 
@@ -443,7 +446,7 @@ impl Ui {
             };
             Some((
                 inst.key.clone(),
-                inst.endpoint.clone(),
+                inst.endpoint.clone()?,
                 s.redis.auth.get(&inst.key).cloned(),
                 s.redis.db,
                 cursor,
@@ -482,7 +485,7 @@ impl Ui {
             let inst = s.redis.snapshot.as_ref()?;
             Some((
                 inst.key.clone(),
-                inst.endpoint.clone(),
+                inst.endpoint.clone()?,
                 s.redis.auth.get(&inst.key).cloned(),
                 s.redis.db,
                 key,
@@ -518,7 +521,7 @@ impl Ui {
             let inst = s.redis.snapshot.as_ref()?;
             Some((
                 inst.key.clone(),
-                inst.endpoint.clone(),
+                inst.endpoint.clone()?,
                 s.redis.auth.get(&inst.key).cloned(),
             ))
         });
@@ -539,7 +542,7 @@ impl Ui {
         });
     }
 
-    fn redis_write(&self, op: WriteOp, after_write_key: Option<String>) {
+    fn redis_write(&self, mode: WriteMode, op: WriteOp, after_write_key: Option<String>) {
         if let Err(error) = op.validate() {
             self.state
                 .revise(|s| s.redis.error = i18n::translate(&format!("{error:#}")));
@@ -552,7 +555,7 @@ impl Ui {
             let inst = s.redis.snapshot.as_ref()?;
             Some((
                 inst.key.clone(),
-                inst.endpoint.clone(),
+                inst.endpoint.clone()?,
                 s.redis.auth.get(&inst.key).cloned(),
                 s.redis.db,
             ))
@@ -561,6 +564,7 @@ impl Ui {
             return;
         };
         let serial = self.send(Action::ServerApps(AppAction::RedisWrite {
+            mode,
             endpoint,
             auth,
             db,
@@ -588,6 +592,7 @@ impl Ui {
         });
         if let Some((key, value)) = data {
             self.redis_write(
+                WriteMode::Edit,
                 WriteOp::SetString {
                     key: key.clone(),
                     value,
@@ -623,6 +628,7 @@ impl Ui {
         match result {
             Ok((key, ttl_seconds)) => {
                 self.redis_write(
+                    WriteMode::Edit,
                     WriteOp::SetTtl {
                         key: key.clone(),
                         ttl_seconds,
@@ -683,7 +689,7 @@ impl Ui {
                     s.redis.add_score.clear();
                     s.redis.add_value.clear();
                 });
-                self.redis_write(op, Some(key));
+                self.redis_write(WriteMode::Edit, op, Some(key));
             }
             Err(error) => self
                 .state
@@ -702,7 +708,7 @@ impl Ui {
     fn redis_submit_new_key(&self) {
         let result = self.state.with(|s| -> anyhow::Result<(WriteOp, String)> {
             let n = &s.redis.new_key;
-            let key = n.key.trim().to_owned();
+            let key = n.key.clone();
             let op = match n.kind {
                 NewKeyKind::String => {
                     let ttl_seconds = if n.ttl.trim().is_empty() {
@@ -755,7 +761,7 @@ impl Ui {
         match result {
             Ok((op, key)) => {
                 self.close_dialog();
-                self.redis_write(op, Some(key));
+                self.redis_write(WriteMode::Create, op, Some(key));
             }
             Err(error) => self
                 .state
@@ -782,7 +788,7 @@ impl Ui {
             return;
         }
         self.close_dialog();
-        self.redis_write(WriteOp::DeleteKey { key }, None);
+        self.redis_write(WriteMode::Edit, WriteOp::DeleteKey { key }, None);
     }
 
     fn redis_open_db(&self, db: u8) {
@@ -1240,7 +1246,7 @@ fn overview(ui: Ui) -> impl Widget {
             move || {
                 text().class("nginx-error").content(state.map(|s| {
                     match s.redis.snapshot.as_ref().map(|i| &i.auth_status) {
-                        Some(AuthStatus::Unreachable(msg)) => msg.clone(),
+                        Some(AuthStatus::Unreachable(msg)) => i18n::translate(msg),
                         _ => String::new(),
                     }
                 }))
@@ -1937,8 +1943,11 @@ fn key_inspector(ui: Ui) -> impl Widget {
                                                         },
                                                         _ => return,
                                                     };
-                                                    remove_ui
-                                                        .redis_write(op, Some(del_key.clone()));
+                                                    remove_ui.redis_write(
+                                                        WriteMode::Edit,
+                                                        op,
+                                                        Some(del_key.clone()),
+                                                    );
                                                 })
                                         }),
                                     ))
@@ -2549,6 +2558,20 @@ mod tests {
                 .with(|s| s.redis.selected_key.as_ref().unwrap().name.clone()),
             "ui:created"
         );
+        ui.redis_open_new_key();
+        ui.state.revise(|s| {
+            s.redis.new_key.key = "ui:created".into();
+            s.redis.new_key.value = "replacement".into();
+        });
+        ui.redis_submit_new_key();
+        pump()?;
+        assert_eq!(
+            ui.state.with(|s| s.redis.error.clone()),
+            "A key with this name already exists"
+        );
+        ui.redis_select_key("ui:created".into(), true);
+        pump()?;
+        assert_eq!(ui.state.with(|s| s.redis.edit_value.clone()), "hello-ui");
         ui.redis_open_delete_key();
         renderer.flush().ok();
         ui.redis_confirm_delete_key();

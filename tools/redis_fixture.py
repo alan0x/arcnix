@@ -60,7 +60,8 @@ class RespTestServer:
         self.username = username
         self.version = version
         self.started_at = time.time()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.key_versions = {}
         self.dbs: dict[int, dict[str, dict]] = {i: {} for i in range(16)}
         self.hits = 940
         self.misses = 60
@@ -221,12 +222,35 @@ class RespTestServer:
         with conn:
             authed = self.password is None
             db_idx = 0
+            watched = {}
+            queued = None
             for raw_args in _read_resp_commands(conn):
                 if not raw_args:
                     continue
                 cmd = raw_args[0].decode("utf-8", errors="replace").upper()
                 try:
-                    reply = self._dispatch(cmd, raw_args[1:], authed, db_idx, addr)
+                    args = raw_args[1:]
+                    with self.lock:
+                        if authed and cmd == "WATCH":
+                            for key in args:
+                                watched[(db_idx, key)] = self.key_versions.get((db_idx, key), 0)
+                            reply = _encode_resp("OK")
+                        elif authed and cmd == "MULTI":
+                            queued = []
+                            reply = _encode_resp("OK")
+                        elif authed and cmd == "EXEC" and queued is not None:
+                            if any(self.key_versions.get(k, 0) != v for k, v in watched.items()):
+                                reply = b"*-1\r\n"
+                            else:
+                                replies = [self._execute(c, a, authed, db_idx, addr) for c, a in queued]
+                                reply = f"*{len(replies)}\r\n".encode("ascii") + b"".join(replies)
+                            watched.clear()
+                            queued = None
+                        elif queued is not None:
+                            queued.append((cmd, args))
+                            reply = _encode_resp("QUEUED")
+                        else:
+                            reply = self._execute(cmd, args, authed, db_idx, addr)
                     if isinstance(reply, tuple) and reply[0] == "__STATE__":
                         _, authed, db_idx, payload = reply
                         conn.sendall(payload)
@@ -234,6 +258,14 @@ class RespTestServer:
                         conn.sendall(reply)
                 except Exception as exc:
                     conn.sendall(f"-ERR {exc}\r\n".encode("utf-8"))
+
+    def _execute(self, cmd, args, authed, db_idx, addr):
+        reply = self._dispatch(cmd, args, authed, db_idx, addr)
+        if cmd in ("SET", "HSET", "HDEL", "RPUSH", "SADD", "SREM", "ZADD", "ZREM", "DEL", "PERSIST", "EXPIRE"):
+            if not reply.startswith(b"-") and reply != _encode_resp(None):
+                key = (db_idx, args[0])
+                self.key_versions[key] = self.key_versions.get(key, 0) + 1
+        return reply
 
     def _dispatch(self, cmd, args, authed, db_idx, addr):
         if cmd == "PING":
@@ -262,6 +294,8 @@ class RespTestServer:
 
         with self.lock:
             db = self.dbs[db_idx]
+            if cmd == "EXISTS":
+                return _encode_resp(int(args[0].decode("utf-8") in db))
             if cmd == "INFO":
                 return _encode_resp(self._info_text().encode("utf-8"))
             if cmd == "SCAN":
@@ -318,6 +352,10 @@ class RespTestServer:
                 val = args[1]
                 exp = None
                 opts = [a.decode("ascii", errors="replace").upper() for a in args[2:]]
+                if "KEEPTTL" in opts and int(self.version.split(".")[0]) < 6:
+                    return b"-ERR syntax error\r\n"
+                if ("NX" in opts and key in db) or ("XX" in opts and key not in db):
+                    return _encode_resp(None)
                 if "KEEPTTL" in opts and key in db:
                     exp = db[key].get("expire_at")
                 elif len(args) >= 4 and opts[0] == "EX":

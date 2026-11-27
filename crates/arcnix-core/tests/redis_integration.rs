@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use arcnix_core::redis::{self, Auth, AuthStatus, Control, WriteOp};
+use arcnix_core::redis::{self, Auth, AuthStatus, Control, WriteMode, WriteOp};
 use arcnix_core::remote::{PendingConnection, RemoteSession};
 use arcnix_core::{AuthMethod, ServerProfile, server_apps};
 use zeroize::Zeroizing;
@@ -49,6 +49,7 @@ fn redis_full_e2e_cases() -> Result<()> {
         .iter()
         .find(|i| i.key == "host")
         .context("TC-02 missing host instance")?;
+    let host_endpoint = host.endpoint.as_ref().context("missing host endpoint")?;
     assert!(host.running);
     assert_eq!(host.auth_status, AuthStatus::Ok);
     let host_ov = host
@@ -112,7 +113,10 @@ fn redis_full_e2e_cases() -> Result<()> {
     assert_eq!(good_docker.overview.as_ref().unwrap().version, "7.4.1");
     let docker_scan = redis::scan_keys(
         &session,
-        &good_docker.endpoint,
+        good_docker
+            .endpoint
+            .as_ref()
+            .context("missing Docker endpoint")?,
         good_auth.get(&docker.key),
         0,
         "0",
@@ -122,7 +126,7 @@ fn redis_full_e2e_cases() -> Result<()> {
     println!("[PASS] TC-03: Wrong password rejected (WRONGPASS); valid password unlocks via stdin");
 
     // TC-04: Multi-DB scan (db1 vs db0).
-    let db1_scan = redis::scan_keys(&session, &host.endpoint, None, 1, "0", "*")?;
+    let db1_scan = redis::scan_keys(&session, host_endpoint, None, 1, "0", "*")?;
     let db1_names: Vec<&str> = db1_scan.keys.iter().map(|k| k.name.as_str()).collect();
     assert!(db1_names.contains(&"cache:homepage"));
     assert!(db1_names.contains(&"user:2002"));
@@ -130,11 +134,11 @@ fn redis_full_e2e_cases() -> Result<()> {
     println!("[PASS] TC-04: Multi-DB switching scans db1 cleanly");
 
     // TC-05: Cursor SCAN pagination & pattern filter on db0 (123 keys).
-    let page1 = redis::scan_keys(&session, &host.endpoint, None, 0, "0", "*")?;
+    let page1 = redis::scan_keys(&session, host_endpoint, None, 0, "0", "*")?;
     assert_eq!(page1.keys.len(), 100);
     assert_ne!(page1.cursor, "0");
     assert!(page1.truncated);
-    let page2 = redis::scan_keys(&session, &host.endpoint, None, 0, &page1.cursor, "*")?;
+    let page2 = redis::scan_keys(&session, host_endpoint, None, 0, &page1.cursor, "*")?;
     assert_eq!(page2.cursor, "0");
     let mut all_names: Vec<String> = page1
         .keys
@@ -146,7 +150,7 @@ fn redis_full_e2e_cases() -> Result<()> {
     all_names.dedup();
     assert_eq!(all_names.len(), 123);
 
-    let filtered = redis::scan_keys(&session, &host.endpoint, None, 0, "0", "user:*")?;
+    let filtered = redis::scan_keys(&session, host_endpoint, None, 0, "0", "user:*")?;
     assert_eq!(filtered.keys.len(), 1);
     assert_eq!(filtered.keys[0].name, "user:1001");
     println!(
@@ -154,7 +158,7 @@ fn redis_full_e2e_cases() -> Result<()> {
     );
 
     // TC-06: Inspect all 6 Redis types + binary + large truncated preview.
-    let kv_str = redis::read_key(&session, &host.endpoint, None, 0, "app:config")?;
+    let kv_str = redis::read_key(&session, host_endpoint, None, 0, "app:config")?;
     assert_eq!(kv_str.kind, "string");
     assert!(!kv_str.binary && !kv_str.truncated);
     assert!(
@@ -165,30 +169,30 @@ fn redis_full_e2e_cases() -> Result<()> {
             .contains("redis_app")
     );
 
-    let kv_hash = redis::read_key(&session, &host.endpoint, None, 0, "user:1001")?;
+    let kv_hash = redis::read_key(&session, host_endpoint, None, 0, "user:1001")?;
     assert_eq!(kv_hash.kind, "hash");
     assert_eq!(kv_hash.entries.len(), 3);
 
-    let kv_list = redis::read_key(&session, &host.endpoint, None, 0, "jobs:pending")?;
+    let kv_list = redis::read_key(&session, host_endpoint, None, 0, "jobs:pending")?;
     assert_eq!(kv_list.kind, "list");
     assert_eq!(kv_list.entries.len(), 3);
 
-    let kv_set = redis::read_key(&session, &host.endpoint, None, 0, "tags:featured")?;
+    let kv_set = redis::read_key(&session, host_endpoint, None, 0, "tags:featured")?;
     assert_eq!(kv_set.kind, "set");
     assert_eq!(kv_set.entries.len(), 3);
 
-    let kv_zset = redis::read_key(&session, &host.endpoint, None, 0, "leaderboard:daily")?;
+    let kv_zset = redis::read_key(&session, host_endpoint, None, 0, "leaderboard:daily")?;
     assert_eq!(kv_zset.kind, "zset");
     assert_eq!(kv_zset.entries.len(), 3);
 
-    let kv_stream = redis::read_key(&session, &host.endpoint, None, 0, "events:audit")?;
+    let kv_stream = redis::read_key(&session, host_endpoint, None, 0, "events:audit")?;
     assert_eq!(kv_stream.kind, "stream");
     assert_eq!(kv_stream.entries.len(), 2);
 
-    let kv_bin = redis::read_key(&session, &host.endpoint, None, 0, "blob:binary")?;
+    let kv_bin = redis::read_key(&session, host_endpoint, None, 0, "blob:binary")?;
     assert!(kv_bin.binary);
 
-    let kv_large = redis::read_key(&session, &host.endpoint, None, 0, "blob:large")?;
+    let kv_large = redis::read_key(&session, host_endpoint, None, 0, "blob:large")?;
     assert!(kv_large.truncated);
     println!(
         "[PASS] TC-06: All 6 types (string/hash/list/set/zset/stream) + binary + truncated previews work"
@@ -200,9 +204,10 @@ fn redis_full_e2e_cases() -> Result<()> {
     let updated_json = "{\n  \"env\": \"production\",\n  \"redis_app\": true\n}";
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::SetString {
             key: "app:config".into(),
             value: updated_json.into(),
@@ -210,7 +215,7 @@ fn redis_full_e2e_cases() -> Result<()> {
             keep_ttl: true,
         },
     )?;
-    let reread = redis::read_key(&session, &host.endpoint, None, 0, "app:config")?;
+    let reread = redis::read_key(&session, host_endpoint, None, 0, "app:config")?;
     assert_eq!(reread.string_value.as_deref(), Some(updated_json));
     assert!(reread.ttl > 0 && reread.ttl <= before_ttl);
     println!("[PASS] TC-07: String update persisted with KEEPTTL intact");
@@ -218,16 +223,17 @@ fn redis_full_e2e_cases() -> Result<()> {
     // TC-08: Hash / List / Set / ZSet mutations.
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::SetHashField {
             key: "user:1001".into(),
             field: "team".into(),
             value: "platform".into(),
         },
     )?;
-    let h_after_add = redis::read_key(&session, &host.endpoint, None, 0, "user:1001")?;
+    let h_after_add = redis::read_key(&session, host_endpoint, None, 0, "user:1001")?;
     assert!(
         h_after_add
             .entries
@@ -236,29 +242,31 @@ fn redis_full_e2e_cases() -> Result<()> {
     );
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::DeleteHashField {
             key: "user:1001".into(),
             field: "team".into(),
         },
     )?;
-    let h_after_del = redis::read_key(&session, &host.endpoint, None, 0, "user:1001")?;
+    let h_after_del = redis::read_key(&session, host_endpoint, None, 0, "user:1001")?;
     assert!(!h_after_del.entries.iter().any(|e| e.label == "team"));
 
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::PushList {
             key: "jobs:pending".into(),
             value: "verify-e2e".into(),
         },
     )?;
     assert_eq!(
-        redis::read_key(&session, &host.endpoint, None, 0, "jobs:pending")?
+        redis::read_key(&session, host_endpoint, None, 0, "jobs:pending")?
             .entries
             .len(),
         4
@@ -266,32 +274,34 @@ fn redis_full_e2e_cases() -> Result<()> {
 
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::AddSetMember {
             key: "tags:featured".into(),
             member: "valkey".into(),
         },
     )?;
     assert_eq!(
-        redis::read_key(&session, &host.endpoint, None, 0, "tags:featured")?
+        redis::read_key(&session, host_endpoint, None, 0, "tags:featured")?
             .entries
             .len(),
         4
     );
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::RemoveSetMember {
             key: "tags:featured".into(),
             member: "valkey".into(),
         },
     )?;
     assert_eq!(
-        redis::read_key(&session, &host.endpoint, None, 0, "tags:featured")?
+        redis::read_key(&session, host_endpoint, None, 0, "tags:featured")?
             .entries
             .len(),
         3
@@ -299,9 +309,10 @@ fn redis_full_e2e_cases() -> Result<()> {
 
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::AddZSetMember {
             key: "leaderboard:daily".into(),
             score: 105.0,
@@ -309,23 +320,24 @@ fn redis_full_e2e_cases() -> Result<()> {
         },
     )?;
     assert_eq!(
-        redis::read_key(&session, &host.endpoint, None, 0, "leaderboard:daily")?
+        redis::read_key(&session, host_endpoint, None, 0, "leaderboard:daily")?
             .entries
             .len(),
         4
     );
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::RemoveZSetMember {
             key: "leaderboard:daily".into(),
             member: "dave".into(),
         },
     )?;
     assert_eq!(
-        redis::read_key(&session, &host.endpoint, None, 0, "leaderboard:daily")?
+        redis::read_key(&session, host_endpoint, None, 0, "leaderboard:daily")?
             .entries
             .len(),
         3
@@ -335,37 +347,40 @@ fn redis_full_e2e_cases() -> Result<()> {
     // TC-09: Set TTL & Persist.
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::SetTtl {
             key: "user:1001".into(),
             ttl_seconds: Some(300),
         },
     )?;
-    let ttl_set = redis::read_key(&session, &host.endpoint, None, 0, "user:1001")?;
+    let ttl_set = redis::read_key(&session, host_endpoint, None, 0, "user:1001")?;
     assert!(ttl_set.ttl > 0 && ttl_set.ttl <= 300);
 
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::SetTtl {
             key: "user:1001".into(),
             ttl_seconds: None,
         },
     )?;
-    let ttl_persisted = redis::read_key(&session, &host.endpoint, None, 0, "user:1001")?;
+    let ttl_persisted = redis::read_key(&session, host_endpoint, None, 0, "user:1001")?;
     assert_eq!(ttl_persisted.ttl, -1);
     println!("[PASS] TC-09: Set TTL and Persist verified");
 
     // TC-10: Create new key & delete key.
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Create,
         &WriteOp::SetString {
             key: "e2e:temp".into(),
             value: "created-over-ssh".into(),
@@ -373,23 +388,24 @@ fn redis_full_e2e_cases() -> Result<()> {
             keep_ttl: false,
         },
     )?;
-    let created = redis::read_key(&session, &host.endpoint, None, 0, "e2e:temp")?;
+    let created = redis::read_key(&session, host_endpoint, None, 0, "e2e:temp")?;
     assert_eq!(created.string_value.as_deref(), Some("created-over-ssh"));
     redis::write_key(
         &session,
-        &host.endpoint,
+        host_endpoint,
         None,
         0,
+        WriteMode::Edit,
         &WriteOp::DeleteKey {
             key: "e2e:temp".into(),
         },
     )?;
-    let missing = redis::read_key(&session, &host.endpoint, None, 0, "e2e:temp");
+    let missing = redis::read_key(&session, host_endpoint, None, 0, "e2e:temp");
     assert!(missing.is_err());
     println!("[PASS] TC-10: Key creation and deletion verified");
 
     // TC-11: Clients & Slowlog diagnostics.
-    let diag = redis::read_diagnostics(&session, &host.endpoint, None)?;
+    let diag = redis::read_diagnostics(&session, host_endpoint, None)?;
     assert!(!diag.clients_truncated);
     assert!(diag.clients.iter().any(|c| c.name == "api-worker"));
     assert!(diag.clients.iter().any(|c| c.name == "scheduler"));
