@@ -289,6 +289,7 @@ def reply(server, channel, command):
         while chunk := channel.recv(65536):
             data.extend(chunk)
         if (root / 'desktop-write-denied').exists():
+            (root / 'desktop-write-denied-attempted').touch()
             return send(status=1, error='Permission denied writing desktop preferences')
         hold = root / 'desktop-write-hold'
         deadline = time.monotonic() + 10
@@ -340,6 +341,7 @@ def reply(server, channel, command):
         while chunk := channel.recv(65536):
             data.extend(chunk)
         if target == preferences and (root / 'desktop-write-denied').exists():
+            (root / 'desktop-write-denied-attempted').touch()
             return send(status=1, error='Permission denied writing desktop preferences')
         expected = re.findall(r"\[ \"\$current\" = '([a-f0-9]{64}|missing)' \]", command)
         digest = hashlib.sha256(data).hexdigest()

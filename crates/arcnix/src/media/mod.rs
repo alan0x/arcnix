@@ -13,7 +13,7 @@ pub(crate) mod office_sync;
 pub(crate) mod office_view;
 pub(crate) mod pdf_reader;
 pub(crate) mod video_player;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) mod web_browser;
 #[cfg(windows)]
 pub(crate) mod web_browser_native;
@@ -57,3 +57,7 @@ pub(crate) fn viewer_fullscreen_button(state: Cage<State>, page: WorkspacePage) 
             })
         })
 }
+
+#[cfg(target_os = "linux")]
+#[path = "web_browser_linux.rs"]
+pub(crate) mod web_browser_native;

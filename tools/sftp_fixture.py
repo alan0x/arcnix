@@ -547,6 +547,14 @@ class Authentication(paramiko.ServerInterface):
 
     def check_channel_direct_tcpip_request(self, channel_id, origin, destination):
         host, port = destination
+        if self.browser_port:
+            with (self.fixture_root / 'browser-connect-attempts.jsonl').open('a', encoding='utf-8') as trace:
+                trace.write(json.dumps(dict(host=host, port=port)) + '\n')
+        if self.browser_tls_port and host == 'tls.browser-fixture.test' and port == 443:
+            self.browser_channels[channel_id] = (("127.0.0.1", self.browser_tls_port), True)
+            return paramiko.OPEN_SUCCEEDED
+        if self.browser_https_address and host == 'example.com' and port == 443:
+            destination = (self.browser_https_address, port)
         # Model an HTTP-only server on its standard port without binding port 80 on the test host.
         if self.browser_port and host in {"http-only.browser-fixture.test", "192.0.2.87"}:
             if port != 80:
@@ -1607,11 +1615,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--browser-port", type=int, default=0)
+    parser.add_argument("--browser-tls-port", type=int, default=0)
+    parser.add_argument("--browser-https-address", default='', help="Test-only public address for example.com; TLS still verifies example.com")
     parser.add_argument("--browser-web", action="store_true",
                         help="Allow forwarding to public HTTP/HTTPS destinations in the loopback preview")
     parser.add_argument("--ready", type=Path, required=True)
     parser.add_argument("--io-delay", type=float, default=0, help="Test-only delay per SFTP read/write (0–0.1 seconds)")
     args = parser.parse_args()
+    if args.browser_https_address and not ipaddress.ip_address(args.browser_https_address).is_global:
+        parser.error('--browser-https-address must be a public IP address')
     if not 0 <= args.io_delay <= 0.1: parser.error("io-delay must be between 0 and 0.1")
     DelayedHandle.delay = args.io_delay
     host_key = paramiko.RSAKey.generate(2048)
@@ -1682,6 +1694,8 @@ def main():
                             authentication = Authentication(accepted_keys, transport, audit_auth)
                             authentication.fixture_root = root
                             authentication.browser_port = args.browser_port
+                            authentication.browser_tls_port = args.browser_tls_port
+                            authentication.browser_https_address = args.browser_https_address
                             authentication.browser_web = args.browser_web
                             authentication.browser_forwarding_denied = (root / 'browser-forwarding-denied').exists()
                             repaired = root / 'browser-forwarding-repaired.json'

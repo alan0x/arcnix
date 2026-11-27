@@ -30,7 +30,7 @@ pub(crate) struct DesktopWindow {
     pgadmin: HashMap<u64, pgadmin_native::Host>,
     #[cfg(target_os = "macos")]
     icon_installed: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     browsers: HashMap<u64, crate::web_browser_native::Host>,
     #[cfg(windows)]
     video: crate::mpv_native::Host,
@@ -57,7 +57,7 @@ impl DesktopWindow {
             pgadmin: HashMap::new(),
             #[cfg(target_os = "macos")]
             icon_installed: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             browsers: HashMap::new(),
             #[cfg(windows)]
             exiting: false,
@@ -209,7 +209,7 @@ impl NativeLifecycle for DesktopWindow {
                 if let Some(pgadmin) = self.pgadmin.get_mut(&old) {
                     pgadmin.hide();
                 }
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 if let Some(browser) = self.browsers.get_mut(&old) {
                     browser.hide();
                 }
@@ -291,6 +291,27 @@ impl NativeLifecycle for DesktopWindow {
                 }
             }
         }
+        #[cfg(target_os = "linux")]
+        {
+            let live = state.with(|s| s.connected_epochs());
+            self.browsers.retain(|epoch, _| live.contains(epoch));
+            if let Some(epoch) = epoch {
+                if state
+                    .with(|s| crate::server_desktop::launcher_running(s, WorkspacePage::Browser))
+                {
+                    self.browsers.entry(epoch).or_insert_with(|| {
+                        let mut browser = crate::web_browser_native::Host::new(self.ui.clone());
+                        if let Some(wake) = &self.wake {
+                            browser.set_wake(wake.clone());
+                        }
+                        browser
+                    });
+                }
+                if let Some(browser) = self.browsers.get_mut(&epoch) {
+                    browser.poll(window);
+                }
+            }
+        }
         Ok(false)
     }
 
@@ -309,7 +330,7 @@ impl NativeLifecycle for DesktopWindow {
         if _window.simple_fullscreen() {
             _window.set_simple_fullscreen(false);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         for browser in self.browsers.values_mut() {
             browser.close();
         }

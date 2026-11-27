@@ -270,7 +270,7 @@ pub(crate) fn available_apps(s: &State) -> Vec<WorkspacePage> {
         .into_iter()
         .filter(|page| s.local_desktop.is_none() || local_app(s, *page))
         .filter(|page| match page {
-            WorkspacePage::Browser => cfg!(windows),
+            WorkspacePage::Browser => cfg!(any(windows, target_os = "linux")),
             WorkspacePage::Docker => s.server_apps.applications.docker,
             WorkspacePage::Nginx => s.server_apps.applications.nginx,
             _ => true,
@@ -433,7 +433,7 @@ pub(crate) fn fullscreen(s: &State) -> bool {
 }
 
 pub(crate) fn owns_dialog(s: &State) -> bool {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     if s.dialog == Some(Dialog::BrowserForwardingRepair) {
         return visible(s);
     }
@@ -697,7 +697,7 @@ impl Ui {
             return;
         }
         self.state.revise(|s| select_app(s, page));
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if page.base() == WorkspacePage::Browser {
             self.open_web_browser();
         }
@@ -801,7 +801,7 @@ impl Ui {
             WorkspacePage::Code => self.state.revise(|s| {
                 s.code.commands.push("workbench.action.closeActiveEditor");
             }),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             WorkspacePage::Browser => self.state.revise(|s| {
                 if let Some(id) = s.web_browser.active {
                     web_browser::close_tab(s, id);
@@ -850,7 +850,7 @@ impl Ui {
             self.player.stop(self);
         }
         let siblings = self.state.with(|s| has_siblings(s, page));
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if page.base() == WorkspacePage::Browser {
             if siblings {
                 self.state.revise(|s| {
@@ -1123,7 +1123,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         )),
         WorkspacePage::Editor => fragment(text_editor::menubar(ui.clone())),
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         WorkspacePage::Browser => fragment(web_browser::address_bar(ui.clone(), id)),
         _ => fragment(()),
     };
@@ -1176,7 +1176,7 @@ fn app_window(ui: Ui, page: WorkspacePage) -> impl Widget {
         WorkspacePage::ImageViewer => fragment(image_viewer::panel(ui)),
         WorkspacePage::PdfReader => fragment(pdf_reader::panel(ui, id)),
         WorkspacePage::Office => fragment(office_reader::panel(ui, id)),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         WorkspacePage::Browser => fragment(web_browser::window_page(ui, id)),
         _ => fragment(()),
     };
@@ -1367,7 +1367,7 @@ pub(super) fn window_title(s: &State, page: WorkspacePage) -> Option<String> {
             .selected(window)
             .map(|tab| s.desktop_editor.tab_title(tab)),
         WorkspacePage::Terminal => s.terminal.window_title(window),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         WorkspacePage::Browser => s
             .web_browser
             .groups

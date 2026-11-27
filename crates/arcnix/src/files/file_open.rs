@@ -5,7 +5,7 @@ use arcnix_core::file_associations::{self, Association, FileApp, extension, file
 
 use crate::*;
 
-const APPS: &[FileApp] = if cfg!(windows) {
+const APPS: &[FileApp] = if cfg!(any(windows, target_os = "linux")) {
     &[
         FileApp::TextEditor,
         FileApp::Code,
@@ -432,9 +432,9 @@ pub(crate) fn launch(ui: &Ui, path: &str, app: FileApp) {
         FileApp::ImageViewer => image_viewer::open(ui, path),
         FileApp::PdfReader => pdf_reader::open(ui, path),
         FileApp::Office => office_reader::open(ui, path),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         FileApp::Browser => ui.open_html_preview(path),
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         FileApp::Browser => {}
     }
 }

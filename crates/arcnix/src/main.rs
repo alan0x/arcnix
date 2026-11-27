@@ -71,7 +71,7 @@ enum Dialog {
     ),
     DesktopTask(String),
     ConfigureNetwork,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     BrowserForwardingRepair,
     StartupService,
     NativeServiceConfirm,
@@ -290,7 +290,7 @@ define_state! {
         files_uploads: files_transfer::Uploads = Default::default(),
         workspace_page: WorkspacePage = WorkspacePage::Desktop,
         workbench: server_desktop::Workbench = Default::default(),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         web_browser: web_browser::Browser = Default::default(),
         server_apps: server_apps_ui::DesktopState = Default::default(),
         docker: docker_ui::DockerState = Default::default(),
@@ -624,7 +624,7 @@ impl Ui {
             s.swap_session(&mut incoming);
             s.code.viewport = None;
             s.office_viewports.clear();
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             {
                 s.web_browser.viewports.clear();
             }
@@ -768,7 +768,7 @@ impl Ui {
             }
             backups_ui::dismiss(s);
             resource_ports_ui::dismiss(s);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if s.dialog == Some(Dialog::BrowserForwardingRepair) {
                 web_browser::cancel_forwarding_review(s);
             }
@@ -988,7 +988,7 @@ impl Ui {
             Update::Office(result)=>office_reader::received(events,response.serial,result),
             Update::Pdf(event)=>pdf_reader::received(events,response.serial,event),
             Update::Video(result)=>events.player.ready(events,response.serial,result),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Update::Html(result)=>web_browser::html_result(events,response.serial,result),
             Update::Alive=>state.revise(|s|s.keepalive_pending=false),
             Update::ServerApps(result)=>server_apps_ui::event(events,response.serial,*result),
@@ -1005,7 +1005,7 @@ impl Ui {
                 Err(message)=>{state.revise(|s|{s.connecting=false;s.notice=message;});}
             },
             Update::Connected(sftp,address)=>{state.revise(|s|{s.server_apps.connected_address=address;s.connected=true;s.connecting=false;s.connecting_with_saved_credential=false;s.keepalive_pending=false;s.sftp_available=sftp;if s.workbench.active==server_desktop::Tab::Home{server_desktop::select_tab(s,server_desktop::Tab::Desktop);}});
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 if state.with(|s| server_desktop::launcher_running(s, WorkspacePage::Browser)) { events.open_web_browser(); }
                 events.log("SSH 认证成功");events.server_apps_connected();if sftp{events.send(Action::ResumeOffice(events.store.as_ref().clone()));events.refresh(true);events.files_enter();}else{events.log("服务器未启用 SFTP；SSH 系统软件管理仍可使用。");}events.terminal_enter();events.pgadmin_enter();events.observability_enter();if state.with(|s|s.workspace_page==WorkspacePage::AppCenter){events.software_detect();}}
             Update::Disconnected=>events.log("连接已断开"),
@@ -1038,11 +1038,11 @@ impl Ui {
                 files_tabs::refreshed(events, response.serial, &parent, result),
             Update::Children{remote,parent,result}=>file_browser::accept_children(events,remote,parent,response.serial,result),
             Update::BrowseError{remote,message}=>{let latest=state.with(|s|if remote{s.remote_request}else{s.local_request});if accepts_listing(latest,response.serial){if remote{state.revise(file_browser::remote_browse_failed);}events.error(format!("读取目录失败：{message}"));}},
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Update::BrowserProxy(result)=>web_browser::proxy_event(events,response.serial,result),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Update::BrowserDiagnosis(diagnosis)=>web_browser::diagnosis_event(events,response.serial,diagnosis),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             Update::BrowserForwardingRepaired(result)=>web_browser::forwarding_repaired(events,response.serial,result),
             Update::ConnectionLost(message)=>{
                 state.revise(|s| {
@@ -1057,7 +1057,7 @@ impl Ui {
                     }
                 });
                 events.player.close(events);
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 events.close_web_browser();operations::connection_lost(events);terminal::disconnected(events);software::on_connection_lost(events,&message);state.revise(|s|{s.metrics=Default::default();resource_ports_ui::reset(s);s.system_logs=Default::default();s.session_rules.clear();s.queue_rules.clear();s.transfer_conflict=None;s.transfer_conflicts.clear();s.files_uploads.abort();for (id,c) in &s.cancels{c.store(true,Ordering::Relaxed);s.transfer_pauses.remove(id);}if s.dialog==Some(Dialog::TransferConflict){s.dialog=None;}s.connected=false;s.trash[1]=Default::default();s.file_browser.reset(true);s.code=Default::default();s.sync_scope=None;s.server_apps=Default::default();s.docker=Default::default();pgadmin_ui::reset(s);s.disks=Default::default();s.compose=Default::default();s.install=Default::default();s.workbench.fullscreen=false;s.connecting=false;s.remote_ready=false;s.remote.clear();s.remote_selection.clear();s.remote_request=0;s.fingerprint=None;for j in &mut s.jobs {if Some(&j.server_id)==s.selected.as_ref() && j.status==TransferStatus::Queued{j.status=TransferStatus::Cancelled;}}});events.log(format!("SSH 连接已断开：{message}"));},
             Update::TransferConflict(id,info,reply)=>transfer_ui::show(events,id,info,reply),
             Update::TransferPlan(id,plan)=>state.revise(|s|transfer_details::plan(s,&id,&plan)),
@@ -1219,7 +1219,7 @@ impl Ui {
             }
             self.cancel_all();
             self.player.close(self);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             self.close_web_browser();
             self.state.revise(|s| {
                 s.advance_epoch();
@@ -1277,7 +1277,7 @@ impl Ui {
         }
         self.cancel_all();
         self.player.close(self);
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         self.close_web_browser();
         if self.state.with(|s| {
             matches!(
@@ -2305,7 +2305,7 @@ fn app(ui: Ui) -> impl Widget {
             fragment((
                 task_records_ui::dialogs(ui.clone()),
                 configuration_backup_ui::dialogs(ui.clone()),
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "linux"))]
                 web_browser::forwarding_dialog(ui.clone()),
             )),
             record_maintenance_ui::dialog(ui.clone()),

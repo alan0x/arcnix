@@ -115,7 +115,7 @@ fn groups_mut(s: &mut State, app: DesktopApp) -> Option<&mut Groups> {
         DesktopApp::Editor => Some(&mut s.desktop_editor.groups),
         DesktopApp::Office => Some(&mut s.office.groups),
         DesktopApp::PdfReader => Some(&mut s.pdf.groups),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         DesktopApp::Browser => Some(&mut s.web_browser.groups),
         _ => None,
     }
@@ -127,7 +127,7 @@ pub fn current(s: &State, base: WorkspacePage) -> WorkspacePage {
         WorkspacePage::Editor => page(DesktopApp::Editor, s.desktop_editor.groups.current),
         WorkspacePage::Office => page(DesktopApp::Office, s.office.groups.current),
         WorkspacePage::PdfReader => page(DesktopApp::PdfReader, s.pdf.groups.current),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         WorkspacePage::Browser => page(DesktopApp::Browser, s.web_browser.groups.current),
         _ => base,
     }
@@ -156,7 +156,7 @@ pub fn focus(s: &mut State, window: WorkspacePage) {
         DesktopApp::Editor => {
             s.desktop_editor.focus_window(selected);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         DesktopApp::Browser => {
             if let Some(tab) = selected
                 && s.web_browser.active != Some(tab)
@@ -178,7 +178,7 @@ pub fn forget(s: &mut State, window: WorkspacePage) {
         WorkspacePage::PdfReader => s.pdf.remove_window(id),
         _ => {}
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     if window.base() == WorkspacePage::Browser {
         s.web_browser
             .viewports
