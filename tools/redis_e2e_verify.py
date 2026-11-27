@@ -153,6 +153,75 @@ def run_helper_unit_tests():
     assert len(h_entries) == 2 and not h_trunc and fake.hcalls == 2
     s_entries, _, s_trunc = mod._scan_set(fake, "k")
     assert len(s_entries) == 2 and not s_trunc and fake.scalls == 2
+
+    # 7. read_host_service puts --no-pager and --property BEFORE -- so systemctl accepts them.
+    recorded_cmds = []
+    orig_run_cmd = mod.run_cmd
+    orig_which = mod.shutil.which
+    try:
+        mod.shutil.which = lambda name: "/usr/bin/systemctl" if name == "systemctl" else orig_which(name)
+
+        def fake_run_cmd(args, timeout=5):
+            recorded_cmds.append(list(args))
+            return 0, "LoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\nActiveEnterTimestampMonotonic=1000\n", ""
+
+        mod.run_cmd = fake_run_cmd
+        svc = mod.read_host_service()
+        assert svc and svc["unit"] == "redis-server.service"
+        cmd = recorded_cmds[0]
+        sep = cmd.index("--")
+        assert cmd.index("--no-pager") < sep
+        assert any(a.startswith("--property=") for a in cmd[:sep])
+        assert cmd[sep + 1] == "redis-server.service"
+    finally:
+        mod.run_cmd = orig_run_cmd
+        mod.shutil.which = orig_which
+
+    # 8. INFO / CLIENT LIST with non-UTF-8 bytes decode lossily (never hex-dumped).
+    lossy_info = mod._decode_lossy_text(b"redis_version:7.2.5\r\nexecutable:/tmp/\xff/redis\r\n")
+    assert "redis_version:7.2.5" in lossy_info and "\ufffd" in lossy_info
+
+    # 9. op_scan marks >4096-byte UTF-8 key names as binary (non-selectable).
+    orig_connect = mod.connect_and_auth
+    try:
+        long_key = ("k" * 5000).encode("utf-8")
+
+        class LongKeyClient:
+            def command(self, *args):
+                if args[0] == "SCAN":
+                    return [b"0", [long_key]]
+                if args[0] == "TYPE":
+                    return b"string"
+                if args[0] == "TTL":
+                    return -1
+                if args[0] == "MEMORY":
+                    return 5100
+                raise AssertionError(args)
+
+            def close(self):
+                pass
+
+        mod.connect_and_auth = lambda *a, **kw: LongKeyClient()
+        page = mod.op_scan({"endpoint": {"host": "127.0.0.1", "port": 6379}, "db": 0, "cursor": "0", "pattern": "*"})
+        assert len(page["keys"]) == 1 and page["keys"][0]["binary"] is True
+    finally:
+        mod.connect_and_auth = orig_connect
+
+    # 10. RespClient rejects oversized bulk string and excessive nesting depth.
+    c = mod.RespClient.__new__(mod.RespClient)
+    c.buf = bytearray(f"${mod.MAX_RESP_BULK_BYTES + 1}\r\n".encode("ascii"))
+    c.total_read = 0
+    try:
+        c._read_reply(0)
+        raise AssertionError("Expected oversized bulk string error")
+    except ValueError:
+        pass
+    try:
+        c._read_reply(mod.MAX_RESP_DEPTH + 1)
+        raise AssertionError("Expected depth limit error")
+    except ValueError:
+        pass
+
     print("[PASS] redis_helper.py direct unit tests passed", flush=True)
 
 

@@ -9,6 +9,7 @@
 //! administrator tasks.
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -22,7 +23,7 @@ use crate::scripts::Template;
 
 const HELPER: &str = include_str!("redis_helper.py");
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
-const STDIN_LIMIT: usize = 320 * 1024;
+const STDIN_LIMIT: usize = 2 * 1024 * 1024;
 const INSTANCE_LIMIT: usize = 21;
 pub const MAX_KEY_BYTES: usize = 4096;
 pub const MAX_VALUE_BYTES: usize = 256 * 1024;
@@ -580,21 +581,25 @@ fn validate_cursor(cursor: &str) -> Result<String> {
     Ok(effective.to_owned())
 }
 
-fn helper_command() -> String {
-    use std::io::Write;
+fn helper_command() -> &'static str {
+    static COMMAND: OnceLock<String> = OnceLock::new();
+    COMMAND.get_or_init(|| {
+        use std::io::Write;
 
-    use base64::Engine as _;
+        use base64::Engine as _;
 
-    let script = HELPER.replace("\r\n", "\n");
-    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-    encoder
-        .write_all(script.as_bytes())
-        .expect("in-memory zlib compression");
-    let compressed = encoder.finish().expect("in-memory zlib finish");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
-    format!(
-        "# arcnix:redis:helper\ncd /\narcnix_t=; if command -v timeout >/dev/null 2>&1; then arcnix_t='timeout -k 2 28'; fi\nexec $arcnix_t python3 -I -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('{encoded}')).decode(),{{'__name__':'__main__'}})\""
-    )
+        let script = HELPER.replace("\r\n", "\n");
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder
+            .write_all(script.as_bytes())
+            .expect("in-memory zlib compression");
+        let compressed = encoder.finish().expect("in-memory zlib finish");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
+        let inner = format!(
+            "cd /; set -- python3 -I -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('{encoded}')).decode(),{{'__name__':'__main__'}})\"; if command -v timeout >/dev/null 2>&1; then set -- timeout -k 2 28 \"$@\"; fi; exec \"$@\""
+        );
+        format!("# arcnix:redis:helper\nexec /bin/sh -c {}", quote(&inner))
+    })
 }
 
 fn run_helper(session: &RemoteSession, payload: &[u8]) -> Result<String> {
@@ -606,10 +611,10 @@ fn run_helper(session: &RemoteSession, payload: &[u8]) -> Result<String> {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let output = session.exec_stream_controlled(
-        &helper_command(),
+        helper_command(),
         payload,
         Duration::from_secs(30),
-        true,
+        false,
         None,
         false,
         |stream, bytes| {
@@ -1216,6 +1221,52 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
             helper_command().len() < 30 * 1024,
             "SSH exec command must stay below the 32 KiB SSH packet limit"
         );
+        // Heavily JSON-escaped 256 KiB value must still fit within STDIN_LIMIT.
+        let escaped = WriteOp::SetString {
+            key: "big".into(),
+            value: "\x01".repeat(MAX_VALUE_BYTES),
+            ttl_seconds: None,
+            keep_ttl: false,
+        };
+        assert!(escaped.validate().is_ok());
+        let wire = serde_json::to_vec(&serde_json::json!({
+            "op": "write",
+            "write_op": escaped.to_json(),
+        }))
+        .unwrap();
+        assert!(wire.len() <= STDIN_LIMIT);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn helper_command_runs_under_sh_and_zsh() -> Result<()> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        for shell in ["/bin/sh", "/bin/zsh"] {
+            if !std::path::Path::new(shell).is_file() {
+                continue;
+            }
+            let mut child = Command::new(shell)
+                .args(["-c", helper_command()])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(br#"{"op":"unknown_probe"}"#)?;
+            let out = child.wait_with_output()?;
+            assert_eq!(out.status.code(), Some(1), "shell={shell}");
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                err.contains("Unknown Redis helper operation: unknown_probe"),
+                "shell={shell} stderr={err}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

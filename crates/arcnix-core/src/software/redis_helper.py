@@ -24,7 +24,7 @@ STRING_PREVIEW_LIMIT = 128 * 1024
 CLIENTS_LIMIT = 200
 SLOWLOG_LIMIT = 64
 
-STDIN_LIMIT = 320 * 1024
+STDIN_LIMIT = 2 * 1024 * 1024
 MAX_RESP_LINE_BYTES = 64 * 1024
 MAX_RESP_BULK_BYTES = 4 * 1024 * 1024
 MAX_RESP_ARRAY_LEN = 10_000
@@ -202,10 +202,10 @@ def read_host_service():
             [
                 "systemctl",
                 "show",
-                "--",
-                unit,
                 "--no-pager",
                 "--property=LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestampMonotonic",
+                "--",
+                unit,
             ],
             timeout=5,
         )
@@ -478,6 +478,14 @@ def classify_error(exc):
     return {"kind": "unreachable", "message": msg}
 
 
+def _decode_lossy_text(value, limit=512 * 1024):
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value[:limit].decode("utf-8", errors="replace")
+    return str(value)[:limit]
+
+
 def probe_instance_info(endpoint, auth=None):
     try:
         client = connect_and_auth(endpoint, auth=auth)
@@ -485,7 +493,7 @@ def probe_instance_info(endpoint, auth=None):
         return classify_error(exc), None
     try:
         raw = client.command("INFO")
-        text, _, _ = decode_bytes(raw, limit=512 * 1024)
+        text = _decode_lossy_text(raw, limit=512 * 1024)
         return {"kind": "ok", "message": ""}, text
     except Exception as exc:
         return classify_error(exc), None
@@ -589,7 +597,7 @@ def op_scan(req):
         truncated = cur != "0"
         keys = []
         for raw_bytes in found:
-            name, is_binary, _ = decode_bytes(raw_bytes, limit=4096)
+            name, is_binary, name_trunc = decode_bytes(raw_bytes, limit=4096)
             try:
                 kind = client.command("TYPE", raw_bytes)
                 if isinstance(kind, bytes):
@@ -598,14 +606,14 @@ def op_scan(req):
                 kind = "unknown"
             try:
                 ttl = int(client.command("TTL", raw_bytes))
-            except Exception:
+            except (RespError, ValueError, TypeError):
                 ttl = -1
             size = None
             try:
                 mem = client.command("MEMORY", "USAGE", raw_bytes, "SAMPLES", 5)
                 if isinstance(mem, int):
                     size = mem
-            except Exception:
+            except (RespError, ValueError, TypeError):
                 size = None
             keys.append(
                 {
@@ -613,7 +621,7 @@ def op_scan(req):
                     "kind": kind or "unknown",
                     "ttl": ttl,
                     "size": size,
-                    "binary": is_binary,
+                    "binary": is_binary or name_trunc,
                 }
             )
 
@@ -705,12 +713,12 @@ def op_get_key(req):
         try:
             enc = client.command("OBJECT", "ENCODING", key)
             encoding = decode_bytes(enc)[0] if enc is not None else ""
-        except Exception:
+        except (RespError, ValueError, TypeError):
             encoding = ""
         try:
             mem = client.command("MEMORY", "USAGE", key, "SAMPLES", 5)
             memory_bytes = mem if isinstance(mem, int) else None
-        except Exception:
+        except (RespError, ValueError, TypeError):
             memory_bytes = None
 
         string_value = None
@@ -801,7 +809,7 @@ def op_diagnostics(req):
     client = connect_and_auth(endpoint, auth=auth)
     try:
         raw_clients = client.command("CLIENT", "LIST")
-        clients_text, _, _ = decode_bytes(raw_clients, limit=512 * 1024)
+        clients_text = _decode_lossy_text(raw_clients, limit=512 * 1024)
         raw_slowlog = client.command("SLOWLOG", "GET", SLOWLOG_LIMIT) or []
         slowlog = []
         for entry in raw_slowlog:
@@ -889,8 +897,10 @@ def main():
     raw = sys.stdin.read(STDIN_LIMIT + 1)
     if len(raw) > STDIN_LIMIT:
         raise ValueError("Redis request exceeds the size limit")
-    req = json.loads(raw) if raw.strip() else {"op": "discover"}
-    op = req.get("op", "discover")
+    if not raw.strip():
+        raise ValueError("Missing Redis helper request")
+    req = json.loads(raw)
+    op = req.get("op")
     handlers = {
         "discover": op_discover,
         "scan": op_scan,

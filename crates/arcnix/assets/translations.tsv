@@ -3629,4 +3629,19 @@ TTL 必须大于 0 秒	TTL must be greater than 0 seconds
 请输入成员值	Enter a member value
 Redis 用户名无效	Invalid Redis username
 Redis 密码无效	Invalid Redis password
+字段不能为空	Field cannot be empty
+字段无效或过长	Field is invalid or too long
+请先选择一个键	Select a key first
+此类型不支持添加条目	Adding entries is not supported for this type
+此 Redis 实例没有可控制的服务	This Redis instance has no controllable service
+启动 Redis 系统服务。	Starts the Redis system service.
+停止 Redis 系统服务。在重新启动之前，使用此实例的应用将无法访问。	Stops the Redis system service. Applications using this instance will lose access until it is started again.
+重启 Redis 系统服务。现有连接将被断开。	Restarts the Redis system service. Open connections are dropped.
+启动 Redis Docker 容器。	Starts the Redis Docker container.
+停止 Redis Docker 容器。连接到此容器的客户端将被断开。	Stops the Redis Docker container. Clients connected to this container will disconnect.
+重启 Redis Docker 容器。现有连接将被断开。	Restarts the Redis Docker container. Open connections are dropped.
+无效的 Redis 响应	Invalid Redis response
+无效的 Redis 键列表响应	Invalid Redis key list response
+无效的 Redis 键值响应	Invalid Redis key value response
+无效的 Redis 诊断响应	Invalid Redis diagnostics response
 

@@ -42,6 +42,13 @@ struct NewKey {
     ttl: String,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct PendingData {
+    serial: u64,
+    instance: String,
+    db: u8,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct RedisState {
     instances: Vec<Rc<Instance>>,
@@ -53,16 +60,12 @@ pub(crate) struct RedisState {
     auth_username: String,
     auth_password: Zeroizing<String>,
     pending: Option<u64>,
-    keys_pending: Option<u64>,
-    key_pending: Option<u64>,
-    diag_pending: Option<u64>,
-    write_pending: Option<u64>,
+    keys_pending: Option<PendingData>,
+    key_pending: Option<PendingData>,
+    diag_pending: Option<PendingData>,
+    write_pending: Option<PendingData>,
     /// Whether the pending scan is loading a next page (append) vs fresh scan.
     scan_append: bool,
-    /// Instance key and DB bound to in-flight data requests so stale replies
-    /// cannot cross-contaminate another instance or database.
-    request_instance: String,
-    request_db: u8,
     /// Key to re-read after a write completes (None when deleting).
     after_write_key: Option<String>,
     error: String,
@@ -95,8 +98,8 @@ impl RedisState {
         self.diag_pending = None;
         self.write_pending = None;
         self.after_write_key = None;
-        self.request_instance.clear();
-        self.request_db = 0;
+        self.auth_username.clear();
+        self.auth_password = Default::default();
         self.db = 0;
         self.pattern.clear();
         self.client_filter.clear();
@@ -378,7 +381,9 @@ impl Ui {
             self.state.revise(|s| s.redis.notice.clear());
             match result {
                 Ok(template) => self.choose_server_script(template),
-                Err(error) => self.state.revise(|s| s.redis.error = format!("{error:#}")),
+                Err(error) => self
+                    .state
+                    .revise(|s| s.redis.error = i18n::translate(&format!("{error:#}"))),
             }
         }
     }
@@ -397,6 +402,7 @@ impl Ui {
                 s.redis.error = i18n::translate(&format!("{error:#}"));
                 return false;
             }
+            s.redis.auth_username.clear();
             s.redis.auth_password = Default::default();
             s.redis.auth.insert(key, auth);
             s.redis.pending = None;
@@ -413,6 +419,7 @@ impl Ui {
         self.state.revise(|s| {
             let key = s.redis.instance.clone();
             s.redis.auth.remove(&key);
+            s.redis.auth_username.clear();
             s.redis.auth_password = Default::default();
             s.redis.pending = None;
             s.redis.clear_instance_views();
@@ -420,7 +427,7 @@ impl Ui {
         self.redis_refresh();
     }
 
-    fn redis_scan(&self, append: bool) {
+    fn redis_scan(&self, append: bool, clear_info: bool) {
         let req = self.state.with(|s| {
             if !data_ready(s) || s.redis.keys_pending.is_some() {
                 return None;
@@ -454,16 +461,20 @@ impl Ui {
             pattern,
         }));
         self.state.revise(|s| {
-            s.redis.keys_pending = Some(serial);
+            s.redis.keys_pending = Some(PendingData {
+                serial,
+                instance,
+                db,
+            });
             s.redis.scan_append = append;
-            s.redis.request_instance = instance;
-            s.redis.request_db = db;
             s.redis.error.clear();
-            s.redis.info.clear();
+            if clear_info {
+                s.redis.info.clear();
+            }
         });
     }
 
-    fn redis_select_key(&self, key: String) {
+    fn redis_select_key(&self, key: String, clear_info: bool) {
         let req = self.state.with(|s| {
             if !data_ready(s) {
                 return None;
@@ -487,11 +498,15 @@ impl Ui {
             key,
         }));
         self.state.revise(|s| {
-            s.redis.key_pending = Some(serial);
-            s.redis.request_instance = instance;
-            s.redis.request_db = db;
+            s.redis.key_pending = Some(PendingData {
+                serial,
+                instance,
+                db,
+            });
             s.redis.error.clear();
-            s.redis.info.clear();
+            if clear_info {
+                s.redis.info.clear();
+            }
         });
     }
 
@@ -515,8 +530,11 @@ impl Ui {
             auth,
         }));
         self.state.revise(|s| {
-            s.redis.diag_pending = Some(serial);
-            s.redis.request_instance = instance;
+            s.redis.diag_pending = Some(PendingData {
+                serial,
+                instance,
+                db: 0,
+            });
             s.redis.error.clear();
         });
     }
@@ -549,9 +567,11 @@ impl Ui {
             op,
         }));
         self.state.revise(|s| {
-            s.redis.write_pending = Some(serial);
-            s.redis.request_instance = instance;
-            s.redis.request_db = db;
+            s.redis.write_pending = Some(PendingData {
+                serial,
+                instance,
+                db,
+            });
             s.redis.after_write_key = after_write_key;
             s.redis.error.clear();
             s.redis.info.clear();
@@ -610,7 +630,9 @@ impl Ui {
                     Some(key),
                 );
             }
-            Err(error) => self.state.revise(|s| s.redis.error = format!("{error:#}")),
+            Err(error) => self
+                .state
+                .revise(|s| s.redis.error = i18n::translate(&format!("{error:#}"))),
         }
     }
 
@@ -663,7 +685,9 @@ impl Ui {
                 });
                 self.redis_write(op, Some(key));
             }
-            Err(error) => self.state.revise(|s| s.redis.error = format!("{error:#}")),
+            Err(error) => self
+                .state
+                .revise(|s| s.redis.error = i18n::translate(&format!("{error:#}"))),
         }
     }
 
@@ -774,7 +798,7 @@ impl Ui {
             s.redis.keys_loaded = false;
             s.redis.cursor.clear();
         });
-        self.redis_scan(false);
+        self.redis_scan(false, true);
     }
 }
 
@@ -783,28 +807,41 @@ pub(crate) fn event(
     serial: u64,
     result: std::result::Result<Reply, String>,
 ) -> Option<std::result::Result<Reply, String>> {
-    let kind = ui.state.with(|s| {
+    let matched = ui.state.with(|s| {
         if s.redis.pending == Some(serial) {
-            1
-        } else if s.redis.keys_pending == Some(serial) {
-            2
-        } else if s.redis.key_pending == Some(serial) {
-            3
-        } else if s.redis.diag_pending == Some(serial) {
-            4
-        } else if s.redis.write_pending == Some(serial) {
-            5
-        } else {
-            0
+            return Some((1u8, None));
         }
+        [
+            (2u8, &s.redis.keys_pending),
+            (3u8, &s.redis.key_pending),
+            (4u8, &s.redis.diag_pending),
+            (5u8, &s.redis.write_pending),
+        ]
+        .into_iter()
+        .find_map(|(kind, slot)| {
+            slot.as_ref()
+                .filter(|p| p.serial == serial)
+                .map(|p| (kind, Some(p.clone())))
+        })
     });
-    if kind == 0 {
+    let Some((kind, pending_data)) = matched else {
         return Some(result);
-    }
+    };
 
     let mut follow_scan = false;
     let mut follow_diag = false;
     let mut follow_key: Option<String> = None;
+
+    let matches_instance = |s: &State| {
+        pending_data
+            .as_ref()
+            .is_some_and(|p| p.instance == s.redis.instance)
+    };
+    let matches_db = |s: &State| {
+        pending_data
+            .as_ref()
+            .is_some_and(|p| p.instance == s.redis.instance && p.db == s.redis.db)
+    };
 
     ui.state.revise(|s| match (kind, result) {
         (1, Ok(Reply::Redis(reading))) => {
@@ -837,11 +874,11 @@ pub(crate) fn event(
         }
         (1, Err(error)) => {
             s.redis.pending = None;
-            s.redis.error = error;
+            s.redis.error = i18n::translate(&error);
         }
         (2, Ok(Reply::RedisKeys(page))) => {
             s.redis.keys_pending = None;
-            if s.redis.request_instance == s.redis.instance && page.db == s.redis.db {
+            if matches_db(s) && page.db == s.redis.db {
                 if s.redis.scan_append {
                     for key in page.keys {
                         if !s
@@ -863,11 +900,13 @@ pub(crate) fn event(
         }
         (2, Err(error)) => {
             s.redis.keys_pending = None;
-            s.redis.error = error;
+            if matches_db(s) {
+                s.redis.error = i18n::translate(&error);
+            }
         }
         (3, Ok(Reply::RedisKeyValue(kv))) => {
             s.redis.key_pending = None;
-            if s.redis.request_instance == s.redis.instance && s.redis.request_db == s.redis.db {
+            if matches_db(s) {
                 s.redis.edit_value = kv.string_value.clone().unwrap_or_default();
                 s.redis.edit_ttl = if kv.ttl >= 0 {
                     kv.ttl.to_string()
@@ -880,22 +919,26 @@ pub(crate) fn event(
         }
         (3, Err(error)) => {
             s.redis.key_pending = None;
-            s.redis.error = error;
+            if matches_db(s) {
+                s.redis.error = i18n::translate(&error);
+            }
         }
         (4, Ok(Reply::RedisDiagnostics(diag))) => {
             s.redis.diag_pending = None;
-            if s.redis.request_instance == s.redis.instance {
+            if matches_instance(s) {
                 s.redis.diagnostics = Some(Rc::new(diag));
             }
         }
         (4, Err(error)) => {
             s.redis.diag_pending = None;
-            s.redis.error = error;
+            if matches_instance(s) {
+                s.redis.error = i18n::translate(&error);
+            }
         }
         (5, Ok(Reply::RedisWritten)) => {
             s.redis.write_pending = None;
             let key = s.redis.after_write_key.take();
-            if s.redis.request_instance == s.redis.instance && s.redis.request_db == s.redis.db {
+            if matches_db(s) {
                 if key.is_none() {
                     s.redis.selected_key = None;
                     s.redis.edit_value.clear();
@@ -904,6 +947,8 @@ pub(crate) fn event(
                 } else {
                     s.redis.info = i18n::translate("Saved");
                 }
+                // Cancel any stale in-flight scan so the post-write refresh is never dropped.
+                s.redis.keys_pending = None;
                 follow_key = key;
                 follow_scan = true;
             }
@@ -911,35 +956,37 @@ pub(crate) fn event(
         (5, Err(error)) => {
             s.redis.write_pending = None;
             s.redis.after_write_key = None;
-            s.redis.error = error;
+            if matches_db(s) {
+                s.redis.error = i18n::translate(&error);
+            }
         }
         (1, _) => {
             s.redis.pending = None;
-            s.redis.error = "Invalid Redis response".into();
+            s.redis.error = i18n::translate("Invalid Redis response");
         }
         (2, _) => {
             s.redis.keys_pending = None;
-            s.redis.error = "Invalid Redis key list response".into();
+            s.redis.error = i18n::translate("Invalid Redis key list response");
         }
         (3, _) => {
             s.redis.key_pending = None;
-            s.redis.error = "Invalid Redis key value response".into();
+            s.redis.error = i18n::translate("Invalid Redis key value response");
         }
         (4, _) => {
             s.redis.diag_pending = None;
-            s.redis.error = "Invalid Redis diagnostics response".into();
+            s.redis.error = i18n::translate("Invalid Redis diagnostics response");
         }
         _ => {
             s.redis.write_pending = None;
-            s.redis.error = "Invalid Redis response".into();
+            s.redis.error = i18n::translate("Invalid Redis response");
         }
     });
 
     if follow_scan {
-        ui.redis_scan(false);
+        ui.redis_scan(false, false);
     }
     if let Some(key) = follow_key {
-        ui.redis_select_key(key);
+        ui.redis_select_key(key, false);
     }
     if follow_diag {
         ui.redis_diagnostics();
@@ -967,7 +1014,7 @@ fn navigation(ui: Ui) -> impl Widget {
                     match view {
                         View::Keys => {
                             if ui.state.with(|s| !s.redis.keys_loaded) {
-                                ui.redis_scan(false);
+                                ui.redis_scan(false, true);
                             }
                         }
                         View::Diagnostics => {
@@ -1028,7 +1075,7 @@ fn navigation(ui: Ui) -> impl Widget {
                                 Some(s.redis.view)
                             });
                             if let Some(View::Keys) = view {
-                                switch_ui.redis_scan(false);
+                                switch_ui.redis_scan(false, true);
                             } else if let Some(View::Diagnostics) = view {
                                 switch_ui.redis_diagnostics();
                             }
@@ -1412,7 +1459,7 @@ fn keys_view(ui: Ui) -> impl Widget {
                         .class("nginx-segment")
                         .label(format!("db{db_index}"))
                         .pressed(state.map(move |s| s.redis.db == db_index))
-                        .enabled(state.map(|s| data_ready(s) && s.redis.keys_pending.is_none()))
+                        .enabled(state.map(|s| data_ready(s) && !busy_data(s)))
                         .on_press(move || db_pick_ui.redis_open_db(db_index))
                 }),
             ),
@@ -1425,10 +1472,14 @@ fn keys_view(ui: Ui) -> impl Widget {
                         state.revise(|s| s.redis.pattern = value);
                     }
                 })
-                .on(commit, move |_| scan_enter.redis_scan(false)),
-            btn("Scan", move || scan_btn.redis_scan(false))
+                .on(commit, move |_| {
+                    if scan_enter.state.with(|s| !busy_data(s)) {
+                        scan_enter.redis_scan(false, true);
+                    }
+                }),
+            btn("Scan", move || scan_btn.redis_scan(false, true))
                 .class("button")
-                .enabled(state.map(|s| data_ready(s) && s.redis.keys_pending.is_none())),
+                .enabled(state.map(|s| data_ready(s) && !busy_data(s))),
             btn("New key…", move || new_key_ui.redis_open_new_key())
                 .class("button primary")
                 .enabled(state.map(|s| data_ready(s) && !busy_data(s))),
@@ -1513,7 +1564,8 @@ fn keys_view(ui: Ui) -> impl Widget {
                                                 text().class("redis-key-meta subtle").content(meta),
                                             ))
                                             .on_press(move || {
-                                                select_row_ui.redis_select_key(select_name.clone())
+                                                select_row_ui
+                                                    .redis_select_key(select_name.clone(), true)
                                             }),
                                         text()
                                             .class(kind_badge_class(&k.kind))
@@ -1525,9 +1577,9 @@ fn keys_view(ui: Ui) -> impl Widget {
                         state.map(|s| !s.redis.cursor.is_empty() && s.redis.cursor != "0"),
                         move || {
                             let load_more = load_more.clone();
-                            btn("Load more keys", move || load_more.redis_scan(true))
+                            btn("Load more keys", move || load_more.redis_scan(true, true))
                                 .class("button redis-load-more")
-                                .enabled(state.map(|s| s.redis.keys_pending.is_none()))
+                                .enabled(state.map(|s| data_ready(s) && !busy_data(s)))
                         },
                     ),
                 )),
@@ -1614,7 +1666,7 @@ fn key_inspector(ui: Ui) -> impl Widget {
                                 .state
                                 .with(|s| s.redis.selected_key.as_ref().map(|k| k.name.clone()))
                             {
-                                refresh_key.redis_select_key(name);
+                                refresh_key.redis_select_key(name, true);
                             }
                         }),
                     btn("Delete key…", move || delete_btn.redis_open_delete_key())
@@ -2050,13 +2102,13 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 .to_owned()
             }))
             .selectable(true)
-            .content(state.map(|s| {
+            .content(i18n::bind(state.map(|s| {
                 if s.redis.error.is_empty() {
                     s.redis.notice.clone()
                 } else {
                     s.redis.error.clone()
                 }
-            })),
+            }))),
         text()
             .class(state.map(|s| {
                 if s.redis.info.is_empty() {
@@ -2066,7 +2118,7 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                 }
                 .to_owned()
             }))
-            .content(state.map(|s| s.redis.info.clone())),
+            .content(i18n::bind(state.map(|s| s.redis.info.clone()))),
         when(
             state.map(|s| s.redis.snapshot.is_none() && s.redis.pending.is_some()),
             || text().class("subtle").content(i18n::bind("Loading…")),
@@ -2087,6 +2139,26 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
     row()
         .class("nginx-page redis-page")
         .fill((navigation(ui), content))
+}
+
+fn redis_field(
+    label: &'static str,
+    ui: &Ui,
+    read: fn(&State) -> String,
+    write: fn(&mut State, String),
+) -> impl Widget + use<> {
+    let state = ui.state;
+    col().class("field").fill((
+        text().class("field-label").content(i18n::bind(label)),
+        input()
+            .name(i18n::bind(label))
+            .value(state.map(read))
+            .on(value_changed, move |event| {
+                if let Event::ValueChanged { value, .. } = event {
+                    state.revise(|s| write(s, value));
+                }
+            }),
+    ))
 }
 
 fn new_key_kind_button(ui: &Ui, label: &'static str, kind: NewKeyKind) -> impl Widget + use<> {
@@ -2124,7 +2196,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                             new_key_kind_button(&ui, "Set", NewKeyKind::Set),
                             new_key_kind_button(&ui, "Sorted set", NewKeyKind::ZSet),
                         )),
-                        field(
+                        redis_field(
                             "Key name",
                             &ui,
                             |s| s.redis.new_key.key.clone(),
@@ -2133,7 +2205,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                         when(state.map(|s| s.redis.new_key.kind == NewKeyKind::Hash), {
                             let ui = ui.clone();
                             move || {
-                                field(
+                                redis_field(
                                     "Field",
                                     &ui,
                                     |s| s.redis.new_key.field.clone(),
@@ -2144,7 +2216,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                         when(state.map(|s| s.redis.new_key.kind == NewKeyKind::ZSet), {
                             let ui = ui.clone();
                             move || {
-                                field(
+                                redis_field(
                                     "Score",
                                     &ui,
                                     |s| s.redis.new_key.score.clone(),
@@ -2168,7 +2240,7 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                         when(state.map(|s| s.redis.new_key.kind == NewKeyKind::String), {
                             let ui = ui.clone();
                             move || {
-                                field(
+                                redis_field(
                                     "TTL in seconds (optional)",
                                     &ui,
                                     |s| s.redis.new_key.ttl.clone(),
@@ -2384,17 +2456,21 @@ mod tests {
         assert!(ui.state.with(needs_auth));
         assert!(visible_text().contains("WRONGPASS"));
 
-        ui.state
-            .revise(|s| s.redis.auth_password = Zeroizing::new("s3cr3t".into()));
+        ui.state.revise(|s| {
+            s.redis.auth_username = "default".into();
+            s.redis.auth_password = Zeroizing::new("s3cr3t".into());
+        });
         ui.redis_unlock();
         pump()?;
         assert!(!ui.state.with(needs_auth));
         assert!(ui.state.with(data_ready));
+        assert!(ui.state.with(|s| s.redis.auth_username.is_empty()));
         assert!(visible_text().contains("Redis 7.4.1"));
 
         ui.redis_clear_auth();
         pump()?;
         assert!(ui.state.with(needs_auth));
+        assert!(ui.state.with(|s| s.redis.auth_username.is_empty()));
 
         // 3. Switch back to host instance -> open db0 -> scan -> load more -> edit string -> TTL ->
         //    Hash add -> New/Delete key.
@@ -2406,12 +2482,12 @@ mod tests {
         ui.redis_open_db(0);
         pump()?;
         assert_eq!(ui.state.with(|s| s.redis.keys.len()), 100);
-        ui.redis_scan(true);
+        ui.redis_scan(true, true);
         pump()?;
         assert_eq!(ui.state.with(|s| s.redis.keys.len()), 123);
 
         // Select JSON string key, pretty-print, save.
-        ui.redis_select_key("app:config".into());
+        ui.redis_select_key("app:config".into(), true);
         pump()?;
         ui.state.revise(|s| {
             let pretty = maybe_pretty_json(&s.redis.edit_value).unwrap();
@@ -2420,9 +2496,10 @@ mod tests {
         ui.redis_save_string();
         pump()?;
         assert_eq!(ui.state.with(|s| s.redis.error.clone()), "");
+        assert_eq!(ui.state.with(|s| s.redis.info.clone()), "Saved");
 
         // Set TTL & Persist via UI actions.
-        ui.redis_select_key("user:1001".into());
+        ui.redis_select_key("user:1001".into(), true);
         pump()?;
         ui.state.revise(|s| s.redis.edit_ttl = "240".into());
         ui.redis_apply_ttl(false);
@@ -2477,6 +2554,7 @@ mod tests {
         ui.redis_confirm_delete_key();
         pump()?;
         assert!(ui.state.with(|s| s.redis.selected_key.is_none()));
+        assert_eq!(ui.state.with(|s| s.redis.info.clone()), "Key deleted");
 
         // Diagnostics view via UI action.
         ui.state.revise(|s| s.redis.view = View::Diagnostics);
