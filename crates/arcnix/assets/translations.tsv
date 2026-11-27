@@ -3564,19 +3564,19 @@ ACL 用户名（可选）	ACL username (optional)
 键空间	Keyspace
 所有数据库均无键。	No keys in any database.
 键模式	Key pattern
-模式，例如 user:*	Pattern, e.g. user:*
 扫描	Scan
 新建键…	New key…
 请先启动或连接 Redis 以浏览键值。	Start or connect to Redis to browse keys.
 正在扫描键…	Scanning keys…
 当前数据库没有匹配的键。	No matching keys in this database.
+当前批次暂无匹配项，点击加载更多继续扫描。	No matches in this batch yet. Load more to keep scanning.
+二进制键名（只读）	Binary key name (read-only)
 加载更多键	Load more keys
 选择一个键以查看或编辑其值。	Select a key to inspect or edit its value.
 正在加载键…	Loading key…
 刷新键	Refresh key
 删除键…	Delete key…
 TTL（秒）	TTL (seconds)
-例如 3600	e.g. 3600
 设置 TTL	Set TTL
 设为永不过期	Persist
 二进制值以十六进制预览显示，已禁用编辑。	Binary value shown as hex preview. Editing is disabled.
@@ -3588,7 +3588,7 @@ TTL（秒）	TTL (seconds)
 移除条目	Remove entry
 刷新诊断信息	Refresh diagnostics
 筛选客户端	Filter clients
-按地址、名称或命令筛选	Filter by address, name, or command
+仅显示前 200 个已连接客户端。	Showing the first 200 connected clients.
 慢查询日志	Slowlog
 暂无慢查询记录。	No slow queries recorded.
 新建键	New key
@@ -3608,3 +3608,25 @@ TTL（秒，可选）	TTL in seconds (optional)
 启动 Redis 容器	Start Redis container
 停止 Redis 容器	Stop Redis container
 重启 Redis 容器	Restart Redis container
+无法检查 Docker 容器：{error}	Docker containers could not be checked: {error}
+读取 Redis 需要在服务器上安装 Python 3	Reading Redis needs Python 3 on the server
+AOF 已开启	AOF on
+AOF 未开启	AOF off
+{count}（{blocked} 阻塞）	{count} ({blocked} blocked)
+{ops} · 命中率 {rate}%	{ops} · {rate}% hit
+{keys} 个键 · {expires} 个过期	{keys} keys · {expires} expiring
+{keys} 个键 · {expires} 个过期 · 平均 TTL {ttl}	{keys} keys · {expires} expiring · avg TTL {ttl}
+{len} 字节	{len} bytes
+{len} 项	{len} items
+确定从 db{db} 删除键 {key} 吗？此操作无法撤销。	Delete key {key} from db{db}? This cannot be undone.
+打开 db{db}	Open db{db}
+请输入键名	Enter a key name
+键名无效或过长	Key name is invalid or too long
+值超过 256 KiB 编辑上限	Value exceeds the 256 KiB editing limit
+TTL 必须大于 0 秒	TTL must be greater than 0 seconds
+请输入整数秒的 TTL	Enter TTL in whole seconds
+请输入有效的数字分值	Enter a valid numeric score
+请输入成员值	Enter a member value
+Redis 用户名无效	Invalid Redis username
+Redis 密码无效	Invalid Redis password
+

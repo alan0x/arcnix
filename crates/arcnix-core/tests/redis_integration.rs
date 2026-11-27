@@ -194,7 +194,9 @@ fn redis_full_e2e_cases() -> Result<()> {
         "[PASS] TC-06: All 6 types (string/hash/list/set/zset/stream) + binary + truncated previews work"
     );
 
-    // TC-07: Edit string value & keep TTL.
+    // TC-07: Edit string value with KEEPTTL preserves existing expiration.
+    let before_ttl = kv_str.ttl;
+    assert!(before_ttl > 0);
     let updated_json = "{\n  \"env\": \"production\",\n  \"redis_app\": true\n}";
     redis::write_key(
         &session,
@@ -204,13 +206,14 @@ fn redis_full_e2e_cases() -> Result<()> {
         &WriteOp::SetString {
             key: "app:config".into(),
             value: updated_json.into(),
-            ttl_seconds: Some(1800),
+            ttl_seconds: None,
+            keep_ttl: true,
         },
     )?;
     let reread = redis::read_key(&session, &host.endpoint, None, 0, "app:config")?;
     assert_eq!(reread.string_value.as_deref(), Some(updated_json));
-    assert!(reread.ttl > 0 && reread.ttl <= 1800);
-    println!("[PASS] TC-07: String update persisted with TTL intact");
+    assert!(reread.ttl > 0 && reread.ttl <= before_ttl);
+    println!("[PASS] TC-07: String update persisted with KEEPTTL intact");
 
     // TC-08: Hash / List / Set / ZSet mutations.
     redis::write_key(
@@ -367,6 +370,7 @@ fn redis_full_e2e_cases() -> Result<()> {
             key: "e2e:temp".into(),
             value: "created-over-ssh".into(),
             ttl_seconds: Some(120),
+            keep_ttl: false,
         },
     )?;
     let created = redis::read_key(&session, &host.endpoint, None, 0, "e2e:temp")?;
@@ -401,7 +405,7 @@ fn redis_full_e2e_cases() -> Result<()> {
         stop_host
             .snippet
             .command
-            .contains("systemctl stop 'redis-server.service'")
+            .contains("systemctl stop -- 'redis-server.service'")
     );
     let restart_docker = redis::control(docker, Control::Restart)?;
     assert_eq!(restart_docker.snippet.id, "builtin:redis:restart");

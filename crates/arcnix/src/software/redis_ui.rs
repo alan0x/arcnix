@@ -59,6 +59,10 @@ pub(crate) struct RedisState {
     write_pending: Option<u64>,
     /// Whether the pending scan is loading a next page (append) vs fresh scan.
     scan_append: bool,
+    /// Instance key and DB bound to in-flight data requests so stale replies
+    /// cannot cross-contaminate another instance or database.
+    request_instance: String,
+    request_db: u8,
     /// Key to re-read after a write completes (None when deleting).
     after_write_key: Option<String>,
     error: String,
@@ -86,6 +90,16 @@ pub(crate) struct RedisState {
 
 impl RedisState {
     fn clear_instance_views(&mut self) {
+        self.keys_pending = None;
+        self.key_pending = None;
+        self.diag_pending = None;
+        self.write_pending = None;
+        self.after_write_key = None;
+        self.request_instance.clear();
+        self.request_db = 0;
+        self.db = 0;
+        self.pattern.clear();
+        self.client_filter.clear();
         self.keys.clear();
         self.keys_loaded = false;
         self.keys_truncated = false;
@@ -218,12 +232,9 @@ fn details(s: &State) -> String {
     let version = inst
         .overview
         .as_ref()
-        .map(|o| o.version.as_str())
-        .filter(|v| !v.is_empty());
-    parts.push(match version {
-        Some(v) => format!("Redis {v}"),
-        None => "Redis".to_owned(),
-    });
+        .filter(|o| !o.version.is_empty())
+        .map(|o| format!("{} {}", o.product_name(), o.version));
+    parts.push(version.unwrap_or_else(|| "Redis".to_owned()));
     if let Some(secs) = inst.uptime() {
         parts.push(i18n::translate(&uptime(secs)));
     }
@@ -380,9 +391,16 @@ impl Ui {
             }
             let auth = Auth {
                 username: s.redis.auth_username.trim().to_owned(),
-                password: std::mem::take(&mut s.redis.auth_password),
+                password: s.redis.auth_password.clone(),
             };
+            if let Err(error) = auth.validate() {
+                s.redis.error = i18n::translate(&format!("{error:#}"));
+                return false;
+            }
+            s.redis.auth_password = Default::default();
             s.redis.auth.insert(key, auth);
+            s.redis.pending = None;
+            s.redis.clear_instance_views();
             s.redis.error.clear();
             true
         });
@@ -396,6 +414,7 @@ impl Ui {
             let key = s.redis.instance.clone();
             s.redis.auth.remove(&key);
             s.redis.auth_password = Default::default();
+            s.redis.pending = None;
             s.redis.clear_instance_views();
         });
         self.redis_refresh();
@@ -416,6 +435,7 @@ impl Ui {
                 "0".to_owned()
             };
             Some((
+                inst.key.clone(),
                 inst.endpoint.clone(),
                 s.redis.auth.get(&inst.key).cloned(),
                 s.redis.db,
@@ -423,7 +443,7 @@ impl Ui {
                 s.redis.pattern.clone(),
             ))
         });
-        let Some((endpoint, auth, db, cursor, pattern)) = req else {
+        let Some((instance, endpoint, auth, db, cursor, pattern)) = req else {
             return;
         };
         let serial = self.send(Action::ServerApps(AppAction::RedisScan {
@@ -436,6 +456,8 @@ impl Ui {
         self.state.revise(|s| {
             s.redis.keys_pending = Some(serial);
             s.redis.scan_append = append;
+            s.redis.request_instance = instance;
+            s.redis.request_db = db;
             s.redis.error.clear();
             s.redis.info.clear();
         });
@@ -448,13 +470,14 @@ impl Ui {
             }
             let inst = s.redis.snapshot.as_ref()?;
             Some((
+                inst.key.clone(),
                 inst.endpoint.clone(),
                 s.redis.auth.get(&inst.key).cloned(),
                 s.redis.db,
                 key,
             ))
         });
-        let Some((endpoint, auth, db, key)) = req else {
+        let Some((instance, endpoint, auth, db, key)) = req else {
             return;
         };
         let serial = self.send(Action::ServerApps(AppAction::RedisReadKey {
@@ -465,6 +488,8 @@ impl Ui {
         }));
         self.state.revise(|s| {
             s.redis.key_pending = Some(serial);
+            s.redis.request_instance = instance;
+            s.redis.request_db = db;
             s.redis.error.clear();
             s.redis.info.clear();
         });
@@ -476,9 +501,13 @@ impl Ui {
                 return None;
             }
             let inst = s.redis.snapshot.as_ref()?;
-            Some((inst.endpoint.clone(), s.redis.auth.get(&inst.key).cloned()))
+            Some((
+                inst.key.clone(),
+                inst.endpoint.clone(),
+                s.redis.auth.get(&inst.key).cloned(),
+            ))
         });
-        let Some((endpoint, auth)) = req else {
+        let Some((instance, endpoint, auth)) = req else {
             return;
         };
         let serial = self.send(Action::ServerApps(AppAction::RedisDiagnostics {
@@ -487,13 +516,15 @@ impl Ui {
         }));
         self.state.revise(|s| {
             s.redis.diag_pending = Some(serial);
+            s.redis.request_instance = instance;
             s.redis.error.clear();
         });
     }
 
     fn redis_write(&self, op: WriteOp, after_write_key: Option<String>) {
         if let Err(error) = op.validate() {
-            self.state.revise(|s| s.redis.error = format!("{error:#}"));
+            self.state
+                .revise(|s| s.redis.error = i18n::translate(&format!("{error:#}")));
             return;
         }
         let req = self.state.with(|s| {
@@ -502,12 +533,13 @@ impl Ui {
             }
             let inst = s.redis.snapshot.as_ref()?;
             Some((
+                inst.key.clone(),
                 inst.endpoint.clone(),
                 s.redis.auth.get(&inst.key).cloned(),
                 s.redis.db,
             ))
         });
-        let Some((endpoint, auth, db)) = req else {
+        let Some((instance, endpoint, auth, db)) = req else {
             return;
         };
         let serial = self.send(Action::ServerApps(AppAction::RedisWrite {
@@ -518,6 +550,8 @@ impl Ui {
         }));
         self.state.revise(|s| {
             s.redis.write_pending = Some(serial);
+            s.redis.request_instance = instance;
+            s.redis.request_db = db;
             s.redis.after_write_key = after_write_key;
             s.redis.error.clear();
             s.redis.info.clear();
@@ -530,19 +564,15 @@ impl Ui {
             if kv.kind != "string" || kv.binary || kv.truncated {
                 return None;
             }
-            let ttl = if kv.ttl > 0 {
-                Some(kv.ttl as u64)
-            } else {
-                None
-            };
-            Some((kv.name.clone(), s.redis.edit_value.clone(), ttl))
+            Some((kv.name.clone(), s.redis.edit_value.clone()))
         });
-        if let Some((key, value, ttl_seconds)) = data {
+        if let Some((key, value)) = data {
             self.redis_write(
                 WriteOp::SetString {
                     key: key.clone(),
                     value,
-                    ttl_seconds,
+                    ttl_seconds: None,
+                    keep_ttl: true,
                 },
                 Some(key),
             );
@@ -649,23 +679,26 @@ impl Ui {
         let result = self.state.with(|s| -> anyhow::Result<(WriteOp, String)> {
             let n = &s.redis.new_key;
             let key = n.key.trim().to_owned();
-            let ttl_seconds = if n.ttl.trim().is_empty() {
-                None
-            } else {
-                let secs: u64 = n
-                    .ttl
-                    .trim()
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("Enter TTL in whole seconds"))?;
-                anyhow::ensure!(secs > 0, "TTL must be greater than 0 seconds");
-                Some(secs)
-            };
             let op = match n.kind {
-                NewKeyKind::String => WriteOp::SetString {
-                    key: key.clone(),
-                    value: n.value.clone(),
-                    ttl_seconds,
-                },
+                NewKeyKind::String => {
+                    let ttl_seconds = if n.ttl.trim().is_empty() {
+                        None
+                    } else {
+                        let secs: u64 = n
+                            .ttl
+                            .trim()
+                            .parse()
+                            .map_err(|_| anyhow::anyhow!("Enter TTL in whole seconds"))?;
+                        anyhow::ensure!(secs > 0, "TTL must be greater than 0 seconds");
+                        Some(secs)
+                    };
+                    WriteOp::SetString {
+                        key: key.clone(),
+                        value: n.value.clone(),
+                        ttl_seconds,
+                        keep_ttl: false,
+                    }
+                }
                 NewKeyKind::Hash => WriteOp::SetHashField {
                     key: key.clone(),
                     field: n.field.clone(),
@@ -700,7 +733,9 @@ impl Ui {
                 self.close_dialog();
                 self.redis_write(op, Some(key));
             }
-            Err(error) => self.state.revise(|s| s.dialog_error = format!("{error:#}")),
+            Err(error) => self
+                .state
+                .revise(|s| s.dialog_error = i18n::translate(&format!("{error:#}"))),
         }
     }
 
@@ -730,6 +765,10 @@ impl Ui {
         self.state.revise(|s| {
             s.redis.view = View::Keys;
             s.redis.db = db;
+            s.redis.keys_pending = None;
+            s.redis.key_pending = None;
+            s.redis.write_pending = None;
+            s.redis.after_write_key = None;
             s.redis.selected_key = None;
             s.redis.keys.clear();
             s.redis.keys_loaded = false;
@@ -802,7 +841,7 @@ pub(crate) fn event(
         }
         (2, Ok(Reply::RedisKeys(page))) => {
             s.redis.keys_pending = None;
-            if page.db == s.redis.db {
+            if s.redis.request_instance == s.redis.instance && page.db == s.redis.db {
                 if s.redis.scan_append {
                     for key in page.keys {
                         if !s
@@ -828,14 +867,16 @@ pub(crate) fn event(
         }
         (3, Ok(Reply::RedisKeyValue(kv))) => {
             s.redis.key_pending = None;
-            s.redis.edit_value = kv.string_value.clone().unwrap_or_default();
-            s.redis.edit_ttl = if kv.ttl >= 0 {
-                kv.ttl.to_string()
-            } else {
-                String::new()
-            };
-            s.redis.pretty_json = false;
-            s.redis.selected_key = Some(Rc::new(kv));
+            if s.redis.request_instance == s.redis.instance && s.redis.request_db == s.redis.db {
+                s.redis.edit_value = kv.string_value.clone().unwrap_or_default();
+                s.redis.edit_ttl = if kv.ttl >= 0 {
+                    kv.ttl.to_string()
+                } else {
+                    String::new()
+                };
+                s.redis.pretty_json = false;
+                s.redis.selected_key = Some(Rc::new(kv));
+            }
         }
         (3, Err(error)) => {
             s.redis.key_pending = None;
@@ -843,7 +884,9 @@ pub(crate) fn event(
         }
         (4, Ok(Reply::RedisDiagnostics(diag))) => {
             s.redis.diag_pending = None;
-            s.redis.diagnostics = Some(Rc::new(diag));
+            if s.redis.request_instance == s.redis.instance {
+                s.redis.diagnostics = Some(Rc::new(diag));
+            }
         }
         (4, Err(error)) => {
             s.redis.diag_pending = None;
@@ -852,16 +895,18 @@ pub(crate) fn event(
         (5, Ok(Reply::RedisWritten)) => {
             s.redis.write_pending = None;
             let key = s.redis.after_write_key.take();
-            if key.is_none() {
-                s.redis.selected_key = None;
-                s.redis.edit_value.clear();
-                s.redis.edit_ttl.clear();
-                s.redis.info = i18n::translate("Key deleted");
-            } else {
-                s.redis.info = i18n::translate("Saved");
+            if s.redis.request_instance == s.redis.instance && s.redis.request_db == s.redis.db {
+                if key.is_none() {
+                    s.redis.selected_key = None;
+                    s.redis.edit_value.clear();
+                    s.redis.edit_ttl.clear();
+                    s.redis.info = i18n::translate("Key deleted");
+                } else {
+                    s.redis.info = i18n::translate("Saved");
+                }
+                follow_key = key;
+                follow_scan = true;
             }
-            follow_key = key;
-            follow_scan = true;
         }
         (5, Err(error)) => {
             s.redis.write_pending = None;
@@ -1117,7 +1162,7 @@ fn overview(ui: Ui) -> impl Widget {
             row().class("nginx-actions").fill((
                 control_button(&ui, "Restart…", "button", Control::Restart, running),
                 control_button(&ui, "Start…", "button primary", Control::Start, |s| {
-                    !s.redis.snapshot.as_ref().is_some_and(|i| i.running)
+                    s.redis.snapshot.as_ref().is_some_and(|i| !i.running)
                 }),
                 control_button(&ui, "Stop…", "button danger", Control::Stop, running),
                 when(
@@ -1129,6 +1174,14 @@ fn overview(ui: Ui) -> impl Widget {
                 ),
             )),
         )),
+        when(state.map(|s| !s.redis.docker_error.is_empty()), move || {
+            text().class("nginx-info").content(state.map(|s| {
+                i18n::translate(&format!(
+                    "Docker containers could not be checked: {}",
+                    s.redis.docker_error
+                ))
+            }))
+        }),
         auth_banner(ui.clone()),
         when(
             state.map(|s| {
@@ -1187,10 +1240,10 @@ fn overview(ui: Ui) -> impl Widget {
                                 .and_then(|i| i.overview.as_ref())
                                 .map(|o| {
                                     if o.blocked_clients > 0 {
-                                        format!(
+                                        i18n::translate(&format!(
                                             "{} ({} blocked)",
                                             o.connected_clients, o.blocked_clients
-                                        )
+                                        ))
                                     } else {
                                         o.connected_clients.to_string()
                                     }
@@ -1204,10 +1257,10 @@ fn overview(ui: Ui) -> impl Widget {
                                 .and_then(|i| i.overview.as_ref())
                                 .map(|o| {
                                     if let Some(rate) = o.hit_rate_percent() {
-                                        format!(
+                                        i18n::translate(&format!(
                                             "{} · {:.1}% hit",
                                             o.instantaneous_ops_per_sec, rate
-                                        )
+                                        ))
                                     } else {
                                         o.instantaneous_ops_per_sec.to_string()
                                     }
@@ -1220,9 +1273,13 @@ fn overview(ui: Ui) -> impl Widget {
                                 .as_ref()
                                 .and_then(|i| i.overview.as_ref())
                                 .map(|o| {
-                                    let aof = if o.aof_enabled { "AOF on" } else { "AOF off" };
+                                    let aof = i18n::translate(if o.aof_enabled {
+                                        "AOF on"
+                                    } else {
+                                        "AOF off"
+                                    });
                                     if o.rdb_last_bgsave_status.is_empty() {
-                                        aof.to_owned()
+                                        aof
                                     } else {
                                         format!("RDB {} · {aof}", o.rdb_last_bgsave_status)
                                     }
@@ -1283,17 +1340,21 @@ fn overview(ui: Ui) -> impl Widget {
                                 let db = item.value.get();
                                 let open_db = open_db.clone();
                                 let detail = match db.avg_ttl_ms {
-                                    Some(ms) if ms > 0 => format!(
+                                    Some(ms) if ms > 0 => i18n::translate(&format!(
                                         "{} keys · {} expiring · avg TTL {}",
                                         db.keys,
                                         db.expires,
                                         format_ttl((ms / 1000) as i64)
-                                    ),
-                                    _ => format!("{} keys · {} expiring", db.keys, db.expires),
+                                    )),
+                                    _ => i18n::translate(&format!(
+                                        "{} keys · {} expiring",
+                                        db.keys, db.expires
+                                    )),
                                 };
                                 row().class("nginx-site-row").fill((
                                     sapid::button()
                                         .class("nginx-site-open")
+                                        .name(i18n::bind(format!("Open db{}", db.index)))
                                         .fill((
                                             text()
                                                 .class("nginx-site-name")
@@ -1393,29 +1454,39 @@ fn keys_view(ui: Ui) -> impl Widget {
                                 && s.redis.keys.is_empty()
                                 && s.redis.keys_pending.is_none()
                         }),
-                        || {
-                            text()
-                                .class("subtle")
-                                .content(i18n::bind("No matching keys in this database."))
+                        move || {
+                            text().class("subtle").content(i18n::bind(state.map(|s| {
+                                if !s.redis.cursor.is_empty() && s.redis.cursor != "0" {
+                                    "No matches in this batch yet. Load more to keep scanning."
+                                } else {
+                                    "No matching keys in this database."
+                                }
+                                .to_owned()
+                            })))
                         },
                     ),
                     col().class("redis-keys-list").fill(
                         each(state.map(|s| s.redis.keys.clone()))
-                            .key(|k| format!("{}\n{}\n{}", k.name, k.kind, k.ttl))
+                            .key(|k| format!("{}\n{}\n{}\n{}", k.name, k.kind, k.ttl, k.binary))
                             .children(move |item| {
                                 let k = item.value.get();
                                 let key_name = k.name.clone();
                                 let select_name = k.name.clone();
                                 let select_row_ui = select_row_ui.clone();
-                                let meta = match k.size {
-                                    Some(bytes) => {
-                                        format!(
-                                            "{} · {}",
-                                            format_ttl(k.ttl),
-                                            formatting::bytes(bytes)
-                                        )
+                                let is_binary_name = k.binary;
+                                let meta = if is_binary_name {
+                                    i18n::translate("Binary key name (read-only)")
+                                } else {
+                                    match k.size {
+                                        Some(bytes) => {
+                                            format!(
+                                                "{} · {}",
+                                                format_ttl(k.ttl),
+                                                formatting::bytes(bytes)
+                                            )
+                                        }
+                                        None => format_ttl(k.ttl),
                                     }
-                                    None => format_ttl(k.ttl),
                                 };
                                 row()
                                     .class(state.map(move |s| {
@@ -1433,6 +1504,8 @@ fn keys_view(ui: Ui) -> impl Widget {
                                     .fill((
                                         sapid::button()
                                             .class("redis-key-open")
+                                            .name(k.name.clone())
+                                            .enabled(!is_binary_name)
                                             .fill((
                                                 text()
                                                     .class("redis-key-name")
@@ -1520,7 +1593,11 @@ fn key_inspector(ui: Ui) -> impl Widget {
                                     parts.push(k.encoding.clone());
                                 }
                                 if let Some(len) = k.length {
-                                    parts.push(format!("{len} items/bytes"));
+                                    if k.kind == "string" {
+                                        parts.push(i18n::translate(&format!("{len} bytes")));
+                                    } else {
+                                        parts.push(i18n::translate(&format!("{len} items")));
+                                    }
                                 }
                                 if let Some(mem) = k.memory_bytes {
                                     parts.push(formatting::bytes(mem));
@@ -1725,7 +1802,13 @@ fn key_inspector(ui: Ui) -> impl Widget {
                                             }),
                                         btn("Add", move || add_item.redis_add_collection_item())
                                             .class("button primary")
-                                            .enabled(state.map(|s| !busy_data(s))),
+                                            .enabled(state.map(|s| {
+                                                !busy_data(s)
+                                                    && s.redis
+                                                        .selected_key
+                                                        .as_ref()
+                                                        .is_some_and(|k| !k.binary && !k.truncated)
+                                            })),
                                     ))
                                 },
                             ),
@@ -1777,7 +1860,15 @@ fn key_inspector(ui: Ui) -> impl Widget {
                                             let del_val = del_val.clone();
                                             icon_action("Remove entry", Icon::Clear)
                                                 .class("icon-button")
-                                                .enabled(state.map(|s| !busy_data(s)))
+                                                .enabled(state.map(|s| {
+                                                    !busy_data(s)
+                                                        && s.redis
+                                                            .selected_key
+                                                            .as_ref()
+                                                            .is_some_and(|k| {
+                                                                !k.binary && !k.truncated
+                                                            })
+                                                }))
                                                 .on_press(move || {
                                                     let op = match del_kind.as_str() {
                                                         "hash" => WriteOp::DeleteHashField {
@@ -1845,6 +1936,19 @@ fn diagnostics_view(ui: Ui) -> impl Widget {
                                 }
                             }),
                     )),
+                    when(
+                        state.map(|s| {
+                            s.redis
+                                .diagnostics
+                                .as_ref()
+                                .is_some_and(|d| d.clients_truncated)
+                        }),
+                        || {
+                            text()
+                                .class("hint")
+                                .content(i18n::bind("Showing the first 200 connected clients."))
+                        },
+                    ),
                     col().class("redis-entries").fill(
                         each(state.map(|s| {
                             let filter = s.redis.client_filter.to_lowercase();
@@ -2072,9 +2176,6 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                                 )
                             }
                         }),
-                        text()
-                            .class("error")
-                            .content(state.map(|s| s.dialog_error.clone())),
                     )),
                     sapid::button()
                         .class("button primary")
@@ -2092,17 +2193,14 @@ pub(crate) fn dialogs(ui: Ui) -> impl Widget {
                 modal(
                     ui.clone(),
                     "Delete key",
-                    col().class("nginx-new-site").fill((
-                        text().content(state.map(|s| {
+                    col()
+                        .class("nginx-new-site")
+                        .fill(text().content(state.map(|s| {
                             i18n::translate(&format!(
                                 "Delete key {} from db{}? This cannot be undone.",
                                 s.redis.delete_target, s.redis.db
                             ))
-                        })),
-                        text()
-                            .class("error")
-                            .content(state.map(|s| s.dialog_error.clone())),
-                    )),
+                        }))),
                     sapid::button()
                         .class("button danger")
                         .label(i18n::bind("Delete"))

@@ -84,6 +84,78 @@ def find_binary() -> Path:
     return Path(meta["target_directory"]) / "debug" / ("arcnix.exe" if os.name == "nt" else "arcnix")
 
 
+def run_helper_unit_tests():
+    import importlib.util
+
+    helper_path = ROOT / "crates/arcnix-core/src/software/redis_helper.py"
+    spec = importlib.util.spec_from_file_location("arcnix_redis_helper_test", helper_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    # 1. Container detection excludes exporters/UIs and includes official/valkey images.
+    assert mod.looks_like_redis("redis:7-alpine", "docker-entrypoint.sh redis-server")
+    assert mod.looks_like_redis("valkey/valkey:8", "valkey-server")
+    assert mod.looks_like_redis("redis/redis-stack:latest", "/entrypoint.sh")
+    assert not mod.looks_like_redis("oliver006/redis_exporter:latest", "/redis_exporter")
+    assert not mod.looks_like_redis("rediscommander/redis-commander:latest", "node app.js")
+    assert not mod.looks_like_redis("redis/redisinsight:latest", "node dist/main.js")
+
+    # 2. Config parser handles bind IPv6, quoted unixsocket, comments, and invalid ports.
+    ep_v6 = mod._parse_config_text("bind ::1\nport 6380 # custom\n")
+    assert ep_v6["host"] == "::1" and ep_v6["port"] == 6380
+    ep_sock = mod._parse_config_text('port 0\nunixsocket "/var/run/redis/redis.sock"\n')
+    assert ep_sock["socket"] == "/var/run/redis/redis.sock"
+    ep_overflow = mod._parse_config_text("port 999999\n")
+    assert ep_overflow["port"] == 6379
+
+    # 3. Container endpoint prefers 6379/tcp over 8001/tcp and preserves IPv6 ::1.
+    host, port, _ = mod._pick_container_endpoint(
+        {
+            "8001/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8001"}],
+            "6379/tcp": [{"HostIp": "::1", "HostPort": "16379"}],
+        },
+        {},
+        {},
+    )
+    assert host == "::1" and port == 16379
+
+    # 4. Truncating multi-byte UTF-8 text does not misclassify as binary.
+    zh = ("你好世界" * 20).encode("utf-8")
+    text, is_bin, is_trunc = mod.decode_bytes(zh, limit=7)
+    assert not is_bin and is_trunc and text == "你好"
+
+    # 5. Binary data is safely detected and hex-encoded.
+    _, is_bin2, _ = mod.decode_bytes(b"\x89PNG\x00\xff")
+    assert is_bin2
+
+    # 6. Multi-cursor HSCAN / SSCAN iteration collects all items across cursors.
+    class FakeClient:
+        def __init__(self):
+            self.hcalls = 0
+            self.scalls = 0
+
+        def command(self, *args):
+            if args[0] == "HSCAN":
+                self.hcalls += 1
+                if args[2] == "0":
+                    return [b"1", []]  # Real Redis can return empty batch with non-zero cursor!
+                return [b"0", [b"f1", b"v1", b"f2", b"v2"]]
+            if args[0] == "SSCAN":
+                self.scalls += 1
+                if args[2] == "0":
+                    return [b"1", [b"a"]]
+                return [b"0", [b"b", b"a"]]  # duplicate across cursors
+            raise AssertionError(args)
+
+    fake = FakeClient()
+    h_entries, _, h_trunc = mod._scan_hash(fake, "k")
+    assert len(h_entries) == 2 and not h_trunc and fake.hcalls == 2
+    s_entries, _, s_trunc = mod._scan_set(fake, "k")
+    assert len(s_entries) == 2 and not s_trunc and fake.scalls == 2
+    print("[PASS] redis_helper.py direct unit tests passed", flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -125,6 +197,9 @@ def main() -> int:
         env = os.environ.copy()
         env["ARCNIX_TEST_SSH_ADDR"] = addr
         env["ARCNIX_TEST_SSH_KEY"] = info["client_key_ed25519"]
+
+        print("\n=== Suite 0: redis_helper.py direct unit tests ===", flush=True)
+        run_helper_unit_tests()
 
         print("\n=== Suite 1: arcnix-core SSH + RESP2 integration tests (TC-01..TC-12) ===", flush=True)
         subprocess.run(

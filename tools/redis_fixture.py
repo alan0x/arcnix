@@ -317,10 +317,24 @@ class RespTestServer:
                 key = args[0].decode("utf-8", errors="replace")
                 val = args[1]
                 exp = None
-                if len(args) >= 4 and args[2].decode("ascii").upper() == "EX":
+                opts = [a.decode("ascii", errors="replace").upper() for a in args[2:]]
+                if "KEEPTTL" in opts and key in db:
+                    exp = db[key].get("expire_at")
+                elif len(args) >= 4 and opts[0] == "EX":
                     exp = time.time() + int(args[3].decode("ascii"))
+                elif len(args) >= 4 and opts[0] == "PX":
+                    exp = time.time() + int(args[3].decode("ascii")) / 1000.0
                 db[key] = {"kind": "string", "value": val, "expire_at": exp}
                 return _encode_resp("OK")
+            if cmd == "PTTL":
+                key = args[0].decode("utf-8", errors="replace")
+                entry = db.get(key)
+                if not entry:
+                    return _encode_resp(-2)
+                exp = entry.get("expire_at")
+                if exp is None:
+                    return _encode_resp(-1)
+                return _encode_resp(max(1, int((exp - time.time()) * 1000)))
             if cmd == "HLEN":
                 entry = db.get(args[0].decode("utf-8", errors="replace"))
                 return _encode_resp(len(entry["value"]) if entry and entry["kind"] == "hash" else 0)
@@ -526,7 +540,7 @@ class RedisClusterFixture:
         instances.append(
             {
                 "key": "host",
-                "title": "This server",
+                "title": "On the server",
                 "service": {
                     "unit": "redis-server.service",
                     "load": "loaded",

@@ -474,6 +474,8 @@ pub(crate) fn owns_dialog(s: &State) -> bool {
                     | Dialog::DockerRemoveImage
                     | Dialog::DockerLogins
                     | Dialog::NginxNewSite
+                    | Dialog::RedisNewKey
+                    | Dialog::RedisDeleteKey
                     | Dialog::TerminalRename { .. }
                     | Dialog::TerminatePortProcess
                     | Dialog::CustomizeFolder { .. }

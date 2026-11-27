@@ -8,6 +8,7 @@ published-port discovery for Docker Redis containers).
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -23,13 +24,22 @@ STRING_PREVIEW_LIMIT = 128 * 1024
 CLIENTS_LIMIT = 200
 SLOWLOG_LIMIT = 64
 
+STDIN_LIMIT = 320 * 1024
+MAX_RESP_LINE_BYTES = 64 * 1024
+MAX_RESP_BULK_BYTES = 4 * 1024 * 1024
+MAX_RESP_ARRAY_LEN = 10_000
+MAX_RESP_DEPTH = 8
+MAX_RESP_TOTAL_BYTES = 12 * 1024 * 1024
+
+DOCKER_ENV_STRIP = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
+
 
 class RespError(Exception):
     pass
 
 
 class RespClient:
-    """Minimal binary-safe RESP2 client over TCP or Unix socket."""
+    """Minimal bounded, binary-safe RESP2 client over TCP or Unix socket."""
 
     def __init__(self, host=None, port=6379, unix_socket=None, timeout=SOCKET_TIMEOUT):
         if unix_socket:
@@ -41,6 +51,7 @@ class RespClient:
             sock.settimeout(timeout)
         self.sock = sock
         self.buf = bytearray()
+        self.total_read = 0
 
     def close(self):
         try:
@@ -48,12 +59,20 @@ class RespClient:
         except OSError:
             pass
 
+    def _recv_more(self, want):
+        chunk = self.sock.recv(max(4096, min(want, 65536)))
+        if not chunk:
+            raise EOFError("Connection closed by Redis")
+        self.total_read += len(chunk)
+        if self.total_read > MAX_RESP_TOTAL_BYTES:
+            raise ValueError("Redis reply exceeded total size limit")
+        self.buf.extend(chunk)
+
     def _read_exact(self, n):
+        if n > MAX_RESP_BULK_BYTES:
+            raise ValueError("Redis bulk string exceeded size limit")
         while len(self.buf) < n:
-            chunk = self.sock.recv(max(4096, n - len(self.buf)))
-            if not chunk:
-                raise EOFError("Connection closed by Redis")
-            self.buf.extend(chunk)
+            self._recv_more(n - len(self.buf))
         data = bytes(self.buf[:n])
         del self.buf[:n]
         return data
@@ -62,15 +81,18 @@ class RespClient:
         while True:
             idx = self.buf.find(b"\r\n")
             if idx != -1:
+                if idx > MAX_RESP_LINE_BYTES:
+                    raise ValueError("Redis protocol line exceeded size limit")
                 line = bytes(self.buf[:idx])
                 del self.buf[: idx + 2]
                 return line
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise EOFError("Connection closed by Redis")
-            self.buf.extend(chunk)
+            if len(self.buf) > MAX_RESP_LINE_BYTES:
+                raise ValueError("Redis protocol line exceeded size limit")
+            self._recv_more(4096)
 
-    def _read_reply(self):
+    def _read_reply(self, depth=0):
+        if depth > MAX_RESP_DEPTH:
+            raise ValueError("Redis reply nesting exceeded depth limit")
         line = self._read_line()
         if not line:
             raise EOFError("Empty reply from Redis")
@@ -86,6 +108,8 @@ class RespClient:
             length = int(payload)
             if length < 0:
                 return None
+            if length > MAX_RESP_BULK_BYTES:
+                raise ValueError("Redis bulk string exceeded size limit")
             data = self._read_exact(length)
             crlf = self._read_exact(2)
             if crlf != b"\r\n":
@@ -95,7 +119,9 @@ class RespClient:
             count = int(payload)
             if count < 0:
                 return None
-            return [self._read_reply() for _ in range(count)]
+            if count > MAX_RESP_ARRAY_LEN:
+                raise ValueError("Redis array reply exceeded element limit")
+            return [self._read_reply(depth + 1) for _ in range(count)]
         raise ValueError(f"Unsupported RESP reply prefix: {prefix!r}")
 
     def command(self, *args):
@@ -109,24 +135,39 @@ class RespClient:
             parts.append(raw)
             parts.append(b"\r\n")
         self.sock.sendall(b"".join(parts))
-        return self._read_reply()
+        return self._read_reply(0)
 
 
-def decode_bytes(value, limit=None):
+def _decode_utf8_maybe_truncated(raw, truncated):
+    """Decode UTF-8; if truncated mid-codepoint, trim trailing incomplete bytes."""
+    if not truncated:
+        return raw.decode("utf-8")
+    # At most 3 trailing bytes can belong to a split multi-byte UTF-8 character.
+    for trim in range(min(4, len(raw) + 1)):
+        candidate = raw[: len(raw) - trim] if trim else raw
+        try:
+            return candidate.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.end < len(candidate):
+                raise
+    raise UnicodeDecodeError("utf-8", raw, 0, len(raw), "invalid utf-8")
+
+
+def decode_bytes(value, limit=None, already_truncated=False):
     if value is None:
-        return "", False, False
+        return "", False, already_truncated
     if isinstance(value, str):
         raw = value.encode("utf-8", errors="replace")
     elif isinstance(value, bytes):
         raw = value
     else:
-        return str(value), False, False
-    truncated = False
+        return str(value), False, already_truncated
+    truncated = already_truncated
     if limit is not None and len(raw) > limit:
         raw = raw[:limit]
         truncated = True
     try:
-        text = raw.decode("utf-8")
+        text = _decode_utf8_maybe_truncated(raw, truncated)
         if "\x00" in text:
             raise UnicodeDecodeError("utf-8", raw, 0, 1, "nul byte")
         return text, False, truncated
@@ -136,6 +177,7 @@ def decode_bytes(value, limit=None):
 
 
 def run_cmd(args, timeout=5):
+    env = {k: v for k, v in os.environ.items() if k not in DOCKER_ENV_STRIP}
     try:
         proc = subprocess.run(
             args,
@@ -144,23 +186,12 @@ def run_cmd(args, timeout=5):
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
+            env=env,
             check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr
     except (OSError, subprocess.TimeoutExpired) as exc:
         return -1, "", str(exc)
-
-
-def parse_systemd_uptime(ts_usec):
-    try:
-        usec = int(ts_usec)
-    except (TypeError, ValueError):
-        return None
-    if usec <= 0:
-        return None
-    now_sec = int(time.time())
-    start_sec = usec // 1_000_000
-    return max(0, now_sec - start_sec)
 
 
 def read_host_service():
@@ -171,9 +202,10 @@ def read_host_service():
             [
                 "systemctl",
                 "show",
+                "--",
                 unit,
                 "--no-pager",
-                "--property=LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestampMonotonic,ActiveEnterTimestamp",
+                "--property=LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestampMonotonic",
             ],
             timeout=5,
         )
@@ -188,16 +220,11 @@ def read_host_service():
         if load and load != "not-found":
             uptime = None
             if props.get("ActiveState") == "active":
-                rc2, out2, _ = run_cmd(
-                    ["systemctl", "show", unit, "--no-pager", "--property=ExecMainStartTimestamp"],
-                    timeout=5,
-                )
-                ts_line = ""
-                if rc2 == 0 and "=" in out2:
-                    ts_line = out2.split("=", 1)[1].strip()
-                rc3, out3, _ = run_cmd(["date", "-d", ts_line, "+%s"], timeout=3) if ts_line else (-1, "", "")
-                if rc3 == 0 and out3.strip().isdigit():
-                    uptime = max(0, int(time.time()) - int(out3.strip()))
+                raw_mono = props.get("ActiveEnterTimestampMonotonic", "")
+                if raw_mono.isdigit() and int(raw_mono) > 0:
+                    elapsed = int(time.monotonic() - (int(raw_mono) / 1_000_000.0))
+                    if elapsed >= 0:
+                        uptime = elapsed
             return {
                 "unit": unit,
                 "load": load,
@@ -209,45 +236,74 @@ def read_host_service():
     return None
 
 
-def read_host_config_endpoint():
-    candidates = [
-        "/etc/redis/redis.conf",
-        "/etc/redis.conf",
-        "/etc/valkey/valkey.conf",
-        "/etc/valkey.conf",
-    ]
-    found_path = None
+def _parse_config_text(text):
     port = 6379
     unix_socket = None
+    binds = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            parts = shlex.split(line, comments=True)
+        except ValueError:
+            parts = line.split()
+        if len(parts) < 2:
+            continue
+        directive = parts[0].lower()
+        if directive == "port" and parts[1].isdigit():
+            parsed = int(parts[1])
+            if 0 <= parsed <= 65535:
+                port = parsed
+        elif directive == "unixsocket":
+            unix_socket = parts[1]
+        elif directive == "bind":
+            for token in parts[1:]:
+                addr = token.lstrip("-")
+                if addr:
+                    binds.append(addr)
+
+    host = "127.0.0.1"
+    if binds:
+        if "127.0.0.1" in binds or "0.0.0.0" in binds or "*" in binds:
+            host = "127.0.0.1"
+        elif "::1" in binds or "::" in binds:
+            host = "::1"
+        else:
+            host = binds[0]
+    if port == 0 and unix_socket:
+        return {"host": host, "port": 0, "socket": unix_socket, "container_id": None}
+    return {"host": host, "port": port if 1 <= port <= 65535 else 6379, "socket": None, "container_id": None}
+
+
+def read_host_config_endpoint(unit_hint=None):
+    valkey_first = bool(unit_hint and unit_hint.startswith("valkey"))
+    candidates = (
+        ["/etc/valkey/valkey.conf", "/etc/valkey.conf", "/etc/redis/redis.conf", "/etc/redis.conf"]
+        if valkey_first
+        else ["/etc/redis/redis.conf", "/etc/redis.conf", "/etc/valkey/valkey.conf", "/etc/valkey.conf"]
+    )
     for path in candidates:
         if os.path.isfile(path):
-            found_path = path
             try:
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    for raw_line in f:
-                        line = raw_line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            directive = parts[0].lower()
-                            if directive == "port" and parts[1].isdigit():
-                                port = int(parts[1])
-                            elif directive == "unixsocket":
-                                unix_socket = parts[1].strip("\"'")
+                    text = f.read(256 * 1024)
+                return _parse_config_text(text), path
             except OSError:
-                pass
-            break
-    if port == 0 and unix_socket:
-        return {"host": "127.0.0.1", "port": 0, "socket": unix_socket, "container_id": None}, found_path
-    return {"host": "127.0.0.1", "port": port if port > 0 else 6379, "socket": None, "container_id": None}, found_path
+                return {"host": "127.0.0.1", "port": 6379, "socket": None, "container_id": None}, path
+    return {"host": "127.0.0.1", "port": 6379, "socket": None, "container_id": None}, None
 
 
 def host_installed():
     for binary in ("redis-server", "valkey-server"):
         if shutil.which(binary):
             return True
-    for path in ("/usr/bin/redis-server", "/usr/sbin/redis-server", "/usr/bin/valkey-server"):
+    for path in (
+        "/usr/bin/redis-server",
+        "/usr/sbin/redis-server",
+        "/usr/bin/valkey-server",
+        "/usr/sbin/valkey-server",
+    ):
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return True
     return False
@@ -264,7 +320,14 @@ def docker_bin():
 
 def looks_like_redis(image, command):
     text = f"{image} {command}".lower()
-    return bool(re.search(r"(^|[/:_\s-])(redis|valkey)([:_\s-]|$)", text))
+    if any(skip in text for skip in ("exporter", "commander", "redisinsight", "redis-insight", "redis-cli")):
+        return False
+    # Match image repo names like redis, bitnami/redis, redis/redis-stack, valkey/valkey
+    # or command binaries like redis-server / valkey-server.
+    image_repo = image.lower().split("@", 1)[0].split(":", 1)[0].rsplit("/", 1)[-1]
+    if image_repo in ("redis", "redis-stack", "redis-stack-server", "valkey", "valkey-bundle"):
+        return True
+    return bool(re.search(r'(^|[\s/"\'])(redis-server|valkey-server)([\s"\']|$)', command.lower()))
 
 
 def parse_iso_uptime(started_at):
@@ -280,6 +343,47 @@ def parse_iso_uptime(started_at):
         return max(0, int(time.time() - dt.timestamp()))
     except ValueError:
         return None
+
+
+def _pick_container_endpoint(port_map, net_cfg, host_cfg):
+    ports_list = []
+    candidates = []
+    for cport, bindings in (port_map or {}).items():
+        if not bindings:
+            continue
+        for b in bindings:
+            h_ip = b.get("HostIp") or "0.0.0.0"
+            h_port = b.get("HostPort") or ""
+            if not h_port:
+                continue
+            ports_list.append(f"{h_ip}:{h_port}->{cport}")
+            if h_port.isdigit() and cport.endswith("/tcp"):
+                port_num = int(h_port)
+                if not (1 <= port_num <= 65535):
+                    continue
+                if h_ip in ("0.0.0.0", "", "127.0.0.1"):
+                    target_host = "127.0.0.1"
+                elif h_ip in ("::", "::1"):
+                    target_host = "::1"
+                else:
+                    target_host = h_ip
+                priority = 0 if cport == "6379/tcp" else 1
+                candidates.append((priority, target_host, port_num))
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0])
+        _, connect_host, connect_port = candidates[0]
+        return connect_host, connect_port, ports_list
+
+    for net in (net_cfg.get("Networks") or {}).values():
+        ip = (net or {}).get("IPAddress") or ""
+        if ip:
+            return ip, 6379, ports_list
+
+    if host_cfg.get("NetworkMode") == "host":
+        return "127.0.0.1", 6379, ports_list
+
+    return "127.0.0.1", 6379, ports_list
 
 
 def read_docker_containers():
@@ -320,37 +424,9 @@ def read_docker_containers():
         uptime = parse_iso_uptime(state_obj.get("StartedAt")) if state == "running" else None
         restart = (host_cfg.get("RestartPolicy") or {}).get("Name") or ""
 
-        ports_list = []
-        connect_host = None
-        connect_port = 6379
-        port_map = net_cfg.get("Ports") or {}
-        for cport, bindings in port_map.items():
-            if not bindings:
-                continue
-            for b in bindings:
-                h_ip = b.get("HostIp") or "0.0.0.0"
-                h_port = b.get("HostPort") or ""
-                if h_port:
-                    ports_list.append(f"{h_ip}:{h_port}->{cport}")
-                    if connect_host is None and h_port.isdigit() and cport.endswith("/tcp"):
-                        if h_ip in ("0.0.0.0", "", "::", "127.0.0.1", "::1"):
-                            connect_host = "127.0.0.1"
-                            connect_port = int(h_port)
-                        else:
-                            connect_host = h_ip
-                            connect_port = int(h_port)
-
-        if connect_host is None:
-            networks = net_cfg.get("Networks") or {}
-            for net in networks.values():
-                ip = (net or {}).get("IPAddress") or ""
-                if ip:
-                    connect_host = ip
-                    connect_port = 6379
-                    break
-        if connect_host is None and (host_cfg.get("NetworkMode") == "host"):
-            connect_host = "127.0.0.1"
-            connect_port = 6379
+        connect_host, connect_port, ports_list = _pick_container_endpoint(
+            net_cfg.get("Ports") or {}, net_cfg, host_cfg
+        )
 
         containers.append(
             {
@@ -364,7 +440,7 @@ def read_docker_containers():
                 "service": labels.get("com.docker.compose.service") or "",
                 "directory": labels.get("com.docker.compose.project.working_dir") or "",
                 "ports": ports_list,
-                "host": connect_host or "127.0.0.1",
+                "host": connect_host,
                 "port": connect_port,
             }
         )
@@ -423,19 +499,19 @@ def op_discover(req):
 
     service = read_host_service()
     installed = host_installed() or service is not None
-    endpoint, config_path = read_host_config_endpoint()
+    endpoint, config_path = read_host_config_endpoint(service["unit"] if service else None)
     if installed:
         running = bool(service and service.get("active") == "active")
         auth_status = {"kind": "unreachable", "message": "Redis is not running"}
         info_text = None
         if running or service is None:
             auth_status, info_text = probe_instance_info(endpoint, auth_map.get("host"))
-            if info_text is not None:
+            if auth_status["kind"] in ("ok", "required", "failed"):
                 running = True
         instances.append(
             {
                 "key": "host",
-                "title": "This server",
+                "title": "On the server",
                 "service": service,
                 "docker": None,
                 "endpoint": endpoint,
@@ -492,7 +568,6 @@ def op_scan(req):
     try:
         found = []
         seen = set()
-        truncated = False
         cur = cursor
         for _ in range(SCAN_ITERATION_LIMIT):
             remaining = max(10, SCAN_PAGE_LIMIT - len(found))
@@ -502,40 +577,115 @@ def op_scan(req):
             next_cur = decode_bytes(reply[0])[0]
             batch = reply[1] or []
             for raw_key in batch:
-                key_name, _, _ = decode_bytes(raw_key, limit=4096)
-                if key_name in seen:
+                raw_bytes = raw_key if isinstance(raw_key, bytes) else str(raw_key).encode("utf-8")
+                if raw_bytes in seen:
                     continue
-                seen.add(key_name)
-                found.append(key_name)
+                seen.add(raw_bytes)
+                found.append(raw_bytes)
             cur = next_cur
             if cur == "0" or len(found) >= SCAN_PAGE_LIMIT:
-                truncated = cur != "0"
                 break
 
+        truncated = cur != "0"
         keys = []
-        for name in found:
+        for raw_bytes in found:
+            name, is_binary, _ = decode_bytes(raw_bytes, limit=4096)
             try:
-                kind = client.command("TYPE", name)
+                kind = client.command("TYPE", raw_bytes)
                 if isinstance(kind, bytes):
                     kind = kind.decode("utf-8", errors="replace")
             except RespError:
                 kind = "unknown"
             try:
-                ttl = int(client.command("TTL", name))
+                ttl = int(client.command("TTL", raw_bytes))
             except Exception:
                 ttl = -1
             size = None
             try:
-                mem = client.command("MEMORY", "USAGE", name, "SAMPLES", 5)
+                mem = client.command("MEMORY", "USAGE", raw_bytes, "SAMPLES", 5)
                 if isinstance(mem, int):
                     size = mem
             except Exception:
                 size = None
-            keys.append({"name": name, "kind": kind or "unknown", "ttl": ttl, "size": size})
+            keys.append(
+                {
+                    "name": name,
+                    "kind": kind or "unknown",
+                    "ttl": ttl,
+                    "size": size,
+                    "binary": is_binary,
+                }
+            )
 
         return {"db": db, "cursor": cur, "keys": keys, "truncated": truncated}
     finally:
         client.close()
+
+
+def _scan_hash(client, key):
+    entries = []
+    seen = set()
+    binary = False
+    truncated = False
+    cur = "0"
+    for _ in range(SCAN_ITERATION_LIMIT):
+        reply = client.command("HSCAN", key, cur, "COUNT", COLLECTION_ITEM_LIMIT)
+        if not isinstance(reply, list) or len(reply) != 2:
+            break
+        cur = decode_bytes(reply[0])[0]
+        items = reply[1] or []
+        for i in range(0, len(items) - 1, 2):
+            if len(entries) >= COLLECTION_ITEM_LIMIT:
+                truncated = True
+                break
+            fk, b1, t1 = decode_bytes(items[i], limit=4096)
+            if fk in seen:
+                continue
+            seen.add(fk)
+            fv, b2, t2 = decode_bytes(items[i + 1], limit=16 * 1024)
+            binary = binary or b1 or b2
+            truncated = truncated or t1 or t2
+            entries.append({"label": fk, "value": fv})
+        if cur == "0" or len(entries) >= COLLECTION_ITEM_LIMIT:
+            if cur != "0":
+                truncated = True
+            break
+    if cur != "0":
+        truncated = True
+    return entries, binary, truncated
+
+
+def _scan_set(client, key):
+    entries = []
+    seen = set()
+    binary = False
+    truncated = False
+    cur = "0"
+    for _ in range(SCAN_ITERATION_LIMIT):
+        reply = client.command("SSCAN", key, cur, "COUNT", COLLECTION_ITEM_LIMIT)
+        if not isinstance(reply, list) or len(reply) != 2:
+            break
+        cur = decode_bytes(reply[0])[0]
+        items = reply[1] or []
+        for item in items:
+            if len(entries) >= COLLECTION_ITEM_LIMIT:
+                truncated = True
+                break
+            raw = item if isinstance(item, bytes) else str(item).encode("utf-8")
+            if raw in seen:
+                continue
+            seen.add(raw)
+            val, b, t = decode_bytes(raw, limit=16 * 1024)
+            binary = binary or b
+            truncated = truncated or t
+            entries.append({"label": "", "value": val})
+        if cur == "0" or len(entries) >= COLLECTION_ITEM_LIMIT:
+            if cur != "0":
+                truncated = True
+            break
+    if cur != "0":
+        truncated = True
+    return entries, binary, truncated
 
 
 def op_get_key(req):
@@ -576,22 +726,14 @@ def op_get_key(req):
                 truncated = True
             else:
                 raw = client.command("GET", key)
-            text, binary, trunc2 = decode_bytes(raw, limit=STRING_PREVIEW_LIMIT)
+            if raw is None:
+                raise RespError("Key does not exist")
+            text, binary, trunc2 = decode_bytes(raw, limit=STRING_PREVIEW_LIMIT, already_truncated=truncated)
             truncated = truncated or trunc2
             string_value = text
         elif kind == "hash":
             length = int(client.command("HLEN", key))
-            reply = client.command("HSCAN", key, "0", "COUNT", COLLECTION_ITEM_LIMIT)
-            items = reply[1] if isinstance(reply, list) and len(reply) == 2 and reply[1] else []
-            for i in range(0, len(items) - 1, 2):
-                if len(entries) >= COLLECTION_ITEM_LIMIT:
-                    truncated = True
-                    break
-                fk, b1, _ = decode_bytes(items[i], limit=4096)
-                fv, b2, t2 = decode_bytes(items[i + 1], limit=16 * 1024)
-                binary = binary or b1 or b2
-                truncated = truncated or t2
-                entries.append({"label": fk, "value": fv})
+            entries, binary, truncated = _scan_hash(client, key)
             if length > len(entries):
                 truncated = True
         elif kind == "list":
@@ -606,13 +748,7 @@ def op_get_key(req):
                 truncated = True
         elif kind == "set":
             length = int(client.command("SCARD", key))
-            reply = client.command("SSCAN", key, "0", "COUNT", COLLECTION_ITEM_LIMIT)
-            items = reply[1] if isinstance(reply, list) and len(reply) == 2 and reply[1] else []
-            for item in items[:COLLECTION_ITEM_LIMIT]:
-                val, b, t = decode_bytes(item, limit=16 * 1024)
-                binary = binary or b
-                truncated = truncated or t
-                entries.append({"label": "", "value": val})
+            entries, binary, truncated = _scan_set(client, key)
             if length > len(entries):
                 truncated = True
         elif kind == "zset":
@@ -704,7 +840,19 @@ def op_write(req):
     try:
         if kind == "set_string":
             ttl = op.get("ttl_seconds")
-            if ttl is not None and int(ttl) > 0:
+            keep_ttl = bool(op.get("keep_ttl"))
+            if keep_ttl:
+                try:
+                    client.command("SET", op["key"], op["value"], "KEEPTTL")
+                except RespError as exc:
+                    if "syntax" not in str(exc).lower():
+                        raise
+                    pttl = int(client.command("PTTL", op["key"]))
+                    if pttl > 0:
+                        client.command("SET", op["key"], op["value"], "PX", pttl)
+                    else:
+                        client.command("SET", op["key"], op["value"])
+            elif ttl is not None and int(ttl) > 0:
                 client.command("SET", op["key"], op["value"], "EX", int(ttl))
             else:
                 client.command("SET", op["key"], op["value"])
@@ -738,7 +886,9 @@ def op_write(req):
 
 
 def main():
-    raw = sys.stdin.read()
+    raw = sys.stdin.read(STDIN_LIMIT + 1)
+    if len(raw) > STDIN_LIMIT:
+        raise ValueError("Redis request exceeds the size limit")
     req = json.loads(raw) if raw.strip() else {"op": "discover"}
     op = req.get("op", "discover")
     handlers = {

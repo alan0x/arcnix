@@ -3404,6 +3404,18 @@ button,
 .redis-type-badge.type-set { color: #98c379; border-color: color-mix(in srgb, #98c379 45%, transparent); }
 .redis-type-badge.type-zset { color: #61afef; border-color: color-mix(in srgb, #61afef 45%, transparent); }
 .redis-type-badge.type-stream { color: #e06c75; border-color: color-mix(in srgb, #e06c75 45%, transparent); }
+.theme-light .redis-type-badge.type-string:not(:where(.desktop-dark *)),
+.desktop-light .redis-type-badge.type-string { color: #0e6f7c; border-color: color-mix(in srgb, #0e6f7c 40%, transparent); }
+.theme-light .redis-type-badge.type-hash:not(:where(.desktop-dark *)),
+.desktop-light .redis-type-badge.type-hash { color: #7c3599; border-color: color-mix(in srgb, #7c3599 40%, transparent); }
+.theme-light .redis-type-badge.type-list:not(:where(.desktop-dark *)),
+.desktop-light .redis-type-badge.type-list { color: #8c5a00; border-color: color-mix(in srgb, #8c5a00 40%, transparent); }
+.theme-light .redis-type-badge.type-set:not(:where(.desktop-dark *)),
+.desktop-light .redis-type-badge.type-set { color: #2b6e22; border-color: color-mix(in srgb, #2b6e22 40%, transparent); }
+.theme-light .redis-type-badge.type-zset:not(:where(.desktop-dark *)),
+.desktop-light .redis-type-badge.type-zset { color: #195fa8; border-color: color-mix(in srgb, #195fa8 40%, transparent); }
+.theme-light .redis-type-badge.type-stream:not(:where(.desktop-dark *)),
+.desktop-light .redis-type-badge.type-stream { color: #a82430; border-color: color-mix(in srgb, #a82430 40%, transparent); }
 .redis-load-more { align-self: center; }
 .redis-key-detail { display: flex !important; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); gap: 12px; }
 .redis-detail-inner { display: flex !important; flex-direction: column; gap: 12px; min-width: 0; flex: 1; }

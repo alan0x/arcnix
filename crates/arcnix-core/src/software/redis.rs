@@ -7,7 +7,8 @@
 //! helper. Credentials and key values are sent only on stdin JSON, never in
 //! command lines or logs. Service start/stop/restart run through reviewed
 //! administrator tasks.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::fmt;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -22,10 +23,10 @@ use crate::scripts::Template;
 const HELPER: &str = include_str!("redis_helper.py");
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 const STDIN_LIMIT: usize = 320 * 1024;
+const INSTANCE_LIMIT: usize = 21;
 pub const MAX_KEY_BYTES: usize = 4096;
 pub const MAX_VALUE_BYTES: usize = 256 * 1024;
 pub const MAX_PATTERN_BYTES: usize = 512;
-pub const MAX_DB_INDEX: u8 = 15;
 pub const CLIENTS_LIMIT: usize = 200;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -110,10 +111,7 @@ impl Endpoint {
             ensure!(self.port > 0, "Invalid Redis port");
         }
         if let Some(cid) = &self.container_id {
-            ensure!(
-                !cid.is_empty() && cid.len() <= 128 && cid.bytes().all(|b| b.is_ascii_hexdigit()),
-                "Invalid Docker container ID"
-            );
+            validate_container_id(cid)?;
         }
         Ok(())
     }
@@ -121,16 +119,27 @@ impl Endpoint {
     pub fn display_address(&self) -> String {
         if let Some(socket) = &self.socket {
             socket.clone()
+        } else if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
         } else {
             format!("{}:{}", self.host, self.port)
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Auth {
     pub username: String,
     pub password: Zeroizing<String>,
+}
+
+impl fmt::Debug for Auth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Auth")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl Auth {
@@ -181,6 +190,7 @@ pub struct DatabaseInfo {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Overview {
+    pub engine: String,
     pub version: String,
     pub mode: String,
     pub role: String,
@@ -206,6 +216,13 @@ impl Overview {
     pub fn hit_rate_percent(&self) -> Option<f64> {
         let total = self.keyspace_hits.saturating_add(self.keyspace_misses);
         (total > 0).then(|| (self.keyspace_hits as f64) * 100.0 / (total as f64))
+    }
+    pub fn product_name(&self) -> &str {
+        if self.engine.is_empty() {
+            "Redis"
+        } else {
+            &self.engine
+        }
     }
 }
 
@@ -258,6 +275,8 @@ pub struct KeySummary {
     pub kind: String,
     pub ttl: i64,
     pub size: Option<u64>,
+    #[serde(default)]
+    pub binary: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -323,6 +342,7 @@ pub enum WriteOp {
         key: String,
         value: String,
         ttl_seconds: Option<u64>,
+        keep_ttl: bool,
     },
     SetHashField {
         key: String,
@@ -370,13 +390,16 @@ impl WriteOp {
                 key,
                 value,
                 ttl_seconds,
+                keep_ttl,
             } => {
                 validate_key(key)?;
                 ensure!(
                     value.len() <= MAX_VALUE_BYTES,
                     "Value exceeds the 256 KiB editing limit"
                 );
-                validate_optional_ttl(*ttl_seconds)?;
+                if !keep_ttl {
+                    validate_optional_ttl(*ttl_seconds)?;
+                }
             }
             Self::SetHashField { key, field, value } => {
                 validate_key(key)?;
@@ -388,7 +411,10 @@ impl WriteOp {
             }
             Self::DeleteHashField { key, field } => {
                 validate_key(key)?;
-                validate_field(field, "Field")?;
+                ensure!(
+                    field.len() <= MAX_KEY_BYTES && !field.contains('\0'),
+                    "Field is invalid or too long"
+                );
             }
             Self::PushList { key, value } => {
                 validate_key(key)?;
@@ -397,23 +423,23 @@ impl WriteOp {
                     "Value exceeds the 256 KiB editing limit"
                 );
             }
-            Self::AddSetMember { key, member } | Self::RemoveSetMember { key, member } => {
+            Self::AddSetMember { key, member } => {
                 validate_key(key)?;
                 ensure!(
                     !member.is_empty() && member.len() <= MAX_VALUE_BYTES,
                     "Enter a member value"
+                );
+            }
+            Self::RemoveSetMember { key, member } | Self::RemoveZSetMember { key, member } => {
+                validate_key(key)?;
+                ensure!(
+                    member.len() <= MAX_VALUE_BYTES,
+                    "Value exceeds the 256 KiB editing limit"
                 );
             }
             Self::AddZSetMember { key, score, member } => {
                 validate_key(key)?;
                 ensure!(score.is_finite(), "Enter a valid numeric score");
-                ensure!(
-                    !member.is_empty() && member.len() <= MAX_VALUE_BYTES,
-                    "Enter a member value"
-                );
-            }
-            Self::RemoveZSetMember { key, member } => {
-                validate_key(key)?;
                 ensure!(
                     !member.is_empty() && member.len() <= MAX_VALUE_BYTES,
                     "Enter a member value"
@@ -436,11 +462,13 @@ impl WriteOp {
                 key,
                 value,
                 ttl_seconds,
+                keep_ttl,
             } => serde_json::json!({
                 "kind": "set_string",
                 "key": key,
                 "value": value,
                 "ttl_seconds": ttl_seconds,
+                "keep_ttl": keep_ttl,
             }),
             Self::SetHashField { key, field, value } => serde_json::json!({
                 "kind": "set_hash_field",
@@ -499,6 +527,14 @@ pub enum Control {
     Restart,
 }
 
+fn validate_container_id(cid: &str) -> Result<()> {
+    ensure!(
+        !cid.is_empty() && cid.len() <= 128 && cid.bytes().all(|b| b.is_ascii_hexdigit()),
+        "Invalid Docker container ID"
+    );
+    Ok(())
+}
+
 fn validate_key(key: &str) -> Result<()> {
     ensure!(!key.is_empty(), "Enter a key name");
     ensure!(
@@ -524,14 +560,6 @@ fn validate_optional_ttl(ttl: Option<u64>) -> Result<()> {
     Ok(())
 }
 
-fn validate_db(db: u8) -> Result<()> {
-    ensure!(
-        db <= MAX_DB_INDEX,
-        "Database index must be between 0 and 15"
-    );
-    Ok(())
-}
-
 fn validate_pattern(pattern: &str) -> Result<String> {
     let trimmed = pattern.trim();
     let effective = if trimmed.is_empty() { "*" } else { trimmed };
@@ -553,7 +581,20 @@ fn validate_cursor(cursor: &str) -> Result<String> {
 }
 
 fn helper_command() -> String {
-    format!("# arcnix:redis:helper\npython3 -c {}", quote(HELPER))
+    use std::io::Write;
+
+    use base64::Engine as _;
+
+    let script = HELPER.replace("\r\n", "\n");
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder
+        .write_all(script.as_bytes())
+        .expect("in-memory zlib compression");
+    let compressed = encoder.finish().expect("in-memory zlib finish");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
+    format!(
+        "# arcnix:redis:helper\ncd /\narcnix_t=; if command -v timeout >/dev/null 2>&1; then arcnix_t='timeout -k 2 28'; fi\nexec $arcnix_t python3 -I -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('{encoded}')).decode(),{{'__name__':'__main__'}})\""
+    )
 }
 
 fn run_helper(session: &RemoteSession, payload: &[u8]) -> Result<String> {
@@ -658,7 +699,6 @@ pub fn scan_keys(
     pattern: &str,
 ) -> Result<ScanPage> {
     endpoint.validate()?;
-    validate_db(db)?;
     let cursor = validate_cursor(cursor)?;
     let pattern = validate_pattern(pattern)?;
     if let Some(auth) = auth {
@@ -684,7 +724,6 @@ pub fn read_key(
     key: &str,
 ) -> Result<KeyValue> {
     endpoint.validate()?;
-    validate_db(db)?;
     validate_key(key)?;
     if let Some(auth) = auth {
         auth.validate()?;
@@ -739,7 +778,6 @@ pub fn write_key(
     op: &WriteOp,
 ) -> Result<()> {
     endpoint.validate()?;
-    validate_db(db)?;
     op.validate()?;
     if let Some(auth) = auth {
         auth.validate()?;
@@ -758,10 +796,7 @@ pub fn write_key(
 pub fn control(instance: &Instance, control: Control) -> Result<Template> {
     let (id, name, description, command) = match (&instance.docker, &instance.service, control) {
         (Some(container), _, Control::Start) => {
-            ensure!(
-                !container.id.is_empty() && container.id.bytes().all(|b| b.is_ascii_hexdigit()),
-                "Invalid Docker container ID"
-            );
+            validate_container_id(&container.id)?;
             (
                 "start",
                 "Start Redis container",
@@ -770,10 +805,7 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
             )
         }
         (Some(container), _, Control::Stop) => {
-            ensure!(
-                !container.id.is_empty() && container.id.bytes().all(|b| b.is_ascii_hexdigit()),
-                "Invalid Docker container ID"
-            );
+            validate_container_id(&container.id)?;
             (
                 "stop",
                 "Stop Redis container",
@@ -782,10 +814,7 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
             )
         }
         (Some(container), _, Control::Restart) => {
-            ensure!(
-                !container.id.is_empty() && container.id.bytes().all(|b| b.is_ascii_hexdigit()),
-                "Invalid Docker container ID"
-            );
+            validate_container_id(&container.id)?;
             (
                 "restart",
                 "Restart Redis container",
@@ -799,7 +828,7 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
                 "start",
                 "Start Redis",
                 "Starts the Redis system service.",
-                format!("systemctl start {}", quote(&service.unit)),
+                format!("systemctl start -- {}", quote(&service.unit)),
             )
         }
         (None, Some(service), Control::Stop) => {
@@ -808,7 +837,7 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
                 "stop",
                 "Stop Redis",
                 "Stops the Redis system service. Applications using this instance will lose access until it is started again.",
-                format!("systemctl stop {}", quote(&service.unit)),
+                format!("systemctl stop -- {}", quote(&service.unit)),
             )
         }
         (None, Some(service), Control::Restart) => {
@@ -817,7 +846,7 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
                 "restart",
                 "Restart Redis",
                 "Restarts the Redis system service. Open connections are dropped.",
-                format!("systemctl restart {}", quote(&service.unit)),
+                format!("systemctl restart -- {}", quote(&service.unit)),
             )
         }
         (None, None, _) => anyhow::bail!("This Redis instance has no controllable service"),
@@ -828,7 +857,7 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
         None => description.to_owned(),
     };
     let prelude = if instance.docker.is_some() {
-        "if ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH=\"$PATH:/snap/bin\"; fi\n"
+        "unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH\nif ! command -v docker >/dev/null 2>&1 && test -x /snap/bin/docker; then export PATH=\"$PATH:/snap/bin\"; fi\n"
     } else {
         ""
     };
@@ -845,42 +874,72 @@ pub fn control(instance: &Instance, control: Control) -> Result<Template> {
 fn validate_unit(unit: &str) -> Result<()> {
     ensure!(
         !unit.is_empty()
+            && !unit.starts_with('-')
             && unit.len() <= 128
+            && unit.ends_with(".service")
             && unit
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'@')),
         "Invalid systemd unit name"
+    );
+    let lower = unit.to_ascii_lowercase();
+    ensure!(
+        lower == "redis.service"
+            || lower == "redis-server.service"
+            || lower == "valkey.service"
+            || lower == "valkey-server.service"
+            || lower.starts_with("redis@")
+            || lower.starts_with("redis-server@")
+            || lower.starts_with("valkey@")
+            || lower.starts_with("valkey-server@"),
+        "Unsupported Redis systemd unit"
     );
     Ok(())
 }
 
 pub fn parse_reading(text: &str) -> Result<Reading> {
     let raw: RawReading = serde_json::from_str(text).context("Invalid Redis response")?;
-    let instances = raw
-        .instances
-        .into_iter()
-        .map(|item| {
-            let auth_status = match item.auth_status.kind.as_str() {
-                "ok" => AuthStatus::Ok,
-                "required" => AuthStatus::Required,
-                "failed" => AuthStatus::Failed(item.auth_status.message),
-                _ => AuthStatus::Unreachable(item.auth_status.message),
-            };
-            let overview = item.info.as_deref().map(parse_info);
-            Instance {
-                key: item.key,
-                title: item.title,
-                service: item.service,
-                docker: item.docker,
-                endpoint: item.endpoint,
-                installed: item.installed,
-                running: item.running,
-                auth_status,
-                overview,
-                config_path: item.config_path,
-            }
-        })
-        .collect();
+    ensure!(
+        raw.instances.len() <= INSTANCE_LIMIT,
+        "Server reported too many Redis instances"
+    );
+    let mut seen_keys = HashSet::new();
+    let mut instances = Vec::with_capacity(raw.instances.len());
+    for item in raw.instances {
+        ensure!(
+            !item.key.is_empty()
+                && item.key.len() <= 160
+                && !item.key.chars().any(char::is_control)
+                && seen_keys.insert(item.key.clone()),
+            "Invalid or duplicate Redis instance key"
+        );
+        item.endpoint.validate()?;
+        if let Some(container) = &item.docker {
+            validate_container_id(&container.id)?;
+        }
+        if let Some(service) = &item.service {
+            validate_unit(&service.unit)?;
+        }
+        let auth_status = match item.auth_status.kind.as_str() {
+            "ok" => AuthStatus::Ok,
+            "required" => AuthStatus::Required,
+            "failed" => AuthStatus::Failed(item.auth_status.message),
+            _ => AuthStatus::Unreachable(item.auth_status.message),
+        };
+        let overview = item.info.as_deref().map(parse_info);
+        instances.push(Instance {
+            key: item.key,
+            title: item.title,
+            service: item.service,
+            docker: item.docker,
+            endpoint: item.endpoint,
+            installed: item.installed,
+            running: item.running,
+            auth_status,
+            overview,
+            config_path: item.config_path,
+        });
+    }
     Ok(Reading {
         instances,
         docker_error: raw.docker_error,
@@ -890,6 +949,8 @@ pub fn parse_reading(text: &str) -> Result<Reading> {
 pub fn parse_info(text: &str) -> Overview {
     let mut overview = Overview::default();
     let mut total_keys = 0u64;
+    let mut redis_version = String::new();
+    let mut valkey_version = String::new();
     for raw_line in text.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -900,10 +961,13 @@ pub fn parse_info(text: &str) -> Overview {
         };
         let value = value.trim();
         match key {
-            "redis_version" | "valkey_version" if overview.version.is_empty() => {
-                overview.version = value.to_owned();
+            "valkey_version" if !value.is_empty() => {
+                valkey_version = value.to_owned();
             }
-            "redis_mode" | "valkey_mode" if overview.mode.is_empty() => {
+            "redis_version" if !value.is_empty() => {
+                redis_version = value.to_owned();
+            }
+            "valkey_mode" | "redis_mode" if overview.mode.is_empty() => {
                 overview.mode = value.to_owned();
             }
             "role" => overview.role = value.to_owned(),
@@ -932,6 +996,13 @@ pub fn parse_info(text: &str) -> Overview {
             }
             _ => {}
         }
+    }
+    if !valkey_version.is_empty() {
+        overview.engine = "Valkey".to_owned();
+        overview.version = valkey_version;
+    } else {
+        overview.engine = "Redis".to_owned();
+        overview.version = redis_version;
     }
     overview.databases.sort_by_key(|db| db.index);
     overview.total_keys = total_keys;
@@ -1002,10 +1073,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_redis_info_and_keyspace() {
+    fn auth_debug_redacts_password() {
+        let auth = Auth {
+            username: "ops".into(),
+            password: Zeroizing::new("super-secret-token".into()),
+        };
+        let rendered = format!("{auth:?}");
+        assert!(rendered.contains("ops"));
+        assert!(rendered.contains("[REDACTED]"));
+        assert!(!rendered.contains("super-secret-token"));
+    }
+
+    #[test]
+    fn parses_redis_and_valkey_info() {
         let sample = "\
 # Server\r\n\
-redis_version:7.2.5\r\n\
+redis_version:7.2.4\r\n\
+valkey_version:8.0.1\r\n\
 redis_mode:standalone\r\n\
 uptime_in_seconds:86420\r\n\
 # Clients\r\n\
@@ -1032,7 +1116,8 @@ db2:keys=12,expires=3,avg_ttl=60000\r\n\
 db0:keys=100,expires=40,avg_ttl=12000\r\n";
 
         let info = parse_info(sample);
-        assert_eq!(info.version, "7.2.5");
+        assert_eq!(info.product_name(), "Valkey");
+        assert_eq!(info.version, "8.0.1");
         assert_eq!(info.mode, "standalone");
         assert_eq!(info.role, "master");
         assert_eq!(info.uptime_seconds, Some(86420));
@@ -1066,12 +1151,13 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
     }
 
     #[test]
-    fn validates_write_ops_and_endpoints() {
+    fn validates_write_ops_endpoints_and_units() {
         assert!(
             WriteOp::SetString {
                 key: "".into(),
                 value: "v".into(),
-                ttl_seconds: None
+                ttl_seconds: None,
+                keep_ttl: false,
             }
             .validate()
             .is_err()
@@ -1080,7 +1166,8 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
             WriteOp::SetString {
                 key: "session:1".into(),
                 value: "ok".into(),
-                ttl_seconds: Some(0)
+                ttl_seconds: Some(0),
+                keep_ttl: false,
             }
             .validate()
             .is_err()
@@ -1089,7 +1176,16 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
             WriteOp::SetString {
                 key: "session:1".into(),
                 value: "ok".into(),
-                ttl_seconds: Some(60)
+                ttl_seconds: None,
+                keep_ttl: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            WriteOp::RemoveSetMember {
+                key: "tags".into(),
+                member: String::new(),
             }
             .validate()
             .is_ok()
@@ -1098,38 +1194,55 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
             WriteOp::AddZSetMember {
                 key: "scores".into(),
                 score: f64::NAN,
-                member: "alice".into()
+                member: "alice".into(),
             }
             .validate()
             .is_err()
         );
+        let ipv6 = Endpoint {
+            host: "::1".into(),
+            port: 6379,
+            socket: None,
+            container_id: None,
+        };
+        assert!(ipv6.validate().is_ok());
+        assert_eq!(ipv6.display_address(), "[::1]:6379");
+
+        assert!(validate_unit("redis-server.service").is_ok());
+        assert!(validate_unit("valkey@cache.service").is_ok());
+        assert!(validate_unit("sshd.service").is_err());
+        assert!(validate_unit("-redis.service").is_err());
         assert!(
-            Endpoint {
-                host: "127.0.0.1".into(),
-                port: 6379,
-                socket: None,
-                container_id: None
-            }
-            .validate()
-            .is_ok()
+            helper_command().len() < 30 * 1024,
+            "SSH exec command must stay below the 32 KiB SSH packet limit"
         );
-        assert!(
-            Endpoint {
-                host: "bad host; rm -rf /".into(),
-                port: 6379,
-                socket: None,
-                container_id: None
-            }
-            .validate()
-            .is_err()
-        );
+    }
+
+    #[test]
+    fn rejects_untrusted_parse_reading_payloads() {
+        // Compromised server claiming sshd.service as Redis unit must be rejected.
+        let bad_unit = r#"{
+            "instances": [{
+                "key": "host",
+                "title": "On the server",
+                "service": {"unit": "sshd.service", "load": "loaded", "active": "active", "sub": "running", "enabled": "enabled", "uptime": 10},
+                "docker": null,
+                "endpoint": {"host": "127.0.0.1", "port": 6379},
+                "installed": true,
+                "running": true,
+                "auth_status": {"kind": "ok", "message": ""},
+                "info": null,
+                "config_path": null
+            }]
+        }"#;
+        assert!(parse_reading(bad_unit).is_err());
     }
 
     #[test]
     fn builds_service_and_container_control_templates() -> Result<()> {
         let host = Instance {
             key: "host".into(),
-            title: "This server".into(),
+            title: "On the server".into(),
             service: Some(Service {
                 unit: "redis-server.service".into(),
                 load: "loaded".into(),
@@ -1145,7 +1258,7 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
         assert!(
             tpl.snippet
                 .command
-                .contains("systemctl restart 'redis-server.service'")
+                .contains("systemctl restart -- 'redis-server.service'")
         );
 
         let docker = Instance {
@@ -1161,6 +1274,7 @@ id=43 addr=10.0.0.5:40000 fd=9 name= age=10 idle=0 flags=N db=0 cmd=client|list\
         };
         let tpl = control(&docker, Control::Stop)?;
         assert!(tpl.snippet.administrator);
+        assert!(tpl.snippet.command.contains("unset DOCKER_HOST"));
         assert!(tpl.snippet.command.contains("docker stop 'abcdef123456'"));
         Ok(())
     }
