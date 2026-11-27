@@ -125,8 +125,14 @@ class Desktop:
     def navigate(self, address, expected):
         self.eval(f'''(() => {{const input=document.querySelector('.browser-address'); input.value={json.dumps(address)}; input.dispatchEvent(new Event('input',{{bubbles:true}}));}})()''')
         self.click('.browser-open-address')
-        eventually(lambda: expected in self.text(), 35)
+        if expected.startswith('Unable to load') or expected.startswith('The website certificate'):
+            eventually(lambda: self.eval(f'(() => {{const e=document.querySelector(".browser-error"); return !!e && e.innerText.includes({json.dumps(expected)});}})()'), 35)
+        else:
+            eventually(lambda: self.title() == expected, 35)
         self.connected()
+
+    def title(self):
+        return self.eval('document.querySelector(".desktop-window.app-browser:not(.hidden) .browser-tab.active .browser-tab-label")?.innerText.trim()')
 
     def close(self):
         assert self.process.poll() is None, f'{self.backend} app exited unexpectedly: {self.process.returncode}'
@@ -212,6 +218,17 @@ def run_backend(binary, out, backend, peer, web, tls):
         eventually(lambda: ui.eval('document.querySelector(".browser-address").value').endswith('/styled'))
         ui.connected()
         checks.append('Tab switching and remote loopback work')
+        ui.navigate(f'http://browser-fixture.test:{port}/second', 'Second routed page')
+        ui.click('.browser-back')
+        eventually(lambda: ui.title() == 'Routed styles and scripts')
+        ui.click('.browser-toolbar button[aria-label="Forward"]')
+        eventually(lambda: ui.title() == 'Second routed page')
+        requests = sum(path == '/second' for _, path in web.requests)
+        ui.click('.browser-toolbar button[aria-label="Reload page"]')
+        eventually(lambda: sum(path == '/second' for _, path in web.requests) > requests)
+        ui.click('.browser-back')
+        eventually(lambda: ui.title() == 'Routed styles and scripts')
+        checks.append('Back, forward, and reload operate on the selected native page')
         start = len(web.requests)
         ui.click('.desktop-dock-app[aria-label="Settings"]')
         ui.connected()
@@ -232,7 +249,11 @@ def run_backend(binary, out, backend, peer, web, tls):
         ui.navigate('https://tls.browser-fixture.test/', 'The website certificate could not be verified')
         ui.navigate('tls.browser-fixture.test/', 'The website certificate could not be verified')
         attempts = [json.loads(line) for line in (Path(peer['root'])/'browser-connect-attempts.jsonl').read_text().splitlines()]
+        for host in ['browser-fixture.test', 'assets.browser-fixture.test', 'scripts.browser-fixture.test', '127.0.0.1']:
+            assert any(x['host'] == host and x['port'] == port for x in attempts), (host, attempts)
+        assert any(x['host'] == 'example.com' and x['port'] == 443 for x in attempts)
         assert not any(x['host']=='tls.browser-fixture.test' and x['port']==80 for x in attempts)
+        (out/f'{backend}-ssh-attempts.json').write_text(json.dumps(attempts, indent=2))
         checks.append('Explicit schemes are binding; certificate errors on explicit and bare HTTPS never downgrade to HTTP')
         ui.navigate(f'http://browser-fixture.test:{port}/cookie', 'Cookie kept')
         ui.eval("document.querySelectorAll('.host-select')[1].click()"); time.sleep(.55)
