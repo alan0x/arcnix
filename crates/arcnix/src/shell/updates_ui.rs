@@ -188,7 +188,8 @@ pub(crate) fn tick(ui: &Ui) {
         check(ui);
     }
     let install = ui.state.revise(|s| {
-        let eligible = supported()
+        let eligible = ui.writable.get()
+            && supported()
             && s.config.settings.updates.install_when_idle
             && s.updates.phase == Phase::Ready
             && idle(s)
@@ -241,7 +242,7 @@ fn check(ui: &Ui) {
 }
 fn download(ui: &Ui) {
     let task = ui.state.revise(|s| {
-        if s.updates.phase != Phase::Available || !ui.writable.get() || !supported() {
+        if s.updates.phase != Phase::Available || !supported() {
             return None;
         }
         let release = s.updates.release.clone()?;
@@ -286,7 +287,7 @@ fn download(ui: &Ui) {
 }
 fn install_update(ui: &Ui) {
     let prepared = ui.state.revise(|s| {
-        if !ui.writable.get() || !supported() || s.updates.phase != Phase::Ready || !idle(s) {
+        if !supported() || s.updates.phase != Phase::Ready || !idle(s) {
             return None;
         }
         let prepared = s.updates.prepared.clone()?;
@@ -295,7 +296,9 @@ fn install_update(ui: &Ui) {
         Some(prepared)
     });
     if let Some(prepared) = prepared {
-        ui.save();
+        if ui.writable.get() {
+            ui.save();
+        }
         let config = ui.store.path().to_owned();
         let controller = ui.update_controller.clone();
         std::thread::spawn(move || {
@@ -346,7 +349,8 @@ pub(crate) fn event(ui: &Ui, event: Event) {
                         s.updates.prepared = None;
                         s.updates.deferred = false;
                     }
-                    automatic_download = supported()
+                    automatic_download = ui.writable.get()
+                        && supported()
                         && s.updates.prepared.is_none()
                         && s.config.settings.updates.automatic_download
                         && release.asset.is_some()
@@ -369,7 +373,7 @@ pub(crate) fn event(ui: &Ui, event: Event) {
                     s.updates.error = error;
                 }
             });
-            if success {
+            if success && ui.writable.get() {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -444,18 +448,18 @@ pub(crate) fn panel(ui: Ui) -> impl Widget {
             let last_check = s.updates.last_check;
             s.updates = defaults.updates.clone();
             s.updates.last_check = last_check;
-        }),
+        })
+        .enabled(ui.writable),
         controls(ui.clone()),
     )
 }
 
-fn controls(ui: Ui) -> impl Widget {
+fn automatic_preferences(ui: Ui) -> impl Widget {
     let state = ui.state;
     let automatic = ui.clone();
     let fetch = ui.clone();
     let install = ui.clone();
-    let check_ui = ui.clone();
-    col().class("preferences-stack update-panel").fill((
+    col().class("preferences-stack").fill((
         sapid::checkbox()
             .class("preference-check")
             .label(i18n::bind("Check for updates automatically"))
@@ -496,6 +500,22 @@ fn controls(ui: Ui) -> impl Widget {
                     .on_checked_change(move |v| {
                         install.update_preferences(|s| s.updates.install_when_idle = v)
                     }),
+            ))
+        }),
+    ))
+}
+
+fn controls(ui: Ui) -> impl Widget {
+    let state = ui.state;
+    let preferences = ui.clone();
+    let check_ui = ui.clone();
+    col().class("preferences-stack update-panel").fill((
+        when(ui.writable, move || {
+            automatic_preferences(preferences.clone())
+        }),
+        when(ui.writable.map(|writable| !*writable), || {
+            text().class("subtle").content(i18n::bind(
+                "Settings are read-only. You can still update Arcnix manually.",
             ))
         }),
         when(
@@ -684,7 +704,6 @@ fn release_controls(ui: Ui, confirming: bool) -> impl Widget {
                 move || {
                     let ui = download_ui.clone();
                     btn("Download update", move || download(&ui))
-                        .enabled(download_ui.writable.get())
                 },
             ),
             when(
