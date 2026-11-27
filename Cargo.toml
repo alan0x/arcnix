@@ -6,7 +6,7 @@ resolver = "3"
 version = "0.3.10"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.99"
+rust-version = "1.100"
 repository = "https://github.com/arcnix-org/arcnix"
 homepage = "https://arcnix.org"
 

@@ -35,7 +35,7 @@ Group 标题行支持鼠标拖动排序，蓝色插入线标明放置位置；�
 
 ## 启动
 
-源码构建需要 Rust 1.99+、Windows MSVC 构建工具、原生 Windows Perl（如 Strawberry Perl）和 NASM；运行界面需要 Microsoft Edge WebView2 Runtime。
+源码构建需要 Rust 1.100+、Windows MSVC 构建工具、原生 Windows Perl（如 Strawberry Perl）和 NASM；运行界面需要 Microsoft Edge WebView2 Runtime。
 
 SSH 使用源码编译并静态链接的 OpenSSL，支持 OpenSSH Ed25519 私钥（包括口令加密的私钥）及 RSA 私钥。运行应用不需要安装 OpenSSL、Perl、NASM，也不调用系统 `ssh.exe`／`sftp.exe`。首次构建会编译 OpenSSL，因此耗时较长。
 

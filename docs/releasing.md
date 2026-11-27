@@ -16,7 +16,7 @@ desktop with GTK/WebKit dependencies, before a release tag is created.
 | Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `arcnix-vVERSION-linux-arm64.tar.gz` |
 | Linux AMD64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `arcnix-vVERSION-linux-amd64.tar.gz` |
 
-Each native runner tests the workspace, builds with Rust **1.99.0** in release
+Each native runner tests the workspace, builds with Rust **1.100.0** in release
 mode, and packages the binary, READMEs and licenses. All four builds must succeed
 before the downloads and `SHA256SUMS` are attached to a GitHub Release. Tags containing
 a prerelease suffix produce a prerelease. Rerunning the release job replaces assets
@@ -136,7 +136,7 @@ python tools/check_release.py v0.2.0
 ```
 
 Rustfmt uses **nightly-2026-11-04** to honor the project's existing unstable
-formatting settings. Compilation, Clippy and tests use **Rust 1.99.0**.
+formatting settings. Compilation, Clippy and tests use **Rust 1.100.0**.
 
 Arcnix distributes new versions through GitHub Releases. Both workspace crates
 set `publish = false` in their Cargo manifests.

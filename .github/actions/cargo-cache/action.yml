@@ -12,5 +12,5 @@ runs:
           ~/.cargo/git
           target/debug
           target/release
-        key: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-v2-${{ hashFiles('Cargo.lock') }}
-        restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.99-v2-
+        key: ${{ runner.os }}-${{ runner.arch }}-rust-1.100-v2-${{ hashFiles('Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.100-v2-
