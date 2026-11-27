@@ -101,7 +101,7 @@ fn ensure_missing(path: &Path) -> Result<()> {
         Err(e) => Err(e).context("Cannot inspect backup destination"),
     }
 }
-fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("Backup folder is missing")?;
     ensure!(
         fs::canonicalize(parent)? == parent,

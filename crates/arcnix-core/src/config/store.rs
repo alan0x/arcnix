@@ -1,6 +1,6 @@
 //! Versioned, atomic configuration storage. Credentials are deliberately absent
 //! from the persisted model; callers keep passwords/passphrases in session state.
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -26,6 +26,12 @@ struct Document {
 #[derive(Debug, Clone)]
 pub struct ConfigStore {
     path: PathBuf,
+}
+
+pub struct StartupConfig {
+    pub config: AppConfig,
+    pub diagnostic: Option<String>,
+    pub writable: bool,
 }
 
 impl ConfigStore {
@@ -111,10 +117,19 @@ impl ConfigStore {
     /// Only a missing file is treated as first launch. Invalid or unreadable
     /// configuration remains untouched and is reported to the caller.
     pub fn load(&self) -> Result<AppConfig> {
+        Ok(self
+            .read_document()?
+            .as_deref()
+            .map(decoded)
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    fn read_document(&self) -> Result<Option<Vec<u8>>> {
         let file = match fs::File::open(&self.path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(AppConfig::default());
+                return Ok(None);
             }
             Err(err) => return Err(err).context("读取配置文件失败"),
         };
@@ -122,13 +137,77 @@ impl ConfigStore {
         file.take(MAX_CONFIG_BYTES + 1)
             .read_to_end(&mut bytes)
             .context("读取配置文件失败")?;
-        decoded(&bytes)
+        ensure!(bytes.len() as u64 <= MAX_CONFIG_BYTES, "配置文件过大");
+        Ok(Some(bytes))
+    }
+
+    pub fn load_for_startup(&self) -> StartupConfig {
+        let mut debug_mode = false;
+        let result = self.load().map(|config| (config, None)).or_else(|error| {
+            if error.downcast_ref::<std::io::Error>().is_some() {
+                return Err(error);
+            }
+            // Re-read under the same lock used by save before repairing anything.
+            let _lock = self.write_lock()?;
+            let Some(bytes) = self.read_document()? else {
+                return Ok((AppConfig::default(), None));
+            };
+            let original_error = match decoded(&bytes) {
+                Ok(config) => return Ok((config, None)),
+                Err(error) => error,
+            };
+            let Some((fixed, removed)) = repair_file_preferences(&bytes, &mut debug_mode) else {
+                return Err(original_error);
+            };
+            let config = decoded(&fixed)?;
+            let backup = self.path.canonicalize()?
+                .with_added_extension(format!("before-repair-{}.bak", new_id()));
+            crate::configuration_backups::publish(&backup, &bytes)?;
+            replace_document(&self.path, &fixed)?;
+            let diagnostic = format!(
+                "Removed {removed} unsupported file association entries. Original configuration: {}\n{}",
+                backup.display(), original_error.root_cause()
+            );
+            Ok((config, Some(diagnostic)))
+        });
+        match result {
+            Ok((config, diagnostic)) => StartupConfig {
+                config,
+                diagnostic,
+                writable: true,
+            },
+            Err(error) => {
+                let mut config = AppConfig::default();
+                config.settings.debug_mode = debug_mode;
+                StartupConfig {
+                    config,
+                    diagnostic: Some(format!("{error:#}")),
+                    writable: false,
+                }
+            }
+        }
+    }
+
+    fn write_lock(&self) -> Result<fs::File> {
+        let path = self.path.with_added_extension("lock");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let lock = fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        lock.lock()?;
+        Ok(lock)
     }
 
     /// Writes a unique file beside the destination, flushes it, then renames it
     /// over the destination. A failed write never truncates the old config.
     pub fn save(&self, config: &AppConfig) -> Result<()> {
         let bytes = encoded(config)?;
+        let _lock = self.write_lock()?;
         replace_document(&self.path, &bytes)
     }
 
@@ -136,6 +215,29 @@ impl ConfigStore {
     pub fn check(config: &AppConfig) -> Result<()> {
         encoded(config).map(|_| ())
     }
+}
+
+fn repair_file_preferences(bytes: &[u8], debug_mode: &mut bool) -> Option<(Vec<u8>, usize)> {
+    // Replace only the file association object. Re-encoding the entire JSON value
+    // could silently collapse duplicate fields in server profiles or trust records.
+    type RawObject<'a> = BTreeMap<String, &'a serde_json::value::RawValue>;
+    let document: RawObject = serde_json::from_slice(bytes).ok()?;
+    let config: RawObject = serde_json::from_str(document.get("config")?.get()).ok()?;
+    let settings: RawObject = serde_json::from_str(config.get("settings")?.get()).ok()?;
+    *debug_mode = settings
+        .get("debug_mode")
+        .is_some_and(|v| v.get() == "true");
+    let original_rules = settings.get("file_associations")?.get();
+    let mut rules = serde_json::from_str(original_rules).ok()?;
+    let removed = crate::file_associations::repair_handlers(&mut rules);
+    if removed == 0 {
+        return None;
+    }
+    let start = original_rules.as_ptr() as usize - bytes.as_ptr() as usize;
+    let mut fixed = bytes[..start].to_vec();
+    serde_json::to_writer(&mut fixed, &rules).ok()?;
+    fixed.extend_from_slice(&bytes[start + original_rules.len()..]);
+    Some((fixed, removed))
 }
 
 pub(crate) fn replace_document(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -838,12 +940,91 @@ mod tests {
         assert_eq!(store.load().unwrap(), config);
         let contents = fs::read_to_string(store.path()).unwrap();
         assert!(!contents.contains("password"));
+        let files: HashSet<_> = fs::read_dir(store.path().parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
         assert_eq!(
-            fs::read_dir(store.path().parent().unwrap())
-                .unwrap()
-                .count(),
-            1
+            files,
+            HashSet::from([store.path.clone(), store.path.with_added_extension("lock")])
         );
+    }
+
+    #[test]
+    fn startup_repairs_unknown_file_apps_once_and_preserves_other_preferences() {
+        let dir = TestDir::new();
+        let store = dir.store();
+        let mut config = AppConfig::default();
+        config.upsert_server(server()).unwrap();
+        config
+            .trust_host("example.org", 22, &fingerprint())
+            .unwrap();
+        store.save(&config).unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        let settings = &mut document["config"]["settings"];
+        settings["future_setting"] = true.into();
+        settings["file_associations"] = serde_json::json!({
+            "docx": {"default":"future_app","added_apps":["office","future_app"],"opened_with":["future_app","office"]},
+            "pdf": {"default":"pdf_reader","opened_with":["office"]}
+        });
+        let original = serde_json::to_vec(&document).unwrap();
+        fs::write(store.path(), &original).unwrap();
+        let loaded = store.load_for_startup();
+        assert!(loaded.writable);
+        assert!(loaded.diagnostic.is_some());
+        assert!(!loaded.config.settings.debug_mode);
+        assert_eq!(loaded.config.servers, config.servers);
+        assert_eq!(loaded.config.trusted_hosts, config.trusted_hosts);
+        let fixed: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        document["config"]["settings"]["file_associations"]["docx"] = serde_json::json!({
+            "added_apps":["office"],"opened_with":["office"]
+        });
+        assert_eq!(fixed, document);
+        assert!(store.load_for_startup().diagnostic.is_none());
+        let backups: Vec<_> = fs::read_dir(store.path().parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "bak"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), original);
+    }
+
+    #[test]
+    fn startup_keeps_unrecoverable_documents_read_only() {
+        let dir = TestDir::new();
+        let store = dir.store();
+        let mut config = AppConfig::default();
+        config.settings.debug_mode = true;
+        store.save(&config).unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        document["config"]["settings"]["file_associations"] =
+            serde_json::json!({"docx":{"default":"future_app"}});
+        document["config"]["trusted_hosts"] =
+            serde_json::json!([{"host":"example.org","port":22,"fingerprint":"broken"}]);
+        let invalid_host = serde_json::to_vec(&document).unwrap();
+        document["config"]["trusted_hosts"] = serde_json::json!([]);
+        let duplicate_hosts = serde_json::to_string(&document).unwrap().replace(
+            "\"trusted_hosts\":[]",
+            "\"trusted_hosts\":[],\"trusted_hosts\":[]",
+        );
+        document["version"] = 99.into();
+        for (bytes, debug_mode) in [
+            (invalid_host, true),
+            (duplicate_hosts.into_bytes(), true),
+            (serde_json::to_vec(&document).unwrap(), true),
+            (b"{".to_vec(), false),
+        ] {
+            fs::write(store.path(), &bytes).unwrap();
+            let loaded = store.load_for_startup();
+            assert!(!loaded.writable);
+            assert!(loaded.diagnostic.is_some());
+            assert_eq!(loaded.config.settings.debug_mode, debug_mode);
+            assert_eq!(fs::read(store.path()).unwrap(), bytes);
+        }
     }
 
     #[test]

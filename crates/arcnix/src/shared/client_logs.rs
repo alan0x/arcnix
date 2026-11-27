@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use anyhow::{Context, Result, ensure};
 use arcnix_core::preferences::LogSettings;
 
+const LOG_FILE: &str = "arcnix.log";
+
 struct Record {
     line: String,
     settings: LogSettings,
@@ -45,6 +47,9 @@ impl Logger {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
+    pub fn active_path(&self, settings: &LogSettings) -> PathBuf {
+        log_directory(settings, &self.directory).join(LOG_FILE)
+    }
     pub fn record(&self, line: String, settings: &LogSettings) {
         if settings.write_file
             && self
@@ -63,18 +68,48 @@ impl Logger {
         self.error.lock().ok()?.take()
     }
 }
+fn log_directory<'a>(settings: &'a LogSettings, fallback: &'a Path) -> &'a Path {
+    settings.directory.as_deref().unwrap_or(fallback)
+}
+
+/// A missing log is normal before the first record is written.
+pub(crate) fn open_existing(path: &Path) -> Result<bool> {
+    let path = std::path::absolute(path)?;
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    ensure!(metadata.is_file(), "Log paths must be regular files");
+    #[cfg(windows)]
+    crate::shell_open(path.as_os_str())?;
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open").arg(path).status()?;
+        ensure!(status.success(), "open exited with {status}");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::gio;
+        use gtk::gio::prelude::FileExt;
+        let file = gio::File::for_path(path);
+        gio::AppInfo::launch_default_for_uri(&file.uri(), gio::AppLaunchContext::NONE)?;
+    }
+    Ok(true)
+}
+
 fn append(settings: &LogSettings, fallback: &Path, line: &str) -> Result<()> {
     settings.validate()?;
-    let directory = settings.directory.as_deref().unwrap_or(fallback);
+    let directory = log_directory(settings, fallback);
     fs::create_dir_all(directory)?;
     let root = fs::canonicalize(directory)?;
-    let path = root.join("arcnix.log");
+    let path = root.join(LOG_FILE);
     // Only these fixed filenames within the chosen directory are rotated.
     for index in 0..=settings.retained_files {
         let candidate = if index == 0 {
             path.clone()
         } else {
-            root.join(format!("arcnix.log.{index}"))
+            root.join(format!("{LOG_FILE}.{index}"))
         };
         if let Ok(metadata) = fs::symlink_metadata(candidate) {
             ensure!(
@@ -103,18 +138,18 @@ fn append(settings: &LogSettings, fallback: &Path, line: &str) -> Result<()> {
         .saturating_add(line.len() as u64 + 1)
         > limit
     {
-        let oldest = root.join(format!("arcnix.log.{}", settings.retained_files));
+        let oldest = root.join(format!("{LOG_FILE}.{}", settings.retained_files));
         if oldest.try_exists()? {
             fs::remove_file(oldest)?;
         }
         for index in (1..settings.retained_files).rev() {
-            let from = root.join(format!("arcnix.log.{index}"));
+            let from = root.join(format!("{LOG_FILE}.{index}"));
             if from.try_exists()? {
-                fs::rename(from, root.join(format!("arcnix.log.{}", index + 1)))?;
+                fs::rename(from, root.join(format!("{LOG_FILE}.{}", index + 1)))?;
             }
         }
         if path.try_exists()? {
-            fs::rename(&path, root.join("arcnix.log.1"))?;
+            fs::rename(&path, root.join(format!("{LOG_FILE}.1")))?;
         }
     }
     let mut file = OpenOptions::new()

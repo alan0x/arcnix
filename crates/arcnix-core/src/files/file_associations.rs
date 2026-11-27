@@ -43,6 +43,28 @@ impl Association {
 
 pub type Associations = BTreeMap<String, Association>;
 
+/// Remove unsupported handlers only from the three app-valued preferences.
+pub(crate) fn repair_handlers(rules: &mut serde_json::Map<String, serde_json::Value>) -> usize {
+    let mut removed = 0;
+    for rule in rules.values_mut().filter_map(|rule| rule.as_object_mut()) {
+        if rule
+            .get("default")
+            .is_some_and(|app| !app.is_null() && FileApp::deserialize(app).is_err())
+        {
+            rule.remove("default");
+            removed += 1;
+        }
+        for field in ["added_apps", "opened_with"] {
+            if let Some(apps) = rule.get_mut(field).and_then(|list| list.as_array_mut()) {
+                let previous = apps.len();
+                apps.retain(|app| FileApp::deserialize(app).is_ok());
+                removed += previous - apps.len();
+            }
+        }
+    }
+    removed
+}
+
 pub fn normalize(extension: &str) -> Option<String> {
     let extension = extension.trim();
     let extension = extension.strip_prefix('.').unwrap_or(extension);

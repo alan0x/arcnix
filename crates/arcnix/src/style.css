@@ -206,6 +206,9 @@
 .help-title{font-size:var(--font-body);font-weight:600;color:var(--text)}
 .help-heading{display:flex;align-items:center;gap:6px;min-width:0}
 .settings-card-heading { display: flex; align-items: center; min-width: 0; gap: 6px; }
+.activity-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.workspace-content .settings-section .log-save-switch { margin-top: 0; }
+.log-file-options { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 16px; }
 .settings-reset { display: inline-flex !important; align-items: center; gap: 6px; flex: none; margin-inline-start: auto; }
 .settings-reset .action-glyph { width: 14px; height: 14px; }
 .context-title.help-heading{justify-content:space-between;gap:8px}
@@ -1415,8 +1418,26 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .desktop-settings-pane .section-heading { min-width: 0; gap: 6px; }
 .desktop-settings-pane .choice-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 /* Sapid sets a light-theme foreground inline on checkbox labels. */
-.desktop-settings-page .preference-check { color: var(--text) !important; }
-.desktop-settings-page .preference-check:has(> input:disabled) { color: var(--muted) !important; }
+.preference-check { color: var(--text) !important; }
+.preference-check:has(> input:disabled) { color: var(--muted) !important; }
+.theme-light, .desktop-light { --preference-color-scheme: light; }
+.theme-dark, .desktop-dark { --preference-color-scheme: dark; }
+.preference-check input[type=checkbox] {
+  appearance: none; display: inline-grid; place-items: center;
+  color-scheme: var(--preference-color-scheme);
+  background: var(--input); border: 1px solid var(--muted); border-radius: 3px;
+}
+.preference-check input:checked { background: var(--accent); border-color: var(--accent); }
+.preference-check input:checked::before {
+  content: ""; width: 5px; height: 9px; margin-top: -2px;
+  border: solid var(--surface); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.preference-check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preference-check input:disabled { opacity: .55; }
+@media (forced-colors: active) {
+  .preference-check input[type=checkbox] { appearance: auto; }
+  .preference-check input:checked::before { content: none; }
+}
 .desktop-date-time .desktop-setting-row { grid-template-columns: minmax(0, 1fr) auto; }
 .desktop-date-time .desktop-setting-row:first-child { border-top: 0; }
 .desktop-date-time .desktop-setting-controls { min-width: 0; justify-content: flex-end; }
@@ -1467,7 +1488,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .dock-status-settings .desktop-setting-row { grid-template-columns: minmax(0, 1fr) auto; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch { min-width: 56px; min-height: 44px; justify-content: center; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch-track { background: var(--line-hover) !important; }
-:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill) !important; }
+:is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { background: var(--accent-fill, var(--accent)) !important; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch-thumb { background: var(--surface) !important; }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch-thumb { box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 28%, transparent); }
 :is(.desktop-settings-pane, .settings-choices) .sapid-switch:has(input:checked) .sapid-switch-track { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
@@ -1484,7 +1505,7 @@ input,textarea,select{font:inherit}input{height:36px}textarea{line-height:1.6}
 .folder-default-columns .preference-check:has(input:disabled) { color: var(--muted) !important; }
 .folder-defaults .default-file-size { max-width: 100%; }
 .folder-defaults .icon-size-slider { width: 165px; }
-.settings-choices .hidden-files-switch { flex: 1; justify-content: space-between; }
+.settings-choices .sapid-switch { flex: 1; justify-content: space-between; }
 .update-panel .preference-check { color: var(--text) !important; }
 .desktop-settings-page .desktop-time-preview {
   margin: 0; padding: 0; color: var(--text); font-size: var(--font-body);

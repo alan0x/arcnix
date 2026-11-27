@@ -164,15 +164,28 @@ pub(crate) fn desktop_reset(
 
 #[derive(Clone, Default)]
 pub(crate) struct SettingsState {
+    pub config_diagnostic: Option<String>,
     pub configuration_backup: crate::configuration_backup_ui::BackupState,
     pub error: String,
     pub log_error: String,
+    pub log_export_error: String,
+    pub open_log_feedback: String,
     pub log_directory_draft: Option<String>,
     pub transfer_concurrency_draft: Option<String>,
     pub file_association_filter: String,
 }
 
 impl Ui {
+    fn change_debug_mode(&self, enabled: bool) {
+        if self.writable.get() {
+            self.update_preferences(|settings| settings.debug_mode = enabled);
+        } else {
+            // Diagnostics must remain accessible when the saved file cannot be read.
+            self.state
+                .revise(|s| s.config.settings.debug_mode = enabled);
+        }
+    }
+
     pub(crate) fn update_preferences(&self, change: impl FnOnce(&mut AppSettings)) {
         let mut config = self.state.with(|s| s.config.clone());
         let previous_language = config.settings.language;
@@ -196,6 +209,9 @@ impl Ui {
                     let views_changed = s.config.settings.folder_views
                         != config.settings.folder_views
                         || s.config.settings.folder_defaults != config.settings.folder_defaults;
+                    if s.config.settings.logging != config.settings.logging {
+                        s.settings.open_log_feedback.clear();
+                    }
                     s.config = config;
                     s.settings.error.clear();
                     if views_changed || previous_hidden != s.config.settings.show_hidden_files {
@@ -326,6 +342,9 @@ pub(crate) fn language_choices(ui: &Ui) -> impl Widget + use<> {
 
 pub(crate) fn page(ui: Ui) -> impl Widget {
     let state = ui.state;
+    let debug = ui.clone();
+    let reset_debug = ui.clone();
+    let writable = ui.writable;
     col().class("settings-page").fill((
         feedback(
             &ui,
@@ -361,6 +380,20 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                     Ui::change_theme,
                 ),
             ),
+            section(
+                &ui,
+                navigation::SettingsSection::General,
+                "Diagnostics",
+                "Show technical details when configuration settings are repaired or cannot be loaded.",
+                reset_button(false, move || reset_debug.change_debug_mode(false)),
+                sapid::switch()
+                    .size(sapid::Size::Small)
+                    .label_position(sapid::SwitchLabelPosition::Before)
+                    .label(i18n::bind("Debug mode"))
+                    .checked(state.map(|s| s.config.settings.debug_mode).with_partial_eq())
+                    .on_checked_change(move |enabled| debug.change_debug_mode(enabled)),
+            ),
+        )).fill((
             preferences_ui::connection(ui.clone()),
             section(
                 &ui,
@@ -417,10 +450,14 @@ pub(crate) fn page(ui: Ui) -> impl Widget {
                     navigation::SettingsSection::About | navigation::SettingsSection::Updates
                 )
             }),
-            || {
+            move || {
                 text()
                     .class("subtle settings-footer")
-                    .content(i18n::bind("Changes are saved automatically."))
+                    .content(i18n::bind(writable.map(|can_save| if *can_save {
+                        "Changes are saved automatically.".to_owned()
+                    } else {
+                        "Settings are read-only. Restore a configuration backup to save changes.".to_owned()
+                    })))
             },
         ),
     ))

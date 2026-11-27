@@ -21,7 +21,7 @@ percent-encoding = "2"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 anyhow.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 directories = "6"
 # WinCNG cannot authenticate Ed25519 keys. Build and statically link OpenSSL
 # so the shipped client needs neither system OpenSSL nor the ssh executable.
