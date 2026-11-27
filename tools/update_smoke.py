@@ -110,6 +110,23 @@ def main():
             dialog = panel.page.get_by_role('dialog', name='Software update', exact=True)
             dialog.get_by_role('button', name='Restart and install', exact=True).click()
         try:
+            readonly = desktop('readonly')
+            invalid_config = b'{"version":1,"config":'
+            readonly.config.write_bytes(invalid_config)
+            with readonly as app:
+                panel = settings(app)
+                expect(panel.get_by_text('Settings are read-only. You can still update Arcnix manually.')).to_be_visible()
+                check(panel)
+                expect(panel.locator('.update-status')).to_have_text('A new version is available')
+                expect(app.page.get_by_text('Could not save settings:', exact=False)).not_to_be_visible()
+                download(panel)
+                expect(app.page.locator('.update-banner')).not_to_be_visible()
+                install(panel)
+                receipt = eventually(lambda: json.loads((app.out/'updates/installed.json').read_text()), timeout=30)
+                assert receipt['version'] == '9.9.9' and sha(app.binary) == hashlib.sha256(good).hexdigest()
+                assert app.config.read_bytes() == invalid_config
+                checks.append('A read-only configuration permits manual download and confirmed installation while preserving the original bytes')
+                owned_processes(app.out, True)
             with desktop('checks') as app:
                 panel=settings(app)
                 server.mode='none'; check(panel); expect(panel.locator('.update-status')).to_have_text('No published release is available yet')

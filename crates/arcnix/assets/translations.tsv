@@ -731,6 +731,7 @@ Arcnix 将重启以安装此次更新。	Arcnix will restart to install this upd
 调试模式	Debug mode
 显示修复配置或无法读取配置时的技术详情。	Show technical details when configuration settings are repaired or cannot be loaded.
 当前设置为只读。恢复配置备份后即可保存更改。	Settings are read-only. Restore a configuration backup to save changes.
+当前设置为只读。你仍然可以手动更新 Arcnix。	Settings are read-only. You can still update Arcnix manually.
 已移除 {count} 个不支持的文件关联条目。原配置备份：{path}	Removed {count} unsupported file association entries. Original configuration: {path}
 日期与时间	Dates and times
 相对时间	Relative time
